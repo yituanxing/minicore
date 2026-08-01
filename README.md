@@ -2,7 +2,7 @@
 
 A correctness-first RISC-V processor project written in Chisel.
 
-The current verified checkpoint is **S0.5**: a five-stage in-order RV64I core with a real Chisel/CIRCT/Verilator path, directed and deterministic generated programs, exact fault-boundary regressions, and commit-level differential testing against a pinned OpenXiangShan/NEMU reference.
+The current verified checkpoint is **S1**: a five-stage in-order RV64IM core with Chisel/CIRCT/Verilator implementation, directed and deterministic generated programs, exact fault-boundary regressions, and commit-level differential testing against a pinned OpenXiangShan/NEMU reference.
 
 ## Current core
 
@@ -12,38 +12,30 @@ IF -> ID -> EX -> MEM -> WB/commit
 
 Implemented foundations:
 
-- RV64I integer decode and execution, including W-class operations.
-- forwarding, load-use interlock and branch/jump recovery.
-- blocking instruction/data interfaces with host-backed simulation RAM.
-- UART MMIO at `0x10000000` and self-check exit MMIO at `0x10000008`.
-- architectural commit trace with PC, instruction, destination write and Store metadata.
-- temporary halt-on-exception behavior with precise suppression of younger memory side effects.
+- complete RV64I integer execution, including W-class operations;
+- complete RV64M multiply/divide extension;
+- EX/MEM and MEM/WB forwarding;
+- load-use interlock and branch/jump recovery;
+- preservation of forwarded EX operands across memory backpressure;
+- blocking instruction/data interfaces with host-backed simulation RAM;
+- UART MMIO at `0x10000000` and self-check exit MMIO at `0x10000008`;
+- architectural commit trace with PC, instruction, destination write and Store metadata;
+- temporary halt-on-exception behavior with precise suppression of younger memory side effects;
 - Chisel unit tests, strict full-core smoke, directed regressions, generated streams and NEMU DiffTest.
 
-## Verified strict smoke
+## RV64M
+
+Supported instructions:
 
 ```text
-A
-PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
+MUL  MULH  MULHSU  MULHU
+DIV  DIVU  REM     REMU
+MULW DIVW  DIVUW   REMW  REMUW
 ```
 
-## Directed RV64I regressions
+The verification contract covers high-product signedness, normal signed/unsigned division, divide by zero, signed minimum divided by `-1`, W-class sign extension, back-to-back dependencies and Load-to-M interlocks.
 
-The eleven normal Verilator programs cover:
-
-- EX/MEM and MEM/WB forwarding;
-- immediate load-use dependency;
-- blocking memory transactions under deterministic backpressure;
-- taken-branch wrong-path Store suppression;
-- JAL/JALR links, target recovery and JALR bit-zero clearing;
-- byte, halfword, word and doubleword stores/loads;
-- signed and unsigned load extension;
-- RV64 W-class immediate and register operations;
-- all six signed/unsigned branch predicates;
-- x0 write suppression and same-cycle WB/read bypass;
-- integer logical, comparison, SUB and 64-bit shift operations;
-- LUI/AUIPC values and PC-relative link-address corner cases;
-- FENCE and FENCE.I retirement in the uncached core.
+The current M implementation is combinational and correctness-first. It is not the intended FPGA timing/area implementation; a later checkpoint will introduce a multi-cycle execution unit while preserving the architectural contract.
 
 ## NEMU commit-level DiffTest
 
@@ -55,40 +47,71 @@ commit ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
 config riscv64-nutshell-ref_defconfig
 ```
 
-For every normal DUT retirement, the harness checks the pre-instruction PC and all 32 GPRs, executes exactly one NEMU instruction, compares all post-instruction GPRs, and verifies enabled Store bytes in reference memory. It keeps the latest 32 matched retirements for first-failure diagnostics. The adapter never copies DUT state back into NEMU after initialization.
+For every normal DUT retirement, the harness checks the pre-instruction PC and all 32 GPRs, executes exactly one NEMU instruction, compares all post-instruction GPRs, and verifies enabled Store bytes in reference memory. DUT state is never copied back into NEMU after initialization.
 
-## Checker mismatch probe
+A separate mismatch probe deliberately presents `addi x1, x0, 7` as `x1=6`; CI requires the adapter to reject it at zero matched commits.
 
-A standalone probe deliberately presents the first `forwarding` retirement as `x1=6` instead of the architectural result `x1=7`. CI requires the same adapter to report:
+## Verified S1 matrix
 
-```text
-DiffTest mismatch after 0 matched commits:
-after reference execution: x1 NEMU=0x0000000000000007 DUT=0x0000000000000006
-```
-
-The production Verilator harness contains no state-perturbation mode.
-
-## Deterministic generated DiffTest
-
-Five fixed XorShift64 seeds generate long RV64I streams with ALU, logical, comparison, shift, W-class, Load/Store, load-use, FENCE and x0 cases. Four images run with periodic memory backpressure.
-
-GitHub Actions run `30696527693` produced:
+GitHub Actions run `30698820690` passed:
 
 ```text
-seed_a37e0001: 274 commits, difftest=274
-seed_a37e0002: 270 commits, difftest=270, stall-period=3
-seed_a37e0003: 263 commits, difftest=263, stall-period=4
-seed_a37e0004: 259 commits, difftest=259, stall-period=5
-seed_a37e0005: 265 commits, difftest=265, stall-period=7
+RV64I directed/generated: 1540 comparisons
+RV64M directed:           108 comparisons
+RV64M generated:         1471 comparisons
+------------------------------------------
+normal retirement total: 3119 comparisons
 ```
 
-Generated comparisons: **1331**. Directed comparisons: **209**. S0.5 total: **1540 normal retirements**, all matched one-for-one with NEMU.
+All 3119 normal retirements matched NEMU one-for-one. The strict smoke, mismatch probe and all three precise fault-boundary regressions also remained green.
 
-The seed, generated binary, manifest and logs are retained in the CI artifact so every failure is reproducible.
+Directed RV64M programs:
+
+```text
+rv64m_multiply: 25 commits, difftest=25
+rv64m_divide:   41 commits, difftest=41
+rv64m_word:     42 commits, difftest=42
+```
+
+Generated RV64M programs:
+
+```text
+mseed_64d10001: 290 commits, difftest=290
+mseed_64d10002: 293 commits, difftest=293, stall-period=3
+mseed_64d10003: 299 commits, difftest=299, stall-period=4
+mseed_64d10004: 297 commits, difftest=297, stall-period=5
+mseed_64d10005: 292 commits, difftest=292, stall-period=7
+```
+
+Seeds, binaries, manifests and logs are retained in CI artifacts for exact reproduction.
+
+## Pipeline bug found by generated testing
+
+The first generated RV64M run found a pre-existing backpressure/forwarding bug:
+
+```text
+DIV x23,...      retires in WB with x23=0
+LD  x22,...      stalls in MEM
+ADD x16,x23,x13  remains frozen in EX
+```
+
+The ADD initially saw the correct WB-forwarded value, but after the stall edge the WB source disappeared and the frozen instruction fell back to its stale decode-time operand. A focused eight-instruction regression reproduced `expected -1181, observed 0x205`.
+
+The stall path now saves the operands already selected by the forwarding network:
+
+```scala
+when(memoryStall) {
+  memWb.valid := false.B
+  idEx.rs1Data := forwardedRs1
+  idEx.rs2Data := forwardedRs2
+}
+```
+
+The previously failing generated seed now completes all `297/297` retirement comparisons.
 
 ## Precise fault regressions
 
-The fault suite checks exact commit PC/instruction/count and suppression of immediately younger effects:
+The suite checks exact commit PC/instruction/count and suppression of immediately younger effects:
 
 ```text
 illegal_instruction:
@@ -100,8 +123,6 @@ PASS: precise fault pc=0x8000000c inst=0x0000b103 after 13 cycles, 4 committed i
 store_bus_fault:
 PASS: precise fault pc=0x80000018 inst=0x0020b023 after 16 cycles, 7 committed instructions, stall-period=4
 ```
-
-These tests found and prevented a younger Store from issuing in the same cycle an older exception retired from WB. Fault tests remain separate from normal DiffTest until trap CSRs and post-trap execution are implemented.
 
 ## Build
 
@@ -119,6 +140,8 @@ make run-fault-regressions
 make run-difftest
 make run-difftest-mismatch-probe
 make run-generated-difftest
+make run-rv64m-regressions
+make run-generated-rv64m
 ```
 
 Useful optional trace:
@@ -132,4 +155,4 @@ build/obj/VAetherCoreSimTop build/software/smoke.bin \
 
 Small changes run unit tests and the strict smoke gate. Feature groups add directed regressions before generated or differential expansion. `main` contains only checkpoints that have passed the complete CI path.
 
-See [`CHECKPOINT.md`](CHECKPOINT.md) for the exact verified state and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the path toward RV64M, privileged architecture, Linux and XC7Z020 FPGA bring-up.
+See [`CHECKPOINT.md`](CHECKPOINT.md) for the exact verified state and [`docs/ROADMAP.md`](docs/ROADMAP.md) for compiled workloads, a multi-cycle M unit, privileged architecture, Linux and FPGA bring-up.

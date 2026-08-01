@@ -101,17 +101,37 @@ class Decoder extends Module {
         is("b000".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
           when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mul }
         }
-        is("b001".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
-        is("b010".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.Slt } }
-        is("b011".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.Sltu } }
-        is("b100".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.Xor } }
+        is("b001".U) {
+          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mulh }
+        }
+        is("b010".U) {
+          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Slt }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mulhsu }
+        }
+        is("b011".U) {
+          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sltu }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mulhu }
+        }
+        is("b100".U) {
+          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Xor }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Div }
+        }
         is("b101".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
           when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Divu }
         }
-        is("b110".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.Or } }
-        is("b111".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.And } }
+        is("b110".U) {
+          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Or }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Rem }
+        }
+        is("b111".U) {
+          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.And }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Remu }
+        }
       }
     }
     is("b0011011".U) {
@@ -131,12 +151,17 @@ class Decoder extends Module {
         is("b000".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
           when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mul }
         }
-        is("b001".U) { when(funct7 === 0.U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
+        is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
+        is("b100".U) { when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Div } }
         is("b101".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
           when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
+          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Divu }
         }
+        is("b110".U) { when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Rem } }
+        is("b111".U) { when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Remu } }
       }
     }
     is("b0001111".U) { when(funct3 === 0.U || funct3 === 1.U) { c.illegal := false.B } }

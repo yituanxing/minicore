@@ -110,6 +110,18 @@ jobs:
           set -o pipefail
           make run-generated-difftest 2>&1 | tee build/logs/generated-nemu-difftest.log
 
+      - name: Directed RV64M NEMU DiffTest
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-rv64m-regressions 2>&1 | tee build/logs/rv64m-nemu-difftest.log
+
+      - name: Generated RV64M NEMU DiffTest matrix
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-generated-rv64m 2>&1 | tee build/logs/generated-rv64m-nemu-difftest.log
+
       - name: Upload build evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -125,4 +137,6 @@ jobs:
             build/completion-regressions/
             build/fault-regressions/
             build/generated-difftest/
+            build/rv64m-regressions/
+            build/generated-rv64m/
             build/aethercore.vcd
