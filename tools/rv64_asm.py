@@ -121,28 +121,125 @@ class Program:
     def addi(self, rd: int, rs1: int, immediate: int) -> None:
         self.emit(i_type(0x13, rd, 0, rs1, immediate))
 
+    def slli(self, rd: int, rs1: int, shift: int) -> None:
+        if not 0 <= shift < 64:
+            raise ValueError(f"invalid RV64 shift: {shift}")
+        self.emit(i_type(0x13, rd, 1, rs1, shift))
+
+    def srli(self, rd: int, rs1: int, shift: int) -> None:
+        if not 0 <= shift < 64:
+            raise ValueError(f"invalid RV64 shift: {shift}")
+        self.emit(i_type(0x13, rd, 5, rs1, shift))
+
+    def srai(self, rd: int, rs1: int, shift: int) -> None:
+        if not 0 <= shift < 64:
+            raise ValueError(f"invalid RV64 shift: {shift}")
+        self.emit(i_type(0x13, rd, 5, rs1, 0x400 | shift))
+
+    def addiw(self, rd: int, rs1: int, immediate: int) -> None:
+        self.emit(i_type(0x1B, rd, 0, rs1, immediate))
+
+    def slliw(self, rd: int, rs1: int, shift: int) -> None:
+        if not 0 <= shift < 32:
+            raise ValueError(f"invalid RV64W shift: {shift}")
+        self.emit(i_type(0x1B, rd, 1, rs1, shift))
+
+    def srliw(self, rd: int, rs1: int, shift: int) -> None:
+        if not 0 <= shift < 32:
+            raise ValueError(f"invalid RV64W shift: {shift}")
+        self.emit(i_type(0x1B, rd, 5, rs1, shift))
+
+    def sraiw(self, rd: int, rs1: int, shift: int) -> None:
+        if not 0 <= shift < 32:
+            raise ValueError(f"invalid RV64W shift: {shift}")
+        self.emit(i_type(0x1B, rd, 5, rs1, 0x400 | shift))
+
     def add(self, rd: int, rs1: int, rs2: int) -> None:
         self.emit(r_type(0x33, rd, 0, rs1, rs2, 0))
 
     def sub(self, rd: int, rs1: int, rs2: int) -> None:
         self.emit(r_type(0x33, rd, 0, rs1, rs2, 0x20))
 
+    def addw(self, rd: int, rs1: int, rs2: int) -> None:
+        self.emit(r_type(0x3B, rd, 0, rs1, rs2, 0))
+
+    def subw(self, rd: int, rs1: int, rs2: int) -> None:
+        self.emit(r_type(0x3B, rd, 0, rs1, rs2, 0x20))
+
+    def sllw(self, rd: int, rs1: int, rs2: int) -> None:
+        self.emit(r_type(0x3B, rd, 1, rs1, rs2, 0))
+
+    def srlw(self, rd: int, rs1: int, rs2: int) -> None:
+        self.emit(r_type(0x3B, rd, 5, rs1, rs2, 0))
+
+    def sraw(self, rd: int, rs1: int, rs2: int) -> None:
+        self.emit(r_type(0x3B, rd, 5, rs1, rs2, 0x20))
+
+    def _load(self, rd: int, rs1: int, funct3: int, immediate: int = 0) -> None:
+        self.emit(i_type(0x03, rd, funct3, rs1, immediate))
+
+    def lb(self, rd: int, rs1: int, immediate: int = 0) -> None:
+        self._load(rd, rs1, 0, immediate)
+
+    def lh(self, rd: int, rs1: int, immediate: int = 0) -> None:
+        self._load(rd, rs1, 1, immediate)
+
+    def lw(self, rd: int, rs1: int, immediate: int = 0) -> None:
+        self._load(rd, rs1, 2, immediate)
+
     def ld(self, rd: int, rs1: int, immediate: int = 0) -> None:
-        self.emit(i_type(0x03, rd, 3, rs1, immediate))
+        self._load(rd, rs1, 3, immediate)
+
+    def lbu(self, rd: int, rs1: int, immediate: int = 0) -> None:
+        self._load(rd, rs1, 4, immediate)
+
+    def lhu(self, rd: int, rs1: int, immediate: int = 0) -> None:
+        self._load(rd, rs1, 5, immediate)
+
+    def lwu(self, rd: int, rs1: int, immediate: int = 0) -> None:
+        self._load(rd, rs1, 6, immediate)
+
+    def _store(self, rs2: int, rs1: int, funct3: int, immediate: int = 0) -> None:
+        self.emit(s_type(0x23, funct3, rs1, rs2, immediate))
+
+    def sb(self, rs2: int, rs1: int, immediate: int = 0) -> None:
+        self._store(rs2, rs1, 0, immediate)
+
+    def sh(self, rs2: int, rs1: int, immediate: int = 0) -> None:
+        self._store(rs2, rs1, 1, immediate)
+
+    def sw(self, rs2: int, rs1: int, immediate: int = 0) -> None:
+        self._store(rs2, rs1, 2, immediate)
 
     def sd(self, rs2: int, rs1: int, immediate: int = 0) -> None:
-        self.emit(s_type(0x23, 3, rs1, rs2, immediate))
+        self._store(rs2, rs1, 3, immediate)
 
     def jalr(self, rd: int, rs1: int, immediate: int = 0) -> None:
         self.emit(i_type(0x67, rd, 0, rs1, immediate))
 
-    def beq(self, rs1: int, rs2: int, label: str) -> None:
-        self.fixups.append(Fixup("branch", len(self.words), label, funct3=0, rs1=rs1, rs2=rs2))
+    def _branch(self, funct3: int, rs1: int, rs2: int, label: str) -> None:
+        self.fixups.append(
+            Fixup("branch", len(self.words), label, funct3=funct3, rs1=rs1, rs2=rs2)
+        )
         self.emit(0)
 
+    def beq(self, rs1: int, rs2: int, label: str) -> None:
+        self._branch(0, rs1, rs2, label)
+
     def bne(self, rs1: int, rs2: int, label: str) -> None:
-        self.fixups.append(Fixup("branch", len(self.words), label, funct3=1, rs1=rs1, rs2=rs2))
-        self.emit(0)
+        self._branch(1, rs1, rs2, label)
+
+    def blt(self, rs1: int, rs2: int, label: str) -> None:
+        self._branch(4, rs1, rs2, label)
+
+    def bge(self, rs1: int, rs2: int, label: str) -> None:
+        self._branch(5, rs1, rs2, label)
+
+    def bltu(self, rs1: int, rs2: int, label: str) -> None:
+        self._branch(6, rs1, rs2, label)
+
+    def bgeu(self, rs1: int, rs2: int, label: str) -> None:
+        self._branch(7, rs1, rs2, label)
 
     def jal(self, rd: int, label: str) -> None:
         self.fixups.append(Fixup("jump", len(self.words), label, rd=rd))
