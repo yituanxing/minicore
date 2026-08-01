@@ -70,12 +70,24 @@ jobs:
         shell: bash
         run: |
           make -f Makefile.rv32im-coremark workload
-          grep -q '^source=coremark@1f483d5b8316753a742cbf5590caf5bd0a4e4777$' \
-            build/rv32im-coremark/software/manifest.txt
-          grep -q '^march=rv32im$' build/rv32im-coremark/software/manifest.txt
-          grep -q '^mabi=ilp32$' build/rv32im-coremark/software/manifest.txt
-          grep -Eq '\<(mul|mulh|mulhu|mulhsu|div|divu|rem|remu)\>' \
-            build/rv32im-coremark/software/coremark_rv32im_O2.dis
+          manifest=build/rv32im-coremark/software/manifest.txt
+          disassembly=build/rv32im-coremark/software/coremark_rv32im_O2.dis
+          grep -q '^source=coremark@1f483d5b8316753a742cbf5590caf5bd0a4e4777$' "$manifest"
+          grep -q '^march=rv32im$' "$manifest"
+          grep -q '^mabi=ilp32$' "$manifest"
+          grep -q '^bytes=10244$' "$manifest"
+          grep -q '^sha256=6e094fad601d16ca8279065ab01083583749d2fb654e4a75bf4d0427df8c5c59$' "$manifest"
+
+          mul_count="$(awk '$3 == "mul" { count++ } END { print count + 0 }' "$disassembly")"
+          divu_count="$(awk '$3 == "divu" { count++ } END { print count + 0 }' "$disassembly")"
+          test "$mul_count" -eq 12
+          test "$divu_count" -eq 5
+          if grep -Eq '\<(mulh|mulhu|mulhsu|div|rem|remu)\>' "$disassembly"; then
+            echo 'ERROR: unexpected RV32IM M-opcode mix changed' >&2
+            exit 1
+          fi
+          printf 'mul=%s\ndivu=%s\n' "$mul_count" "$divu_count" \
+            | tee build/rv32im-coremark/software/m-opcode-counts.txt
 
       - name: Run RV32IM CoreMark DiffTest
         shell: bash
@@ -83,8 +95,9 @@ jobs:
           set -o pipefail
           make -f Makefile.rv32im-coremark run RV32_NEMU_SO="$RV32_NEMU_SO" \
             2>&1 | tee build/rv32im-coremark/coremark-rv32im.log
-          grep -Fq 'PASS: self-check exit=0' build/rv32im-coremark/coremark-rv32im.log
-          grep -Eq 'difftest=[1-9][0-9]*' build/rv32im-coremark/coremark-rv32im.log
+          grep -Fq \
+            'PASS: self-check exit=0 after 883272 cycles, 646301 committed instructions, stall-period=5, difftest=646301' \
+            build/rv32im-coremark/coremark-rv32im.log
 
       - name: Upload RV32IM CoreMark evidence
         if: always()
