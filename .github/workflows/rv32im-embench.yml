@@ -1,0 +1,114 @@
+name: RV32IM Embench Batch 1
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32im-embench-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  batch:
+    name: Pinned Embench batch on RV32IM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+        with:
+          job: rv32im-embench
+
+      - name: Install Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils verilator \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          java -version
+          verilator --version
+          riscv64-unknown-elf-gcc --version
+
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
+
+      - name: Build exact frozen RV32 NEMU reference
+        shell: bash
+        run: |
+          mkdir -p build
+          set -o pipefail
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-probe" \
+            2>&1 | tee build/rv32-nemu-probe.log
+          grep -q '^reference_sha256=1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
+            -name 'riscv32-nemu-interpreter-so*' -print -quit)"
+          test -n "$reference_so"
+          echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
+
+      - name: Build pinned Embench batch
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-embench workload
+          batch=build/rv32im-embench/software/batch.txt
+          manifest=build/rv32im-embench/software/manifest.tsv
+          grep -q '^source=embench-iot@09c2ed8c3b7008c95d08b038de4a3f6dc103ed70$' "$batch"
+          grep -q '^benchmarks=crc32 edn matmult-int statemate$' "$batch"
+          grep -q '^march=rv32im$' "$batch"
+          grep -q '^mabi=ilp32$' "$batch"
+          grep -q '^optimization=O2$' "$batch"
+          grep -q '^warmup_heat=0$' "$batch"
+          grep -q '^global_scale_factor=1$' "$batch"
+          grep -q '^local_scale_factor=1$' "$batch"
+          test "$(grep -h '^#define LOCAL_SCALE_FACTOR 1$' \
+            build/rv32im-embench/software/scaled-src/*/*.c | wc -l)" -eq 4
+          grep -Fq $'crc32\t1472\t368\t4c126e8244b5d05b74824d4c1c927d5db44eb8078b4353e8be5a42bc52588aca\t1' "$manifest"
+          grep -Fq $'edn\t3972\t993\td521ef81684801adde928cbcf843083ce36c3aab14cf108995fe8d921006aac3\t1' "$manifest"
+          grep -Fq $'matmult-int\t2492\t623\t33d3f7ada07f51198589424a17d9e2d5203a620da3dc18489eb88ded1742615a\t1' "$manifest"
+          grep -Fq $'statemate\t7356\t1839\t25c74615a0215731111ecf54c5477eb8f89291e768423eeee5c8dfd0dd2aaf4b\t1' "$manifest"
+
+      - name: Run Embench batch DiffTest
+        shell: bash
+        run: |
+          set -o pipefail
+          make -f Makefile.rv32im-embench run RV32_NEMU_SO="$RV32_NEMU_SO" \
+            2>&1 | tee build/rv32im-embench/embench-batch.log
+          results=build/rv32im-embench/results.tsv
+          grep -Fq $'crc32\tPASS: self-check exit=0 after 33442 cycles, 25703 committed instructions, stall-period=5, difftest=25703' "$results"
+          grep -Fq $'edn\tPASS: self-check exit=0 after 61875 cycles, 47338 committed instructions, stall-period=5, difftest=47338' "$results"
+          grep -Fq $'matmult-int\tPASS: self-check exit=0 after 143851 cycles, 109152 committed instructions, stall-period=5, difftest=109152' "$results"
+          grep -Fq $'statemate\tPASS: self-check exit=0 after 2716 cycles, 1992 committed instructions, stall-period=5, difftest=1992' "$results"
+          test "$(grep -c 'PASS: self-check exit=0' "$results")" -eq 4
+
+      - name: Upload Embench evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32im-embench-batch1-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32-nemu-probe.log
+            build/rv32-nemu-probe/evidence/
+            build/rv32im-embench/
+            build/upstream-src/embench-iot-*/COPYING
