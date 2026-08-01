@@ -86,32 +86,54 @@ known host-compiler diagnostics are kept as warnings instead of errors:
 
 All other compiler warnings remain fatal.
 
+## Reproducible build contract
+
+The workflow performs two independent clean builds in the same fresh runner.
+Before each build it removes `.config`, the complete NEMU build directory and
+the historical `fixdep` binary, then regenerates all three.
+
+The host-link Build ID is disabled and GCC receives the NEMU commit timestamp
+through `SOURCE_DATE_EPOCH`:
+
+```text
+SOURCE_DATE_EPOCH=1616055099
+build_id=disabled
+```
+
+Both clean builds produced byte-identical shared objects:
+
+```text
+reproducible=true
+first_sha256=b064aec211ae22e872d8ab7a3705a2e354e0d968289dbb7880515710d9dd5eb7
+second_sha256=b064aec211ae22e872d8ab7a3705a2e354e0d968289dbb7880515710d9dd5eb7
+```
+
 ## Verified reference artifact
 
 GitHub Actions run:
 
 ```text
-30709204540
+30709463359
 ```
 
 Reference shared object:
 
 ```text
 riscv32-nemu-interpreter-so
-SHA-256: a9d3497f6492cc65c21a8904fda49c5bfe45555ac4b337ff15e39677e09d1dfc
+SHA-256: b064aec211ae22e872d8ab7a3705a2e354e0d968289dbb7880515710d9dd5eb7
 ```
 
 The file is an x86-64 host shared object containing the RV32 NEMU interpreter.
 The workflow retains the exact generated config, build-composition patch,
-source copies, dynamic symbols, ELF metadata, linked libraries, build logs and
-ABI probe output.
+source copies, dynamic symbols, ELF metadata, linked libraries, both clean
+build logs, reproducibility result and ABI probe output.
 
 Artifact:
 
 ```text
-rv32-nemu-probe-30709204540
-artifact ID: 8821316109
-ZIP SHA-256: 83349ff54369e8f5cda8112bc33de3ab69db14a15495cf259551c9136b13791c
+rv32-nemu-probe-30709463359
+artifact ID: 8821389762
+ZIP SHA-256: 93c8d0ab637765b90a485fc26669f6c79c11004d3f6f8d652ae4cd7794b93d7a
 ```
 
 ## Register-copy ABI
@@ -136,6 +158,7 @@ The probe writes a nontrivial 132-byte pattern into the reference with
 Verified result:
 
 ```text
+revision=8601834e4889e6bf3b6113eb5f824ba7689126f5
 expected_reg_bytes=132
 prefix_matches=true
 guard_matches=true
@@ -163,6 +186,7 @@ address used by the frozen GCC workload.
 This checkpoint proves:
 
 - exact NEMU revision and build recipe;
+- two byte-identical clean reference builds;
 - a loadable self-contained reference shared object;
 - exact 132-byte GPR/PC layout;
 - bidirectional register copying without guard corruption;
