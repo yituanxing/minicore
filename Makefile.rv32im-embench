@@ -1,0 +1,53 @@
+BUILD_DIR ?= build/rv32im-embench
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+SOFTWARE_DIR := $(BUILD_DIR)/software
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im.cpp
+TOP := AetherCoreRV32IMSimTop
+BENCHMARKS := crc32 edn matmult-int statemate
+VERILATOR ?= verilator
+RV32_NEMU_SO ?=
+
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+
+.PHONY: all rtl workload runner-source sim run clean
+
+all: run
+
+rtl:
+	./mill aethercore.runMain aethercore.ElaborateRV32IM --target-dir $(RTL_DIR)
+
+workload:
+	bash tools/build_rv32im_embench_batch1.sh $(SOFTWARE_DIR)
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+
+sim: rtl runner-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest_rv32.cpp)
+
+run: sim workload
+	@test -n "$(RV32_NEMU_SO)" || { echo "ERROR: set RV32_NEMU_SO to the exact RV32 NEMU reference"; exit 1; }
+	@test -f "$(RV32_NEMU_SO)" || { echo "ERROR: RV32 NEMU reference not found: $(RV32_NEMU_SO)"; exit 1; }
+	@set -euo pipefail; \
+	: > $(BUILD_DIR)/results.tsv; \
+	printf 'benchmark\tresult\n' >> $(BUILD_DIR)/results.tsv; \
+	for benchmark in $(BENCHMARKS); do \
+	  echo "== run Embench $$benchmark =="; \
+	  $(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/$$benchmark.bin \
+	    --max-cycles 20000000 --self-check-exit --stall-period 5 \
+	    --difftest $(RV32_NEMU_SO) \
+	    2>&1 | tee $(BUILD_DIR)/$$benchmark.log; \
+	  result="$$(grep -F 'PASS: self-check exit=0' $(BUILD_DIR)/$$benchmark.log)"; \
+	  test -n "$$result"; \
+	  printf '%s\t%s\n' "$$benchmark" "$$result" >> $(BUILD_DIR)/results.tsv; \
+	done; \
+	cat $(BUILD_DIR)/results.tsv
+
+clean:
+	rm -rf $(BUILD_DIR)
