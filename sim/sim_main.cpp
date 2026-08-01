@@ -20,14 +20,17 @@ constexpr std::uint32_t kEbreak = 0x00100073U;
 struct Options {
   std::string image;
   std::uint64_t maxCycles = 1000000;
+  std::uint64_t stallPeriod = 0;
   bool trace = false;
   bool commitTrace = false;
+  bool selfCheckExit = false;
 };
 
 Options parseOptions(int argc, char** argv) {
   if (argc < 2) {
     throw std::runtime_error(
-        "usage: VAetherCoreSimTop <image.bin> [--max-cycles N] [--trace] [--commit-trace]");
+        "usage: VAetherCoreSimTop <image.bin> [--max-cycles N] [--stall-period N] "
+        "[--trace] [--commit-trace] [--self-check-exit]");
   }
 
   Options options;
@@ -36,10 +39,17 @@ Options parseOptions(int argc, char** argv) {
     const std::string arg = argv[i];
     if (arg == "--max-cycles" && i + 1 < argc) {
       options.maxCycles = std::stoull(argv[++i]);
+    } else if (arg == "--stall-period" && i + 1 < argc) {
+      options.stallPeriod = std::stoull(argv[++i]);
+      if (options.stallPeriod == 1) {
+        throw std::runtime_error("--stall-period 1 would block every memory cycle");
+      }
     } else if (arg == "--trace") {
       options.trace = true;
     } else if (arg == "--commit-trace") {
       options.commitTrace = true;
+    } else if (arg == "--self-check-exit") {
+      options.selfCheckExit = true;
     } else {
       throw std::runtime_error("unknown argument: " + arg);
     }
@@ -91,7 +101,7 @@ class Memory {
   std::vector<std::uint8_t> bytes_;
 };
 
-void driveInputs(VAetherCoreSimTop& top, const Memory& memory) {
+void driveInputs(VAetherCoreSimTop& top, const Memory& memory, bool memoryReady) {
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const bool ifault = !memory.contains(iaddr, 4);
   top.io_imemFault = ifault;
@@ -100,7 +110,7 @@ void driveInputs(VAetherCoreSimTop& top, const Memory& memory) {
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
   const bool dvalid = top.io_memValid;
   const bool dfault = dvalid && !memory.contains(daddr, 8);
-  top.io_memReady = 1;
+  top.io_memReady = memoryReady;
   top.io_memFault = dfault;
   top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read64(daddr);
 }
@@ -136,22 +146,26 @@ int main(int argc, char** argv) {
     std::uint64_t committed = 0;
     std::uint64_t exceptions = 0;
     std::uint64_t cycles = 0;
+    std::uint64_t exitCode = 0;
     bool sawX3 = false;
     bool exitRequested = false;
     std::string uart;
 
     top.reset = 1;
     top.clock = 0;
-    driveInputs(top, memory);
+    driveInputs(top, memory, true);
     top.eval();
 
     for (; cycles < options.maxCycles && !top.io_halted && !exitRequested; ++cycles) {
+      const bool memoryReady =
+          options.stallPeriod == 0 || (cycles % options.stallPeriod) != 0;
+
       // Settle the combinational logic at clock-low. Architectural events are
       // sampled here because they are accepted by the upcoming rising edge.
       top.clock = 0;
-      driveInputs(top, memory);
+      driveInputs(top, memory, memoryReady);
       top.eval();
-      driveInputs(top, memory);
+      driveInputs(top, memory, memoryReady);
       top.eval();
 
       if (wave) wave->dump(context.time());
@@ -170,7 +184,7 @@ int main(int argc, char** argv) {
         }
 
         if (top.io_exitValid) {
-          std::cout << "\nEXIT MMIO: " << static_cast<std::uint64_t>(top.io_exitCode) << '\n';
+          exitCode = static_cast<std::uint64_t>(top.io_exitCode);
           exitRequested = true;
         }
 
@@ -180,12 +194,12 @@ int main(int argc, char** argv) {
 
           if (top.io_commit_rdWrite && top.io_commit_rd == 3) {
             const auto value = static_cast<std::uint64_t>(top.io_commit_rdData);
-            if (value != kExpectedX3) {
+            if (!options.selfCheckExit && value != kExpectedX3) {
               std::cerr << "\nFAIL: x3 committed 0x" << std::hex << value
                         << ", expected 0x" << kExpectedX3 << std::dec << '\n';
               return 3;
             }
-            sawX3 = true;
+            if (value == kExpectedX3) sawX3 = true;
           }
 
           if (options.commitTrace) dumpCommit(top);
@@ -193,7 +207,7 @@ int main(int argc, char** argv) {
       }
 
       top.clock = 1;
-      driveInputs(top, memory);
+      driveInputs(top, memory, memoryReady);
       top.eval();
       if (wave) wave->dump(context.time());
       context.timeInc(1);
@@ -213,6 +227,23 @@ int main(int argc, char** argv) {
       std::cerr << "FAIL: timeout after " << cycles << " cycles\n";
       return 2;
     }
+
+    if (options.selfCheckExit) {
+      if (!exitRequested) {
+        std::cerr << "FAIL: self-check program halted without writing the exit MMIO\n";
+        return 9;
+      }
+      if (exitCode != 0) {
+        std::cerr << "FAIL: self-check program returned code " << exitCode << '\n';
+        return static_cast<int>(exitCode > 125 ? 125 : exitCode);
+      }
+      std::cout << "PASS: self-check exit=0 after " << cycles << " cycles, " << committed
+                << " committed instructions";
+      if (options.stallPeriod != 0) std::cout << ", stall-period=" << options.stallPeriod;
+      std::cout << '\n';
+      return 0;
+    }
+
     if (!top.io_halted && !exitRequested) {
       std::cerr << "FAIL: simulation ended without halt or exit\n";
       return 4;

@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    name: Chisel and Verilator bring-up
+    name: Chisel and Verilator regression
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -44,7 +44,7 @@ jobs:
           chmod +x mill
           ./mill --version
 
-      - name: Python reference tests
+      - name: Python reference and image tests
         run: make python-test
 
       - name: Chisel tests
@@ -66,6 +66,12 @@ jobs:
           set -o pipefail
           make run-smoke 2>&1 | tee build/logs/verilator-smoke.log
 
+      - name: Directed pipeline regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-regressions 2>&1 | tee build/logs/pipeline-regressions.log
+
       - name: Upload build evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -77,4 +83,5 @@ jobs:
             build/logs/
             build/rtl/
             build/software/smoke.bin
+            build/regressions/
             build/aethercore.vcd

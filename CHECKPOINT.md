@@ -1,10 +1,10 @@
-# AetherCore S0.2 checkpoint
+# AetherCore S0.3a checkpoint
 
 ## Status
 
-The first real Chisel-to-Verilator execution path is green. S0.2 is the stable bring-up checkpoint for the five-stage RV64I core and its architectural commit interface.
+The first directed RV64I pipeline-regression layer is green on top of the verified S0.2 core. S0.3a establishes self-checking binaries, deterministic memory backpressure and CI evidence for forwarding, load-use, branch recovery and JAL/JALR recovery.
 
-## Implemented
+## Core baseline inherited from S0.2
 
 - IF/ID/EX/MEM/WB in-order pipeline.
 - RV64I decoder and ALU, including W-class arithmetic.
@@ -13,35 +13,46 @@ The first real Chisel-to-Verilator execution path is green. S0.2 is the stable b
 - One-cycle load-use interlock.
 - EX-stage branch and jump redirection.
 - Blocking data bus and host-backed RAM adapter.
-- UART MMIO at `0x10000000`.
-- Commit trace and temporary halt-on-exception behavior.
-- Python ISA smoke reference.
-- Chisel unit/smoke tests and Verilator harness.
-- GitHub Actions build and artifact pipeline.
+- UART MMIO at `0x10000000` and exit MMIO at `0x10000008`.
+- Architectural commit trace and temporary halt-on-exception behavior.
+- Chisel tests, strict Verilator smoke and GitHub Actions artifact pipeline.
+
+## Added in S0.3a
+
+- Tiny Python RV64 instruction encoder with labels and B/J fixups.
+- Self-checking regression binaries that return unique failure codes through exit MMIO.
+- `--self-check-exit` Verilator mode.
+- Deterministic `--stall-period N` memory-ready backpressure.
+- CI execution and archived logs/images for all directed regressions.
 
 ## Verified by GitHub Actions
 
-Run `30692781114` completed successfully on Ubuntu 24.04 with Java 21, Mill 1.1.2, Chisel 7.7.0 and Verilator 5.020.
-
-Passed gates:
-
-- Python ISA reference test.
-- Chisel compilation.
-- ALU unit test.
-- Decoder unit test.
-- Chisel full-core smoke test.
-- CIRCT SystemVerilog generation.
-- Verilator C++ compilation and link.
-- RTL execution with strict architectural assertions.
-
-Strict RTL smoke result:
+Run `30693234154` completed successfully with the original S0.2 smoke and all new regressions green.
 
 ```text
 A
 PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
+
+forwarding:
+PASS: self-check exit=0 after 17 cycles, 8 committed instructions
+
+load_use:
+PASS: self-check exit=0 after 22 cycles, 11 committed instructions, stall-period=3
+
+branch_flush:
+PASS: self-check exit=0 after 21 cycles, 9 committed instructions
+
+jal_jalr:
+PASS: self-check exit=0 after 26 cycles, 11 committed instructions
 ```
 
-The harness samples commit and MMIO events before the accepting rising edge. This removed the earlier incorrect eight-instruction count and aligned the RTL result with the ISA reference model.
+Coverage demonstrated:
+
+- dependent ALU instructions consume EX/MEM and MEM/WB forwarded results;
+- an immediate load consumer receives the correct value after the load-use bubble;
+- a blocking load survives deterministic memory backpressure without duplicate or lost architectural progress;
+- a taken branch suppresses a younger wrong-path store;
+- JAL writes a link address and JALR returns through it while wrong-path instructions are flushed.
 
 ## Known non-fatal warnings
 
@@ -49,18 +60,13 @@ The harness samples commit and MMIO events before the accepting rising edge. Thi
 - Generated reset/randomization helper symbols are unused.
 - Shift intermediates are wider than their selected architectural result.
 
-These warnings do not affect S0.2 correctness but should be cleaned up before tightening lint to fatal warnings.
+## Next gate: S0.3b
 
-## Next gate: S0.3
+Continue deterministic RV64I coverage before adding privileged architecture:
 
-Do not add privileged architecture yet. First expand deterministic RV64I regression coverage for:
-
-- ALU dependency forwarding.
-- load-use stalls.
-- taken/not-taken branches and wrong-path store suppression.
-- JAL/JALR recovery.
-- byte/half/word/dword loads and stores.
-- signed and unsigned loads.
-- W-class sign extension.
-- randomized memory-ready backpressure.
-- x0 and same-cycle writeback corner cases.
+- byte/half/word/dword stores and loads;
+- signed and unsigned load extension;
+- ADDIW/SLLIW/SRLIW/SRAIW and register W-class operations;
+- all signed and unsigned branch predicates;
+- x0 protection and same-cycle WB/read corner cases;
+- broader deterministic memory-ready patterns.
