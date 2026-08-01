@@ -3,13 +3,17 @@ RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 SOFTWARE_DIR := $(BUILD_DIR)/software
 GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32.cpp
+RV32_NEMU_DIR ?= build/rv32-nemu-reference
+RV32_NEMU_SO := $(RV32_NEMU_DIR)/nemu/build/riscv32-nemu-interpreter-so
+DIFFTEST_PROBE := $(BUILD_DIR)/nemu_difftest_rv32_mismatch_probe
 TOP := AetherCoreRV32SimTop
 VERILATOR ?= verilator
+CXX ?= g++
 
 # Expanded after the `rtl` prerequisite has emitted the complete module tree.
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-.PHONY: all rtl workload runner-source sim run clean
+.PHONY: all rtl workload runner-source reference sim run run-difftest run-difftest-mismatch-probe clean
 
 all: run
 
@@ -21,18 +25,45 @@ workload:
 
 runner-source:
 	mkdir -p $(BUILD_DIR)
-	sed 's/VAetherCoreSimTop/VAetherCoreRV32SimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+	sed \
+		-e 's/VAetherCoreSimTop/VAetherCoreRV32SimTop/g' \
+		-e 's/#include "nemu_difftest.h"/#include "nemu_difftest_rv32.h"/' \
+		sim/sim_main.cpp > $(GENERATED_MAIN)
+
+reference:
+	bash tools/probe_rv32_nemu_historical.sh $(abspath $(RV32_NEMU_DIR))
+	@test -f $(RV32_NEMU_SO) || { echo "ERROR: RV32 NEMU shared object was not produced"; exit 1; }
+
+$(DIFFTEST_PROBE): sim/nemu_difftest_rv32_mismatch_probe.cpp sim/nemu_difftest_rv32.cpp sim/nemu_difftest_rv32.h
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra \
+		sim/nemu_difftest_rv32_mismatch_probe.cpp sim/nemu_difftest_rv32.cpp \
+		-ldl -o $@
 
 sim: rtl runner-source
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32 SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
-		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest.cpp)
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest_rv32.cpp)
 
 run: sim workload
 	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/rv32_smoke.bin \
 		--max-cycles 200000 --self-check-exit --stall-period 5
 
+run-difftest: sim workload reference
+	@set -e; \
+	output="$$( $(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/rv32_smoke.bin \
+		--max-cycles 200000 --self-check-exit --stall-period 5 \
+		--difftest "$(abspath $(RV32_NEMU_SO))" )"; \
+	echo "$$output"; \
+	echo "$$output" | grep -q 'difftest=585$$' || { \
+		echo "ERROR: RV32 DiffTest did not verify exactly 585 retirements"; \
+		exit 1; \
+	}
+
+run-difftest-mismatch-probe: workload reference $(DIFFTEST_PROBE)
+	$(DIFFTEST_PROBE) "$(abspath $(RV32_NEMU_SO))" $(SOFTWARE_DIR)/rv32_smoke.bin
+
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(RV32_NEMU_DIR)
