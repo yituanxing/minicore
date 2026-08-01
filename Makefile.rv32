@@ -3,7 +3,7 @@ RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 SOFTWARE_DIR := $(BUILD_DIR)/software
 GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32.cpp
-RV32_NEMU_DIR ?= build/rv32-nemu-probe
+RV32_NEMU_DIR ?= build/rv32-nemu-single-step
 RV32_NEMU_SO := $(RV32_NEMU_DIR)/nemu/build/riscv32-nemu-interpreter-so
 DIFFTEST_PROBE := $(BUILD_DIR)/nemu_difftest_rv32_mismatch_probe
 TOP := AetherCoreRV32SimTop
@@ -31,8 +31,8 @@ runner-source:
 		sim/sim_main.cpp > $(GENERATED_MAIN)
 
 reference:
-	bash tools/probe_rv32_nemu_historical.sh $(abspath $(RV32_NEMU_DIR))
-	@test -f $(RV32_NEMU_SO) || { echo "ERROR: RV32 NEMU shared object was not produced"; exit 1; }
+	bash tools/build_rv32_nemu_single_step.sh $(abspath $(RV32_NEMU_DIR))
+	@test -f $(RV32_NEMU_SO) || { echo "ERROR: RV32 single-step NEMU shared object was not produced"; exit 1; }
 
 $(DIFFTEST_PROBE): sim/nemu_difftest_rv32_mismatch_probe.cpp sim/nemu_difftest_rv32.cpp sim/nemu_difftest_rv32.h
 	mkdir -p $(BUILD_DIR)
