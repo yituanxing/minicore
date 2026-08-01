@@ -7,6 +7,12 @@ source_dir="$work_dir/nemu"
 evidence_dir="$work_dir/evidence"
 config_name="riscv32-minicore-ref_defconfig"
 expected_reg_bytes=132
+single_step="${NEMU_SINGLE_STEP:-0}"
+
+if [[ "$single_step" != "0" && "$single_step" != "1" ]]; then
+  echo "ERROR: NEMU_SINGLE_STEP must be 0 or 1" >&2
+  exit 2
+fi
 
 rm -rf "$work_dir"
 mkdir -p "$source_dir" "$evidence_dir"
@@ -41,6 +47,17 @@ CONFIG_PC_RESET_OFFSET=0x0
 # CONFIG_DIFFTEST is not set
 # CONFIG_MEM_RANDOM is not set
 EOF
+
+# This historical NEMU defaults DISABLE_INSTR_CNT=y whenever PERF_OPT is
+# enabled. That also makes difftest_exec(1) execute a whole basic block rather
+# than one architectural instruction. Commit-level DiffTest requests an
+# otherwise identical reference with that single Kconfig option forced off.
+if [[ "$single_step" == "1" ]]; then
+  cat >> "$source_dir/configs/$config_name" <<'EOF'
+# CONFIG_DISABLE_INSTR_CNT is not set
+EOF
+fi
+
 cp "$source_dir/configs/$config_name" "$evidence_dir/derived.defconfig"
 
 # In this historical tree the shared-reference implementation calls the MMIO
@@ -80,6 +97,20 @@ build_reference() {
 
   make -C "$source_dir" "$config_name" \
     > "$evidence_dir/config-$label.log" 2>&1
+
+  if [[ "$single_step" == "1" ]]; then
+    if ! grep -q '^CONFIG_ENABLE_INSTR_CNT=y$' "$source_dir/.config"; then
+      echo "ERROR: single-step reference did not enable instruction counting" >&2
+      cp "$source_dir/.config" "$evidence_dir/failed-single-step.config"
+      return 4
+    fi
+    if grep -q '^CONFIG_DISABLE_INSTR_CNT=y$' "$source_dir/.config"; then
+      echo "ERROR: single-step reference still disables instruction counting" >&2
+      cp "$source_dir/.config" "$evidence_dir/failed-single-step.config"
+      return 5
+    fi
+  fi
+
   make -C "$source_dir/tools/fixdep" clean \
     > "$evidence_dir/fixdep-$label.log" 2>&1
   make -C "$source_dir/tools/fixdep" \
@@ -108,6 +139,7 @@ if ! cmp -s "$work_dir/riscv32-reference-first.so" "$reference_so"; then
 reproducible=false
 first_sha256=$first_sha
 second_sha256=$second_sha
+single_step=$single_step
 EOF
   cat "$evidence_dir/reproducibility.txt" >&2
   exit 3
@@ -119,6 +151,7 @@ first_sha256=$first_sha
 second_sha256=$second_sha
 source_date_epoch=$SOURCE_DATE_EPOCH
 build_id=disabled
+single_step=$single_step
 EOF
 cat "$evidence_dir/reproducibility.txt"
 
@@ -201,6 +234,7 @@ reference_so=$(basename "$reference_so")
 reference_sha256=$second_sha
 regcpy_bytes=$expected_reg_bytes
 reproducible=true
+single_step=$single_step
 EOF
 cat "$evidence_dir/result.txt"
 cat "$evidence_dir/abi-probe.txt"
