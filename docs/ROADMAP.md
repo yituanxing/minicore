@@ -6,8 +6,9 @@
 - S0.5: checker mismatch probe plus deterministic seeded RV64I generated DiffTest.
 - S1: complete RV64M semantics, directed/generated differential testing and memory-stall forwarding fix.
 - S1.1: GCC-produced freestanding RV64IM programs, ELF/link/disassembly evidence and 3621 additional NEMU comparisons.
-- S1.2: real-program expansion with sort, CRC/hash, mixed integer kernels, `-O0/-O2/-Os`, and Minic/GCC same-source comparison.
-- S1.3: multi-cycle M-unit request/busy/response handshake, driven by the frozen compiled binary corpus.
+- S1.2: frozen 12-binary real-program corpus with sort, CRC/hash, mixed integer kernels and `-O0/-O2/-Os`; 207337 total verified retirements.
+- S1.3: Minic/GCC same-source corpus production using the compiler-neutral manifest.
+- S1.4: multi-cycle M-unit request/busy/response handshake, driven by unchanged frozen binaries.
 - S2: M/S/U privilege, CSR, exceptions and interrupts.
 - S3: Sv39, TLB and blocking I/D caches.
 - S4: OpenSBI, Linux and BusyBox.
