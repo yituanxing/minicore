@@ -8,7 +8,7 @@ from pathlib import Path
 from make_generated_difftest import XorShift64
 from make_regressions import emit_exit
 from make_rv64m_regressions import emit_m
-from rv64_asm import Program
+from rv64_asm import Program, r_type
 
 DATA_BASE_OFFSET = 0x780
 DATA_BASE_REGISTER = 28
@@ -81,7 +81,7 @@ def build_program(case: GeneratedMCase) -> Program:
             program.sub(rd, rs1, rs2)
             last_destination = rd
         elif selector == 15:
-            program.xor(rd, rs1, rs2)
+            program.emit(r_type(0x33, rd, 4, rs1, rs2, 0))
             last_destination = rd
         elif selector == 16:
             program.addi(rd, rs1, rng.signed12())
@@ -106,8 +106,8 @@ def build_program(case: GeneratedMCase) -> Program:
         elif selector == 21:
             program.emit(0x0000000F if rng.bounded(2) == 0 else 0x0000100F)
         elif selector == 22:
-            # Keep divide-by-zero and signed-overflow cases naturally present:
-            # x0 is a legal divisor and the result is still compared to NEMU.
+            # x0 is a legal divisor, so the generated matrix repeatedly covers
+            # the architectural divide/remainder-by-zero results.
             word, funct3 = M_ENCODINGS[4 + rng.bounded(4)]
             emit_m(program, rd, funct3, rs1, 0, word=word)
             last_destination = rd
