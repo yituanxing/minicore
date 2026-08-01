@@ -41,6 +41,20 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform.busBytes shouldBe 4
   }
 
+  it should "describe the RV32IM real-software profile" in {
+    val config = CoreProfiles.rv32imSoftware
+
+    config.name shouldBe "rv32im-software"
+    config.isa.xlen shouldBe 32
+    config.isa.xBytes shouldBe 4
+    config.isa.shiftBits shouldBe 5
+    config.isa.hasM shouldBe true
+    config.isa.hasWordOps shouldBe false
+    config.isa.march shouldBe "rv32im"
+    config.isa.mabi shouldBe "ilp32"
+    config.platform shouldBe CoreProfiles.rv32iMinimal.platform
+  }
+
   it should "derive an independent RV32I software contract" in {
     val isa = IsaConfig(
       xlen = 32,
