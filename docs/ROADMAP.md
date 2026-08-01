@@ -7,10 +7,16 @@
 - S1: complete RV64M semantics, directed/generated differential testing and memory-stall forwarding fix.
 - S1.1: GCC-produced freestanding RV64IM programs, ELF/link/disassembly evidence and 3621 additional NEMU comparisons.
 - S1.2: frozen 12-binary real-program corpus with sort, CRC/hash, mixed integer kernels and `-O0/-O2/-Os`; 207337 total verified retirements.
-- S1.3: Minic/GCC same-source corpus production using the compiler-neutral manifest.
-- S1.4: multi-cycle M-unit request/busy/response handshake, driven by unchanged frozen binaries.
-- S2: M/S/U privilege, CSR, exceptions and interrupts.
-- S3: Sv39, TLB and blocking I/D caches.
-- S4: OpenSBI, Linux and BusyBox.
-- S5: FPGA synthesis, timing closure and board bring-up.
-- S6+: dual issue, ROB, register renaming and partial out-of-order execution.
+- S1.3: pinned upstream bare-metal software, beginning with CoreMark and expanding to Embench-IoT.
+- S1.4: storage and library workloads: littlefs plus a freestanding subset of musl routines.
+- S2: FreeRTOS-driven machine CSRs, exceptions, timer/software interrupts and context switching.
+- S3: xv6-riscv-driven A extension, M/S/U privilege, Sv39, TLBs and essential devices.
+- S4: OpenSBI, Linux, musl, BusyBox and deterministic user-space programs including Lua and SQLite.
+- S5: use the complete frozen software ladder to drive cache, multi-cycle execution, branch and bus performance work.
+- S6: FPGA synthesis, timing closure and board bring-up.
+- S7+: optional superscalar work such as dual issue, ROB, register renaming and partial out-of-order execution.
+
+Correctness and software completeness precede performance optimization. Every
+upstream failure must be reduced to a focused permanent regression before RTL
+is changed, and every microarchitectural change must rerun the exact frozen
+binary hashes without recompilation.
