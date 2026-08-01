@@ -31,6 +31,11 @@ jobs:
 
       - name: Probe pinned RV32 reference configuration and ABI
         shell: bash
+        env:
+          # The pinned tree formats some 32-bit values with RV64-oriented %lx
+          # diagnostics. Keep every other warning fatal while allowing only
+          # this known host-compiler compatibility warning.
+          CFLAGS: -Wno-error=format
         run: |
           mkdir -p build
           set -o pipefail
