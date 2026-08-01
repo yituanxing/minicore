@@ -1,0 +1,48 @@
+name: RV32 NEMU ABI Probe
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32-nemu-probe-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Probe pinned RV32 NEMU reference ABI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NEMU build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils
+
+      - name: Probe pinned RV32 reference configuration and ABI
+        shell: bash
+        run: |
+          set -o pipefail
+          bash tools/probe_rv32_nemu.sh build/rv32-nemu-probe \
+            2>&1 | tee build/rv32-nemu-probe.log
+
+      - name: Upload ABI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32-nemu-probe-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32-nemu-probe.log
+            build/rv32-nemu-probe/evidence/
