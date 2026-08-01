@@ -56,13 +56,17 @@ jobs:
         run: |
           mkdir -p build
           set -o pipefail
+          # The historical unstripped shared object contains its absolute build
+          # path. Reproduce PR #18 at the exact frozen path before moving its
+          # complete evidence aside for the precise reference build.
           bash tools/probe_rv32_nemu_historical.sh \
-            "$(pwd)/build/rv32-nemu-abi" \
+            "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-abi.log
           grep -q '^reference_sha256=b064aec211ae22e872d8ab7a3705a2e354e0d968289dbb7880515710d9dd5eb7$' \
-            build/rv32-nemu-abi/evidence/result.txt
-          grep -q '^single_step=0$' build/rv32-nemu-abi/evidence/result.txt
-          grep -q '^perf_opt=true$' build/rv32-nemu-abi/evidence/result.txt
+            build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^single_step=0$' build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^perf_opt=true$' build/rv32-nemu-probe/evidence/result.txt
+          mv build/rv32-nemu-probe build/rv32-nemu-abi
 
       - name: Build exact frozen RV32 NEMU reference
         shell: bash
