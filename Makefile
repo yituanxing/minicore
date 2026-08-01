@@ -7,6 +7,7 @@ COMPLETION_DIR := $(BUILD_DIR)/completion-regressions
 FAULT_DIR := $(BUILD_DIR)/fault-regressions
 GENERATED_DIR := $(BUILD_DIR)/generated-difftest
 RV64M_DIR := $(BUILD_DIR)/rv64m-regressions
+GENERATED_M_DIR := $(BUILD_DIR)/generated-rv64m
 NEMU_DIR := $(BUILD_DIR)/nemu
 NEMU_HOME := $(abspath $(NEMU_DIR))
 NEMU_COMMIT := ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
@@ -22,7 +23,7 @@ SIM_SOURCES := $(abspath sim/sim_main.cpp) $(abspath sim/nemu_difftest.cpp)
 # Keep this recursive so the wildcard is expanded after the `rtl` prerequisite.
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-.PHONY: all rtl test smoke regressions completion-regressions fault-regressions generated-difftest rv64m-regressions nemu sim run-smoke run-regressions run-completion-regressions run-fault-regressions run-difftest run-difftest-mismatch-probe run-generated-difftest run-rv64m-regressions python-test clean
+.PHONY: all rtl test smoke regressions completion-regressions fault-regressions generated-difftest rv64m-regressions generated-rv64m nemu sim run-smoke run-regressions run-completion-regressions run-fault-regressions run-difftest run-difftest-mismatch-probe run-generated-difftest run-rv64m-regressions run-generated-rv64m python-test clean
 
 all: test run-smoke run-regressions run-completion-regressions run-fault-regressions
 
@@ -50,6 +51,9 @@ generated-difftest:
 
 rv64m-regressions:
 	$(PYTHON) tools/make_rv64m_regressions.py $(RV64M_DIR)
+
+generated-rv64m:
+	$(PYTHON) tools/make_generated_rv64m.py $(GENERATED_M_DIR)
 
 $(NEMU_SO):
 	rm -rf $(NEMU_DIR)
@@ -147,6 +151,17 @@ run-rv64m-regressions: sim rv64m-regressions $(NEMU_SO)
 		$(OBJ_DIR)/V$(TOP) $(RV64M_DIR)/$$name.bin \
 			--max-cycles 2000 --self-check-exit --difftest "$$so"; \
 	done < $(RV64M_DIR)/manifest.txt
+
+run-generated-rv64m: sim generated-rv64m $(NEMU_SO)
+	@set -e; \
+	so="$(abspath $(NEMU_SO))"; \
+	while read name seed stall operations words; do \
+		echo "== generated RV64M NEMU DiffTest: $$name seed=$$seed operations=$$operations words=$$words =="; \
+		stall_args=""; \
+		if [ "$$stall" != "0" ]; then stall_args="--stall-period $$stall"; fi; \
+		$(OBJ_DIR)/V$(TOP) $(GENERATED_M_DIR)/$$name.bin \
+			--max-cycles 10000 --self-check-exit --difftest "$$so" $$stall_args; \
+	done < $(GENERATED_M_DIR)/manifest.txt
 
 python-test:
 	$(PYTHON) -m unittest discover -s tests_py -v
