@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+set -eu
+
+# Prefer a Mill installation supplied by CI/SDK tooling. This avoids a network
+# download on every build while keeping the repository runnable standalone.
+if command -v mill >/dev/null 2>&1; then
+  MILL_ON_PATH="$(command -v mill)"
+  case "$MILL_ON_PATH" in
+    "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")") ;;
+    *) exec "$MILL_ON_PATH" "$@" ;;
+  esac
+fi
+
+MILL_VERSION="${MILL_VERSION:-1.1.2}"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/aethercore"
+MILL_BIN="$CACHE_DIR/mill-$MILL_VERSION"
+URL="https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/$MILL_VERSION/mill-dist-$MILL_VERSION.exe"
+
+if [ ! -x "$MILL_BIN" ]; then
+  mkdir -p "$CACHE_DIR"
+  echo "Downloading Mill $MILL_VERSION..." >&2
+  curl -fL --retry 3 --retry-delay 2 "$URL" -o "$MILL_BIN.tmp"
+  chmod +x "$MILL_BIN.tmp"
+  mv "$MILL_BIN.tmp" "$MILL_BIN"
+fi
+
+exec "$MILL_BIN" "$@"
