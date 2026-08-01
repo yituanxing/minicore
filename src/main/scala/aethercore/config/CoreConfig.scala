@@ -57,6 +57,14 @@ final case class CoreConfig(
 }
 
 object CoreProfiles {
+  private val rv32Platform: PlatformConfig = PlatformConfig(
+    resetVector = BigInt("80000000", 16),
+    paddrBits = 32,
+    busDataBits = 32,
+    uartAddress = BigInt("10000000", 16),
+    exitAddress = BigInt("10000008", 16)
+  )
+
   val rv32iMinimal: CoreConfig = CoreConfig(
     name = "rv32i-minimal",
     isa = IsaConfig(
@@ -64,13 +72,17 @@ object CoreProfiles {
       extensions = Set('I'),
       privilegeModes = Set('M')
     ),
-    platform = PlatformConfig(
-      resetVector = BigInt("80000000", 16),
-      paddrBits = 32,
-      busDataBits = 32,
-      uartAddress = BigInt("10000000", 16),
-      exitAddress = BigInt("10000008", 16)
-    )
+    platform = rv32Platform
+  )
+
+  val rv32imSoftware: CoreConfig = CoreConfig(
+    name = "rv32im-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M')
+    ),
+    platform = rv32Platform
   )
 
   val rv64imCurrent: CoreConfig = CoreConfig(
