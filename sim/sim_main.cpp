@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,6 +18,14 @@ constexpr std::uint64_t kExpectedX3 = 12;
 constexpr std::uint64_t kExpectedCommits = 7;
 constexpr std::uint32_t kEbreak = 0x00100073U;
 
+std::uint64_t parseInteger(const char* text) {
+  std::size_t consumed = 0;
+  const std::string value{text};
+  const auto parsed = std::stoull(value, &consumed, 0);
+  if (consumed != value.size()) throw std::runtime_error("invalid integer: " + value);
+  return parsed;
+}
+
 struct Options {
   std::string image;
   std::uint64_t maxCycles = 1000000;
@@ -24,13 +33,23 @@ struct Options {
   bool trace = false;
   bool commitTrace = false;
   bool selfCheckExit = false;
+  std::optional<std::uint64_t> expectedExceptionPc;
+  std::optional<std::uint32_t> expectedExceptionInst;
+  std::optional<std::uint64_t> expectedCommits;
+  std::optional<unsigned> forbiddenRd;
+  std::optional<std::uint64_t> expectedMemoryAddress;
+  std::optional<std::uint64_t> expectedMemoryValue;
+
+  bool faultCheck() const { return expectedExceptionPc.has_value(); }
 };
 
 Options parseOptions(int argc, char** argv) {
   if (argc < 2) {
     throw std::runtime_error(
         "usage: VAetherCoreSimTop <image.bin> [--max-cycles N] [--stall-period N] "
-        "[--trace] [--commit-trace] [--self-check-exit]");
+        "[--trace] [--commit-trace] [--self-check-exit] "
+        "[--expect-exception-pc N --expect-exception-inst N --expected-commits N] "
+        "[--forbid-rd N] [--expect-memory64 ADDRESS VALUE]");
   }
 
   Options options;
@@ -38,9 +57,9 @@ Options parseOptions(int argc, char** argv) {
   for (int i = 2; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--max-cycles" && i + 1 < argc) {
-      options.maxCycles = std::stoull(argv[++i]);
+      options.maxCycles = parseInteger(argv[++i]);
     } else if (arg == "--stall-period" && i + 1 < argc) {
-      options.stallPeriod = std::stoull(argv[++i]);
+      options.stallPeriod = parseInteger(argv[++i]);
       if (options.stallPeriod == 1) {
         throw std::runtime_error("--stall-period 1 would block every memory cycle");
       }
@@ -50,9 +69,35 @@ Options parseOptions(int argc, char** argv) {
       options.commitTrace = true;
     } else if (arg == "--self-check-exit") {
       options.selfCheckExit = true;
+    } else if (arg == "--expect-exception-pc" && i + 1 < argc) {
+      options.expectedExceptionPc = parseInteger(argv[++i]);
+    } else if (arg == "--expect-exception-inst" && i + 1 < argc) {
+      options.expectedExceptionInst = static_cast<std::uint32_t>(parseInteger(argv[++i]));
+    } else if (arg == "--expected-commits" && i + 1 < argc) {
+      options.expectedCommits = parseInteger(argv[++i]);
+    } else if (arg == "--forbid-rd" && i + 1 < argc) {
+      const auto rd = parseInteger(argv[++i]);
+      if (rd >= 32) throw std::runtime_error("--forbid-rd must name x0..x31");
+      options.forbiddenRd = static_cast<unsigned>(rd);
+    } else if (arg == "--expect-memory64" && i + 2 < argc) {
+      options.expectedMemoryAddress = parseInteger(argv[++i]);
+      options.expectedMemoryValue = parseInteger(argv[++i]);
     } else {
-      throw std::runtime_error("unknown argument: " + arg);
+      throw std::runtime_error("unknown or incomplete argument: " + arg);
     }
+  }
+
+  if (options.faultCheck()) {
+    if (!options.expectedExceptionInst || !options.expectedCommits) {
+      throw std::runtime_error(
+          "fault checking requires --expect-exception-pc, --expect-exception-inst and --expected-commits");
+    }
+    if (options.selfCheckExit) {
+      throw std::runtime_error("fault checking and --self-check-exit are mutually exclusive");
+    }
+  }
+  if (options.expectedMemoryAddress.has_value() != options.expectedMemoryValue.has_value()) {
+    throw std::runtime_error("--expect-memory64 requires both address and value");
   }
   return options;
 }
@@ -147,8 +192,11 @@ int main(int argc, char** argv) {
     std::uint64_t exceptions = 0;
     std::uint64_t cycles = 0;
     std::uint64_t exitCode = 0;
+    std::uint64_t exceptionPc = 0;
+    std::uint32_t exceptionInst = 0;
     bool sawX3 = false;
     bool exitRequested = false;
+    bool forbiddenWriteSeen = false;
     std::string uart;
 
     top.reset = 1;
@@ -160,8 +208,6 @@ int main(int argc, char** argv) {
       const bool memoryReady =
           options.stallPeriod == 0 || (cycles % options.stallPeriod) != 0;
 
-      // Settle the combinational logic at clock-low. Architectural events are
-      // sampled here because they are accepted by the upcoming rising edge.
       top.clock = 0;
       driveInputs(top, memory, memoryReady);
       top.eval();
@@ -190,11 +236,20 @@ int main(int argc, char** argv) {
 
         if (top.io_commit_valid) {
           ++committed;
-          if (top.io_commit_exception) ++exceptions;
+          if (top.io_commit_exception) {
+            ++exceptions;
+            exceptionPc = static_cast<std::uint64_t>(top.io_commit_pc);
+            exceptionInst = static_cast<std::uint32_t>(top.io_commit_inst);
+          }
+
+          if (options.forbiddenRd && top.io_commit_rdWrite &&
+              static_cast<unsigned>(top.io_commit_rd) == *options.forbiddenRd) {
+            forbiddenWriteSeen = true;
+          }
 
           if (top.io_commit_rdWrite && top.io_commit_rd == 3) {
             const auto value = static_cast<std::uint64_t>(top.io_commit_rdData);
-            if (!options.selfCheckExit && value != kExpectedX3) {
+            if (!options.selfCheckExit && !options.faultCheck() && value != kExpectedX3) {
               std::cerr << "\nFAIL: x3 committed 0x" << std::hex << value
                         << ", expected 0x" << kExpectedX3 << std::dec << '\n';
               return 3;
@@ -212,8 +267,6 @@ int main(int argc, char** argv) {
       if (wave) wave->dump(context.time());
       context.timeInc(1);
 
-      // Hold reset for five complete rising edges. Do not sample any
-      // architectural event until the next clock-low phase.
       if (cycles == 4) top.reset = 0;
     }
 
@@ -226,6 +279,55 @@ int main(int argc, char** argv) {
     if (!top.io_halted && cycles >= options.maxCycles) {
       std::cerr << "FAIL: timeout after " << cycles << " cycles\n";
       return 2;
+    }
+
+    if (options.faultCheck()) {
+      if (!top.io_halted) {
+        std::cerr << "FAIL: fault test ended without the core halting\n";
+        return 20;
+      }
+      if (exitRequested || !uart.empty()) {
+        std::cerr << "FAIL: younger MMIO side effect escaped past the fault\n";
+        return 21;
+      }
+      if (exceptions != 1) {
+        std::cerr << "FAIL: observed " << exceptions << " exception commits, expected exactly one\n";
+        return 22;
+      }
+      if (exceptionPc != *options.expectedExceptionPc ||
+          exceptionInst != *options.expectedExceptionInst) {
+        std::cerr << "FAIL: exception boundary pc=0x" << std::hex << exceptionPc
+                  << " inst=0x" << exceptionInst << ", expected pc=0x"
+                  << *options.expectedExceptionPc << " inst=0x"
+                  << *options.expectedExceptionInst << std::dec << '\n';
+        return 23;
+      }
+      if (committed != *options.expectedCommits) {
+        std::cerr << "FAIL: retired " << committed << " instructions, expected "
+                  << *options.expectedCommits << '\n';
+        return 24;
+      }
+      if (forbiddenWriteSeen) {
+        std::cerr << "FAIL: younger forbidden register x" << *options.forbiddenRd
+                  << " committed after the fault boundary\n";
+        return 25;
+      }
+      if (options.expectedMemoryAddress) {
+        const auto observed = memory.read64(*options.expectedMemoryAddress);
+        if (observed != *options.expectedMemoryValue) {
+          std::cerr << "FAIL: memory[0x" << std::hex << *options.expectedMemoryAddress
+                    << "] = 0x" << observed << ", expected 0x"
+                    << *options.expectedMemoryValue << std::dec << '\n';
+          return 26;
+        }
+      }
+
+      std::cout << "PASS: precise fault pc=0x" << std::hex << exceptionPc
+                << " inst=0x" << exceptionInst << std::dec << " after " << cycles
+                << " cycles, " << committed << " committed instructions";
+      if (options.stallPeriod != 0) std::cout << ", stall-period=" << options.stallPeriod;
+      std::cout << '\n';
+      return 0;
     }
 
     if (options.selfCheckExit) {
