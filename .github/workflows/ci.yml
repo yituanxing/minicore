@@ -78,6 +78,12 @@ jobs:
           set -o pipefail
           make run-completion-regressions 2>&1 | tee build/logs/completion-regressions.log
 
+      - name: Precise fault-boundary regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-fault-regressions 2>&1 | tee build/logs/fault-regressions.log
+
       - name: Upload build evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,4 +97,5 @@ jobs:
             build/software/smoke.bin
             build/regressions/
             build/completion-regressions/
+            build/fault-regressions/
             build/aethercore.vcd
