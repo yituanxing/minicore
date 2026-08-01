@@ -194,6 +194,13 @@ class AetherCore(resetVector: BigInt = BigInt("80000000", 16)) extends Module {
   when(!haltedReg) {
     when(memoryStall) {
       memWb.valid := false.B
+
+      // MEM backpressure freezes ID/EX while the current WB result retires and
+      // its forwarding source disappears. Persist the values already selected
+      // by the forwarding network so the frozen EX instruction cannot fall
+      // back to stale register-file snapshots on the following cycle.
+      idEx.rs1Data := forwardedRs1
+      idEx.rs2Data := forwardedRs2
     }.otherwise {
       memWb.valid := exMem.valid
       memWb.pc := exMem.pc
