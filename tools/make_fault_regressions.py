@@ -44,28 +44,28 @@ class FaultCase:
 
 def illegal_instruction() -> FaultCase:
     p = Program()
-    p.addi(1, 0, 7)
-    fault_index = len(p.words)
-    p.emit(0xFFFFFFFF)
-    p.addi(2, 0, 99)  # younger write must not retire
     p.lui(31, 0x10000)
     p.addi(30, 0, 1)
-    p.sd(30, 31, 8)   # younger exit side effect must not escape
-    return FaultCase(p, fault_index, expected_commits=2, forbidden_rd=2)
+    fault_index = len(p.words)
+    p.emit(0xFFFFFFFF)
+    p.sd(30, 31, 8)   # immediately younger exit store must not escape
+    p.addi(2, 0, 99)  # younger register write must not retire
+    return FaultCase(p, fault_index, expected_commits=3, forbidden_rd=2)
 
 
 def load_bus_fault() -> FaultCase:
     p = Program()
+    p.lui(31, 0x10000)
+    p.addi(30, 0, 1)
     p.lui(1, 0x10000)  # 0x10000000: MMIO only for writes, invalid as host RAM
     fault_index = len(p.words)
     p.ld(2, 1, 0)
-    p.addi(3, 0, 99)   # younger write must not retire
-    p.lui(31, 0x10000)
-    p.sd(3, 31, 8)     # younger exit side effect must not escape
+    p.sd(30, 31, 8)   # immediately younger exit store must not escape
+    p.addi(3, 0, 99)  # younger register write must not retire
     return FaultCase(
         p,
         fault_index,
-        expected_commits=2,
+        expected_commits=4,
         stall_period=3,
         forbidden_rd=3,
     )
@@ -77,14 +77,14 @@ def store_bus_fault() -> FaultCase:
     p.addi(10, 10, 0x200)
     p.sd(0, 10, 0)     # sentinel must remain zero
 
+    p.addi(2, 0, 0x55)
     p.lui(1, 0x10000)
     p.addi(1, 1, 16)   # 0x10000010: neither RAM nor recognized MMIO
-    p.addi(2, 0, 0x55)
     fault_index = len(p.words)
     p.sd(2, 1, 0)
 
+    p.sd(2, 10, 0)     # immediately younger valid-RAM store must be suppressed
     p.addi(3, 0, 99)   # younger register write must not retire
-    p.sd(2, 10, 0)     # younger valid-RAM store must not become visible
     return FaultCase(
         p,
         fault_index,
