@@ -76,8 +76,8 @@ jobs:
             build/rv32im-embench/software/batch.txt
           grep -q '^local_scale_factor=1$' \
             build/rv32im-embench/software/batch.txt
-          test "$(grep -c '^#define LOCAL_SCALE_FACTOR 1$' \
-            build/rv32im-embench/software/scaled-src/*/*.c)" -eq 4
+          test "$(grep -h '^#define LOCAL_SCALE_FACTOR 1$' \
+            build/rv32im-embench/software/scaled-src/*/*.c | wc -l)" -eq 4
 
       - name: Run Embench batch DiffTest
         shell: bash
