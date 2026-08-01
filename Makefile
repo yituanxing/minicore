@@ -6,6 +6,10 @@ TOP := AetherCoreSimTop
 VERILATOR ?= verilator
 PYTHON ?= python3
 
+# Chisel/CIRCT emits the top and child modules as separate SystemVerilog files.
+# Keep this recursive so the wildcard is expanded after the `rtl` prerequisite.
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+
 .PHONY: all rtl test smoke sim run-smoke python-test clean
 
 all: test run-smoke
@@ -21,10 +25,11 @@ smoke:
 	$(PYTHON) tools/make_smoke.py $(SOFTWARE_DIR)/smoke.bin
 
 sim: rtl smoke
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no generated SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2" \
-		$(RTL_DIR)/$(TOP).sv sim/sim_main.cpp
+		$(RTL_SOURCES) sim/sim_main.cpp
 
 run-smoke: sim
 	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/smoke.bin --max-cycles 200
