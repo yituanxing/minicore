@@ -80,8 +80,10 @@ build_reference() {
 
   make -C "$source_dir" "$config_name" \
     > "$evidence_dir/config-$label.log" 2>&1
-  make -C "$source_dir/tools/fixdep" clean all \
+  make -C "$source_dir/tools/fixdep" clean \
     > "$evidence_dir/fixdep-$label.log" 2>&1
+  make -C "$source_dir/tools/fixdep" \
+    >> "$evidence_dir/fixdep-$label.log" 2>&1
   make -C "$source_dir" -j2 \
     > "$evidence_dir/build-$label.log" 2>&1
 
