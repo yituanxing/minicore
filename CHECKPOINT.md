@@ -1,10 +1,10 @@
-# AetherCore S0.3a checkpoint
+# AetherCore S0.3b checkpoint
 
 ## Status
 
-The first directed RV64I pipeline-regression layer is green on top of the verified S0.2 core. S0.3a establishes self-checking binaries, deterministic memory backpressure and CI evidence for forwarding, load-use, branch recovery and JAL/JALR recovery.
+The deterministic RV64I regression matrix now covers eight self-checking Verilator programs. S0.3b verifies the existing five-stage core across forwarding, blocking memory behavior, load/store widths, sign extension, W-class arithmetic, all branch predicates, control-flow recovery and register-file corner cases without changing CPU RTL.
 
-## Core baseline inherited from S0.2
+## Core baseline
 
 - IF/ID/EX/MEM/WB in-order pipeline.
 - RV64I decoder and ALU, including W-class arithmetic.
@@ -17,17 +17,17 @@ The first directed RV64I pipeline-regression layer is green on top of the verifi
 - Architectural commit trace and temporary halt-on-exception behavior.
 - Chisel tests, strict Verilator smoke and GitHub Actions artifact pipeline.
 
-## Added in S0.3a
+## Verification infrastructure
 
-- Tiny Python RV64 instruction encoder with labels and B/J fixups.
-- Self-checking regression binaries that return unique failure codes through exit MMIO.
-- `--self-check-exit` Verilator mode.
-- Deterministic `--stall-period N` memory-ready backpressure.
-- CI execution and archived logs/images for all directed regressions.
+- Tiny Python RV64 assembler with labels and B/J fixups.
+- Load/store width, shift, W-class and all branch-predicate encoders.
+- Self-checking binaries with unique exit-MMIO error codes.
+- Deterministic memory-ready backpressure through `--stall-period N`.
+- Archived generated images, SystemVerilog and CI logs.
 
 ## Verified by GitHub Actions
 
-Run `30693234154` completed successfully with the original S0.2 smoke and all new regressions green.
+Run `30693594258` completed successfully. The original strict smoke remained green and all eight directed regressions passed.
 
 ```text
 A
@@ -44,15 +44,30 @@ PASS: self-check exit=0 after 21 cycles, 9 committed instructions
 
 jal_jalr:
 PASS: self-check exit=0 after 26 cycles, 11 committed instructions
+
+memory_widths:
+PASS: self-check exit=0 after 50 cycles, 29 committed instructions, stall-period=4
+
+word_operations:
+PASS: self-check exit=0 after 37 cycles, 28 committed instructions
+
+branch_matrix:
+PASS: self-check exit=0 after 38 cycles, 17 committed instructions
+
+x0_writeback:
+PASS: self-check exit=0 after 21 cycles, 12 committed instructions
 ```
 
-Coverage demonstrated:
+## Coverage demonstrated
 
-- dependent ALU instructions consume EX/MEM and MEM/WB forwarded results;
-- an immediate load consumer receives the correct value after the load-use bubble;
-- a blocking load survives deterministic memory backpressure without duplicate or lost architectural progress;
-- a taken branch suppresses a younger wrong-path store;
-- JAL writes a link address and JALR returns through it while wrong-path instructions are flushed.
+- SB/SH/SW/SD and LB/LH/LW/LD complete correctly;
+- LBU/LHU/LWU zero-extend while signed loads sign-extend;
+- memory transactions survive periodic `ready=0` without duplication or loss;
+- ADDIW/SLLIW/SRLIW/SRAIW and ADDW/SUBW/SLLW/SRLW/SRAW produce sign-extended RV64 results;
+- BEQ/BNE/BLT/BGE/BLTU/BGEU are correct in both taken and not-taken cases;
+- x0 ignores writes;
+- a consumer decoding during the producer's WB cycle receives the just-written value;
+- the S0.3a forwarding, load-use, branch-flush and JAL/JALR tests remain green.
 
 ## Known non-fatal warnings
 
@@ -60,13 +75,15 @@ Coverage demonstrated:
 - Generated reset/randomization helper symbols are unused.
 - Shift intermediates are wider than their selected architectural result.
 
-## Next gate: S0.3b
+## Next gate: S0.3c
 
-Continue deterministic RV64I coverage before adding privileged architecture:
+Finish deterministic RV64I coverage before connecting an external reference model:
 
-- byte/half/word/dword stores and loads;
-- signed and unsigned load extension;
-- ADDIW/SLLIW/SRLIW/SRAIW and register W-class operations;
-- all signed and unsigned branch predicates;
-- x0 protection and same-cycle WB/read corner cases;
-- broader deterministic memory-ready patterns.
+- XOR/OR/AND, SLT/SLTU and register/immediate 64-bit shifts;
+- SUB and immediate arithmetic boundary values;
+- LUI/AUIPC/JAL/JALR PC and link-address corner cases;
+- FENCE/FENCE.I no-op retirement behavior;
+- illegal-instruction and memory-fault retirement records;
+- several reproducible memory-ready patterns rather than one fixed period.
+
+After S0.3c, freeze the directed suite and begin commit-level NEMU/Spike DiffTest.
