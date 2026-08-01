@@ -72,6 +72,12 @@ jobs:
           set -o pipefail
           make run-regressions 2>&1 | tee build/logs/pipeline-regressions.log
 
+      - name: Remaining RV64I completion regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-completion-regressions 2>&1 | tee build/logs/completion-regressions.log
+
       - name: Upload build evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -84,4 +90,5 @@ jobs:
             build/rtl/
             build/software/smoke.bin
             build/regressions/
+            build/completion-regressions/
             build/aethercore.vcd
