@@ -24,7 +24,24 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform.busBytes shouldBe 8
   }
 
-  it should "derive a future RV32I software contract without enabling it in RTL" in {
+  it should "describe the executable RV32I profile" in {
+    val config = CoreProfiles.rv32iMinimal
+
+    config.name shouldBe "rv32i-minimal"
+    config.isa.xlen shouldBe 32
+    config.isa.xBytes shouldBe 4
+    config.isa.shiftBits shouldBe 5
+    config.isa.hasM shouldBe false
+    config.isa.hasWordOps shouldBe false
+    config.isa.march shouldBe "rv32i"
+    config.isa.mabi shouldBe "ilp32"
+    config.platform.resetVector shouldBe BigInt("80000000", 16)
+    config.platform.paddrBits shouldBe 32
+    config.platform.busDataBits shouldBe 32
+    config.platform.busBytes shouldBe 4
+  }
+
+  it should "derive an independent RV32I software contract" in {
     val isa = IsaConfig(
       xlen = 32,
       extensions = Set('I'),

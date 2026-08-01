@@ -62,7 +62,6 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
 
-  require(xlen == 64, "the complete pipeline semantics are still RV64-only")
   require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
 
@@ -170,12 +169,17 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   io.dmem.size := exMem.ctrl.memSize
 
   def extendLoad(bits: Int): UInt = {
+    require(bits <= xlen, s"cannot extend a $bits-bit load into XLEN=$xlen")
     val value = io.dmem.rdata(bits - 1, 0)
-    Mux(
-      exMem.ctrl.memUnsigned,
-      Cat(0.U((xlen - bits).W), value),
-      Cat(Fill(xlen - bits, value(bits - 1)), value)
-    )
+    if (bits == xlen) {
+      value
+    } else {
+      Mux(
+        exMem.ctrl.memUnsigned,
+        Cat(0.U((xlen - bits).W), value),
+        Cat(Fill(xlen - bits, value(bits - 1)), value)
+      )
+    }
   }
 
   val loadData = WireDefault(io.dmem.rdata)
