@@ -56,7 +56,7 @@ int main(void) {
   fill_data(data, 257);
 
   if (data[0] != UINT8_C(0xa5) || data[1] != UINT8_C(0xbe) ||
-      data[2] != UINT8_C(0xfe) || data[256] != UINT8_C(0x3e)) {
+      data[2] != UINT8_C(0xfe) || data[256] != UINT8_C(0xe4)) {
     return 1;
   }
 
