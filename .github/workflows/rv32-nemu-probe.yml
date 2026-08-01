@@ -32,11 +32,12 @@ jobs:
       - name: Probe pinned RV32 reference configuration and ABI
         shell: bash
         env:
-          # This is the last focused upstream RV32 adaptation checkpoint found
-          # before the repository evolved toward an RV64-only reference core.
-          NEMU_REVISION: 4cac5438bec9cabd98c9ab1dacfc8bb4e1ee2601
-          # Preserve all warnings as errors except known host-format drift.
-          CFLAGS: -Wno-error=format
+          # This checkpoint follows the focused RV32/common-code adaptation and
+          # includes the host-TLB rewrite that restores explicit vaddr_t types.
+          NEMU_REVISION: 8601834e4889e6bf3b6113eb5f824ba7689126f5
+          # GCC 13 diagnoses the historical high-base host-pointer offset as an
+          # array-bounds warning. Keep every other warning fatal.
+          CFLAGS: -Wno-error=format -Wno-error=array-bounds
         run: |
           mkdir -p build
           set -o pipefail
