@@ -2,7 +2,7 @@
 
 A correctness-first RISC-V processor project written in Chisel.
 
-The current stable development checkpoint is **S0.3a**: a five-stage in-order RV64I core with a real Chisel/CIRCT/Verilator build path and an initial self-checking pipeline-regression suite.
+The current stable development checkpoint is **S0.3b**: a five-stage in-order RV64I core with a real Chisel/CIRCT/Verilator build path and eight self-checking directed regression programs.
 
 ## Current core
 
@@ -28,13 +28,18 @@ PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
 
 ## Directed regressions
 
-Current Verilator regressions cover:
+The Verilator suite currently covers:
 
 - EX/MEM and MEM/WB forwarding;
 - immediate load-use dependency;
-- load transaction under deterministic memory backpressure;
+- blocking memory transactions under deterministic backpressure;
 - taken-branch wrong-path store suppression;
-- JAL link writeback and JALR return/recovery.
+- JAL link writeback and JALR return/recovery;
+- byte, halfword, word and doubleword stores/loads;
+- signed and unsigned load extension;
+- RV64 W-class immediate and register operations;
+- all six signed/unsigned branch predicates in taken and not-taken cases;
+- x0 write suppression and same-cycle WB/read bypass.
 
 ```bash
 make run-regressions
