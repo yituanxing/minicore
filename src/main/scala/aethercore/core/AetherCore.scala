@@ -3,72 +3,86 @@ package aethercore.core
 import chisel3._
 import chisel3.util._
 import aethercore.common._
+import aethercore.config.{CoreConfig, CoreProfiles}
 
-class IfId extends Bundle {
+class IfId(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
-  val pc = UInt(64.W)
+  val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val fault = Bool()
 }
 
-class IdEx extends Bundle {
+class IdEx(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
-  val pc = UInt(64.W)
+  val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val rs1 = UInt(5.W)
   val rs2 = UInt(5.W)
   val rd = UInt(5.W)
-  val rs1Data = UInt(64.W)
-  val rs2Data = UInt(64.W)
-  val imm = UInt(64.W)
+  val rs1Data = UInt(xlen.W)
+  val rs2Data = UInt(xlen.W)
+  val imm = UInt(xlen.W)
   val ctrl = new ControlSignals
   val exception = Bool()
 }
 
-class ExMem extends Bundle {
+class ExMem(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
-  val pc = UInt(64.W)
+  val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val rd = UInt(5.W)
-  val result = UInt(64.W)
-  val storeData = UInt(64.W)
+  val result = UInt(xlen.W)
+  val storeData = UInt(xlen.W)
   val ctrl = new ControlSignals
   val exception = Bool()
 }
 
-class MemWb extends Bundle {
+class MemWb(
+    val xlen: Int = 64,
+    val paddrBits: Int = 64,
+    val busDataBits: Int = 64
+) extends Bundle {
   val valid = Bool()
-  val pc = UInt(64.W)
+  val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val rd = UInt(5.W)
-  val rdData = UInt(64.W)
+  val rdData = UInt(xlen.W)
   val regWrite = Bool()
   val memValid = Bool()
   val memWrite = Bool()
-  val memAddr = UInt(64.W)
-  val memWdata = UInt(64.W)
-  val memWmask = UInt(8.W)
+  val memAddr = UInt(paddrBits.W)
+  val memWdata = UInt(busDataBits.W)
+  val memWmask = UInt((busDataBits / 8).W)
   val exception = Bool()
 }
 
-class AetherCore(resetVector: BigInt = BigInt("80000000", 16)) extends Module {
+class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
+  private val xlen = config.isa.xlen
+  private val paddrBits = config.platform.paddrBits
+  private val busDataBits = config.platform.busDataBits
+  private val busBytes = config.platform.busBytes
+
+  require(xlen == 64, "the complete pipeline semantics are still RV64-only")
+  require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
+  require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
+
   val io = IO(new Bundle {
-    val imem = new InstructionBusIO
-    val dmem = new DataBusIO
-    val commit = Output(new CommitTrace)
+    val imem = new InstructionBusIO(paddrBits)
+    val dmem = new DataBusIO(paddrBits, busDataBits)
+    val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
 
-  val pc = RegInit(resetVector.U(64.W))
-  val ifId = RegInit(0.U.asTypeOf(new IfId))
-  val idEx = RegInit(0.U.asTypeOf(new IdEx))
-  val exMem = RegInit(0.U.asTypeOf(new ExMem))
-  val memWb = RegInit(0.U.asTypeOf(new MemWb))
+  val pc = RegInit(config.platform.resetVector.U(xlen.W))
+  val ifId = RegInit(0.U.asTypeOf(new IfId(xlen)))
+  val idEx = RegInit(0.U.asTypeOf(new IdEx(xlen)))
+  val exMem = RegInit(0.U.asTypeOf(new ExMem(xlen)))
+  val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
   val haltedReg = RegInit(false.B)
 
   val decoder = Module(new Decoder)
-  val registerFile = Module(new RegisterFile)
-  val alu = Module(new ALU)
+  val registerFile = Module(new RegisterFile(xlen))
+  val alu = Module(new ALU(xlen))
 
   io.imem.addr := pc
   decoder.io.inst := ifId.inst
@@ -79,7 +93,7 @@ class AetherCore(resetVector: BigInt = BigInt("80000000", 16)) extends Module {
   registerFile.io.rdAddr := memWb.rd
   registerFile.io.rdData := memWb.rdData
 
-  val decodedImm = WireDefault(0.U(64.W))
+  val decodedImm = WireDefault(0.U(xlen.W))
   switch(decoder.io.ctrl.immSel) {
     is(ImmSel.I) { decodedImm := Immediate.i(ifId.inst) }
     is(ImmSel.S) { decodedImm := Immediate.s(ifId.inst) }
@@ -128,17 +142,19 @@ class AetherCore(resetVector: BigInt = BigInt("80000000", 16)) extends Module {
   val jumpTaken = idEx.valid && idEx.ctrl.jump
   val redirect = branchTaken || jumpTaken
   val branchTarget = idEx.pc + idEx.imm
-  val jalrTarget = (forwardedRs1 + idEx.imm) & "hfffffffffffffffe".U
+  val jalrAlignmentMask = ((BigInt(1) << xlen) - 2).U(xlen.W)
+  val jalrTarget = (forwardedRs1 + idEx.imm) & jalrAlignmentMask
   val redirectTarget = Mux(idEx.ctrl.jalr, jalrTarget, branchTarget)
 
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
 
-  val storeMask = WireDefault("hff".U(8.W))
+  val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
+  val storeMask = WireDefault(fullStoreMask)
   switch(exMem.ctrl.memSize) {
-    is(MemSize.Byte)  { storeMask := "h01".U }
-    is(MemSize.Half)  { storeMask := "h03".U }
-    is(MemSize.Word)  { storeMask := "h0f".U }
-    is(MemSize.DWord) { storeMask := "hff".U }
+    is(MemSize.Byte)  { storeMask := 1.U(busBytes.W) }
+    is(MemSize.Half)  { storeMask := 3.U(busBytes.W) }
+    is(MemSize.Word)  { storeMask := 15.U(busBytes.W) }
+    is(MemSize.DWord) { storeMask := fullStoreMask }
   }
 
   // A faulting instruction retires from WB while a younger instruction may
@@ -153,17 +169,20 @@ class AetherCore(resetVector: BigInt = BigInt("80000000", 16)) extends Module {
   io.dmem.wmask := storeMask
   io.dmem.size := exMem.ctrl.memSize
 
+  def extendLoad(bits: Int): UInt = {
+    val value = io.dmem.rdata(bits - 1, 0)
+    Mux(
+      exMem.ctrl.memUnsigned,
+      Cat(0.U((xlen - bits).W), value),
+      Cat(Fill(xlen - bits, value(bits - 1)), value)
+    )
+  }
+
   val loadData = WireDefault(io.dmem.rdata)
   switch(exMem.ctrl.memSize) {
-    is(MemSize.Byte) {
-      loadData := Mux(exMem.ctrl.memUnsigned, Cat(0.U(56.W), io.dmem.rdata(7, 0)), Cat(Fill(56, io.dmem.rdata(7)), io.dmem.rdata(7, 0)))
-    }
-    is(MemSize.Half) {
-      loadData := Mux(exMem.ctrl.memUnsigned, Cat(0.U(48.W), io.dmem.rdata(15, 0)), Cat(Fill(48, io.dmem.rdata(15)), io.dmem.rdata(15, 0)))
-    }
-    is(MemSize.Word) {
-      loadData := Mux(exMem.ctrl.memUnsigned, Cat(0.U(32.W), io.dmem.rdata(31, 0)), Cat(Fill(32, io.dmem.rdata(31)), io.dmem.rdata(31, 0)))
-    }
+    is(MemSize.Byte)  { loadData := extendLoad(8) }
+    is(MemSize.Half)  { loadData := extendLoad(16) }
+    is(MemSize.Word)  { loadData := extendLoad(32) }
     is(MemSize.DWord) { loadData := io.dmem.rdata }
   }
 

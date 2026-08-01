@@ -32,38 +32,51 @@ object MemSize extends ChiselEnum {
   val Byte, Half, Word, DWord = Value
 }
 
-class InstructionBusIO extends Bundle {
-  val addr = Output(UInt(64.W))
+class InstructionBusIO(val addrBits: Int = 64) extends Bundle {
+  require(addrBits > 0, s"instruction address width must be positive, got $addrBits")
+
+  val addr = Output(UInt(addrBits.W))
   val inst = Input(UInt(32.W))
   val fault = Input(Bool())
 }
 
-class DataBusIO extends Bundle {
+class DataBusIO(val addrBits: Int = 64, val dataBits: Int = 64) extends Bundle {
+  require(addrBits > 0, s"data address width must be positive, got $addrBits")
+  require(dataBits > 0 && dataBits % 8 == 0, s"data width must be byte aligned, got $dataBits")
+
   val valid = Output(Bool())
   val write = Output(Bool())
-  val addr = Output(UInt(64.W))
-  val wdata = Output(UInt(64.W))
-  val wmask = Output(UInt(8.W))
+  val addr = Output(UInt(addrBits.W))
+  val wdata = Output(UInt(dataBits.W))
+  val wmask = Output(UInt((dataBits / 8).W))
   val size = Output(MemSize())
 
   val ready = Input(Bool())
-  val rdata = Input(UInt(64.W))
+  val rdata = Input(UInt(dataBits.W))
   val fault = Input(Bool())
 }
 
-class CommitTrace extends Bundle {
+class CommitTrace(
+    val xlen: Int = 64,
+    val paddrBits: Int = 64,
+    val busDataBits: Int = 64
+) extends Bundle {
+  require(xlen == 32 || xlen == 64, s"commit XLEN must be 32 or 64, got $xlen")
+  require(paddrBits > 0, s"commit physical address width must be positive, got $paddrBits")
+  require(busDataBits > 0 && busDataBits % 8 == 0, s"commit bus width must be byte aligned, got $busDataBits")
+
   val valid = Bool()
-  val pc = UInt(64.W)
+  val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val rd = UInt(5.W)
   val rdWrite = Bool()
-  val rdData = UInt(64.W)
+  val rdData = UInt(xlen.W)
 
   val memValid = Bool()
   val memWrite = Bool()
-  val memAddr = UInt(64.W)
-  val memWdata = UInt(64.W)
-  val memWmask = UInt(8.W)
+  val memAddr = UInt(paddrBits.W)
+  val memWdata = UInt(busDataBits.W)
+  val memWmask = UInt((busDataBits / 8).W)
 
   val exception = Bool()
 }
