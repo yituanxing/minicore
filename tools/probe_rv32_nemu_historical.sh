@@ -90,7 +90,7 @@ ldd "$reference_so" > "$evidence_dir/reference-so.ldd.txt"
 cp "$source_dir/.config" "$evidence_dir/generated.config"
 
 REFERENCE_SO="$reference_so" EVIDENCE_DIR="$evidence_dir" \
-EXPECTED_REG_BYTES="$expected_reg_bytes" python3 - <<'PY'
+EXPECTED_REG_BYTES="$expected_reg_bytes" NEMU_REVISION="$revision" python3 - <<'PY'
 import ctypes
 import os
 from pathlib import Path
@@ -135,7 +135,7 @@ memcpy_ref(0x80000000, roundtrip, 16, False)
 memory_matches = bytes(pattern) == bytes(roundtrip)
 
 with (evidence / "abi-probe.txt").open("w", encoding="utf-8") as output:
-    output.write(f"revision={os.environ.get('NEMU_REVISION', '')}\n")
+    output.write(f"revision={os.environ['NEMU_REVISION']}\n")
     output.write(f"expected_reg_bytes={expected}\n")
     output.write(f"prefix_matches={str(prefix_matches).lower()}\n")
     output.write(f"guard_matches={str(guard_matches).lower()}\n")
