@@ -17,7 +17,10 @@ git -C "$source_dir" fetch --depth=1 origin "$revision"
 git -C "$source_dir" checkout -q FETCH_HEAD
 export NEMU_HOME="$(cd "$source_dir" && pwd)"
 export CFLAGS="${CFLAGS:-} -Wno-error=format -Wno-error=array-bounds"
-export LDFLAGS="${LDFLAGS:-} -lreadline"
+export LDFLAGS="${LDFLAGS:-} -lreadline -Wl,--build-id=none"
+export SOURCE_DATE_EPOCH="$(git -C "$source_dir" show -s --format=%ct HEAD)"
+export LC_ALL=C
+export TZ=UTC
 
 git -C "$source_dir" rev-parse HEAD | tee "$evidence_dir/revision.txt"
 
@@ -68,19 +71,54 @@ cp "$source_dir/src/isa/riscv32/difftest/ref.c" "$evidence_dir/isa-difftest-ref.
 cp "$source_dir/src/cpu/difftest/ref.c" "$evidence_dir/cpu-difftest-ref.c"
 cp "$source_dir/lib-include/difftest.h" "$evidence_dir/difftest-layout.h"
 
-make -C "$source_dir" "$config_name" \
-  > "$evidence_dir/config.log" 2>&1
-make -C "$source_dir/tools/fixdep" \
-  > "$evidence_dir/fixdep.log" 2>&1
-make -C "$source_dir" -j2 \
-  > "$evidence_dir/build.log" 2>&1
+build_reference() {
+  local label="$1"
+  local reference_so
 
-reference_so="$(find "$source_dir/build" -maxdepth 1 -type f \
-  -name 'riscv32-nemu-interpreter-so*' -print -quit)"
-if [[ -z "$reference_so" ]]; then
-  echo "ERROR: RV32 reference shared object was not produced" >&2
-  exit 2
+  rm -f "$source_dir/.config"
+  rm -rf "$source_dir/build"
+
+  make -C "$source_dir" "$config_name" \
+    > "$evidence_dir/config-$label.log" 2>&1
+  make -C "$source_dir/tools/fixdep" clean all \
+    > "$evidence_dir/fixdep-$label.log" 2>&1
+  make -C "$source_dir" -j2 \
+    > "$evidence_dir/build-$label.log" 2>&1
+
+  reference_so="$(find "$source_dir/build" -maxdepth 1 -type f \
+    -name 'riscv32-nemu-interpreter-so*' -print -quit)"
+  if [[ -z "$reference_so" ]]; then
+    echo "ERROR: RV32 reference shared object was not produced in $label build" >&2
+    return 2
+  fi
+  printf '%s\n' "$reference_so"
+}
+
+first_reference="$(build_reference first)"
+cp "$first_reference" "$work_dir/riscv32-reference-first.so"
+first_sha="$(sha256sum "$first_reference" | awk '{print $1}')"
+
+reference_so="$(build_reference second)"
+second_sha="$(sha256sum "$reference_so" | awk '{print $1}')"
+
+if ! cmp -s "$work_dir/riscv32-reference-first.so" "$reference_so"; then
+  cat > "$evidence_dir/reproducibility.txt" <<EOF
+reproducible=false
+first_sha256=$first_sha
+second_sha256=$second_sha
+EOF
+  cat "$evidence_dir/reproducibility.txt" >&2
+  exit 3
 fi
+
+cat > "$evidence_dir/reproducibility.txt" <<EOF
+reproducible=true
+first_sha256=$first_sha
+second_sha256=$second_sha
+source_date_epoch=$SOURCE_DATE_EPOCH
+build_id=disabled
+EOF
+cat "$evidence_dir/reproducibility.txt"
 
 sha256sum "$reference_so" | tee "$evidence_dir/reference-so.sha256"
 file "$reference_so" | tee "$evidence_dir/reference-so.file.txt"
@@ -158,7 +196,9 @@ status=PASS
 revision=$revision
 config=$config_name
 reference_so=$(basename "$reference_so")
+reference_sha256=$second_sha
 regcpy_bytes=$expected_reg_bytes
+reproducible=true
 EOF
 cat "$evidence_dir/result.txt"
 cat "$evidence_dir/abi-probe.txt"
