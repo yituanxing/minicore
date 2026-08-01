@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 BUILD_DIR ?= build/rv32im-embench
 RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
