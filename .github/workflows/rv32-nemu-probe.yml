@@ -51,10 +51,22 @@ jobs:
           chmod +x mill
           ./mill --version
 
-      - name: Build exact frozen RV32 NEMU reference
+      - name: Preserve frozen optimized RV32 NEMU reference
         shell: bash
         run: |
           mkdir -p build
+          set -o pipefail
+          bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-abi" \
+            2>&1 | tee build/rv32-nemu-abi.log
+          grep -q '^reference_sha256=b064aec211ae22e872d8ab7a3705a2e354e0d968289dbb7880515710d9dd5eb7$' \
+            build/rv32-nemu-abi/evidence/result.txt
+          grep -q '^single_step=0$' build/rv32-nemu-abi/evidence/result.txt
+          grep -q '^perf_opt=true$' build/rv32-nemu-abi/evidence/result.txt
+
+      - name: Build exact frozen RV32 NEMU reference
+        shell: bash
+        run: |
           set -o pipefail
           NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
             "$(pwd)/build/rv32-nemu-probe" \
@@ -107,6 +119,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
+            build/rv32-nemu-abi.log
+            build/rv32-nemu-abi/evidence/
             build/rv32-nemu-probe.log
             build/rv32-nemu-probe/evidence/
             build/rv32/
