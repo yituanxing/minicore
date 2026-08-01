@@ -6,6 +6,7 @@ REGRESSION_DIR := $(BUILD_DIR)/regressions
 COMPLETION_DIR := $(BUILD_DIR)/completion-regressions
 FAULT_DIR := $(BUILD_DIR)/fault-regressions
 NEMU_DIR := $(BUILD_DIR)/nemu
+NEMU_HOME := $(abspath $(NEMU_DIR))
 NEMU_COMMIT := ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
 NEMU_SO := $(NEMU_DIR)/build/riscv64-nemu-interpreter-so
 TOP := AetherCoreSimTop
@@ -47,8 +48,8 @@ $(NEMU_SO):
 	git -C $(NEMU_DIR) remote add origin https://github.com/OpenXiangShan/NEMU.git
 	git -C $(NEMU_DIR) fetch --depth=1 origin $(NEMU_COMMIT)
 	git -C $(NEMU_DIR) checkout --detach FETCH_HEAD
-	$(MAKE) -C $(NEMU_DIR) riscv64-nutshell-ref_defconfig
-	$(MAKE) -C $(NEMU_DIR) -j$$(nproc)
+	NEMU_HOME=$(NEMU_HOME) $(MAKE) -C $(NEMU_DIR) riscv64-nutshell-ref_defconfig
+	NEMU_HOME=$(NEMU_HOME) $(MAKE) -C $(NEMU_DIR) -j$$(nproc)
 	@test -f $@ || { echo "ERROR: NEMU shared object was not produced"; exit 1; }
 
 nemu: $(NEMU_SO)
