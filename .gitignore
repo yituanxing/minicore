@@ -1,0 +1,11 @@
+build/
+out/
+.bsp/
+.metals/
+.idea/
+.vscode/
+*.vcd
+*.fst
+*.log
+__pycache__/
+*.pyc
