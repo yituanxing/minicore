@@ -16,9 +16,9 @@ concurrency:
 
 jobs:
   test:
-    name: Chisel and Verilator regression
+    name: Chisel, Verilator and NEMU DiffTest
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -26,6 +26,12 @@ jobs:
 
       - name: Cache Scala dependencies
         uses: coursier/cache-action@v8
+
+      - name: Cache pinned NEMU reference
+        uses: actions/cache@v4
+        with:
+          path: build/nemu
+          key: nemu-${{ runner.os }}-ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
 
       - name: Install Java
         uses: coursier/setup-action@v3
@@ -35,7 +41,9 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends verilator make g++ python3 curl
+          sudo apt-get install -y --no-install-recommends \
+            verilator make g++ python3 curl git bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev
           java -version
           verilator --version
 
@@ -83,6 +91,12 @@ jobs:
         run: |
           set -o pipefail
           make run-fault-regressions 2>&1 | tee build/logs/fault-regressions.log
+
+      - name: NEMU commit-level DiffTest
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-difftest 2>&1 | tee build/logs/nemu-difftest.log
 
       - name: Upload build evidence
         if: always()
