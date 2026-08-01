@@ -2,7 +2,7 @@
 
 A correctness-first RISC-V processor project written in Chisel.
 
-The current stable development checkpoint is **S0.2**: a five-stage in-order RV64I core that compiles with Chisel/CIRCT, builds with Verilator, and executes a deterministic architectural smoke program under GitHub Actions.
+The current stable development checkpoint is **S0.3a**: a five-stage in-order RV64I core with a real Chisel/CIRCT/Verilator build path and an initial self-checking pipeline-regression suite.
 
 ## Current core
 
@@ -15,16 +15,32 @@ Implemented foundations:
 - RV64I integer decode and execution, including W-class operations.
 - forwarding, load-use interlock and branch/jump recovery.
 - blocking instruction/data interfaces with host-backed simulation RAM.
-- UART MMIO at `0x10000000`.
+- UART MMIO at `0x10000000` and self-check exit MMIO at `0x10000008`.
 - architectural commit trace prepared for future NEMU/Spike DiffTest.
-- Chisel unit tests, full-core smoke test and Verilator harness.
+- Chisel unit tests, strict full-core smoke and Verilator regression harness.
 
-## Verified smoke result
+## Verified strict smoke
 
 ```text
 A
 PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
 ```
+
+## Directed regressions
+
+Current Verilator regressions cover:
+
+- EX/MEM and MEM/WB forwarding;
+- immediate load-use dependency;
+- load transaction under deterministic memory backpressure;
+- taken-branch wrong-path store suppression;
+- JAL link writeback and JALR return/recovery.
+
+```bash
+make run-regressions
+```
+
+Each program writes zero to exit MMIO on success and a unique nonzero code on failure.
 
 ## Build
 
@@ -36,6 +52,7 @@ make python-test
 make test
 make rtl
 make run-smoke
+make run-regressions
 ```
 
 Useful optional trace:
@@ -47,6 +64,6 @@ build/obj/VAetherCoreSimTop build/software/smoke.bin \
 
 ## Development policy
 
-Small changes run unit tests and the strict smoke gate. Feature groups add directed regressions before larger random or differential tests. `main` should contain only checkpoints that have passed the complete CI path.
+Small changes run unit tests and the strict smoke gate. Feature groups add directed regressions before larger random or differential tests. `main` contains only checkpoints that have passed the complete CI path.
 
 See [`CHECKPOINT.md`](CHECKPOINT.md) for the exact verified state and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the path toward DiffTest, privileged architecture, Linux and XC7Z020 FPGA bring-up.
