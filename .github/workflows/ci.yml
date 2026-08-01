@@ -28,22 +28,22 @@ jobs:
       - name: Cache Scala dependencies
         uses: coursier/cache-action@v8
 
-      - name: Install Java and Mill
+      - name: Install Java
         uses: coursier/setup-action@v3
         with:
           jvm: temurin:21
-          apps: mill:1.1.2
 
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends verilator make g++ python3
+          sudo apt-get install -y --no-install-recommends verilator make g++ python3 curl
           java -version
-          mill --version
           verilator --version
 
-      - name: Prepare repository scripts
-        run: chmod +x mill
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
 
       - name: Python reference tests
         run: make python-test
