@@ -32,6 +32,7 @@ jobs:
       - name: Probe pinned RV32 reference configuration and ABI
         shell: bash
         run: |
+          mkdir -p build
           set -o pipefail
           bash tools/probe_rv32_nemu.sh build/rv32-nemu-probe \
             2>&1 | tee build/rv32-nemu-probe.log
