@@ -3,8 +3,6 @@
 
 #include <stddef.h>
 
-#define RAND_MAX 32767
-
 int abs(int value);
 long labs(long value);
 
