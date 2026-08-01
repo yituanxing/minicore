@@ -15,6 +15,7 @@ git -C "$source_dir" init -q
 git -C "$source_dir" remote add origin https://github.com/OpenXiangShan/NEMU.git
 git -C "$source_dir" fetch --depth=1 origin "$revision"
 git -C "$source_dir" checkout -q FETCH_HEAD
+export NEMU_HOME="$source_dir"
 
 git -C "$source_dir" rev-parse HEAD | tee "$evidence_dir/revision.txt"
 
