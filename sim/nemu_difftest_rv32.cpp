@@ -1,5 +1,6 @@
 #include "nemu_difftest_rv32.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +19,8 @@ constexpr bool kToDut = false;
 constexpr bool kToRef = true;
 constexpr std::size_t kTraceDepth = 32;
 constexpr std::size_t kRv32StateBytes = 33 * sizeof(std::uint32_t);
+constexpr std::uint32_t kPlatformMmioBase = 0x10000000U;
+constexpr int kPlatformMmioBytes = 16;
 
 // Exact state copied by OpenXiangShan/NEMU revision
 // 8601834e4889e6bf3b6113eb5f824ba7689126f5 with the frozen RV32 reference
@@ -81,6 +84,9 @@ class NemuDifftest::Impl {
   using Memcpy = void (*)(std::uint32_t, void*, std::size_t, bool);
   using Regcpy = void (*)(void*, bool);
   using Exec = void (*)(std::uint64_t);
+  using MmioCallback = void (*)(std::uint32_t, int, bool);
+  using NewSpace = std::uint8_t* (*)(int);
+  using AddMmioMap = void (*)(char*, std::uint32_t, std::uint8_t*, int, MmioCallback);
 
   Impl(const std::string& sharedObject, const std::string& imagePath,
        std::uint64_t resetPc, std::uint64_t ramSize)
@@ -110,8 +116,25 @@ class NemuDifftest::Impl {
       memcpy_ = loadSymbol<Memcpy>(handle_, "difftest_memcpy");
       regcpy_ = loadSymbol<Regcpy>(handle_, "difftest_regcpy");
       exec_ = loadSymbol<Exec>(handle_, "difftest_exec");
+      newSpace_ = loadSymbol<NewSpace>(handle_, "new_space");
+      addMmioMap_ = loadSymbol<AddMmioMap>(handle_, "add_mmio_map");
 
       init_();
+
+      // The historical reference initializes its own serial window at
+      // 0xa10003f8. AetherCore instead exposes UART and exit registers in one
+      // 16-byte platform window at 0x10000000. Register an inert backing store
+      // through NEMU's unchanged official map API so the reference executes
+      // exactly the same MMIO instructions without treating them as RAM.
+      static char platformName[] = "aethercore.platform";
+      platformMmio_ = newSpace_(kPlatformMmioBytes);
+      if (!platformMmio_) {
+        throw std::runtime_error("RV32 DiffTest could not allocate platform MMIO backing");
+      }
+      std::fill_n(platformMmio_, kPlatformMmioBytes, std::uint8_t{0});
+      addMmioMap_(platformName, kPlatformMmioBase, platformMmio_,
+                  kPlatformMmioBytes, nullptr);
+
       if (!image_.empty()) memcpy_(resetPc_, image_.data(), image_.size(), kToRef);
 
       NemuRv32State initial{};
@@ -222,10 +245,8 @@ class NemuDifftest::Impl {
     const std::uint32_t address = narrow32(commit.memAddr, "store address");
     constexpr std::size_t kBusBytes = 4;
 
-    // Platform MMIO (UART/exit) is verified by the DUT runner itself. The
-    // frozen GCC workload exits before the MMIO store reaches architectural
-    // retirement, but keeping this boundary explicit prevents an invalid RAM
-    // copy if a later workload retires an MMIO write.
+    // Platform MMIO is executed by both models, but the runner owns its visible
+    // UART/exit effect. Only RAM bytes are compared through difftest_memcpy.
     if (!inRam(address, kBusBytes)) return;
 
     if ((commit.memWmask & 0xf0U) != 0) {
@@ -260,6 +281,9 @@ class NemuDifftest::Impl {
   Memcpy memcpy_ = nullptr;
   Regcpy regcpy_ = nullptr;
   Exec exec_ = nullptr;
+  NewSpace newSpace_ = nullptr;
+  AddMmioMap addMmioMap_ = nullptr;
+  std::uint8_t* platformMmio_ = nullptr;
 
   std::uint32_t resetPc_ = 0;
   std::uint64_t ramSize_ = 0;
