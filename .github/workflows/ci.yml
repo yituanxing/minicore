@@ -1,0 +1,81 @@
+name: AetherCore CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Chisel and Verilator bring-up
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+
+      - name: Install Java and Mill
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+          apps: mill:1.1.2
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends verilator make g++ python3
+          java -version
+          mill --version
+          verilator --version
+
+      - name: Prepare repository scripts
+        run: chmod +x mill
+
+      - name: Python reference tests
+        run: make python-test
+
+      - name: Chisel tests
+        shell: bash
+        run: |
+          mkdir -p build/logs
+          set -o pipefail
+          make test 2>&1 | tee build/logs/chisel-test.log
+
+      - name: Emit SystemVerilog
+        shell: bash
+        run: |
+          set -o pipefail
+          make rtl 2>&1 | tee build/logs/elaboration.log
+
+      - name: Verilator smoke test
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-smoke 2>&1 | tee build/logs/verilator-smoke.log
+
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/logs/
+            build/rtl/
+            build/software/smoke.bin
+            build/aethercore.vcd
