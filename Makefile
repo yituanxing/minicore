@@ -3,6 +3,7 @@ RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 SOFTWARE_DIR := $(BUILD_DIR)/software
 REGRESSION_DIR := $(BUILD_DIR)/regressions
+COMPLETION_DIR := $(BUILD_DIR)/completion-regressions
 TOP := AetherCoreSimTop
 VERILATOR ?= verilator
 PYTHON ?= python3
@@ -12,9 +13,9 @@ SIM_MAIN := $(abspath sim/sim_main.cpp)
 # Keep this recursive so the wildcard is expanded after the `rtl` prerequisite.
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-.PHONY: all rtl test smoke regressions sim run-smoke run-regressions python-test clean
+.PHONY: all rtl test smoke regressions completion-regressions sim run-smoke run-regressions run-completion-regressions python-test clean
 
-all: test run-smoke run-regressions
+all: test run-smoke run-regressions run-completion-regressions
 
 rtl:
 	./mill aethercore.runMain aethercore.Elaborate --target-dir $(RTL_DIR)
@@ -28,6 +29,9 @@ smoke:
 
 regressions:
 	$(PYTHON) tools/make_regressions.py $(REGRESSION_DIR)
+
+completion-regressions:
+	$(PYTHON) tools/make_completion_regressions.py $(COMPLETION_DIR)
 
 sim: rtl smoke
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no generated SystemVerilog files in $(RTL_DIR)"; exit 1; }
@@ -48,6 +52,14 @@ run-regressions: sim regressions
 		$(OBJ_DIR)/V$(TOP) $(REGRESSION_DIR)/$$name.bin \
 			--max-cycles 500 --self-check-exit $$stall_args; \
 	done < $(REGRESSION_DIR)/manifest.txt
+
+run-completion-regressions: sim completion-regressions
+	@set -e; \
+	while read name; do \
+		echo "== completion regression: $$name =="; \
+		$(OBJ_DIR)/V$(TOP) $(COMPLETION_DIR)/$$name.bin \
+			--max-cycles 500 --self-check-exit; \
+	done < $(COMPLETION_DIR)/manifest.txt
 
 python-test:
 	$(PYTHON) -m unittest discover -s tests_py -v

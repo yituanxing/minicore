@@ -2,7 +2,7 @@
 
 A correctness-first RISC-V processor project written in Chisel.
 
-The current stable development checkpoint is **S0.3b**: a five-stage in-order RV64I core with a real Chisel/CIRCT/Verilator build path and eight self-checking directed regression programs.
+The current stable development checkpoint is **S0.3c**: a five-stage in-order RV64I core with a real Chisel/CIRCT/Verilator build path and eleven self-checking directed regression programs.
 
 ## Current core
 
@@ -34,15 +34,19 @@ The Verilator suite currently covers:
 - immediate load-use dependency;
 - blocking memory transactions under deterministic backpressure;
 - taken-branch wrong-path store suppression;
-- JAL link writeback and JALR return/recovery;
+- JAL/JALR links, target recovery and JALR bit-zero clearing;
 - byte, halfword, word and doubleword stores/loads;
 - signed and unsigned load extension;
 - RV64 W-class immediate and register operations;
 - all six signed/unsigned branch predicates in taken and not-taken cases;
-- x0 write suppression and same-cycle WB/read bypass.
+- x0 write suppression and same-cycle WB/read bypass;
+- remaining integer logical, comparison, SUB and 64-bit shift operations;
+- LUI/AUIPC values and PC-relative link-address corner cases;
+- FENCE and FENCE.I retirement in the uncached core.
 
 ```bash
 make run-regressions
+make run-completion-regressions
 ```
 
 Each program writes zero to exit MMIO on success and a unique nonzero code on failure.
@@ -58,6 +62,7 @@ make test
 make rtl
 make run-smoke
 make run-regressions
+make run-completion-regressions
 ```
 
 Useful optional trace:

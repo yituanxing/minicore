@@ -1,8 +1,8 @@
-# AetherCore S0.3b checkpoint
+# AetherCore S0.3c checkpoint
 
 ## Status
 
-The deterministic RV64I regression matrix now covers eight self-checking Verilator programs. S0.3b verifies the existing five-stage core across forwarding, blocking memory behavior, load/store widths, sign extension, W-class arithmetic, all branch predicates, control-flow recovery and register-file corner cases without changing CPU RTL.
+The deterministic RV64I directed suite now contains eleven self-checking Verilator programs. S0.3c completes the normal, non-trapping RV64I arithmetic/control-flow matrix for the current five-stage core without changing CPU RTL.
 
 ## Core baseline
 
@@ -19,55 +19,40 @@ The deterministic RV64I regression matrix now covers eight self-checking Verilat
 
 ## Verification infrastructure
 
-- Tiny Python RV64 assembler with labels and B/J fixups.
-- Load/store width, shift, W-class and all branch-predicate encoders.
-- Self-checking binaries with unique exit-MMIO error codes.
+- Tiny Python RV64 assembler with B/J fixups and the encodings required by the directed suite.
+- Eleven self-checking binaries with unique exit-MMIO error codes.
 - Deterministic memory-ready backpressure through `--stall-period N`.
 - Archived generated images, SystemVerilog and CI logs.
 
 ## Verified by GitHub Actions
 
-Run `30693594258` completed successfully. The original strict smoke remained green and all eight directed regressions passed.
+Run `30693939767` completed successfully. The strict smoke and all eight S0.3a/S0.3b programs remained green, then the three completion programs passed:
 
 ```text
-A
-PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
+alu_logic:
+PASS: self-check exit=0 after 61 cycles, 52 committed instructions
 
-forwarding:
-PASS: self-check exit=0 after 17 cycles, 8 committed instructions
+pc_relative:
+PASS: self-check exit=0 after 36 cycles, 23 committed instructions
 
-load_use:
-PASS: self-check exit=0 after 22 cycles, 11 committed instructions, stall-period=3
-
-branch_flush:
-PASS: self-check exit=0 after 21 cycles, 9 committed instructions
-
-jal_jalr:
-PASS: self-check exit=0 after 26 cycles, 11 committed instructions
-
-memory_widths:
-PASS: self-check exit=0 after 50 cycles, 29 committed instructions, stall-period=4
-
-word_operations:
-PASS: self-check exit=0 after 37 cycles, 28 committed instructions
-
-branch_matrix:
-PASS: self-check exit=0 after 38 cycles, 17 committed instructions
-
-x0_writeback:
-PASS: self-check exit=0 after 21 cycles, 12 committed instructions
+fence_retire:
+PASS: self-check exit=0 after 18 cycles, 9 committed instructions
 ```
 
 ## Coverage demonstrated
 
-- SB/SH/SW/SD and LB/LH/LW/LD complete correctly;
-- LBU/LHU/LWU zero-extend while signed loads sign-extend;
-- memory transactions survive periodic `ready=0` without duplication or loss;
-- ADDIW/SLLIW/SRLIW/SRAIW and ADDW/SUBW/SLLW/SRLW/SRAW produce sign-extended RV64 results;
-- BEQ/BNE/BLT/BGE/BLTU/BGEU are correct in both taken and not-taken cases;
-- x0 ignores writes;
-- a consumer decoding during the producer's WB cycle receives the just-written value;
-- the S0.3a forwarding, load-use, branch-flush and JAL/JALR tests remain green.
+- XOR/OR/AND and XORI/ORI/ANDI;
+- SUB, SLT/SLTU and SLTI/SLTIU;
+- register and immediate 64-bit SLL/SRL/SRA behavior, including shift 63;
+- signed 12-bit ADDI boundary values;
+- exact AUIPC values;
+- exact JAL and JALR link addresses;
+- JALR clears target bit zero and flushes the wrong path;
+- LUI sign extension;
+- FENCE and FENCE.I retire without trapping in the current uncached implementation;
+- all earlier forwarding, memory, W-class, branch and register-file regressions remain green.
+
+Together with S0.3a/S0.3b, the normal RV64I execution paths used by the current core now have deterministic whole-core tests.
 
 ## Known non-fatal warnings
 
@@ -75,15 +60,14 @@ PASS: self-check exit=0 after 21 cycles, 12 committed instructions
 - Generated reset/randomization helper symbols are unused.
 - Shift intermediates are wider than their selected architectural result.
 
-## Next gate: S0.3c
+## Next gate: S0.3d precise fault boundary
 
-Finish deterministic RV64I coverage before connecting an external reference model:
+Before external DiffTest, verify the current temporary exception contract:
 
-- XOR/OR/AND, SLT/SLTU and register/immediate 64-bit shifts;
-- SUB and immediate arithmetic boundary values;
-- LUI/AUIPC/JAL/JALR PC and link-address corner cases;
-- FENCE/FENCE.I no-op retirement behavior;
-- illegal-instruction and memory-fault retirement records;
-- several reproducible memory-ready patterns rather than one fixed period.
+- illegal instruction retires exactly once with `exception=1`;
+- load and store bus faults retire on the faulting instruction;
+- younger register writes and stores are suppressed after the fault;
+- commit PC/instruction match the faulting architectural instruction;
+- reproducible memory-ready schedules do not move or duplicate the fault boundary.
 
-After S0.3c, freeze the directed suite and begin commit-level NEMU/Spike DiffTest.
+After S0.3d, freeze the directed suite and begin commit-level NEMU/Spike DiffTest.
