@@ -6,37 +6,38 @@ import aethercore.config.{CoreConfig, CoreProfiles}
 import aethercore.core.AetherCore
 
 class AetherCoreSimTop(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
-  require(config.isa.xlen == 64, "the current datapath is still RV64-only")
-  require(config.platform.paddrBits == 64, "the current simulation address ports are 64-bit")
-  require(config.platform.busDataBits == 64, "the current simulation data bus is 64-bit")
+  private val xlen = config.isa.xlen
+  private val paddrBits = config.platform.paddrBits
+  private val busDataBits = config.platform.busDataBits
+  private val busBytes = config.platform.busBytes
 
   val io = IO(new Bundle {
-    val imemAddr = Output(UInt(64.W))
+    val imemAddr = Output(UInt(paddrBits.W))
     val imemInst = Input(UInt(32.W))
     val imemFault = Input(Bool())
 
     val memValid = Output(Bool())
     val memWrite = Output(Bool())
-    val memAddr = Output(UInt(64.W))
-    val memWdata = Output(UInt(64.W))
-    val memWmask = Output(UInt(8.W))
+    val memAddr = Output(UInt(paddrBits.W))
+    val memWdata = Output(UInt(busDataBits.W))
+    val memWmask = Output(UInt(busBytes.W))
     val memSize = Output(MemSize())
     val memReady = Input(Bool())
-    val memRdata = Input(UInt(64.W))
+    val memRdata = Input(UInt(busDataBits.W))
     val memFault = Input(Bool())
 
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
     val exitValid = Output(Bool())
-    val exitCode = Output(UInt(64.W))
+    val exitCode = Output(UInt(xlen.W))
 
-    val commit = Output(new CommitTrace)
+    val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
 
-  val core = Module(new AetherCore(config.platform.resetVector))
-  val uartAddress = config.platform.uartAddress.U(64.W)
-  val exitAddress = config.platform.exitAddress.U(64.W)
+  val core = Module(new AetherCore(config))
+  val uartAddress = config.platform.uartAddress.U(paddrBits.W)
+  val exitAddress = config.platform.exitAddress.U(paddrBits.W)
 
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
