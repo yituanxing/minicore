@@ -54,24 +54,6 @@ int ee_printf(const char *fmt, ...)
     return 0;
 }
 
-ee_s32 get_seed_32(int index)
-{
-    switch (index) {
-    case 1:
-        return seed1_volatile;
-    case 2:
-        return seed2_volatile;
-    case 3:
-        return seed3_volatile;
-    case 4:
-        return seed4_volatile;
-    case 5:
-        return seed5_volatile;
-    default:
-        return 0;
-    }
-}
-
 void start_time(void)
 {
     start_ticks = 0;
