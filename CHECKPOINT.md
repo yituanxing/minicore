@@ -1,8 +1,8 @@
-# AetherCore S0.3c checkpoint
+# AetherCore S0.3d checkpoint
 
 ## Status
 
-The deterministic RV64I directed suite now contains eleven self-checking Verilator programs. S0.3c completes the normal, non-trapping RV64I arithmetic/control-flow matrix for the current five-stage core without changing CPU RTL.
+The normal RV64I directed suite is frozen at eleven self-checking programs, and the temporary exception contract now has three strict whole-core fault regressions. S0.3d found and fixed a real precise-exception bug: a younger Store could issue from MEM in the same cycle an older exception retired from WB.
 
 ## Core baseline
 
@@ -17,42 +17,90 @@ The deterministic RV64I directed suite now contains eleven self-checking Verilat
 - Architectural commit trace and temporary halt-on-exception behavior.
 - Chisel tests, strict Verilator smoke and GitHub Actions artifact pipeline.
 
-## Verification infrastructure
+## Precise-fault infrastructure
 
-- Tiny Python RV64 assembler with B/J fixups and the encodings required by the directed suite.
-- Eleven self-checking binaries with unique exit-MMIO error codes.
-- Deterministic memory-ready backpressure through `--stall-period N`.
-- Archived generated images, SystemVerilog and CI logs.
+The Verilator harness can assert:
+
+- exact exception PC and instruction;
+- exact total retirement count;
+- exactly one exception retirement;
+- absence of a forbidden younger destination-register write;
+- absence of younger UART/exit-MMIO effects;
+- an expected 64-bit memory value after halt;
+- deterministic memory backpressure through `--stall-period N`.
+
+Fault cases:
+
+- illegal instruction with an immediately younger exit-MMIO Store;
+- faulting LD under periodic backpressure with an immediately younger exit-MMIO Store;
+- faulting SD under periodic backpressure with an immediately younger valid-RAM Store and sentinel check.
+
+## Defect found
+
+Initial strict run `30694337230` kept all normal tests green but failed the first fault case:
+
+```text
+FAIL: younger MMIO side effect escaped past the fault
+```
+
+Root cause:
+
+- the faulting instruction reached WB with `memWb.exception=1`;
+- an immediately younger Store had already reached MEM;
+- `io.dmem.valid` was still asserted during the exception-retirement cycle;
+- the Store/MMIO side effect became visible before `haltedReg` took effect on the clock edge.
+
+## RTL fix
+
+The data-bus request is now suppressed combinationally while WB is retiring an exception:
+
+```scala
+val retiringException = memWb.valid && memWb.exception
+io.dmem.valid := exMem.valid &&
+  (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
+  !exMem.exception &&
+  !retiringException
+```
+
+This blocks all younger MEM requests in the precise exception boundary cycle while leaving normal memory behavior unchanged.
 
 ## Verified by GitHub Actions
 
-Run `30693939767` completed successfully. The strict smoke and all eight S0.3a/S0.3b programs remained green, then the three completion programs passed:
+Run `30694514557` passed the complete suite after the RTL fix.
+
+Strict normal smoke:
 
 ```text
-alu_logic:
-PASS: self-check exit=0 after 61 cycles, 52 committed instructions
-
-pc_relative:
-PASS: self-check exit=0 after 36 cycles, 23 committed instructions
-
-fence_retire:
-PASS: self-check exit=0 after 18 cycles, 9 committed instructions
+A
+PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
 ```
 
-## Coverage demonstrated
+All eleven normal RV64I directed programs remained green.
 
-- XOR/OR/AND and XORI/ORI/ANDI;
-- SUB, SLT/SLTU and SLTI/SLTIU;
-- register and immediate 64-bit SLL/SRL/SRA behavior, including shift 63;
-- signed 12-bit ADDI boundary values;
-- exact AUIPC values;
-- exact JAL and JALR link addresses;
-- JALR clears target bit zero and flushes the wrong path;
-- LUI sign extension;
-- FENCE and FENCE.I retire without trapping in the current uncached implementation;
-- all earlier forwarding, memory, W-class, branch and register-file regressions remain green.
+Precise-fault results:
 
-Together with S0.3a/S0.3b, the normal RV64I execution paths used by the current core now have deterministic whole-core tests.
+```text
+illegal_instruction:
+PASS: precise fault pc=0x80000008 inst=0xffffffff after 12 cycles, 3 committed instructions
+
+load_bus_fault:
+PASS: precise fault pc=0x8000000c inst=0x0000b103 after 13 cycles, 4 committed instructions, stall-period=3
+
+store_bus_fault:
+PASS: precise fault pc=0x80000018 inst=0x0020b023 after 16 cycles, 7 committed instructions, stall-period=4
+```
+
+The store-fault sentinel at `0x80000200` remained zero, proving the immediately younger valid-RAM Store was suppressed.
+
+## Current verified boundary
+
+- Chisel compilation and unit tests: PASS.
+- CIRCT SystemVerilog generation: PASS.
+- Verilator compile/link: PASS.
+- strict smoke: PASS.
+- eleven normal RV64I whole-core programs: PASS.
+- three exact fault-boundary programs: PASS.
+- deterministic memory-backpressure paths: PASS.
 
 ## Known non-fatal warnings
 
@@ -60,14 +108,13 @@ Together with S0.3a/S0.3b, the normal RV64I execution paths used by the current 
 - Generated reset/randomization helper symbols are unused.
 - Shift intermediates are wider than their selected architectural result.
 
-## Next gate: S0.3d precise fault boundary
+## Next gate: S0.4 DiffTest foundation
 
-Before external DiffTest, verify the current temporary exception contract:
+Freeze the current directed suite and connect an external ISA reference model for normal, non-trapping RV64I commits:
 
-- illegal instruction retires exactly once with `exception=1`;
-- load and store bus faults retire on the faulting instruction;
-- younger register writes and stores are suppressed after the fault;
-- commit PC/instruction match the faulting architectural instruction;
-- reproducible memory-ready schedules do not move or duplicate the fault boundary.
-
-After S0.3d, freeze the directed suite and begin commit-level NEMU/Spike DiffTest.
+- load NEMU or Spike as the reference implementation;
+- initialize reference memory from the same binary image;
+- execute exactly one reference instruction for each DUT commit;
+- compare committed PC, instruction, destination write and memory side effects;
+- preserve a rolling trace and stop at the first architectural mismatch;
+- keep the precise-fault suite separate until the reference exception contract is wired explicitly.
