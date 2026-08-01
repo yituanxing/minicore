@@ -66,4 +66,4 @@ jobs:
           retention-days: 14
           path: |
             build/rv32/
-            build/rv32-nemu-reference/evidence/
+            build/rv32-nemu-probe/evidence/
