@@ -29,19 +29,13 @@ jobs:
             libreadline-dev libsdl2-dev zstd libzstd-dev \
             file binutils
 
-      - name: Probe pinned RV32 reference configuration and ABI
+      - name: Build and probe the pinned RV32 reference ABI
         shell: bash
-        env:
-          # This checkpoint follows the focused RV32/common-code adaptation and
-          # includes the host-TLB rewrite that restores explicit vaddr_t types.
-          NEMU_REVISION: 8601834e4889e6bf3b6113eb5f824ba7689126f5
-          # GCC 13 diagnoses the historical high-base host-pointer offset as an
-          # array-bounds warning. Keep every other warning fatal.
-          CFLAGS: -Wno-error=format -Wno-error=array-bounds
         run: |
           mkdir -p build
           set -o pipefail
-          bash tools/probe_rv32_nemu.sh "$(pwd)/build/rv32-nemu-probe" \
+          bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-probe.log
 
       - name: Upload ABI evidence
