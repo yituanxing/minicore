@@ -1,0 +1,69 @@
+name: RV32 NEMU DiffTest
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32-difftest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rv32-difftest:
+    name: GCC RV32I commit-level NEMU DiffTest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+
+      - name: Install Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+
+      - name: Install RV32 RTL, compiler and reference dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            verilator make g++ python3 git bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          java -version
+          verilator --version
+          riscv64-unknown-elf-gcc --version
+
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
+
+      - name: Run RV32 commit-level DiffTest and negative probe
+        shell: bash
+        run: |
+          mkdir -p build/rv32/logs
+          set -o pipefail
+          make -f Makefile.rv32 run-difftest run-difftest-mismatch-probe \
+            2>&1 | tee build/rv32/logs/rv32-nemu-difftest.log
+
+      - name: Upload RV32 DiffTest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32-difftest-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32/
+            build/rv32-nemu-reference/evidence/
