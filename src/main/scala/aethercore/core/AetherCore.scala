@@ -141,7 +141,12 @@ class AetherCore(resetVector: BigInt = BigInt("80000000", 16)) extends Module {
     is(MemSize.DWord) { storeMask := "hff".U }
   }
 
-  io.dmem.valid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) && !exMem.exception
+  // A faulting instruction retires from WB while a younger instruction may
+  // already occupy MEM. Suppress that younger request combinationally so no
+  // store or MMIO side effect can escape in the exception-retirement cycle.
+  val retiringException = memWb.valid && memWb.exception
+  io.dmem.valid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
+    !exMem.exception && !retiringException
   io.dmem.write := exMem.ctrl.memWrite
   io.dmem.addr := exMem.result
   io.dmem.wdata := exMem.storeData
