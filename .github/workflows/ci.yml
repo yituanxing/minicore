@@ -98,6 +98,12 @@ jobs:
           set -o pipefail
           make run-difftest 2>&1 | tee build/logs/nemu-difftest.log
 
+      - name: NEMU DiffTest mismatch probe
+        shell: bash
+        run: |
+          set -o pipefail
+          make run-difftest-mismatch-probe 2>&1 | tee build/logs/nemu-difftest-mismatch-probe.log
+
       - name: Upload build evidence
         if: always()
         uses: actions/upload-artifact@v4
