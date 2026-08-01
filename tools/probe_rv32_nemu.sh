@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-revision="${NEMU_REVISION:-ad6bfde6241f2fc1e864b1efb2bed99b3670eb73}"
+revision="${NEMU_REVISION:-4cac5438bec9cabd98c9ab1dacfc8bb4e1ee2601}"
 work_dir="${1:-build/rv32-nemu-probe}"
 source_dir="$work_dir/nemu"
 evidence_dir="$work_dir/evidence"
@@ -15,106 +15,102 @@ git -C "$source_dir" init -q
 git -C "$source_dir" remote add origin https://github.com/OpenXiangShan/NEMU.git
 git -C "$source_dir" fetch --depth=1 origin "$revision"
 git -C "$source_dir" checkout -q FETCH_HEAD
-export NEMU_HOME="$source_dir"
+export NEMU_HOME="$(cd "$source_dir" && pwd)"
 
 git -C "$source_dir" rev-parse HEAD | tee "$evidence_dir/revision.txt"
-
 find "$source_dir/configs" -maxdepth 1 -type f -printf '%f\n' | sort \
   | tee "$evidence_dir/configs.txt"
 
-grep -RIn --exclude-dir=.git -E 'riscv32|ISA_riscv32|RV32' \
-  "$source_dir/configs" "$source_dir/src" "$source_dir/include" \
-  > "$evidence_dir/riscv32-source-matches.txt" || true
-
 grep -RIn --exclude-dir=.git -E \
-  'difftest_regcpy|DIFFTEST_REG_SIZE|CPU_state|word_t|CONFIG_ISA_riscv32|config SHARE|config SHARE_REF' \
-  "$source_dir/Kconfig" "$source_dir/lib-include" \
-  "$source_dir/src" "$source_dir/include" \
-  > "$evidence_dir/difftest-layout-matches.txt" || true
+  'riscv32|ISA_riscv32|RV32|difftest_regcpy|DIFFTEST_REG_SIZE|CPU_state|word_t|config SHARE|config PERF_OPT' \
+  "$source_dir/Kconfig" "$source_dir/lib-include" "$source_dir/src" \
+  "$source_dir/include" > "$evidence_dir/source-matches.txt" || true
 
-cp "$source_dir/src/isa/riscv32/include/isa-def.h" \
-  "$evidence_dir/riscv32-isa-def.h"
-cp "$source_dir/src/isa/riscv32/difftest/ref.c" \
-  "$evidence_dir/riscv32-difftest-ref.c"
-cp "$source_dir/lib-include/difftest.h" \
-  "$evidence_dir/difftest-public-layout.h"
-cp "$source_dir/configs/riscv32-pa_defconfig" \
-  "$evidence_dir/upstream-riscv32-pa_defconfig"
+for path in \
+  src/isa/riscv32/include/isa-def.h \
+  src/isa/riscv32/difftest/ref.c \
+  src/cpu/difftest/ref.c \
+  lib-include/difftest.h \
+  configs/riscv32-pa_defconfig; do
+  if [[ -f "$source_dir/$path" ]]; then
+    cp "$source_dir/$path" "$evidence_dir/$(echo "$path" | tr '/' '-')"
+  fi
+done
 
 mapfile -t candidates < <(
   find "$source_dir/configs" -maxdepth 1 -type f -printf '%f\n' \
-    | grep -E '^riscv32.*ref_defconfig$' \
-    | sort
+    | grep -E '^riscv32.*ref_defconfig$' | sort
 )
 
 if ((${#candidates[@]} == 0)); then
-  mapfile -t candidates < <(
-    grep -l 'CONFIG_ISA_riscv32=y' "$source_dir"/configs/*ref_defconfig 2>/dev/null \
-      | xargs -r -n1 basename \
-      | sort -u
-  )
-fi
-
-if ((${#candidates[@]} == 0)); then
-  echo "No upstream RV32 reference defconfig exists; derive one from riscv32-pa_defconfig."
+  echo "No upstream RV32 reference defconfig exists; derive one using only symbols present in this revision."
+  SOURCE_ROOT="$source_dir" \
   SOURCE_CONFIG="$source_dir/configs/riscv32-pa_defconfig" \
   OUTPUT_CONFIG="$source_dir/configs/$derived_config" python3 - <<'PY'
 import os
 import re
 from pathlib import Path
 
+root = Path(os.environ["SOURCE_ROOT"])
 source = Path(os.environ["SOURCE_CONFIG"])
 output = Path(os.environ["OUTPUT_CONFIG"])
-lines = source.read_text(encoding="utf-8").splitlines()
 
-settings = {
+symbols = set()
+for kconfig in root.rglob("Kconfig"):
+    text = kconfig.read_text(encoding="utf-8", errors="replace")
+    symbols.update(re.findall(r"^(?:menu)?config\s+([A-Za-z0-9_]+)", text, re.M))
+
+requested = {
+    "ISA_riscv32": "CONFIG_ISA_riscv32=y",
+    "ISA_riscv64": "# CONFIG_ISA_riscv64 is not set",
     "CC_GCC": "CONFIG_CC_GCC=y",
-    "CC_GPP": "# CONFIG_CC_GPP is not set",
     "CC_CLANG": "# CONFIG_CC_CLANG is not set",
-    "CC": 'CONFIG_CC="gcc"',
-    "CXX": 'CONFIG_CXX="g++"',
     "CC_O0": "# CONFIG_CC_O0 is not set",
     "CC_O1": "# CONFIG_CC_O1 is not set",
     "CC_O2": "CONFIG_CC_O2=y",
     "CC_O3": "# CONFIG_CC_O3 is not set",
-    "CC_OPT": 'CONFIG_CC_OPT="-O2"',
     "CC_LTO": "# CONFIG_CC_LTO is not set",
-    "CC_AGGRESSIVE_INLINE": "CONFIG_CC_AGGRESSIVE_INLINE=y",
     "CC_DEBUG": "# CONFIG_CC_DEBUG is not set",
+    "CC_ASAN": "# CONFIG_CC_ASAN is not set",
     "SHARE": "CONFIG_SHARE=y",
     "SHARE_REF": "CONFIG_SHARE_REF=y",
     "SHARE_CTRL": "# CONFIG_SHARE_CTRL is not set",
-    "QUERY_REF": "CONFIG_QUERY_REF=y",
-    "LARGE_COPY": "CONFIG_LARGE_COPY=y",
-    "FPU_HOST": "# CONFIG_FPU_HOST is not set",
-    "FPU_SOFT": "# CONFIG_FPU_SOFT is not set",
-    "FPU_NONE": "CONFIG_FPU_NONE=y",
-    "DIFFTEST_CHECK_FCSR": "# CONFIG_DIFFTEST_CHECK_FCSR is not set",
+    "DEBUG": "# CONFIG_DEBUG is not set",
+    "DIFFTEST": "# CONFIG_DIFFTEST is not set",
+    "QUERY_REF": "# CONFIG_QUERY_REF is not set",
+    "LARGE_COPY": "# CONFIG_LARGE_COPY is not set",
     "DEVICE": "# CONFIG_DEVICE is not set",
     "MEM_RANDOM": "# CONFIG_MEM_RANDOM is not set",
+    "PERF_OPT": "CONFIG_PERF_OPT=y",
+    "DISABLE_INSTR_CNT": "# CONFIG_DISABLE_INSTR_CNT is not set",
+    "TIMER_GETTIMEOFDAY": "CONFIG_TIMER_GETTIMEOFDAY=y",
+    "TIMER_CLOCK_GETTIME": "# CONFIG_TIMER_CLOCK_GETTIME is not set",
     "MBASE": "CONFIG_MBASE=0x80000000",
     "MSIZE": "CONFIG_MSIZE=0x4000000",
     "PADDRBITS": "CONFIG_PADDRBITS=32",
-    "RESET_FROM_MMIO": "# CONFIG_RESET_FROM_MMIO is not set",
     "PC_RESET_OFFSET": "CONFIG_PC_RESET_OFFSET=0x0",
-    "DETERMINISTIC": "CONFIG_DETERMINISTIC=y",
-    "PERF_OPT": "# CONFIG_PERF_OPT is not set",
 }
-
+requested = {name: line for name, line in requested.items() if name in symbols}
 patterns = {
     name: re.compile(rf"^(?:CONFIG_{re.escape(name)}=.*|# CONFIG_{re.escape(name)} is not set)$")
-    for name in settings
+    for name in requested
 }
+base_lines = source.read_text(encoding="utf-8").splitlines()
 filtered = [
-    line for line in lines
+    line for line in base_lines
     if not any(pattern.match(line) for pattern in patterns.values())
 ]
-filtered.extend(["", "# AetherCore-derived RV32 reference settings"])
-filtered.extend(settings.values())
+filtered.extend(["", "# AetherCore-derived RV32 shared-reference settings"])
+filtered.extend(requested.values())
 output.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+(root / "available-kconfig-symbols.txt").write_text(
+    "\n".join(sorted(symbols)) + "\n", encoding="utf-8"
+)
 PY
   cp "$source_dir/configs/$derived_config" \
     "$evidence_dir/derived-riscv32-reference.defconfig"
+  cp "$source_dir/available-kconfig-symbols.txt" \
+    "$evidence_dir/available-kconfig-symbols.txt"
   candidates=("$derived_config")
 fi
 
@@ -127,12 +123,22 @@ for candidate in "${candidates[@]}"; do
     | tee -a "$evidence_dir/build-attempts.txt"
   rm -f "$source_dir/.config"
   rm -rf "$source_dir/build"
-  if make -C "$source_dir" "$candidate" \
-      > "$evidence_dir/${candidate}.config.log" 2>&1 && \
-     make -C "$source_dir" -j2 \
+
+  if ! make -C "$source_dir" "$candidate" \
+      > "$evidence_dir/${candidate}.config.log" 2>&1; then
+    continue
+  fi
+
+  if [[ -d "$source_dir/tools/fixdep" ]]; then
+    make -C "$source_dir/tools/fixdep" \
+      > "$evidence_dir/${candidate}.fixdep.log" 2>&1
+  fi
+
+  if make -C "$source_dir" -j2 \
       > "$evidence_dir/${candidate}.build.log" 2>&1; then
     reference_so="$(find "$source_dir/build" -type f \
-      -name '*riscv32*interpreter-so*' -print -quit)"
+      \( -name '*riscv32*interpreter-so*' -o -name 'riscv32-nemu-interpreter-so*' \) \
+      -print -quit)"
     if [[ -n "$reference_so" ]]; then
       selected="$candidate"
       break
@@ -164,19 +170,18 @@ evidence = Path(os.environ["EVIDENCE_DIR"])
 expected = int(os.environ["EXPECTED_REG_BYTES"])
 lib = ctypes.CDLL(so_path, mode=os.RTLD_NOW | os.RTLD_LOCAL)
 
-set_ram_size = lib.difftest_set_ramsize
-set_ram_size.argtypes = [ctypes.c_size_t]
-set_ram_size.restype = None
+set_ram_size = getattr(lib, "difftest_set_ramsize", None)
+if set_ram_size is not None:
+    set_ram_size.argtypes = [ctypes.c_size_t]
+    set_ram_size.restype = None
+    set_ram_size(64 * 1024 * 1024)
 
 init = lib.difftest_init
 init.argtypes = []
 init.restype = None
-
 regcpy = lib.difftest_regcpy
 regcpy.argtypes = [ctypes.c_void_p, ctypes.c_bool]
 regcpy.restype = None
-
-set_ram_size(64 * 1024 * 1024)
 init()
 
 size = 4096
@@ -190,7 +195,6 @@ destination = (ctypes.c_ubyte * size)(*([guard] * size))
 regcpy(ctypes.byref(destination), False)
 raw = bytes(destination)
 expected_bytes = bytes(source[:expected])
-
 prefix_matches = raw[:expected] == expected_bytes
 guard_matches = all(value == guard for value in raw[expected:])
 changed = [index for index, value in enumerate(raw) if value != guard]
