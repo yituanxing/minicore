@@ -3,8 +3,12 @@ package aethercore.core
 import chisel3._
 import chisel3.util._
 import aethercore.common._
+import aethercore.config.{CoreProfiles, IsaConfig}
 
-class Decoder extends Module {
+class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Module {
+  private val hasM = isa.hasM
+  private val hasWordOps = isa.hasWordOps
+
   val io = IO(new Bundle {
     val inst = Input(UInt(32.W))
     val rs1 = Output(UInt(5.W))
@@ -18,6 +22,11 @@ class Decoder extends Module {
   val funct7 = io.inst(31, 25)
   val funct6 = io.inst(31, 26)
 
+  val shiftLogicalImmediate =
+    if (isa.xlen == 64) funct6 === "b000000".U else funct7 === "b0000000".U
+  val shiftArithmeticImmediate =
+    if (isa.xlen == 64) funct6 === "b010000".U else funct7 === "b0100000".U
+
   io.rs1 := io.inst(19, 15)
   io.rs2 := io.inst(24, 20)
   io.rd := io.inst(11, 7)
@@ -29,7 +38,7 @@ class Decoder extends Module {
   c.opBSel := OpBSel.Rs2
   c.wbSel := WbSel.Alu
   c.branch := BranchType.None
-  c.memSize := MemSize.DWord
+  if (hasWordOps) c.memSize := MemSize.DWord else c.memSize := MemSize.Word
   c.illegal := true.B
 
   switch(opcode) {
@@ -64,10 +73,14 @@ class Decoder extends Module {
         is("b000".U) { c.illegal := false.B; c.memSize := MemSize.Byte }
         is("b001".U) { c.illegal := false.B; c.memSize := MemSize.Half }
         is("b010".U) { c.illegal := false.B; c.memSize := MemSize.Word }
-        is("b011".U) { c.illegal := false.B; c.memSize := MemSize.DWord }
+        is("b011".U) {
+          when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.DWord }
+        }
         is("b100".U) { c.illegal := false.B; c.memSize := MemSize.Byte; c.memUnsigned := true.B }
         is("b101".U) { c.illegal := false.B; c.memSize := MemSize.Half; c.memUnsigned := true.B }
-        is("b110".U) { c.illegal := false.B; c.memSize := MemSize.Word; c.memUnsigned := true.B }
+        is("b110".U) {
+          when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.Word; c.memUnsigned := true.B }
+        }
       }
     }
     is("b0100011".U) {
@@ -76,7 +89,9 @@ class Decoder extends Module {
         is("b000".U) { c.illegal := false.B; c.memSize := MemSize.Byte }
         is("b001".U) { c.illegal := false.B; c.memSize := MemSize.Half }
         is("b010".U) { c.illegal := false.B; c.memSize := MemSize.Word }
-        is("b011".U) { c.illegal := false.B; c.memSize := MemSize.DWord }
+        is("b011".U) {
+          when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.DWord }
+        }
       }
     }
     is("b0010011".U) {
@@ -88,10 +103,10 @@ class Decoder extends Module {
         is("b100".U) { c.illegal := false.B; c.aluOp := AluOp.Xor }
         is("b110".U) { c.illegal := false.B; c.aluOp := AluOp.Or }
         is("b111".U) { c.illegal := false.B; c.aluOp := AluOp.And }
-        is("b001".U) { when(funct6 === "b000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
+        is("b001".U) { when(shiftLogicalImmediate) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
         is("b101".U) {
-          when(funct6 === "b000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-          when(funct6 === "b010000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
+          when(shiftLogicalImmediate) { c.illegal := false.B; c.aluOp := AluOp.Srl }
+          when(shiftArithmeticImmediate) { c.illegal := false.B; c.aluOp := AluOp.Sra }
         }
       }
     }
@@ -101,67 +116,71 @@ class Decoder extends Module {
         is("b000".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
           when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mul }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mul }
         }
         is("b001".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mulh }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mulh }
         }
         is("b010".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Slt }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mulhsu }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mulhsu }
         }
         is("b011".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sltu }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mulhu }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mulhu }
         }
         is("b100".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Xor }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Div }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Div }
         }
         is("b101".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
           when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Divu }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Divu }
         }
         is("b110".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Or }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Rem }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Rem }
         }
         is("b111".U) {
           when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.And }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Remu }
+          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Remu }
         }
       }
     }
     is("b0011011".U) {
-      c.usesRs1 := true.B; c.regWrite := true.B; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.I; c.wordOp := true.B
-      switch(funct3) {
-        is("b000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
-        is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
-        is("b101".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-          when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
+      if (hasWordOps) {
+        c.usesRs1 := true.B; c.regWrite := true.B; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.I; c.wordOp := true.B
+        switch(funct3) {
+          is("b000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
+          is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
+          is("b101".U) {
+            when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
+            when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
+          }
         }
       }
     }
     is("b0111011".U) {
-      c.usesRs1 := true.B; c.usesRs2 := true.B; c.regWrite := true.B; c.wordOp := true.B
-      switch(funct3) {
-        is("b000".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
-          when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Mul }
+      if (hasWordOps) {
+        c.usesRs1 := true.B; c.usesRs2 := true.B; c.regWrite := true.B; c.wordOp := true.B
+        switch(funct3) {
+          is("b000".U) {
+            when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
+            when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
+            when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mul }
+          }
+          is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
+          is("b100".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Div } }
+          is("b101".U) {
+            when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
+            when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
+            when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Divu }
+          }
+          is("b110".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Rem } }
+          is("b111".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Remu } }
         }
-        is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
-        is("b100".U) { when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Div } }
-        is("b101".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-          when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
-          when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Divu }
-        }
-        is("b110".U) { when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Rem } }
-        is("b111".U) { when(funct7 === "b0000001".U) { c.illegal := false.B; c.aluOp := AluOp.Remu } }
       }
     }
     is("b0001111".U) { when(funct3 === 0.U || funct3 === 1.U) { c.illegal := false.B } }

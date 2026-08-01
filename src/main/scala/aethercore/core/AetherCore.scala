@@ -80,7 +80,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
   val haltedReg = RegInit(false.B)
 
-  val decoder = Module(new Decoder)
+  val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
 
@@ -95,11 +95,11 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
 
   val decodedImm = WireDefault(0.U(xlen.W))
   switch(decoder.io.ctrl.immSel) {
-    is(ImmSel.I) { decodedImm := Immediate.i(ifId.inst) }
-    is(ImmSel.S) { decodedImm := Immediate.s(ifId.inst) }
-    is(ImmSel.B) { decodedImm := Immediate.b(ifId.inst) }
-    is(ImmSel.U) { decodedImm := Immediate.u(ifId.inst) }
-    is(ImmSel.J) { decodedImm := Immediate.j(ifId.inst) }
+    is(ImmSel.I) { decodedImm := Immediate.i(ifId.inst, xlen) }
+    is(ImmSel.S) { decodedImm := Immediate.s(ifId.inst, xlen) }
+    is(ImmSel.B) { decodedImm := Immediate.b(ifId.inst, xlen) }
+    is(ImmSel.U) { decodedImm := Immediate.u(ifId.inst, xlen) }
+    is(ImmSel.J) { decodedImm := Immediate.j(ifId.inst, xlen) }
   }
 
   val exMemForward = exMem.valid && exMem.ctrl.regWrite && !exMem.ctrl.memRead && exMem.rd =/= 0.U
