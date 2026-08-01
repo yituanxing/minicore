@@ -6,6 +6,7 @@ REGRESSION_DIR := $(BUILD_DIR)/regressions
 COMPLETION_DIR := $(BUILD_DIR)/completion-regressions
 FAULT_DIR := $(BUILD_DIR)/fault-regressions
 GENERATED_DIR := $(BUILD_DIR)/generated-difftest
+RV64M_DIR := $(BUILD_DIR)/rv64m-regressions
 NEMU_DIR := $(BUILD_DIR)/nemu
 NEMU_HOME := $(abspath $(NEMU_DIR))
 NEMU_COMMIT := ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
@@ -21,7 +22,7 @@ SIM_SOURCES := $(abspath sim/sim_main.cpp) $(abspath sim/nemu_difftest.cpp)
 # Keep this recursive so the wildcard is expanded after the `rtl` prerequisite.
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-.PHONY: all rtl test smoke regressions completion-regressions fault-regressions generated-difftest nemu sim run-smoke run-regressions run-completion-regressions run-fault-regressions run-difftest run-difftest-mismatch-probe run-generated-difftest python-test clean
+.PHONY: all rtl test smoke regressions completion-regressions fault-regressions generated-difftest rv64m-regressions nemu sim run-smoke run-regressions run-completion-regressions run-fault-regressions run-difftest run-difftest-mismatch-probe run-generated-difftest run-rv64m-regressions python-test clean
 
 all: test run-smoke run-regressions run-completion-regressions run-fault-regressions
 
@@ -46,6 +47,9 @@ fault-regressions:
 
 generated-difftest:
 	$(PYTHON) tools/make_generated_difftest.py $(GENERATED_DIR)
+
+rv64m-regressions:
+	$(PYTHON) tools/make_rv64m_regressions.py $(RV64M_DIR)
 
 $(NEMU_SO):
 	rm -rf $(NEMU_DIR)
@@ -134,6 +138,15 @@ run-generated-difftest: sim generated-difftest $(NEMU_SO)
 		$(OBJ_DIR)/V$(TOP) $(GENERATED_DIR)/$$name.bin \
 			--max-cycles 5000 --self-check-exit --difftest "$$so" $$stall_args; \
 	done < $(GENERATED_DIR)/manifest.txt
+
+run-rv64m-regressions: sim rv64m-regressions $(NEMU_SO)
+	@set -e; \
+	so="$(abspath $(NEMU_SO))"; \
+	while read name words; do \
+		echo "== directed RV64M NEMU DiffTest: $$name words=$$words =="; \
+		$(OBJ_DIR)/V$(TOP) $(RV64M_DIR)/$$name.bin \
+			--max-cycles 2000 --self-check-exit --difftest "$$so"; \
+	done < $(RV64M_DIR)/manifest.txt
 
 python-test:
 	$(PYTHON) -m unittest discover -s tests_py -v
