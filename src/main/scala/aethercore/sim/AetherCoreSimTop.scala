@@ -2,9 +2,14 @@ package aethercore.sim
 
 import chisel3._
 import aethercore.common._
+import aethercore.config.{CoreConfig, CoreProfiles}
 import aethercore.core.AetherCore
 
-class AetherCoreSimTop extends Module {
+class AetherCoreSimTop(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
+  require(config.isa.xlen == 64, "the current datapath is still RV64-only")
+  require(config.platform.paddrBits == 64, "the current simulation address ports are 64-bit")
+  require(config.platform.busDataBits == 64, "the current simulation data bus is 64-bit")
+
   val io = IO(new Bundle {
     val imemAddr = Output(UInt(64.W))
     val imemInst = Input(UInt(32.W))
@@ -29,9 +34,9 @@ class AetherCoreSimTop extends Module {
     val halted = Output(Bool())
   })
 
-  val core = Module(new AetherCore())
-  val uartAddress = "h0000000010000000".U(64.W)
-  val exitAddress = "h0000000010000008".U(64.W)
+  val core = Module(new AetherCore(config.platform.resetVector))
+  val uartAddress = config.platform.uartAddress.U(64.W)
+  val exitAddress = config.platform.exitAddress.U(64.W)
 
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
