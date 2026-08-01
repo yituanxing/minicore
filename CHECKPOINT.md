@@ -1,8 +1,8 @@
-# AetherCore S0.4 checkpoint
+# AetherCore S0.5 checkpoint
 
 ## Status
 
-S0.4 connects the frozen RV64I core to a pinned OpenXiangShan/NEMU reference model and performs one architectural reference step for every normal DUT retirement. The complete directed suite now passes both its original self-checking assertions and commit-level DiffTest.
+S0.5 proves that the external checker rejects an intentionally unequal retirement, then expands the frozen RV64I core from directed examples to deterministic generated instruction streams. The complete suite passes self-checking Verilator execution and one-for-one commit comparison against a pinned OpenXiangShan/NEMU reference.
 
 ## Core baseline
 
@@ -16,11 +16,13 @@ S0.4 connects the frozen RV64I core to a pinned OpenXiangShan/NEMU reference mod
 - UART MMIO at `0x10000000` and exit MMIO at `0x10000008`.
 - Architectural commit trace and temporary halt-on-exception behavior.
 - Precise suppression of younger memory effects while WB retires an exception.
-- Chisel tests, strict Verilator smoke, directed regressions and GitHub Actions evidence artifacts.
+- Chisel tests, strict Verilator smoke, directed regressions, generated regressions and GitHub Actions evidence artifacts.
+
+No CPU RTL changed between S0.4 and S0.5.
 
 ## NEMU reference
 
-The reference implementation is fixed rather than following a moving branch:
+The reference implementation remains fixed:
 
 - repository: `OpenXiangShan/NEMU`;
 - revision: `ad6bfde6241f2fc1e864b1efb2bed99b3670eb73`;
@@ -29,7 +31,7 @@ The reference implementation is fixed rather than following a moving branch:
 - RAM base: `0x80000000`;
 - reference RAM size: 64 MiB.
 
-The selected configuration disables FPU, RVV, RVH and multicore state. The adapter synchronizes the exact scalar `regcpy` prefix through the 32 GPRs, machine mode, scalar privileged fields and PC.
+The selected configuration disables FPU, RVV, RVH and multicore state. The adapter synchronizes the scalar `regcpy` prefix through the 32 GPRs, machine mode, scalar privileged fields and PC.
 
 ## Commit comparison contract
 
@@ -44,65 +46,96 @@ For each normal DUT retirement, the adapter:
 7. for normal RAM Stores, reads NEMU memory and compares every enabled byte;
 8. retains the latest 32 matched commits for first-mismatch diagnostics.
 
-The adapter never copies DUT register state back into NEMU after initialization. Therefore a passing result cannot be produced by continually resynchronizing the reference to the DUT.
+The adapter never copies DUT register state back into NEMU after initialization.
 
-The self-check exit Store terminates the Verilator run from the MEM/MMIO side-effect point before that Store reaches architectural retirement. It is intentionally outside the normal commit stream, while every preceding retirement is compared.
+The self-check exit Store terminates Verilator from the MEM/MMIO side-effect point before that Store reaches architectural retirement. Every preceding retirement is compared; the exit Store and following EBREAK are the final two image words and are intentionally outside the compared stream.
+
+## Checker mismatch probe
+
+A separate C++ probe uses the same `NemuDifftest` implementation and the real first instruction of `forwarding.bin`:
+
+```text
+addi x1, x0, 7
+```
+
+It deliberately presents `x1=6`. The test passes only when NEMU identifies the first post-execution GPR mismatch and the matched-commit counter remains zero.
+
+GitHub Actions evidence:
+
+```text
+PASS: deliberate first-commit x1 mismatch was detected
+DiffTest mismatch after 0 matched commits:
+after reference execution: x1 NEMU=0x0000000000000007 DUT=0x0000000000000006
+```
+
+The production Verilator harness contains no perturbation switch; the probe is an independent test executable.
+
+## Deterministic generated streams
+
+The generator uses an in-repository XorShift64 implementation rather than Python's `random` module, so a seed maps to a stable instruction image independent of Python's random implementation.
+
+Each program contains:
+
+- initialization of x1-x27;
+- a dedicated data base in x28 at reset PC + `0x780`;
+- initialized aligned RAM slots;
+- 192 deterministic generation steps;
+- RV64 register and immediate arithmetic;
+- logical, comparison and 64-bit shift operations;
+- RV64 W-class operations;
+- byte, halfword, word and doubleword Loads/Stores;
+- immediate load-use dependency pairs;
+- FENCE/FENCE.I;
+- x0 write-suppression cases;
+- an MMIO exit sequence.
+
+The generator rejects any image whose code reaches the data scratch at `0x780`.
 
 ## Verified by GitHub Actions
 
-Run `30695286414` passed the complete S0.4 gate.
+Run `30696527693` passed the complete S0.5 gate.
 
-Strict smoke:
-
-```text
-A
-PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
-```
-
-NEMU commit-level results:
+Generated matrix:
 
 ```text
-forwarding:       8 commits,  difftest=8
-load_use:        11 commits,  difftest=11, stall-period=3
-branch_flush:     9 commits,  difftest=9
-jal_jalr:        11 commits,  difftest=11
-memory_widths:   29 commits,  difftest=29, stall-period=4
-word_operations: 28 commits,  difftest=28
-branch_matrix:   17 commits,  difftest=17
-x0_writeback:    12 commits,  difftest=12
-alu_logic:       52 commits,  difftest=52
-pc_relative:     23 commits,  difftest=23
-fence_retire:     9 commits,  difftest=9
+name           seed                bytes  words  stall  cycles  commits  difftest
+seed_a37e0001  0x00000000a37e0001  1104   276    0      305     274      274
+seed_a37e0002  0x00000000a37e0002  1088   272    3      326     270      270
+seed_a37e0003  0x00000000a37e0003  1060   265    4      312     263      263
+seed_a37e0004  0x00000000a37e0004  1044   261    5      300     259      259
+seed_a37e0005  0x00000000a37e0005  1068   267    7      305     265      265
 ```
 
-Total normal retirement comparisons: **209**.
+Generated retirement comparisons: **1331**.
 
-All three separate precise-fault regressions also remained green:
+The existing directed matrix remains **209** comparisons. Total normal one-for-one comparisons in the S0.5 gate: **1540**.
+
+Generated binary SHA-256 values:
 
 ```text
-illegal_instruction:
-PASS: precise fault pc=0x80000008 inst=0xffffffff after 12 cycles, 3 committed instructions
-
-load_bus_fault:
-PASS: precise fault pc=0x8000000c inst=0x0000b103 after 13 cycles, 4 committed instructions, stall-period=3
-
-store_bus_fault:
-PASS: precise fault pc=0x80000018 inst=0x0020b023 after 16 cycles, 7 committed instructions, stall-period=4
+e19da2e45b903808b1dac0c3006a1b9f26708ca4c5aadaa133e83f2d2d1fa37d  seed_a37e0001.bin
+1c04e8cb39a914db8c2aff7861ca9000b4a379165ff62d18feebae50599ff3e1  seed_a37e0002.bin
+405be5f779a07b97839c4dfe88ffa973da4084a2fa37bd5782db98acf7da7d83  seed_a37e0003.bin
+702049816a45815a2a5d4ae160d44e47a32ef01e0053f2947a6a76f46ffff585  seed_a37e0004.bin
+b47bca5a619fb26bcbb101f26c4c58b7b17b373f9a37f33fae2ef1f1b3aaf54a  seed_a37e0005.bin
 ```
 
-Precise faults are deliberately not sent through normal DiffTest until trap CSRs and post-trap PC behavior are part of AetherCore's architectural contract.
+Strict smoke, all eleven directed normal programs and all three precise-fault programs also remained green.
 
 ## Current verified boundary
 
 - Python image/reference tests: PASS.
+- deterministic generator reproducibility and opcode-family tests: PASS.
 - Chisel compilation and unit tests: PASS.
 - CIRCT SystemVerilog generation: PASS.
 - Verilator compile/link: PASS.
 - strict smoke: PASS.
-- eleven normal RV64I whole-core programs: PASS.
-- 209 normal retirements compared one-for-one with NEMU: PASS.
+- eleven directed normal RV64I programs: PASS.
+- five deterministic generated RV64I programs: PASS.
+- 1540 normal retirements compared one-for-one with NEMU: PASS.
+- explicit checker mismatch probe: PASS.
 - three exact fault-boundary programs: PASS.
-- deterministic memory-backpressure paths: PASS.
+- deterministic memory-backpressure periods 3, 4, 5 and 7: PASS.
 - pinned NEMU build and GitHub Actions cache: PASS.
 
 ## Known non-fatal warnings
@@ -112,16 +145,15 @@ Precise faults are deliberately not sent through normal DiffTest until trap CSRs
 - Shift intermediates are wider than their selected architectural result.
 - GitHub currently warns that some upstream Actions target Node.js 20 and are being forced onto Node.js 24.
 
-## Next gate: S0.5 generated differential programs
+## Next gate: S1 RV64M
 
-Keep S0.4 frozen and expand confidence without adding ISA features:
+Freeze S0.5 and add the M extension test-first:
 
-- generate deterministic seeded RV64I instruction streams;
-- constrain control flow and memory accesses to valid test regions;
-- terminate through the existing self-check MMIO convention;
-- run each generated image with periodic memory backpressure variants;
-- compare every normal retirement against the pinned NEMU reference;
-- preserve the seed, binary and rolling trace on the first mismatch;
-- add a deliberate adapter-negative test proving that a perturbed DUT retirement is detected.
+- add decoder and ALU unit tests for MUL/DIV/REM and W-class variants;
+- define signed, unsigned, divide-by-zero and overflow behavior explicitly;
+- add directed whole-core programs before modifying RTL;
+- extend deterministic generation to RV64M only after directed cases pass;
+- continue comparing every normal retirement against the same pinned NEMU reference;
+- preserve S0.5 as the rollback baseline.
 
-Only after generated DiffTest is stable should development move to the M extension or privileged architecture.
+Privileged architecture, trap CSRs and post-trap execution remain outside S1.
