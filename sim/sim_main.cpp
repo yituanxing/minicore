@@ -1,4 +1,5 @@
 #include "VAetherCoreSimTop.h"
+#include "nemu_difftest.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
 
@@ -6,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -33,6 +35,7 @@ struct Options {
   bool trace = false;
   bool commitTrace = false;
   bool selfCheckExit = false;
+  std::optional<std::string> difftestSharedObject;
   std::optional<std::uint64_t> expectedExceptionPc;
   std::optional<std::uint32_t> expectedExceptionInst;
   std::optional<std::uint64_t> expectedCommits;
@@ -47,7 +50,7 @@ Options parseOptions(int argc, char** argv) {
   if (argc < 2) {
     throw std::runtime_error(
         "usage: VAetherCoreSimTop <image.bin> [--max-cycles N] [--stall-period N] "
-        "[--trace] [--commit-trace] [--self-check-exit] "
+        "[--trace] [--commit-trace] [--self-check-exit] [--difftest NEMU_SO] "
         "[--expect-exception-pc N --expect-exception-inst N --expected-commits N] "
         "[--forbid-rd N] [--expect-memory64 ADDRESS VALUE]");
   }
@@ -69,6 +72,8 @@ Options parseOptions(int argc, char** argv) {
       options.commitTrace = true;
     } else if (arg == "--self-check-exit") {
       options.selfCheckExit = true;
+    } else if (arg == "--difftest" && i + 1 < argc) {
+      options.difftestSharedObject = argv[++i];
     } else if (arg == "--expect-exception-pc" && i + 1 < argc) {
       options.expectedExceptionPc = parseInteger(argv[++i]);
     } else if (arg == "--expect-exception-inst" && i + 1 < argc) {
@@ -94,6 +99,9 @@ Options parseOptions(int argc, char** argv) {
     }
     if (options.selfCheckExit) {
       throw std::runtime_error("fault checking and --self-check-exit are mutually exclusive");
+    }
+    if (options.difftestSharedObject) {
+      throw std::runtime_error("precise-fault mode is not yet connected to external DiffTest");
     }
   }
   if (options.expectedMemoryAddress.has_value() != options.expectedMemoryValue.has_value()) {
@@ -168,6 +176,22 @@ void dumpCommit(const VAetherCoreSimTop& top) {
             << " data=0x" << std::hex << static_cast<std::uint64_t>(top.io_commit_rdData)
             << (top.io_commit_exception ? " exception" : "") << std::dec << '\n';
 }
+
+DifftestCommit makeDifftestCommit(const VAetherCoreSimTop& top) {
+  DifftestCommit commit;
+  commit.pc = static_cast<std::uint64_t>(top.io_commit_pc);
+  commit.inst = static_cast<std::uint32_t>(top.io_commit_inst);
+  commit.rd = static_cast<std::uint8_t>(top.io_commit_rd);
+  commit.rdWrite = top.io_commit_rdWrite;
+  commit.rdData = static_cast<std::uint64_t>(top.io_commit_rdData);
+  commit.memValid = top.io_commit_memValid;
+  commit.memWrite = top.io_commit_memWrite;
+  commit.memAddr = static_cast<std::uint64_t>(top.io_commit_memAddr);
+  commit.memWdata = static_cast<std::uint64_t>(top.io_commit_memWdata);
+  commit.memWmask = static_cast<std::uint8_t>(top.io_commit_memWmask);
+  commit.exception = top.io_commit_exception;
+  return commit;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -179,6 +203,12 @@ int main(int argc, char** argv) {
     VAetherCoreSimTop top{&context};
     Memory memory;
     memory.load(options.image);
+
+    std::unique_ptr<NemuDifftest> difftest;
+    if (options.difftestSharedObject) {
+      difftest = std::make_unique<NemuDifftest>(
+          *options.difftestSharedObject, options.image, kRamBase, kRamSize);
+    }
 
     VerilatedVcdC* wave = nullptr;
     if (options.trace) {
@@ -236,6 +266,8 @@ int main(int argc, char** argv) {
 
         if (top.io_commit_valid) {
           ++committed;
+          if (difftest) difftest->check(makeDifftestCommit(top));
+
           if (top.io_commit_exception) {
             ++exceptions;
             exceptionPc = static_cast<std::uint64_t>(top.io_commit_pc);
@@ -342,6 +374,7 @@ int main(int argc, char** argv) {
       std::cout << "PASS: self-check exit=0 after " << cycles << " cycles, " << committed
                 << " committed instructions";
       if (options.stallPeriod != 0) std::cout << ", stall-period=" << options.stallPeriod;
+      if (difftest) std::cout << ", difftest=" << difftest->checkedCommits();
       std::cout << '\n';
       return 0;
     }

@@ -1,12 +1,12 @@
-# AetherCore S0.3d checkpoint
+# AetherCore S0.4 checkpoint
 
 ## Status
 
-The normal RV64I directed suite is frozen at eleven self-checking programs, and the temporary exception contract now has three strict whole-core fault regressions. S0.3d found and fixed a real precise-exception bug: a younger Store could issue from MEM in the same cycle an older exception retired from WB.
+S0.4 connects the frozen RV64I core to a pinned OpenXiangShan/NEMU reference model and performs one architectural reference step for every normal DUT retirement. The complete directed suite now passes both its original self-checking assertions and commit-level DiffTest.
 
 ## Core baseline
 
-- IF/ID/EX/MEM/WB in-order pipeline.
+- IF/ID/EX/MEM/WB five-stage in-order pipeline.
 - RV64I decoder and ALU, including W-class arithmetic.
 - Integer register file with x0 protection and same-cycle WB bypass.
 - EX/MEM and MEM/WB forwarding.
@@ -15,69 +15,69 @@ The normal RV64I directed suite is frozen at eleven self-checking programs, and 
 - Blocking data bus and host-backed RAM adapter.
 - UART MMIO at `0x10000000` and exit MMIO at `0x10000008`.
 - Architectural commit trace and temporary halt-on-exception behavior.
-- Chisel tests, strict Verilator smoke and GitHub Actions artifact pipeline.
+- Precise suppression of younger memory effects while WB retires an exception.
+- Chisel tests, strict Verilator smoke, directed regressions and GitHub Actions evidence artifacts.
 
-## Precise-fault infrastructure
+## NEMU reference
 
-The Verilator harness can assert:
+The reference implementation is fixed rather than following a moving branch:
 
-- exact exception PC and instruction;
-- exact total retirement count;
-- exactly one exception retirement;
-- absence of a forbidden younger destination-register write;
-- absence of younger UART/exit-MMIO effects;
-- an expected 64-bit memory value after halt;
-- deterministic memory backpressure through `--stall-period N`.
+- repository: `OpenXiangShan/NEMU`;
+- revision: `ad6bfde6241f2fc1e864b1efb2bed99b3670eb73`;
+- configuration: `riscv64-nutshell-ref_defconfig`;
+- shared object: `build/riscv64-nemu-interpreter-so`;
+- RAM base: `0x80000000`;
+- reference RAM size: 64 MiB.
 
-Fault cases:
+The selected configuration disables FPU, RVV, RVH and multicore state. The adapter synchronizes the exact scalar `regcpy` prefix through the 32 GPRs, machine mode, scalar privileged fields and PC.
 
-- illegal instruction with an immediately younger exit-MMIO Store;
-- faulting LD under periodic backpressure with an immediately younger exit-MMIO Store;
-- faulting SD under periodic backpressure with an immediately younger valid-RAM Store and sentinel check.
+## Commit comparison contract
 
-## Defect found
+For each normal DUT retirement, the adapter:
 
-Initial strict run `30694337230` kept all normal tests green but failed the first fault case:
+1. reads NEMU state and checks the pre-instruction PC;
+2. compares all 32 NEMU GPRs against the harness-maintained DUT architectural state;
+3. verifies that the retired DUT instruction equals the instruction in the loaded image;
+4. executes exactly one NEMU instruction;
+5. applies only the DUT retirement destination write to the harness-maintained DUT state;
+6. reads NEMU state again and compares all 32 post-instruction GPRs;
+7. for normal RAM Stores, reads NEMU memory and compares every enabled byte;
+8. retains the latest 32 matched commits for first-mismatch diagnostics.
 
-```text
-FAIL: younger MMIO side effect escaped past the fault
-```
+The adapter never copies DUT register state back into NEMU after initialization. Therefore a passing result cannot be produced by continually resynchronizing the reference to the DUT.
 
-Root cause:
-
-- the faulting instruction reached WB with `memWb.exception=1`;
-- an immediately younger Store had already reached MEM;
-- `io.dmem.valid` was still asserted during the exception-retirement cycle;
-- the Store/MMIO side effect became visible before `haltedReg` took effect on the clock edge.
-
-## RTL fix
-
-The data-bus request is now suppressed combinationally while WB is retiring an exception:
-
-```scala
-val retiringException = memWb.valid && memWb.exception
-io.dmem.valid := exMem.valid &&
-  (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-  !exMem.exception &&
-  !retiringException
-```
-
-This blocks all younger MEM requests in the precise exception boundary cycle while leaving normal memory behavior unchanged.
+The self-check exit Store terminates the Verilator run from the MEM/MMIO side-effect point before that Store reaches architectural retirement. It is intentionally outside the normal commit stream, while every preceding retirement is compared.
 
 ## Verified by GitHub Actions
 
-Run `30694514557` passed the complete suite after the RTL fix.
+Run `30695286414` passed the complete S0.4 gate.
 
-Strict normal smoke:
+Strict smoke:
 
 ```text
 A
 PASS: halted after 16 cycles, 7 committed instructions, x3=12, UART="A"
 ```
 
-All eleven normal RV64I directed programs remained green.
+NEMU commit-level results:
 
-Precise-fault results:
+```text
+forwarding:       8 commits,  difftest=8
+load_use:        11 commits,  difftest=11, stall-period=3
+branch_flush:     9 commits,  difftest=9
+jal_jalr:        11 commits,  difftest=11
+memory_widths:   29 commits,  difftest=29, stall-period=4
+word_operations: 28 commits,  difftest=28
+branch_matrix:   17 commits,  difftest=17
+x0_writeback:    12 commits,  difftest=12
+alu_logic:       52 commits,  difftest=52
+pc_relative:     23 commits,  difftest=23
+fence_retire:     9 commits,  difftest=9
+```
+
+Total normal retirement comparisons: **209**.
+
+All three separate precise-fault regressions also remained green:
 
 ```text
 illegal_instruction:
@@ -90,31 +90,38 @@ store_bus_fault:
 PASS: precise fault pc=0x80000018 inst=0x0020b023 after 16 cycles, 7 committed instructions, stall-period=4
 ```
 
-The store-fault sentinel at `0x80000200` remained zero, proving the immediately younger valid-RAM Store was suppressed.
+Precise faults are deliberately not sent through normal DiffTest until trap CSRs and post-trap PC behavior are part of AetherCore's architectural contract.
 
 ## Current verified boundary
 
+- Python image/reference tests: PASS.
 - Chisel compilation and unit tests: PASS.
 - CIRCT SystemVerilog generation: PASS.
 - Verilator compile/link: PASS.
 - strict smoke: PASS.
 - eleven normal RV64I whole-core programs: PASS.
+- 209 normal retirements compared one-for-one with NEMU: PASS.
 - three exact fault-boundary programs: PASS.
 - deterministic memory-backpressure paths: PASS.
+- pinned NEMU build and GitHub Actions cache: PASS.
 
 ## Known non-fatal warnings
 
 - Verilator reports the deliberately cleared JALR low bit as unused.
 - Generated reset/randomization helper symbols are unused.
 - Shift intermediates are wider than their selected architectural result.
+- GitHub currently warns that some upstream Actions target Node.js 20 and are being forced onto Node.js 24.
 
-## Next gate: S0.4 DiffTest foundation
+## Next gate: S0.5 generated differential programs
 
-Freeze the current directed suite and connect an external ISA reference model for normal, non-trapping RV64I commits:
+Keep S0.4 frozen and expand confidence without adding ISA features:
 
-- load NEMU or Spike as the reference implementation;
-- initialize reference memory from the same binary image;
-- execute exactly one reference instruction for each DUT commit;
-- compare committed PC, instruction, destination write and memory side effects;
-- preserve a rolling trace and stop at the first architectural mismatch;
-- keep the precise-fault suite separate until the reference exception contract is wired explicitly.
+- generate deterministic seeded RV64I instruction streams;
+- constrain control flow and memory accesses to valid test regions;
+- terminate through the existing self-check MMIO convention;
+- run each generated image with periodic memory backpressure variants;
+- compare every normal retirement against the pinned NEMU reference;
+- preserve the seed, binary and rolling trace on the first mismatch;
+- add a deliberate adapter-negative test proving that a perturbed DUT retirement is detected.
+
+Only after generated DiffTest is stable should development move to the M extension or privileged architecture.

@@ -5,16 +5,20 @@ SOFTWARE_DIR := $(BUILD_DIR)/software
 REGRESSION_DIR := $(BUILD_DIR)/regressions
 COMPLETION_DIR := $(BUILD_DIR)/completion-regressions
 FAULT_DIR := $(BUILD_DIR)/fault-regressions
+NEMU_DIR := $(BUILD_DIR)/nemu
+NEMU_HOME := $(abspath $(NEMU_DIR))
+NEMU_COMMIT := ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
+NEMU_SO := $(NEMU_DIR)/build/riscv64-nemu-interpreter-so
 TOP := AetherCoreSimTop
 VERILATOR ?= verilator
 PYTHON ?= python3
-SIM_MAIN := $(abspath sim/sim_main.cpp)
+SIM_SOURCES := $(abspath sim/sim_main.cpp) $(abspath sim/nemu_difftest.cpp)
 
 # Chisel/CIRCT emits the top and child modules as separate SystemVerilog files.
 # Keep this recursive so the wildcard is expanded after the `rtl` prerequisite.
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-.PHONY: all rtl test smoke regressions completion-regressions fault-regressions sim run-smoke run-regressions run-completion-regressions run-fault-regressions python-test clean
+.PHONY: all rtl test smoke regressions completion-regressions fault-regressions nemu sim run-smoke run-regressions run-completion-regressions run-fault-regressions run-difftest python-test clean
 
 all: test run-smoke run-regressions run-completion-regressions run-fault-regressions
 
@@ -37,12 +41,25 @@ completion-regressions:
 fault-regressions:
 	$(PYTHON) tools/make_fault_regressions.py $(FAULT_DIR)
 
+$(NEMU_SO):
+	rm -rf $(NEMU_DIR)
+	mkdir -p $(NEMU_DIR)
+	git -C $(NEMU_DIR) init
+	git -C $(NEMU_DIR) remote add origin https://github.com/OpenXiangShan/NEMU.git
+	git -C $(NEMU_DIR) fetch --depth=1 origin $(NEMU_COMMIT)
+	git -C $(NEMU_DIR) checkout --detach FETCH_HEAD
+	NEMU_HOME=$(NEMU_HOME) $(MAKE) -C $(NEMU_DIR) riscv64-nutshell-ref_defconfig
+	NEMU_HOME=$(NEMU_HOME) $(MAKE) -C $(NEMU_DIR) -j$$(nproc)
+	@test -f $@ || { echo "ERROR: NEMU shared object was not produced"; exit 1; }
+
+nemu: $(NEMU_SO)
+
 sim: rtl smoke
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no generated SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(OBJ_DIR) \
-		-CFLAGS "-std=c++20 -O2" \
-		$(RTL_SOURCES) $(SIM_MAIN)
+		-CFLAGS "-std=c++20 -O2" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(SIM_SOURCES)
 
 run-smoke: sim
 	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/smoke.bin --max-cycles 200
@@ -75,6 +92,22 @@ run-fault-regressions: sim fault-regressions
 		if [ "$$memaddr" != "-" ]; then args="$$args --expect-memory64 $$memaddr $$memval"; fi; \
 		$(OBJ_DIR)/V$(TOP) $(FAULT_DIR)/$$name.bin $$args; \
 	done < $(FAULT_DIR)/manifest.txt
+
+run-difftest: sim regressions completion-regressions $(NEMU_SO)
+	@set -e; \
+	so="$(abspath $(NEMU_SO))"; \
+	while read name stall; do \
+		echo "== NEMU DiffTest: $$name =="; \
+		stall_args=""; \
+		if [ "$$stall" != "0" ]; then stall_args="--stall-period $$stall"; fi; \
+		$(OBJ_DIR)/V$(TOP) $(REGRESSION_DIR)/$$name.bin \
+			--max-cycles 500 --self-check-exit --difftest "$$so" $$stall_args; \
+	done < $(REGRESSION_DIR)/manifest.txt; \
+	while read name; do \
+		echo "== NEMU DiffTest: $$name =="; \
+		$(OBJ_DIR)/V$(TOP) $(COMPLETION_DIR)/$$name.bin \
+			--max-cycles 500 --self-check-exit --difftest "$$so"; \
+	done < $(COMPLETION_DIR)/manifest.txt
 
 python-test:
 	$(PYTHON) -m unittest discover -s tests_py -v
