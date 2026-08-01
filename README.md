@@ -2,7 +2,7 @@
 
 A correctness-first RISC-V processor project written in Chisel and driven by executable software workloads.
 
-The current verified checkpoint is **S1.1**: a five-stage in-order RV64IM core with Chisel/CIRCT/Verilator implementation, commit-level differential testing against a pinned OpenXiangShan/NEMU reference, and real freestanding C programs compiled by RISC-V GCC.
+The current verified checkpoint is **S1.2**: a five-stage in-order RV64IM core with Chisel/CIRCT/Verilator implementation, commit-level differential testing against a pinned OpenXiangShan/NEMU reference, and a frozen corpus of real freestanding C programs compiled across multiple optimization levels.
 
 ## Current core
 
@@ -35,8 +35,6 @@ The current M implementation is combinational and correctness-first. A later che
 
 ## Real compiler-produced software
 
-S1.1 adds a freestanding RV64IM software path:
-
 ```text
 C source
   -> riscv64-unknown-elf-gcc -march=rv64im -mabi=lp64
@@ -46,40 +44,31 @@ C source
   -> one-for-one NEMU retirement comparison
 ```
 
-The first matrix contains:
+Current source workloads:
 
 - `call_stack`: recursion, nested calls, stack frames, arrays, structures and remainder;
 - `memory`: `.rodata/.data/.bss`, byte loops, pointers, structures and checksum code;
-- `arithmetic`: signed/unsigned 64-bit and W-class multiply/divide/remainder.
+- `arithmetic`: signed/unsigned 64-bit and W-class multiply/divide/remainder;
+- `sort`: insertion sort and recursive quicksort;
+- `crc_hash`: CRC32, FNV-1a and rotate/multiply hashing;
+- `mixed_integer`: signed matrix multiplication and quotient/remainder chains.
 
-GitHub Actions run `30700575123` passed:
+The last three are compiled at `-O0`, `-O2` and `-Os`, producing distinct stack layouts, register allocation and control-flow shapes.
 
-```text
-call_stack:  2541 commits, difftest=2541
-memory:       791 commits, difftest=791, stall-period=4
-arithmetic:   289 commits, difftest=289, stall-period=3
--------------------------------------------------------
-compiled C:  3621 normal retirement comparisons
-```
+## Verified scale
 
-All three programs returned exit code zero. ELF files, binaries, maps, disassemblies, logs and SHA-256 values are retained in the CI artifact.
-
-## Complete verified total
-
-The frozen S1 directed/generated matrix remains green:
+GitHub Actions runs `30702481540` and `30702481539` passed:
 
 ```text
-RV64I directed/generated: 1540 comparisons
-RV64M directed:            108 comparisons
-RV64M generated:          1471 comparisons
--------------------------------------------
-S1 existing:              3119 comparisons
-S1.1 compiled C:          3621 comparisons
--------------------------------------------
-combined:                 6740 comparisons
+frozen directed/generated architecture:     3,119 comparisons
+compiler-produced corpus:                 204,218 comparisons
+----------------------------------------------------------
+complete normal-retirement gate:          207,337 comparisons
 ```
 
-Every normal retirement matched the pinned NEMU reference. The strict smoke, deliberate mismatch probe and all three precise fault-boundary regressions also remain green.
+Every normal retirement matched the pinned NEMU reference. All 12 compiled programs returned exit code zero. Strict smoke, the deliberate mismatch probe and all three precise fault-boundary regressions also remain green.
+
+Exact optimization levels, image sizes, cycle counts, retirement counts and hashes are recorded in [`docs/COMPILED_CORPUS.md`](docs/COMPILED_CORPUS.md).
 
 ## NEMU reference
 
@@ -115,6 +104,6 @@ bash tools/run_compiled_workloads.sh \
 
 ## Development policy
 
-Real programs are treated as design inputs, not merely final demos. New compiler-generated failures are reduced to focused regressions before RTL is changed. `main` contains only checkpoints that pass the complete CI path.
+Real programs are design inputs, not final demos. New compiler-generated failures are reduced to focused regressions before RTL is changed. Frozen binary hashes must run unchanged across microarchitectural changes; recompilation is a separate compiler-compatibility gate.
 
-See [`CHECKPOINT.md`](CHECKPOINT.md) for the exact verified boundary and [`docs/ROADMAP.md`](docs/ROADMAP.md) for real-program expansion, Minic integration, the multi-cycle M unit, privileged architecture, Linux and FPGA bring-up.
+`main` contains only checkpoints that pass the complete CI path. See [`CHECKPOINT.md`](CHECKPOINT.md) for the exact verified boundary and [`docs/ROADMAP.md`](docs/ROADMAP.md) for Minic integration, the multi-cycle M unit, privileged architecture, Linux and FPGA bring-up.
