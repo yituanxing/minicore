@@ -4,7 +4,8 @@ import chisel3._
 import chisel3.util._
 
 object AluOp extends ChiselEnum {
-  val Add, Sub, Sll, Slt, Sltu, Xor, Srl, Sra, Or, And = Value
+  val Add, Sub, Sll, Slt, Sltu, Xor, Srl, Sra, Or, And,
+      Mul, Mulh, Mulhsu, Mulhu, Div, Divu, Rem, Remu = Value
 }
 
 object ImmSel extends ChiselEnum {
