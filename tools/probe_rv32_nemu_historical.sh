@@ -7,6 +7,12 @@ source_dir="$work_dir/nemu"
 evidence_dir="$work_dir/evidence"
 config_name="riscv32-minicore-ref_defconfig"
 expected_reg_bytes=132
+single_step="${NEMU_SINGLE_STEP:-0}"
+
+if [[ "$single_step" != "0" && "$single_step" != "1" ]]; then
+  echo "ERROR: NEMU_SINGLE_STEP must be 0 or 1" >&2
+  exit 2
+fi
 
 rm -rf "$work_dir"
 mkdir -p "$source_dir" "$evidence_dir"
@@ -29,7 +35,6 @@ CONFIG_ISA_riscv32=y
 CONFIG_CC_GCC=y
 CONFIG_CC_O2=y
 CONFIG_SHARE=y
-CONFIG_PERF_OPT=y
 CONFIG_TIMER_GETTIMEOFDAY=y
 CONFIG_MBASE=0x80000000
 CONFIG_MSIZE=0x4000000
@@ -41,6 +46,23 @@ CONFIG_PC_RESET_OFFSET=0x0
 # CONFIG_DIFFTEST is not set
 # CONFIG_MEM_RANDOM is not set
 EOF
+
+# The historical PERF_OPT executor retires and accounts at basic-block
+# boundaries. Even with instruction counting enabled, difftest_exec(1) can
+# overshoot the requested architectural instruction. The exact DiffTest mode
+# selects NEMU's own non-PERF_OPT interpreter loop, whose execute() decrements
+# n once per decoded instruction. The default ABI probe keeps its original
+# optimized configuration and hash.
+if [[ "$single_step" == "1" ]]; then
+  cat >> "$source_dir/configs/$config_name" <<'EOF'
+# CONFIG_PERF_OPT is not set
+EOF
+else
+  cat >> "$source_dir/configs/$config_name" <<'EOF'
+CONFIG_PERF_OPT=y
+EOF
+fi
+
 cp "$source_dir/configs/$config_name" "$evidence_dir/derived.defconfig"
 
 # In this historical tree the shared-reference implementation calls the MMIO
@@ -70,6 +92,7 @@ cp "$source_dir/src/isa/riscv32/include/isa-def.h" "$evidence_dir/isa-def.h"
 cp "$source_dir/src/isa/riscv32/difftest/ref.c" "$evidence_dir/isa-difftest-ref.c"
 cp "$source_dir/src/cpu/difftest/ref.c" "$evidence_dir/cpu-difftest-ref.c"
 cp "$source_dir/lib-include/difftest.h" "$evidence_dir/difftest-layout.h"
+cp "$source_dir/src/cpu/cpu-exec.c" "$evidence_dir/cpu-exec.c"
 
 build_reference() {
   local label="$1"
@@ -80,6 +103,20 @@ build_reference() {
 
   make -C "$source_dir" "$config_name" \
     > "$evidence_dir/config-$label.log" 2>&1
+
+  if [[ "$single_step" == "1" ]]; then
+    if ! grep -q '^CONFIG_ENABLE_INSTR_CNT=y$' "$source_dir/.config"; then
+      echo "ERROR: exact reference did not enable instruction counting" >&2
+      cp "$source_dir/.config" "$evidence_dir/failed-single-step.config"
+      return 4
+    fi
+    if grep -q '^CONFIG_PERF_OPT=y$' "$source_dir/.config"; then
+      echo "ERROR: exact reference still uses the basic-block PERF_OPT executor" >&2
+      cp "$source_dir/.config" "$evidence_dir/failed-single-step.config"
+      return 5
+    fi
+  fi
+
   make -C "$source_dir/tools/fixdep" clean \
     > "$evidence_dir/fixdep-$label.log" 2>&1
   make -C "$source_dir/tools/fixdep" \
@@ -108,6 +145,7 @@ if ! cmp -s "$work_dir/riscv32-reference-first.so" "$reference_so"; then
 reproducible=false
 first_sha256=$first_sha
 second_sha256=$second_sha
+single_step=$single_step
 EOF
   cat "$evidence_dir/reproducibility.txt" >&2
   exit 3
@@ -119,6 +157,7 @@ first_sha256=$first_sha
 second_sha256=$second_sha
 source_date_epoch=$SOURCE_DATE_EPOCH
 build_id=disabled
+single_step=$single_step
 EOF
 cat "$evidence_dir/reproducibility.txt"
 
@@ -146,9 +185,6 @@ init.restype = None
 regcpy = lib.difftest_regcpy
 regcpy.argtypes = [ctypes.c_void_p, ctypes.c_bool]
 regcpy.restype = None
-exec_one = lib.difftest_exec
-exec_one.argtypes = [ctypes.c_uint64]
-exec_one.restype = None
 memcpy_ref = lib.difftest_memcpy
 memcpy_ref.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_bool]
 memcpy_ref.restype = None
@@ -167,7 +203,6 @@ raw = bytes(destination)
 prefix_matches = raw[:expected] == bytes(source[:expected])
 guard_matches = all(value == guard for value in raw[expected:])
 
-# Also prove the exported memory-copy ABI accepts the RV32 0x80000000 base.
 pattern = (ctypes.c_ubyte * 16)(*range(16))
 roundtrip = (ctypes.c_ubyte * 16)()
 memcpy_ref(0x80000000, pattern, 16, True)
@@ -201,6 +236,8 @@ reference_so=$(basename "$reference_so")
 reference_sha256=$second_sha
 regcpy_bytes=$expected_reg_bytes
 reproducible=true
+single_step=$single_step
+perf_opt=$([[ "$single_step" == "1" ]] && echo false || echo true)
 EOF
 cat "$evidence_dir/result.txt"
 cat "$evidence_dir/abi-probe.txt"
