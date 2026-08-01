@@ -32,9 +32,10 @@ jobs:
       - name: Probe pinned RV32 reference configuration and ABI
         shell: bash
         env:
-          # The pinned tree formats some 32-bit values with RV64-oriented %lx
-          # diagnostics. Keep every other warning fatal while allowing only
-          # this known host-compiler compatibility warning.
+          # This is the last focused upstream RV32 adaptation checkpoint found
+          # before the repository evolved toward an RV64-only reference core.
+          NEMU_REVISION: 4cac5438bec9cabd98c9ab1dacfc8bb4e1ee2601
+          # Preserve all warnings as errors except known host-format drift.
           CFLAGS: -Wno-error=format
         run: |
           mkdir -p build
