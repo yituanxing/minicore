@@ -1,0 +1,2 @@
+-Dchisel.project.root=${PWD}
+-Xmx4G
