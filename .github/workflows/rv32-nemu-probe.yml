@@ -51,7 +51,7 @@ jobs:
           chmod +x mill
           ./mill --version
 
-      - name: Build instruction-counted frozen RV32 NEMU reference
+      - name: Build exact frozen RV32 NEMU reference
         shell: bash
         run: |
           mkdir -p build
@@ -61,7 +61,11 @@ jobs:
             2>&1 | tee build/rv32-nemu-probe.log
           grep -q '^CONFIG_ENABLE_INSTR_CNT=y$' \
             build/rv32-nemu-probe/evidence/generated.config
+          grep -q '^# CONFIG_PERF_OPT is not set$' \
+            build/rv32-nemu-probe/evidence/generated.config
           grep -q '^single_step=1$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^perf_opt=false$' \
             build/rv32-nemu-probe/evidence/result.txt
           reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
             -name 'riscv32-nemu-interpreter-so*' -print -quit)"
