@@ -33,6 +33,7 @@ class NemuDifftest {
 
   void check(const DifftestCommit& commit);
   std::uint64_t checkedCommits() const;
+  std::uint64_t zicsrShadowSteps() const;
 
  private:
   class Impl;

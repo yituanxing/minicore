@@ -7,6 +7,7 @@ import aethercore.config.{CoreProfiles, IsaConfig}
 
 class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Module {
   private val hasM = isa.hasM
+  private val hasZicsr = isa.hasZicsr
   private val hasWordOps = isa.hasWordOps
 
   val io = IO(new Bundle {
@@ -37,6 +38,7 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   c.opASel := OpASel.Rs1
   c.opBSel := OpBSel.Rs2
   c.wbSel := WbSel.Alu
+  c.csrOp := CsrOp.None
   c.branch := BranchType.None
   if (hasWordOps) c.memSize := MemSize.DWord else c.memSize := MemSize.Word
   c.illegal := true.B
@@ -185,7 +187,50 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
     }
     is("b0001111".U) { when(funct3 === 0.U || funct3 === 1.U) { c.illegal := false.B } }
     is("b1110011".U) {
-      when(io.inst === "h00000073".U || io.inst === "h00100073".U) { c.illegal := false.B; c.trap := true.B }
+      switch(funct3) {
+        is("b000".U) {
+          when(io.inst === "h00000073".U || io.inst === "h00100073".U) {
+            c.illegal := false.B
+            c.trap := true.B
+          }
+        }
+        is("b001".U) {
+          when(hasZicsr.B) {
+            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
+            c.csrOp := CsrOp.Write; c.usesRs1 := true.B
+          }
+        }
+        is("b010".U) {
+          when(hasZicsr.B) {
+            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
+            c.csrOp := CsrOp.Set; c.usesRs1 := true.B
+          }
+        }
+        is("b011".U) {
+          when(hasZicsr.B) {
+            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
+            c.csrOp := CsrOp.Clear; c.usesRs1 := true.B
+          }
+        }
+        is("b101".U) {
+          when(hasZicsr.B) {
+            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
+            c.csrOp := CsrOp.Write; c.csrUseImm := true.B
+          }
+        }
+        is("b110".U) {
+          when(hasZicsr.B) {
+            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
+            c.csrOp := CsrOp.Set; c.csrUseImm := true.B
+          }
+        }
+        is("b111".U) {
+          when(hasZicsr.B) {
+            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
+            c.csrOp := CsrOp.Clear; c.csrUseImm := true.B
+          }
+        }
+      }
     }
   }
 

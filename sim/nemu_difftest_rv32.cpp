@@ -25,6 +25,19 @@ constexpr std::uint32_t kMmioBase = 0x10000000U;
 constexpr std::size_t kMmioSize = 4096;
 char kMmioName[] = "aethercore-rv32-mmio";
 
+constexpr std::uint32_t kSystemOpcode = 0x73U;
+constexpr std::uint32_t kMstatus = 0x300U;
+constexpr std::uint32_t kMisa = 0x301U;
+constexpr std::uint32_t kMtvec = 0x305U;
+constexpr std::uint32_t kMscratch = 0x340U;
+constexpr std::uint32_t kMepc = 0x341U;
+constexpr std::uint32_t kMcause = 0x342U;
+constexpr std::uint32_t kMtval = 0x343U;
+constexpr std::uint32_t kRv32ImMisa = 0x40001100U;
+constexpr std::uint32_t kMstatusMie = 1U << 3;
+constexpr std::uint32_t kMstatusMpie = 1U << 7;
+constexpr std::uint32_t kMstatusMppMachine = 3U << 11;
+
 // Frozen ABI for OpenXiangShan/NEMU revision
 // 8601834e4889e6bf3b6113eb5f824ba7689126f5 with the repository's derived
 // riscv32-minicore-ref_defconfig. The validated regcpy region is exactly
@@ -36,6 +49,15 @@ struct NemuState32 {
 
 static_assert(sizeof(NemuState32) == 132);
 static_assert(offsetof(NemuState32, pc) == 32 * sizeof(std::uint32_t));
+
+struct ZicsrState32 {
+  std::uint32_t mstatus = 0;
+  std::uint32_t mtvec = 0;
+  std::uint32_t mscratch = 0;
+  std::uint32_t mepc = 0;
+  std::uint32_t mcause = 0;
+  std::uint32_t mtval = 0;
+};
 
 std::vector<std::uint8_t> readImage(const std::string& path) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -84,6 +106,10 @@ std::string byteHex(std::uint8_t value) {
   std::ostringstream out;
   out << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(value);
   return out.str();
+}
+
+bool isZicsrInstruction(std::uint32_t instruction) {
+  return (instruction & 0x7fU) == kSystemOpcode && ((instruction >> 12) & 0x7U) != 0;
 }
 }  // namespace
 
@@ -170,18 +196,24 @@ class NemuDifftest::Impl {
            hex32(imageInst) + " at pc=" + hex32(commitPc));
     }
 
-    exec_(1);
-
     NemuState32 after{};
-    regcpy_(&after, kToDut);
+    const bool shadowStep = isZicsrInstruction(commit.inst);
+    if (shadowStep) {
+      after = executeZicsr(before, commit.inst);
+      regcpy_(&after, kToRef);
+      ++zicsrShadowSteps_;
+    } else {
+      exec_(1);
+      regcpy_(&after, kToDut);
+    }
 
     if (commit.rdWrite && commit.rd != 0) {
       dutRegs_[commit.rd] = static_cast<std::uint32_t>(commit.rdData);
     }
     dutRegs_[0] = 0;
 
-    // CI uses this only for the deliberate negative probe. The normal path has
-    // no injection environment variable and remains a pure architectural check.
+    // CI uses this only for deliberate negative probes. The normal path has no
+    // injection environment variable and remains a pure architectural check.
     if (injectMismatchAt_ && checked_ == *injectMismatchAt_) dutRegs_[31] ^= 1U;
 
     compareRegisters(after, "after reference execution");
@@ -198,6 +230,7 @@ class NemuDifftest::Impl {
       line << " store[" << hex32(checkedAddress(commit.memAddr, "store address"))
            << "] mask=0x" << std::hex << static_cast<unsigned>(commit.memWmask) << std::dec;
     }
+    if (shadowStep) line << " reference=zicsr-shadow";
     line << " next=" << hex32(after.pc);
     trace_.push_back(line.str());
     if (trace_.size() > kTraceDepth) trace_.pop_front();
@@ -205,6 +238,7 @@ class NemuDifftest::Impl {
   }
 
   std::uint64_t checkedCommits() const { return checked_; }
+  std::uint64_t zicsrShadowSteps() const { return zicsrShadowSteps_; }
 
  private:
   static std::uint32_t checkedAddress(std::uint64_t value, const char* label) {
@@ -213,6 +247,98 @@ class NemuDifftest::Impl {
                                " exceeds 32 bits");
     }
     return static_cast<std::uint32_t>(value);
+  }
+
+  std::uint32_t readCsr(std::uint32_t address) const {
+    switch (address) {
+      case kMstatus: return zicsr_.mstatus;
+      case kMisa: return kRv32ImMisa;
+      case kMtvec: return zicsr_.mtvec;
+      case kMscratch: return zicsr_.mscratch;
+      case kMepc: return zicsr_.mepc;
+      case kMcause: return zicsr_.mcause;
+      case kMtval: return zicsr_.mtval;
+      default: fail("Zicsr shadow read of unimplemented CSR " + hex32(address));
+    }
+  }
+
+  bool csrWritable(std::uint32_t address) const {
+    switch (address) {
+      case kMstatus:
+      case kMtvec:
+      case kMscratch:
+      case kMepc:
+      case kMcause:
+      case kMtval:
+        return true;
+      case kMisa:
+        return false;
+      default:
+        fail("Zicsr shadow legality query for unimplemented CSR " + hex32(address));
+    }
+  }
+
+  void writeCsr(std::uint32_t address, std::uint32_t value) {
+    switch (address) {
+      case kMstatus:
+        zicsr_.mstatus = (value & (kMstatusMie | kMstatusMpie)) | kMstatusMppMachine;
+        return;
+      case kMtvec:
+        zicsr_.mtvec = value & ~std::uint32_t{3};
+        return;
+      case kMscratch:
+        zicsr_.mscratch = value;
+        return;
+      case kMepc:
+        zicsr_.mepc = value & ~std::uint32_t{3};
+        return;
+      case kMcause:
+        zicsr_.mcause = value;
+        return;
+      case kMtval:
+        zicsr_.mtval = value;
+        return;
+      case kMisa:
+        fail("Zicsr shadow attempted to write read-only misa");
+      default:
+        fail("Zicsr shadow write of unimplemented CSR " + hex32(address));
+    }
+  }
+
+  NemuState32 executeZicsr(const NemuState32& before, std::uint32_t instruction) {
+    const std::uint32_t funct3 = (instruction >> 12) & 0x7U;
+    const std::uint32_t operation = funct3 & 0x3U;
+    const bool immediate = (funct3 & 0x4U) != 0;
+    const std::uint32_t rd = (instruction >> 7) & 0x1fU;
+    const std::uint32_t sourceField = (instruction >> 15) & 0x1fU;
+    const std::uint32_t address = instruction >> 20;
+
+    if (operation == 0) {
+      fail("Zicsr shadow received reserved SYSTEM funct3=" + std::to_string(funct3));
+    }
+
+    const std::uint32_t oldValue = readCsr(address);
+    const std::uint32_t source = immediate ? sourceField : before.gpr[sourceField];
+    const bool writeIntent = operation == 1 || sourceField != 0;
+
+    if (writeIntent && !csrWritable(address)) {
+      fail("Zicsr shadow received a normal commit that writes read-only CSR " +
+           hex32(address));
+    }
+
+    NemuState32 after = before;
+    after.pc = before.pc + 4;
+    if (rd != 0) after.gpr[rd] = oldValue;
+    after.gpr[0] = 0;
+
+    if (writeIntent) {
+      std::uint32_t newValue = source;
+      if (operation == 2) newValue = oldValue | source;
+      if (operation == 3) newValue = oldValue & ~source;
+      writeCsr(address, newValue);
+    }
+
+    return after;
   }
 
   std::uint32_t instructionAt(std::uint32_t pc) const {
@@ -288,9 +414,11 @@ class NemuDifftest::Impl {
   std::uint32_t resetPc_ = 0;
   std::vector<std::uint8_t> image_;
   std::array<std::uint32_t, 32> dutRegs_{};
+  ZicsrState32 zicsr_{};
   std::deque<std::string> trace_;
   std::optional<std::uint64_t> injectMismatchAt_;
   std::uint64_t checked_ = 0;
+  std::uint64_t zicsrShadowSteps_ = 0;
 };
 
 NemuDifftest::NemuDifftest(const std::string& sharedObject, const std::string& imagePath,
@@ -303,3 +431,4 @@ NemuDifftest& NemuDifftest::operator=(NemuDifftest&&) noexcept = default;
 
 void NemuDifftest::check(const DifftestCommit& commit) { impl_->check(commit); }
 std::uint64_t NemuDifftest::checkedCommits() const { return impl_->checkedCommits(); }
+std::uint64_t NemuDifftest::zicsrShadowSteps() const { return impl_->zicsrShadowSteps(); }
