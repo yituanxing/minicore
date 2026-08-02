@@ -38,6 +38,7 @@ class NemuDifftest {
   std::uint64_t zicsrShadowSteps() const;
   std::uint64_t trapShadowSteps() const;
   std::uint64_t mretShadowSteps() const;
+  std::uint64_t timerInterruptShadowSteps() const;
 
  private:
   class Impl;
