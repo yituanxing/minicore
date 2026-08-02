@@ -1,0 +1,104 @@
+name: RV32IM Embench Batch 2
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32im-embench-batch2-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  batch:
+    name: Pinned Embench batch 2 on RV32IM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+        with:
+          job: rv32im-embench-batch2
+
+      - name: Install Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils verilator \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          java -version
+          verilator --version
+          riscv64-unknown-elf-gcc --version
+
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
+
+      - name: Build exact frozen RV32 NEMU reference
+        shell: bash
+        run: |
+          mkdir -p build
+          set -o pipefail
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-probe" \
+            2>&1 | tee build/rv32-nemu-probe.log
+          grep -q '^reference_sha256=1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
+            -name 'riscv32-nemu-interpreter-so*' -print -quit)"
+          test -n "$reference_so"
+          echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
+
+      - name: Build pinned Embench batch 2
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-embench-batch2 workload
+          grep -q '^source=embench-iot@09c2ed8c3b7008c95d08b038de4a3f6dc103ed70$' \
+            build/rv32im-embench-batch2/software/batch.txt
+          grep -q '^benchmarks=aha-mont64 huffbench slre wikisort$' \
+            build/rv32im-embench-batch2/software/batch.txt
+          grep -q '^local_scale_factor=1$' \
+            build/rv32im-embench-batch2/software/batch.txt
+          test "$(grep -h '^#define LOCAL_SCALE_FACTOR 1$' \
+            build/rv32im-embench-batch2/software/scaled-src/*/*.c | wc -l)" -eq 4
+
+      - name: Run Embench batch 2 DiffTest
+        shell: bash
+        run: |
+          set -o pipefail
+          make -f Makefile.rv32im-embench-batch2 run RV32_NEMU_SO="$RV32_NEMU_SO" \
+            2>&1 | tee build/rv32im-embench-batch2/embench-batch2.log
+          test "$(grep -c 'PASS: self-check exit=0' build/rv32im-embench-batch2/results.tsv)" -eq 4
+          for benchmark in aha-mont64 huffbench slre wikisort; do
+            grep -q "^${benchmark}[[:space:]]" build/rv32im-embench-batch2/results.tsv
+          done
+
+      - name: Upload Embench batch 2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32im-embench-batch2-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32-nemu-probe.log
+            build/rv32-nemu-probe/evidence/
+            build/rv32im-embench-batch2/
+            build/upstream-src/embench-iot-*/COPYING
