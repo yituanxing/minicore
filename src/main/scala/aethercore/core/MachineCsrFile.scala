@@ -44,6 +44,10 @@ object MachineCsrWarl {
 
 class MachineCsrFile(val isa: IsaConfig) extends Module {
   private val xlen = isa.xlen
+  private val mstatusMie = BigInt(1) << 3
+  private val mstatusMpie = BigInt(1) << 7
+  private val mstatusMpp = BigInt(3) << 11
+  private val mstatusTrapClearMask = mstatusMie | mstatusMpie | mstatusMpp
 
   private val misaValue = {
     val mxl = if (xlen == 32) BigInt(1) else BigInt(2)
@@ -64,6 +68,12 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     val writeEnable = Input(Bool())
     val writeAddr = Input(UInt(12.W))
     val writeData = Input(UInt(xlen.W))
+
+    val trapEnter = Input(Bool())
+    val trapPc = Input(UInt(xlen.W))
+    val trapCause = Input(UInt(xlen.W))
+    val trapValue = Input(UInt(xlen.W))
+    val trapVector = Output(UInt(xlen.W))
   })
 
   val mstatus = RegInit(0.U(xlen.W))
@@ -73,6 +83,7 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   val mcause = RegInit(0.U(xlen.W))
   val mtval = RegInit(0.U(xlen.W))
 
+  io.trapVector := mtvec
   io.readData := 0.U
   io.readImplemented := false.B
   io.readWritable := false.B
@@ -115,8 +126,18 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   }
 
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
+  val canonicalTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
+  val trapMstatus =
+    (mstatus & (~mstatusTrapClearMask).U(xlen.W)) |
+      (mstatus(3).asUInt << 7) |
+      mstatusMpp.U(xlen.W)
 
-  when(io.writeEnable) {
+  when(io.trapEnter) {
+    mstatus := trapMstatus
+    mepc := canonicalTrapPc
+    mcause := io.trapCause
+    mtval := io.trapValue
+  }.elsewhen(io.writeEnable) {
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
       is(MachineCsrAddress.Mtvec.U) { mtvec := canonicalWriteData }
