@@ -17,49 +17,54 @@ concurrency:
 jobs:
   coremark:
     name: Pinned CoreMark on RV32IM
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 60
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Scala dependencies
-        uses: coursier/cache-action@v8
-        with:
-          job: rv32im-coremark
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Install Java
-        uses: coursier/setup-action@v3
-        with:
-          jvm: temurin:21
-
-      - name: Install build dependencies
+      - name: Verify persistent runner toolchain
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential git python3 bison flex \
-            libreadline-dev libsdl2-dev zstd libzstd-dev \
-            file binutils verilator \
-            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          set -euxo pipefail
+          test "$(stat -f -c %T .)" != "9p"
+          test "$(stat -f -c %T .)" != "drvfs"
           java -version
-          verilator --version
+          javac -version
+          git --version
+          python3 --version
+          g++ --version
+          test "$(cat "$HOME/.cache/aethercore/toolchains/verilator-5.024/.aethercore-source-revision")" = \
+            "522bead374d6b7b2adb316304126e5361b18bcf1"
+          test "$(readlink -f "$(command -v verilator)")" = \
+            "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin/verilator"
           riscv64-unknown-elf-gcc --version
+          riscv64-unknown-elf-objdump --version | head -n 1
+          command -v make curl bison flex zstd file
 
       - name: Prepare Mill launcher
+        shell: bash
         run: |
+          set -euxo pipefail
           chmod +x mill
-          ./mill --version
+          timeout 600 ./mill --version
 
       - name: Build exact frozen RV32 NEMU reference
         shell: bash
         run: |
           mkdir -p build
           set -o pipefail
-          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_deterministic.sh \
             "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-probe.log
-          grep -q '^reference_sha256=1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577$' \
+          grep -q '^reference_sha256=e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e$' \
             build/rv32-nemu-probe/evidence/result.txt
           reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
             -name 'riscv32-nemu-interpreter-so*' -print -quit)"
