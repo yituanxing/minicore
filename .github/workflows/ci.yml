@@ -24,28 +24,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Scala dependencies
-        uses: coursier/cache-action@v8
-
-      - name: Cache pinned NEMU reference
-        uses: actions/cache@v4
-        with:
-          path: build/nemu
-          key: nemu-${{ runner.os }}-ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
-
-      - name: Install Java
-        uses: coursier/setup-action@v3
-        with:
-          jvm: temurin:21
-
-      - name: Install native dependencies
+      - name: Verify persistent runner toolchain
+        shell: bash
         run: |
-          sudo -E apt-get update
-          sudo -E apt-get install -y --no-install-recommends \
-            verilator make g++ python3 curl git bison flex \
-            libreadline-dev libsdl2-dev zstd libzstd-dev
+          set -euxo pipefail
+          test "$(stat -f -c %T .)" != "9p"
+          test "$(stat -f -c %T .)" != "drvfs"
           java -version
+          javac -version
+          git --version
+          python3 --version
+          g++ --version
           verilator --version
+          riscv64-unknown-elf-gcc --version
+          command -v make curl bison flex zstd
 
       - name: Prepare Mill launcher
         run: |
