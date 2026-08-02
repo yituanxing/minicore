@@ -27,12 +27,20 @@ fi
 # Ubuntu 24.04 ships Verilator 5.020, which has an intermittent thread-pool
 # destructor failure fixed in 5.024. Build the exact upstream fix release once
 # into the persistent WSL cache; subsequent jobs only prepend its bin directory.
-if ! command -v cmake >/dev/null 2>&1 || \
-   ! command -v ninja >/dev/null 2>&1 || \
-   ! dpkg-query -W -f='${Status}' libfl-dev 2>/dev/null | grep -q 'install ok installed'; then
-  sudo -E apt-get update
-  sudo -E apt-get install -y --no-install-recommends \
-    cmake ninja-build libfl-dev zlib1g-dev
+missing=()
+command -v cmake >/dev/null 2>&1 || missing+=(cmake)
+command -v ninja >/dev/null 2>&1 || missing+=(ninja-build)
+dpkg-query -W -f='${Status}' libfl-dev 2>/dev/null | \
+  grep -q 'install ok installed' || missing+=(libfl-dev)
+dpkg-query -W -f='${Status}' zlib1g-dev 2>/dev/null | \
+  grep -q 'install ok installed' || missing+=(zlib1g-dev)
+
+if (( ${#missing[@]} != 0 )); then
+  printf 'ERROR: persistent runner is missing Verilator build prerequisites:' >&2
+  printf ' %s' "${missing[@]}" >&2
+  printf '\nInstall them once from an interactive WSL shell with:\n' >&2
+  printf '  sudo apt-get update && sudo apt-get install -y cmake ninja-build libfl-dev zlib1g-dev\n' >&2
+  exit 42
 fi
 
 rm -rf "$source_dir" "$build_dir" "$prefix"
