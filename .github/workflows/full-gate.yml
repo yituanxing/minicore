@@ -1,0 +1,171 @@
+name: AetherCore Full Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-full-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-gate:
+    name: Shared build and complete verification
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Persistent toolchain and Mill
+        shell: bash
+        run: bash tools/ci/full_gate.sh toolchain
+
+      - name: Fast source and image tests
+        shell: bash
+        run: bash tools/ci/full_gate.sh python
+
+      - name: Chisel unit tests
+        shell: bash
+        run: bash tools/ci/full_gate.sh chisel
+
+      - name: RV64 RTL, smoke and precise pipeline regressions
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv64-smoke
+
+      - name: RV64 NEMU differential matrices
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv64-difftest
+
+      - name: Build both frozen RV32 NEMU references once
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-reference
+
+      - name: RV32 GCC workload and 585-retirement DiffTest
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-gcc
+
+      - name: RV32 Zicsr and Machine CSR boundary
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-csr
+
+      - name: RV32 precise synchronous traps
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-traps
+
+      - name: RV32 precise MRET loops
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-mret
+
+      - name: RV32 precise Machine timer interrupts
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-timer
+
+      - name: RV64 compiler-produced corpus
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv64-compiled
+
+      - name: RV64 pinned upstream workloads
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv64-upstream
+
+      - name: RV32IM CoreMark
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-coremark
+
+      - name: RV32IM Embench batch 1
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-embench1
+
+      - name: RV32IM Embench batch 2
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-embench2
+
+      - name: RV32IM littlefs
+        shell: bash
+        run: bash tools/ci/full_gate.sh rv32-littlefs
+
+      - name: Write pipeline summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore consolidated gate'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- one checkout and one persistent toolchain setup'
+            echo '- one optimized plus one single-step deterministic RV32 NEMU build'
+            echo '- fast architectural gates run before long software workloads'
+            echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload consolidated evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-full-gate-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/ci/logs/
+            build/ci/rv32-nemu-opt/evidence/
+            build/ci/rv32-nemu-single-step/evidence/
+            build/logs/
+            build/rtl/
+            build/software/
+            build/regressions/
+            build/completion-regressions/
+            build/fault-regressions/
+            build/generated-difftest/
+            build/rv64m-regressions/
+            build/generated-rv64m/
+            build/compiled-workloads/
+            build/upstream-workloads/
+            build/rv32/
+            build/rv32im-*/
+            !build/**/obj/**
+            !build/**/rtl/**
+            !build/**/nemu/**
+            !build/upstream-src/**
+
+  legacy-check-contexts:
+    name: ${{ matrix.check }}
+    needs: full-gate
+    if: ${{ always() }}
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        check:
+          - Chisel, Verilator and NEMU DiffTest
+          - GCC RV64IM workloads against Verilator and NEMU
+          - Pinned CoreMark against Verilator and NEMU
+          - GCC RV32I against RV32 Verilator top
+          - GCC RV32I commit-level NEMU DiffTest
+          - Pinned CoreMark on RV32IM
+          - Pinned Embench batch on RV32IM
+          - Pinned Embench batch 2 on RV32IM
+          - Pinned littlefs on RV32IM RAM flash
+          - Zicsr and machine CSRs on RV32IM
+          - Precise synchronous traps on RV32IM
+          - Precise Machine trap return on RV32IM
+          - Precise Machine timer interrupts on RV32IM
+    steps:
+      - name: Mirror consolidated result
+        shell: bash
+        env:
+          FULL_GATE_RESULT: ${{ needs.full-gate.result }}
+        run: |
+          echo "consolidated full-gate result: ${FULL_GATE_RESULT}"
+          test "${FULL_GATE_RESULT}" = "success"
