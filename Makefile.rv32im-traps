@@ -26,19 +26,7 @@ workloads:
 runner-source:
 	mkdir -p $(BUILD_DIR)
 	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMTrapSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
-	python3 - <<'PY'
-from pathlib import Path
-path = Path("$(GENERATED_MAIN)")
-text = path.read_text()
-old_commit = "  commit.exception = top.io_commit_exception;\n  return commit;"
-new_commit = "  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  return commit;"
-assert old_commit in text
-text = text.replace(old_commit, new_commit, 1)
-old_result = '      if (difftest) std::cout << ", difftest=" << difftest->checkedCommits();'
-new_result = '      if (difftest) std::cout << ", difftest=" << difftest->checkedCommits() << ", zicsr-shadow=" << difftest->zicsrShadowSteps() << ", trap-shadow=" << difftest->trapShadowSteps();'
-assert old_result in text
-path.write_text(text.replace(old_result, new_result, 1))
-PY
+	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  return commit;"; c="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits();"; d="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits() << \", zicsr-shadow=\" << difftest->zicsrShadowSteps() << \", trap-shadow=\" << difftest->trapShadowSteps();"; assert a in s and c in s; p.write_text(s.replace(a,b,1).replace(c,d,1))'
 
 sim: rtl runner-source
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
