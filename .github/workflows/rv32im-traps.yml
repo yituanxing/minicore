@@ -1,0 +1,131 @@
+name: RV32IM Machine Traps
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32im-traps-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  traps:
+    name: Precise synchronous traps on RV32IM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+        with:
+          job: rv32im-traps
+
+      - name: Install Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils verilator \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          java -version
+          verilator --version
+          riscv64-unknown-elf-gcc --version
+
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
+
+      - name: Build exact frozen RV32 NEMU reference
+        shell: bash
+        run: |
+          mkdir -p build
+          set -o pipefail
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-probe" \
+            2>&1 | tee build/rv32-nemu-probe.log
+          grep -q '^reference_sha256=1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
+            -name 'riscv32-nemu-interpreter-so*' -print -quit)"
+          test -n "$reference_so"
+          echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
+
+      - name: Build frozen RV32IM trap workloads
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-traps workloads
+          manifest=build/rv32im-traps/software/manifest.txt
+          diff -u <(cat <<'EOF'
+          ecall 256 64 0b7d27beeb7f1b515dcbfdc1de0cc0a4efc07d6e4e41b83e51f4d64dd186b127
+          ebreak 260 65 24fd161632ab8b734326ba912628a84eaa5ca9c9a48e12a30918e7dd7416d5d5
+          illegal 256 64 7ba0bd080db3689597603ec0ad2bf287eedcb55141bb0a111f984ebaeeb291d8
+          load-fault 260 65 54d93e5f79730171dd938f6be9a4b780c293595530783cf6a43dbeb2b7b8abb2
+          store-fault 260 65 f5d23a68afc0c7c29b594ce52cf1130356a4e476c877edaafd7418b3b4fc7189
+          fetch-fault 256 64 84c81e012b857ead633f6063743014294790f969b0e3b13f52c00125ed892122
+          EOF
+          ) "$manifest"
+          for name in ecall ebreak illegal load-fault store-fault fetch-fault; do
+            grep -q '<trap_handler>:' "build/rv32im-traps/software/$name.dis"
+            grep -q 'csrr.*mcause' "build/rv32im-traps/software/$name.dis"
+            grep -q 'csrr.*mepc' "build/rv32im-traps/software/$name.dis"
+            grep -q 'csrr.*mtval' "build/rv32im-traps/software/$name.dis"
+            grep -q 'csrr.*mstatus' "build/rv32im-traps/software/$name.dis"
+          done
+
+      - name: Run frozen precise trap DiffTest batch
+        shell: bash
+        run: |
+          set -o pipefail
+          make -f Makefile.rv32im-traps run RV32_NEMU_SO="$RV32_NEMU_SO" \
+            2>&1 | tee build/rv32im-traps/traps-ci.log
+          grep -q '^PASS: self-check exit=0 after 61 cycles, 41 committed instructions, stall-period=5, difftest=41, zicsr-shadow=6, trap-shadow=1$' build/rv32im-traps/logs/ecall.log
+          grep -q '^PASS: self-check exit=0 after 62 cycles, 42 committed instructions, stall-period=5, difftest=42, zicsr-shadow=6, trap-shadow=1$' build/rv32im-traps/logs/ebreak.log
+          grep -q '^PASS: self-check exit=0 after 61 cycles, 41 committed instructions, stall-period=5, difftest=41, zicsr-shadow=6, trap-shadow=1$' build/rv32im-traps/logs/illegal.log
+          grep -q '^PASS: self-check exit=0 after 62 cycles, 42 committed instructions, stall-period=5, difftest=42, zicsr-shadow=6, trap-shadow=1$' build/rv32im-traps/logs/load-fault.log
+          grep -q '^PASS: self-check exit=0 after 62 cycles, 42 committed instructions, stall-period=5, difftest=42, zicsr-shadow=6, trap-shadow=1$' build/rv32im-traps/logs/store-fault.log
+          grep -q '^PASS: self-check exit=0 after 64 cycles, 42 committed instructions, stall-period=5, difftest=42, zicsr-shadow=6, trap-shadow=1$' build/rv32im-traps/logs/fetch-fault.log
+
+      - name: Reject a mismatch on the ECALL trap event
+        shell: bash
+        run: |
+          set +e
+          AETHERCORE_RV32_DIFFTEST_INJECT_MISMATCH_AT=18 \
+            build/rv32im-traps/obj/VAetherCoreRV32IMTrapSimTop \
+            build/rv32im-traps/software/ecall.bin \
+            --max-cycles 2000 --self-check-exit --stall-period 5 \
+            --difftest "$RV32_NEMU_SO" \
+            > build/rv32im-traps/trap-negative.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q 'RV32 DiffTest mismatch after 18 matched events' \
+            build/rv32im-traps/trap-negative.log
+          grep -q 'x31' build/rv32im-traps/trap-negative.log
+
+      - name: Upload trap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32im-machine-traps-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32-nemu-probe.log
+            build/rv32-nemu-probe/evidence/
+            build/rv32im-traps/

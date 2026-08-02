@@ -36,6 +36,23 @@ object MemSize extends ChiselEnum {
   val Byte, Half, Word, DWord = Value
 }
 
+object MachineExceptionCode {
+  val InstructionAccessFault: Int = 1
+  val IllegalInstruction: Int = 2
+  val Breakpoint: Int = 3
+  val LoadAccessFault: Int = 5
+  val StoreAccessFault: Int = 7
+  val EnvironmentCallFromM: Int = 11
+}
+
+class TrapInfo(val xlen: Int) extends Bundle {
+  require(xlen == 32 || xlen == 64, s"trap XLEN must be 32 or 64, got $xlen")
+
+  val valid = Bool()
+  val cause = UInt(xlen.W)
+  val value = UInt(xlen.W)
+}
+
 class InstructionBusIO(val addrBits: Int = 64) extends Bundle {
   require(addrBits > 0, s"instruction address width must be positive, got $addrBits")
 
@@ -83,6 +100,8 @@ class CommitTrace(
   val memWmask = UInt((busDataBits / 8).W)
 
   val exception = Bool()
+  val exceptionCause = UInt(xlen.W)
+  val exceptionValue = UInt(xlen.W)
 }
 
 class ControlSignals extends Bundle {

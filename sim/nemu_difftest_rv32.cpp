@@ -26,6 +26,18 @@ constexpr std::size_t kMmioSize = 4096;
 char kMmioName[] = "aethercore-rv32-mmio";
 
 constexpr std::uint32_t kSystemOpcode = 0x73U;
+constexpr std::uint32_t kLoadOpcode = 0x03U;
+constexpr std::uint32_t kStoreOpcode = 0x23U;
+constexpr std::uint32_t kEcall = 0x00000073U;
+constexpr std::uint32_t kEbreak = 0x00100073U;
+
+constexpr std::uint32_t kInstructionAccessFault = 1U;
+constexpr std::uint32_t kIllegalInstruction = 2U;
+constexpr std::uint32_t kBreakpoint = 3U;
+constexpr std::uint32_t kLoadAccessFault = 5U;
+constexpr std::uint32_t kStoreAccessFault = 7U;
+constexpr std::uint32_t kEnvironmentCallFromM = 11U;
+
 constexpr std::uint32_t kMstatus = 0x300U;
 constexpr std::uint32_t kMisa = 0x301U;
 constexpr std::uint32_t kMtvec = 0x305U;
@@ -37,6 +49,8 @@ constexpr std::uint32_t kRv32ImMisa = 0x40001100U;
 constexpr std::uint32_t kMstatusMie = 1U << 3;
 constexpr std::uint32_t kMstatusMpie = 1U << 7;
 constexpr std::uint32_t kMstatusMppMachine = 3U << 11;
+constexpr std::uint32_t kMstatusTrapMask =
+    kMstatusMie | kMstatusMpie | kMstatusMppMachine;
 
 // Frozen ABI for OpenXiangShan/NEMU revision
 // 8601834e4889e6bf3b6113eb5f824ba7689126f5 with the repository's derived
@@ -50,7 +64,7 @@ struct NemuState32 {
 static_assert(sizeof(NemuState32) == 132);
 static_assert(offsetof(NemuState32, pc) == 32 * sizeof(std::uint32_t));
 
-struct ZicsrState32 {
+struct MachineState32 {
   std::uint32_t mstatus = 0;
   std::uint32_t mtvec = 0;
   std::uint32_t mscratch = 0;
@@ -110,6 +124,10 @@ std::string byteHex(std::uint8_t value) {
 
 bool isZicsrInstruction(std::uint32_t instruction) {
   return (instruction & 0x7fU) == kSystemOpcode && ((instruction >> 12) & 0x7U) != 0;
+}
+
+std::int32_t signExtend12(std::uint32_t value) {
+  return static_cast<std::int32_t>(value << 20) >> 20;
 }
 }  // namespace
 
@@ -179,32 +197,38 @@ class NemuDifftest::Impl {
   }
 
   void check(const DifftestCommit& commit) {
-    if (commit.exception) {
-      fail("normal RV32 DiffTest received an exception commit at pc=" +
-           hex32(checkedAddress(commit.pc, "commit PC")));
-    }
-
     const auto commitPc = checkedAddress(commit.pc, "commit PC");
     NemuState32 before{};
     regcpy_(&before, kToDut);
     comparePc(before.pc, commitPc, "before reference execution");
     compareRegisters(before, "before reference execution");
 
-    const std::uint32_t imageInst = instructionAt(commitPc);
-    if (imageInst != commit.inst) {
-      fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
-           hex32(imageInst) + " at pc=" + hex32(commitPc));
-    }
-
     NemuState32 after{};
-    const bool shadowStep = isZicsrInstruction(commit.inst);
-    if (shadowStep) {
-      after = executeZicsr(before, commit.inst);
+    bool zicsrStep = false;
+    bool trapStep = false;
+
+    if (commit.exception) {
+      validateTrap(before, commit);
+      after = executeTrap(before, commit);
       regcpy_(&after, kToRef);
-      ++zicsrShadowSteps_;
+      ++trapShadowSteps_;
+      trapStep = true;
     } else {
-      exec_(1);
-      regcpy_(&after, kToDut);
+      const std::uint32_t imageInst = instructionAt(commitPc);
+      if (imageInst != commit.inst) {
+        fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
+             hex32(imageInst) + " at pc=" + hex32(commitPc));
+      }
+
+      zicsrStep = isZicsrInstruction(commit.inst);
+      if (zicsrStep) {
+        after = executeZicsr(before, commit.inst);
+        regcpy_(&after, kToRef);
+        ++zicsrShadowSteps_;
+      } else {
+        exec_(1);
+        regcpy_(&after, kToDut);
+      }
     }
 
     if (commit.rdWrite && commit.rd != 0) {
@@ -230,7 +254,12 @@ class NemuDifftest::Impl {
       line << " store[" << hex32(checkedAddress(commit.memAddr, "store address"))
            << "] mask=0x" << std::hex << static_cast<unsigned>(commit.memWmask) << std::dec;
     }
-    if (shadowStep) line << " reference=zicsr-shadow";
+    if (zicsrStep) line << " reference=zicsr-shadow";
+    if (trapStep) {
+      line << " reference=trap-shadow cause="
+           << hex32(checkedAddress(commit.exceptionCause, "exception cause"))
+           << " value=" << hex32(checkedAddress(commit.exceptionValue, "exception value"));
+    }
     line << " next=" << hex32(after.pc);
     trace_.push_back(line.str());
     if (trace_.size() > kTraceDepth) trace_.pop_front();
@@ -239,6 +268,7 @@ class NemuDifftest::Impl {
 
   std::uint64_t checkedCommits() const { return checked_; }
   std::uint64_t zicsrShadowSteps() const { return zicsrShadowSteps_; }
+  std::uint64_t trapShadowSteps() const { return trapShadowSteps_; }
 
  private:
   static std::uint32_t checkedAddress(std::uint64_t value, const char* label) {
@@ -251,13 +281,13 @@ class NemuDifftest::Impl {
 
   std::uint32_t readCsr(std::uint32_t address) const {
     switch (address) {
-      case kMstatus: return zicsr_.mstatus;
+      case kMstatus: return machine_.mstatus;
       case kMisa: return kRv32ImMisa;
-      case kMtvec: return zicsr_.mtvec;
-      case kMscratch: return zicsr_.mscratch;
-      case kMepc: return zicsr_.mepc;
-      case kMcause: return zicsr_.mcause;
-      case kMtval: return zicsr_.mtval;
+      case kMtvec: return machine_.mtvec;
+      case kMscratch: return machine_.mscratch;
+      case kMepc: return machine_.mepc;
+      case kMcause: return machine_.mcause;
+      case kMtval: return machine_.mtval;
       default: fail("Zicsr shadow read of unimplemented CSR " + hex32(address));
     }
   }
@@ -281,22 +311,22 @@ class NemuDifftest::Impl {
   void writeCsr(std::uint32_t address, std::uint32_t value) {
     switch (address) {
       case kMstatus:
-        zicsr_.mstatus = (value & (kMstatusMie | kMstatusMpie)) | kMstatusMppMachine;
+        machine_.mstatus = (value & (kMstatusMie | kMstatusMpie)) | kMstatusMppMachine;
         return;
       case kMtvec:
-        zicsr_.mtvec = value & ~std::uint32_t{3};
+        machine_.mtvec = value & ~std::uint32_t{3};
         return;
       case kMscratch:
-        zicsr_.mscratch = value;
+        machine_.mscratch = value;
         return;
       case kMepc:
-        zicsr_.mepc = value & ~std::uint32_t{3};
+        machine_.mepc = value & ~std::uint32_t{3};
         return;
       case kMcause:
-        zicsr_.mcause = value;
+        machine_.mcause = value;
         return;
       case kMtval:
-        zicsr_.mtval = value;
+        machine_.mtval = value;
         return;
       case kMisa:
         fail("Zicsr shadow attempted to write read-only misa");
@@ -322,7 +352,7 @@ class NemuDifftest::Impl {
     const bool writeIntent = operation == 1 || sourceField != 0;
 
     if (writeIntent && !csrWritable(address)) {
-      fail("Zicsr shadow received a normal commit that writes read-only CSR " +
+      fail("Zicsr shadow received a normal event that writes read-only CSR " +
            hex32(address));
     }
 
@@ -341,9 +371,100 @@ class NemuDifftest::Impl {
     return after;
   }
 
+  std::uint32_t explicitMemoryAddress(const NemuState32& before,
+                                      std::uint32_t instruction) const {
+    const std::uint32_t opcode = instruction & 0x7fU;
+    const std::uint32_t rs1 = (instruction >> 15) & 0x1fU;
+    std::uint32_t encodedImmediate = 0;
+    if (opcode == kLoadOpcode) {
+      encodedImmediate = instruction >> 20;
+    } else if (opcode == kStoreOpcode) {
+      encodedImmediate = ((instruction >> 25) << 5) | ((instruction >> 7) & 0x1fU);
+    } else {
+      fail("trap shadow expected an explicit load/store instruction at pc=" +
+           hex32(before.pc));
+    }
+    return before.gpr[rs1] + static_cast<std::uint32_t>(signExtend12(encodedImmediate));
+  }
+
+  void validateTrap(const NemuState32& before, const DifftestCommit& commit) const {
+    const auto cause = checkedAddress(commit.exceptionCause, "exception cause");
+    const auto value = checkedAddress(commit.exceptionValue, "exception value");
+    const auto pc = checkedAddress(commit.pc, "exception PC");
+
+    if (commit.rdWrite || commit.memValid) {
+      fail("trap event exposed a register or memory side effect");
+    }
+
+    switch (cause) {
+      case kInstructionAccessFault:
+        if (value != pc) {
+          fail("instruction access fault mtval=" + hex32(value) +
+               " expected faulting pc=" + hex32(pc));
+        }
+        return;
+
+      case kIllegalInstruction: {
+        const auto instruction = instructionAt(pc);
+        if (instruction != commit.inst || value != commit.inst) {
+          fail("illegal-instruction trap metadata disagrees with the image");
+        }
+        return;
+      }
+
+      case kBreakpoint:
+        if (commit.inst != kEbreak || instructionAt(pc) != kEbreak || value != pc) {
+          fail("breakpoint trap metadata is inconsistent");
+        }
+        return;
+
+      case kLoadAccessFault:
+        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc) != commit.inst ||
+            value != explicitMemoryAddress(before, commit.inst)) {
+          fail("load access-fault trap metadata is inconsistent");
+        }
+        return;
+
+      case kStoreAccessFault:
+        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc) != commit.inst ||
+            value != explicitMemoryAddress(before, commit.inst)) {
+          fail("store access-fault trap metadata is inconsistent");
+        }
+        return;
+
+      case kEnvironmentCallFromM:
+        if (commit.inst != kEcall || instructionAt(pc) != kEcall || value != 0) {
+          fail("M-mode ECALL trap metadata is inconsistent");
+        }
+        return;
+
+      default:
+        fail("trap shadow received unsupported synchronous cause " + hex32(cause));
+    }
+  }
+
+  NemuState32 executeTrap(const NemuState32& before, const DifftestCommit& commit) {
+    const auto cause = checkedAddress(commit.exceptionCause, "exception cause");
+    const auto value = checkedAddress(commit.exceptionValue, "exception value");
+    const auto pc = checkedAddress(commit.pc, "exception PC");
+
+    machine_.mstatus =
+        (machine_.mstatus & ~kMstatusTrapMask) |
+        ((machine_.mstatus & kMstatusMie) ? kMstatusMpie : 0U) |
+        kMstatusMppMachine;
+    machine_.mepc = pc & ~std::uint32_t{3};
+    machine_.mcause = cause;
+    machine_.mtval = value;
+
+    NemuState32 after = before;
+    after.pc = machine_.mtvec;
+    after.gpr[0] = 0;
+    return after;
+  }
+
   std::uint32_t instructionAt(std::uint32_t pc) const {
     if (pc < resetPc_ || static_cast<std::uint64_t>(pc - resetPc_) + 4 > image_.size()) {
-      fail("DUT committed outside the loaded image at pc=" + hex32(pc));
+      fail("DUT event outside the loaded image at pc=" + hex32(pc));
     }
     const std::size_t offset = static_cast<std::size_t>(pc - resetPc_);
     return std::uint32_t(image_[offset]) |
@@ -394,9 +515,9 @@ class NemuDifftest::Impl {
 
   [[noreturn]] void fail(const std::string& reason) const {
     std::ostringstream out;
-    out << "RV32 DiffTest mismatch after " << checked_ << " matched commits: " << reason;
+    out << "RV32 DiffTest mismatch after " << checked_ << " matched events: " << reason;
     if (!trace_.empty()) {
-      out << "\nRecent matched commits:";
+      out << "\nRecent matched events:";
       for (const auto& line : trace_) out << "\n  " << line;
     }
     throw std::runtime_error(out.str());
@@ -414,11 +535,12 @@ class NemuDifftest::Impl {
   std::uint32_t resetPc_ = 0;
   std::vector<std::uint8_t> image_;
   std::array<std::uint32_t, 32> dutRegs_{};
-  ZicsrState32 zicsr_{};
+  MachineState32 machine_{};
   std::deque<std::string> trace_;
   std::optional<std::uint64_t> injectMismatchAt_;
   std::uint64_t checked_ = 0;
   std::uint64_t zicsrShadowSteps_ = 0;
+  std::uint64_t trapShadowSteps_ = 0;
 };
 
 NemuDifftest::NemuDifftest(const std::string& sharedObject, const std::string& imagePath,
@@ -432,3 +554,4 @@ NemuDifftest& NemuDifftest::operator=(NemuDifftest&&) noexcept = default;
 void NemuDifftest::check(const DifftestCommit& commit) { impl_->check(commit); }
 std::uint64_t NemuDifftest::checkedCommits() const { return impl_->checkedCommits(); }
 std::uint64_t NemuDifftest::zicsrShadowSteps() const { return impl_->zicsrShadowSteps(); }
+std::uint64_t NemuDifftest::trapShadowSteps() const { return impl_->trapShadowSteps(); }

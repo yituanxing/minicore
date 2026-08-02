@@ -18,6 +18,8 @@ struct DifftestCommit {
   std::uint8_t memWmask = 0;
 
   bool exception = false;
+  std::uint64_t exceptionCause = 0;
+  std::uint64_t exceptionValue = 0;
 };
 
 class NemuDifftest {
@@ -34,6 +36,7 @@ class NemuDifftest {
   void check(const DifftestCommit& commit);
   std::uint64_t checkedCommits() const;
   std::uint64_t zicsrShadowSteps() const;
+  std::uint64_t trapShadowSteps() const;
 
  private:
   class Impl;

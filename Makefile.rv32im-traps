@@ -1,0 +1,51 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/rv32im-traps
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+SOFTWARE_DIR := $(BUILD_DIR)/software
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_trap.cpp
+TOP := AetherCoreRV32IMTrapSimTop
+VERILATOR ?= verilator
+RV32_NEMU_SO ?=
+
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+TRAP_CASES := ecall ebreak illegal load-fault store-fault fetch-fault
+
+.PHONY: all rtl workloads runner-source sim run clean
+
+all: run
+
+rtl:
+	./mill aethercore.runMain aethercore.ElaborateRV32IMTrap --target-dir $(RTL_DIR)
+
+workloads:
+	bash tools/build_rv32im_trap_workloads.sh $(SOFTWARE_DIR)
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMTrapSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  return commit;"; c="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits();"; d="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits() << \", zicsr-shadow=\" << difftest->zicsrShadowSteps() << \", trap-shadow=\" << difftest->trapShadowSteps();"; assert a in s and c in s; p.write_text(s.replace(a,b,1).replace(c,d,1))'
+
+sim: rtl runner-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest_rv32.cpp)
+
+run: sim workloads
+	@test -n "$(RV32_NEMU_SO)" || { echo "ERROR: set RV32_NEMU_SO to the exact RV32 NEMU reference"; exit 1; }
+	@test -f "$(RV32_NEMU_SO)" || { echo "ERROR: RV32 NEMU reference not found: $(RV32_NEMU_SO)"; exit 1; }
+	mkdir -p $(BUILD_DIR)/logs
+	@for name in $(TRAP_CASES); do \
+		echo "== RV32IM synchronous trap: $$name =="; \
+		$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/$$name.bin \
+			--max-cycles 2000 --self-check-exit --stall-period 5 \
+			--difftest "$(RV32_NEMU_SO)" \
+			2>&1 | tee $(BUILD_DIR)/logs/$$name.log; \
+	done
+
+clean:
+	rm -rf $(BUILD_DIR)

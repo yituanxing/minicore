@@ -10,6 +10,16 @@ import aethercore.core.{MachineCsrAddress, MachineCsrFile}
 class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "MachineCsrFile"
 
+  private def initialize(dut: MachineCsrFile): Unit = {
+    dut.io.writeEnable.poke(false.B)
+    dut.io.writeAddr.poke(0.U)
+    dut.io.writeData.poke(0.U)
+    dut.io.trapEnter.poke(false.B)
+    dut.io.trapPc.poke(0.U)
+    dut.io.trapCause.poke(0.U)
+    dut.io.trapValue.poke(0.U)
+  }
+
   private def read(dut: MachineCsrFile, address: Int): BigInt = {
     dut.io.readAddr.poke(address.U)
     dut.io.readData.peek().litValue
@@ -25,9 +35,7 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
   it should "expose the RV32IM machine CSR map and WARL masks" in {
     simulate(new MachineCsrFile(CoreProfiles.rv32imSoftware.isa)) { dut =>
-      dut.io.writeEnable.poke(false.B)
-      dut.io.writeAddr.poke(0.U)
-      dut.io.writeData.poke(0.U)
+      initialize(dut)
 
       read(dut, MachineCsrAddress.Misa) shouldBe BigInt("40001100", 16)
       dut.io.readImplemented.expect(true.B)
@@ -52,11 +60,36 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "enter an M-mode trap atomically with WARL mepc and status stacking" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imSoftware.isa)) { dut =>
+      initialize(dut)
+
+      write(dut, MachineCsrAddress.Mtvec, BigInt("80000103", 16))
+      dut.io.trapVector.expect(BigInt("80000100", 16).U)
+      write(dut, MachineCsrAddress.Mstatus, BigInt("00000008", 16))
+
+      dut.io.writeEnable.poke(true.B)
+      dut.io.writeAddr.poke(MachineCsrAddress.Mscratch.U)
+      dut.io.writeData.poke(BigInt("deadbeef", 16).U)
+      dut.io.trapEnter.poke(true.B)
+      dut.io.trapPc.poke(BigInt("80000203", 16).U)
+      dut.io.trapCause.poke(5.U)
+      dut.io.trapValue.poke(BigInt("90000004", 16).U)
+      dut.clock.step()
+      dut.io.trapEnter.poke(false.B)
+      dut.io.writeEnable.poke(false.B)
+
+      read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00001880", 16)
+      read(dut, MachineCsrAddress.Mepc) shouldBe BigInt("80000200", 16)
+      read(dut, MachineCsrAddress.Mcause) shouldBe 5
+      read(dut, MachineCsrAddress.Mtval) shouldBe BigInt("90000004", 16)
+      read(dut, MachineCsrAddress.Mscratch) shouldBe 0
+    }
+  }
+
   it should "construct an XLEN-wide RV64 misa value" in {
     simulate(new MachineCsrFile(CoreProfiles.rv64imCurrent.isa)) { dut =>
-      dut.io.writeEnable.poke(false.B)
-      dut.io.writeAddr.poke(0.U)
-      dut.io.writeData.poke(0.U)
+      initialize(dut)
 
       read(dut, MachineCsrAddress.Misa) shouldBe BigInt("8000000000001100", 16)
       write(dut, MachineCsrAddress.Mscratch, BigInt("fedcba9876543210", 16))
