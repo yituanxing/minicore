@@ -34,6 +34,9 @@ class ExMem(val xlen: Int = 64) extends Bundle {
   val result = UInt(xlen.W)
   val storeData = UInt(xlen.W)
   val ctrl = new ControlSignals
+  val csrWrite = Bool()
+  val csrAddr = UInt(12.W)
+  val csrData = UInt(xlen.W)
   val exception = Bool()
 }
 
@@ -53,6 +56,9 @@ class MemWb(
   val memAddr = UInt(paddrBits.W)
   val memWdata = UInt(busDataBits.W)
   val memWmask = UInt((busDataBits / 8).W)
+  val csrWrite = Bool()
+  val csrAddr = UInt(12.W)
+  val csrData = UInt(xlen.W)
   val exception = Bool()
 }
 
@@ -82,6 +88,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
+  val csrFile = Module(new MachineCsrFile(config.isa))
 
   io.imem.addr := pc
   decoder.io.inst := ifId.inst
@@ -91,6 +98,10 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   registerFile.io.writeEnable := memWb.valid && memWb.regWrite && !memWb.exception
   registerFile.io.rdAddr := memWb.rd
   registerFile.io.rdData := memWb.rdData
+
+  csrFile.io.writeEnable := memWb.valid && memWb.csrWrite && !memWb.exception
+  csrFile.io.writeAddr := memWb.csrAddr
+  csrFile.io.writeData := memWb.csrData
 
   val decodedImm = WireDefault(0.U(xlen.W))
   switch(decoder.io.ctrl.immSel) {
@@ -145,7 +156,34 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val jalrTarget = (forwardedRs1 + idEx.imm) & jalrAlignmentMask
   val redirectTarget = Mux(idEx.ctrl.jalr, jalrTarget, branchTarget)
 
-  val exResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
+  val csrInstruction = idEx.ctrl.csrOp =/= CsrOp.None
+  val csrAddr = idEx.inst(31, 20)
+  csrFile.io.readAddr := csrAddr
+
+  val csrReadData = Mux(
+    exMem.valid && exMem.csrWrite && !exMem.exception && exMem.csrAddr === csrAddr,
+    exMem.csrData,
+    Mux(
+      memWb.valid && memWb.csrWrite && !memWb.exception && memWb.csrAddr === csrAddr,
+      memWb.csrData,
+      csrFile.io.readData
+    )
+  )
+  val csrImmediate = Cat(0.U((xlen - 5).W), idEx.rs1)
+  val csrOperand = Mux(idEx.ctrl.csrUseImm, csrImmediate, forwardedRs1)
+  val csrSourceFieldNonZero = idEx.rs1 =/= 0.U
+  val csrWriteIntent = idEx.ctrl.csrOp === CsrOp.Write ||
+    ((idEx.ctrl.csrOp === CsrOp.Set || idEx.ctrl.csrOp === CsrOp.Clear) && csrSourceFieldNonZero)
+  val csrLegal = csrFile.io.readImplemented && (!csrWriteIntent || csrFile.io.readWritable)
+  val csrWriteData = WireDefault(csrOperand)
+  switch(idEx.ctrl.csrOp) {
+    is(CsrOp.Set) { csrWriteData := csrReadData | csrOperand }
+    is(CsrOp.Clear) { csrWriteData := csrReadData & ~csrOperand }
+  }
+  val csrException = csrInstruction && !csrLegal
+
+  val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
+  val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
 
   val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
   val storeMask = WireDefault(fullStoreMask)
@@ -236,6 +274,9 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       memWb.memAddr := exMem.result
       memWb.memWdata := exMem.storeData
       memWb.memWmask := storeMask
+      memWb.csrWrite := exMem.csrWrite
+      memWb.csrAddr := exMem.csrAddr
+      memWb.csrData := exMem.csrData
       memWb.exception := exMem.exception || (io.dmem.valid && io.dmem.fault)
 
       exMem.valid := idEx.valid
@@ -245,7 +286,10 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       exMem.result := exResult
       exMem.storeData := forwardedRs2
       exMem.ctrl := idEx.ctrl
-      exMem.exception := idEx.exception
+      exMem.csrWrite := idEx.valid && csrInstruction && csrWriteIntent && csrLegal && !idEx.exception
+      exMem.csrAddr := csrAddr
+      exMem.csrData := csrWriteData
+      exMem.exception := idEx.exception || csrException
 
       when(redirect) {
         pc := redirectTarget
