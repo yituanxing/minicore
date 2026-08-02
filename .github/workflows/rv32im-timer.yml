@@ -17,39 +17,37 @@ concurrency:
 jobs:
   timer:
     name: Precise Machine timer interrupts on RV32IM
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Scala dependencies
-        uses: coursier/cache-action@v8
-        with:
-          job: rv32im-timer
-
-      - name: Install Java
-        uses: coursier/setup-action@v3
-        with:
-          jvm: temurin:21
-
-      - name: Install build dependencies
+      - name: Verify persistent runner toolchain
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential git python3 bison flex \
-            libreadline-dev libsdl2-dev zstd libzstd-dev \
-            file binutils verilator \
-            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          set -euxo pipefail
+          test "$(stat -f -c %T .)" != "9p"
+          test "$(stat -f -c %T .)" != "drvfs"
           java -version
+          javac -version
+          git --version
+          python3 --version
+          g++ --version
           verilator --version
           riscv64-unknown-elf-gcc --version
+          riscv64-unknown-elf-objdump --version | head -n 1
+          command -v make curl bison flex zstd file
 
       - name: Prepare Mill launcher
+        shell: bash
         run: |
+          set -euxo pipefail
           chmod +x mill
-          ./mill --version
+          timeout 600 ./mill --version
 
       - name: Build exact frozen RV32 NEMU reference
         shell: bash
