@@ -1,115 +1,286 @@
-# AetherCore S1.3 checkpoint
+# AetherCore privileged architecture checkpoint
 
-## Status
+## Branch and PR state
 
-S1.3 adds the first pinned, unmodified upstream application to the verified
-software-driven RV64IM core. CPU RTL is unchanged from S1.2.
-
-The complete software path is now:
+Stable `main` before this checkpoint:
 
 ```text
-repository-owned and pinned upstream C
-  -> riscv64-unknown-elf-gcc
-  -> repository-owned bare-metal port + crt0.S + linker.ld
-  -> ELF + flat binary + map + disassembly
-  -> Verilated AetherCore
-  -> one NEMU step per normal DUT retirement
+14cce6cb633f3140fd57dd34fa811bb0e36d7f5b
 ```
 
-## Core baseline
-
-- IF/ID/EX/MEM/WB five-stage in-order pipeline.
-- Complete RV64I and all thirteen RV64M register instructions.
-- EX/MEM and MEM/WB forwarding, load-use interlock and branch recovery.
-- Forwarded EX operands preserved across memory backpressure.
-- Host-backed 64 MiB RAM, UART MMIO at `0x10000000`, exit MMIO at `0x10000008`.
-- Architectural commit trace and precise suppression of younger memory side effects at fault retirement.
-- Pinned OpenXiangShan/NEMU commit-level DiffTest.
-
-The multiply/divide implementation remains combinational and correctness-first.
-Performance and timing work is intentionally deferred until the software ladder
-is substantially complete.
-
-## Frozen software gates
-
-S1.1/S1.2 retain twelve GCC-produced freestanding programs covering calls,
-stack frames, memory, RV64M arithmetic, sorting, hashing, CRC, matrix work and
-`-O0/-O2/-Os` code shapes.
-
-S1.3 adds EEMBC CoreMark pinned at:
+Current architecture PR:
 
 ```text
-eembc/coremark
-1f483d5b8316753a742cbf5590caf5bd0a4e4777
+branch: agent/rv32im-machine-timer-interrupt
+PR:     #28 — add precise RV32IM machine timer interrupts
+state:  Draft
 ```
 
-The five upstream algorithm files are unmodified. The repository supplies only
-its bare-metal port and an exit-status wrapper. Synthetic timing is used solely
-to execute CoreMark's deterministic CRC validation path; this is not a
-published benchmark score.
+PR #28 must remain Draft until GitHub Actions can execute again and the final head receives one complete all-green run.
 
-Verified CoreMark result from workflow `30704503644`:
+## CPU baseline
+
+- Chisel five-stage in-order pipeline: IF, ID, EX, MEM, WB.
+- RV32I, RV32IM/Zicsr and RV64IM/Zicsr elaboration-time profiles.
+- EX/MEM and MEM/WB forwarding.
+- Load-use interlock and branch/jump recovery.
+- Forwarded operands preserved across data-memory backpressure.
+- Precise architectural commit trace.
+- Younger GPR, Store and MMIO effects suppressed at architectural redirects.
+- Multiply/divide remains combinational and correctness-first.
+
+## Privileged architecture already merged on main
+
+### Machine CSRs and Zicsr
+
+Implemented:
 
 ```text
-optimization: -O2
-bytes:        10,740
-cycles:       960,387
-retirements:  737,070
-DiffTest:     737,070
-stall-period: 5
-exit:         0
-sha256:       cda5d505711d55e4355c6d62e4eaf4b27ef1168f0a3229011b56968a6a24dfb2
+mstatus   0x300
+misa      0x301
+mtvec     0x305
+mscratch  0x340
+mepc      0x341
+mcause    0x342
+mtval     0x343
 ```
 
-Artifact:
+Supported instructions:
 
 ```text
-upstream-workloads-30704503644
-ZIP SHA-256: dcd1137998a0a34b6e3d0eef6c5cc01ced1b4ddc9a07b02590d9128889a5f9d5
+CSRRW / CSRRS / CSRRC
+CSRRWI / CSRRSI / CSRRCI
 ```
 
-## Verification scale
+WARL handling is implemented for `mstatus`, `mtvec` and `mepc`.
+
+### Precise synchronous traps
+
+Implemented causes:
+
+- instruction access fault;
+- illegal instruction;
+- breakpoint;
+- Load access fault;
+- Store access fault;
+- Machine ECALL.
+
+Trap entry occurs only at WB. The faulting instruction exposes no forbidden GPR or memory side effect, and every younger stage is flushed.
+
+### MRET
+
+`MRET` retires as a normal non-exception event at WB:
 
 ```text
-frozen directed/generated architecture:       3,119
-S1.1/S1.2 compiler-produced corpus:          204,218
-S1.3 pinned CoreMark:                        737,070
----------------------------------------------------
-complete normal-retirement gate:            944,407
+mstatus.MIE  <- mstatus.MPIE
+mstatus.MPIE <- 1
+mstatus.MPP  <- least supported privilege
+PC           <- mepc
 ```
 
-Every normal retirement matched NEMU one-for-one. All thirteen compiled
-programs returned exit code zero. Strict smoke, the explicit mismatch probe,
-the focused memory-stall forwarding regression and all three precise
-fault-boundary tests remain mandatory separate gates.
+The current M-only software profile observes:
 
-Exact CoreMark provenance is in [`docs/UPSTREAM_SOFTWARE.md`](docs/UPSTREAM_SOFTWARE.md).
-The prior twelve binary hashes and results remain frozen in
-[`docs/COMPILED_CORPUS.md`](docs/COMPILED_CORPUS.md).
+```text
+handler mstatus = 0x00001880
+returned status = 0x00001888
+```
 
-## Compatibility rules
+The merged MRET checkpoint covers ECALL, EBREAK with rewritten `mepc`, Load-fault recovery and two complete trap/return loops:
 
-1. **Frozen-binary microarchitecture gate:** run the exact recorded binary hashes unchanged.
-2. **Compiler compatibility gate:** rebuild the same source and record a new artifact separately.
-3. **Upstream integrity gate:** pin the source revision and keep algorithm sources unmodified; isolate all platform adaptation.
-4. **Failure reduction gate:** an upstream CPU failure must become a focused permanent regression before RTL is repaired.
+```text
+cycles:       368
+retirements:  259
+Zicsr shadow: 59
+trap shadow:  5
+MRET shadow:  5
+```
 
-A CPU change may not silently recompile the corpus to obtain a passing result.
+## Machine timer architecture in PR #28
+
+Added CSRs:
+
+```text
+mie.MTIE  bit 7, writable
+mip.MTIP  bit 7, read-only platform input
+```
+
+Platform timer:
+
+```text
+mtimecmp  0x02004000
+mtime     0x0200bff8
+```
+
+The timer is 64-bit. RV32 uses low/high 32-bit accesses; RV64 uses full-width accesses. `mtimecmp` resets to all ones, so all historical programs remain timer-inert unless software explicitly enables and programs it.
+
+A Machine timer interrupt is eligible only when:
+
+```text
+mtime >= mtimecmp
+mstatus.MIE == 1
+mie.MTIE == 1
+```
+
+Cause values:
+
+```text
+RV32 mcause = 0x80000007
+RV64 mcause = 0x8000000000000007
+mtval       = 0
+```
+
+## Precise asynchronous boundary
+
+The current WB instruction retires normally. Interrupt acceptance then:
+
+1. preserves that instruction's GPR, Store or CSR effect;
+2. selects the oldest younger PC from EX/MEM, ID/EX, IF/ID or current fetch;
+3. stores that PC in `mepc`;
+4. blocks a younger MEM/MMIO request combinationally;
+5. flushes all younger pipeline state;
+6. redirects to `mtvec`.
+
+A same-boundary retiring write to `mstatus`, `mie`, `mtvec` or `mscratch` is applied before interrupt entry. Synchronous traps have higher priority than interrupts, and MRET is not interrupted at its own retirement boundary.
+
+## Real timer workload evidence
+
+Functional head:
+
+```text
+6eec8ff6c7d37941f92458e8afee0d998c3620a5
+```
+
+Successful workflow and artifact:
+
+```text
+workflow:     RV32IM Machine Timer 30737277090
+artifact:     rv32im-machine-timer-30737277090
+artifact ID:  8830057359
+ZIP SHA-256:  79e9c0717b0f14e27e416a8561005299dda4df2b5627cb911331733b82902528
+```
+
+Frozen results:
+
+```text
+case          cycles  events  Zicsr  MRET  timer IRQ
+basic            311     150      16     1          1
+global-mask      622     341      17     1          1
+source-mask      622     341      17     1          1
+double           600     341      23     2          2
+----------------------------------------------------
+total          2,155   1,173      73     5          5
+```
+
+The workloads prove:
+
+- ordinary enabled timer delivery;
+- pending MTIP while global `mstatus.MIE` is clear;
+- pending MTIP while source `mie.MTIE` is clear;
+- comparator rearming in the handler;
+- two complete asynchronous interrupt/MRET loops.
+
+First interrupt:
+
+```text
+zero-based event: 94
+retiring PC:      0x80000074
+cause:            0x80000007
+resume PC:        0x80000074
+```
+
+The equal retiring/resume address is two consecutive dynamic iterations of the same wait-loop branch: one retires, the next is flushed and replayed.
+
+Full details are in `docs/RV32IM_MACHINE_TIMER.md`.
+
+## Frozen normal-retirement gates
+
+RV64:
+
+```text
+directed/generated architecture:       3,119
+compiled real programs:               204,218
+CoreMark:                             737,070
+---------------------------------------------
+RV64 exact total:                    944,407
+```
+
+RV32 real software:
+
+```text
+RV32I GCC DiffTest:                     585
+RV32IM CoreMark:                    646,301
+RV32IM Embench batch 1:             184,185
+RV32IM Embench batch 2:           1,144,895
+RV32IM littlefs basic:             4,819,485
+---------------------------------------------
+RV32 exact total:                  6,795,451
+```
+
+Do not merge RV32 and RV64 totals without explicitly labelling a cross-profile aggregate.
+
+## Reference boundary
+
+Normal instruction references remain pinned to OpenXiangShan/NEMU:
+
+```text
+revision: 8601834e4889e6bf3b6113eb5f824ba7689126f5
+RV32 reference SHA-256:
+1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577
+ABI: uint32_t gpr[32]; uint32_t pc
+```
+
+Reference partitioning:
+
+```text
+ordinary RV32IM/RV64IM instructions -> frozen NEMU
+Zicsr instructions                  -> independent CSR shadow
+synchronous trap entry              -> independent trap shadow
+MRET                                -> independent return shadow
+Machine timer acceptance            -> independent interrupt shadow
+```
+
+No privileged event is silently skipped.
+
+## Current blocker
+
+All private-repository GitHub Actions jobs currently fail before checkout with:
+
+```text
+steps: []
+no job log
+rerun fails identically
+```
+
+This affects historical workflows as well as PR #28 and PR #30. Do not modify RTL in response to a zero-step runner failure. Check the repository/account Actions budget and billing state, then rerun the unchanged final head.
+
+## Stacked next checkpoint
+
+PR #30 is stacked on PR #28:
+
+```text
+branch: agent/rv32im-preemptive-scheduler
+PR:     #30 — run a timer-preemptive two-task scheduler
+```
+
+It adds no RTL. It uses MTIP/MRET to save and restore x1..x31 plus `mepc` across two independent task stacks for eight timer-driven preemptions.
+
+Correct completion order:
+
+1. restore GitHub Actions execution;
+2. rerun PR #28 and require every historical plus timer workflow green;
+3. mark PR #28 Ready and squash merge;
+4. retarget/rebase PR #30 onto the new `main`;
+5. run PR #30's dual-reference scheduler matrix;
+6. only then consider U-mode/ECALL or the A extension.
 
 ## Known limitations
 
-- Multiply/divide remains combinational and unsuitable for final FPGA timing/area.
-- The linker emits a non-fatal RWX LOAD-segment warning; later cleanup should split text and data program headers.
-- Privileged CSRs, trap redirection, interrupts, atomics, Sv39 and caches are not implemented.
-- Precise faults still halt instead of entering an architectural trap handler.
-- Full musl, Lua and SQLite require a user-mode and syscall environment that does not yet exist.
-
-## Next software gates
-
-1. expand the upstream harness to a selected first batch of Embench-IoT programs;
-2. add littlefs over a deterministic RAM-backed block-device adapter;
-3. add a freestanding musl function corpus for routines that need no syscall ABI;
-4. use FreeRTOS to drive machine CSRs, timer interrupts and context switching;
-5. use xv6-riscv, then Linux, to complete privilege, atomics, virtual memory and devices;
-6. run full musl, BusyBox, Lua and SQLite as user-space compatibility gates;
-7. only after software completeness, use the frozen corpus for execution-unit, cache, branch and bus optimization.
+- Runtime privilege is still Machine mode only.
+- No U-mode or S-mode execution.
+- No delegation or supervisor timer interrupt.
+- No software/external interrupt controller.
+- No WFI.
+- Single hart only.
+- No A extension.
+- No MMU, page tables or caches.
+- Timer peripheral is simulation-platform logic, not yet a reusable production CLINT/ACLINT block.
