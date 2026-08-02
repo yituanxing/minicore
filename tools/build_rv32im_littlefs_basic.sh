@@ -10,8 +10,9 @@ cc="${prefix}gcc"
 objcopy="${prefix}objcopy"
 objdump="${prefix}objdump"
 readelf="${prefix}readelf"
+nm="${prefix}nm"
 
-for tool in "$cc" "$objcopy" "$objdump" "$readelf" git; do
+for tool in "$cc" "$objcopy" "$objdump" "$readelf" "$nm" git; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "ERROR: required tool is missing: $tool" >&2
     exit 1
@@ -74,6 +75,9 @@ printf '%s\n' "$revision" > "$out_dir/littlefs.revision"
 cp "$littlefs_dir/LICENSE.md" "$out_dir/littlefs-LICENSE.md"
 "$cc" --version > "$out_dir/compiler-version.txt"
 printf '%s\n' "${cflags[*]}" > "$out_dir/compiler-flags.txt"
+sha256sum "$littlefs_dir/lfs.c" "$littlefs_dir/lfs.h" \
+  "$littlefs_dir/lfs_util.c" "$littlefs_dir/lfs_util.h" \
+  > "$out_dir/upstream-source-sha256.txt"
 
 sources=(
   "$littlefs_dir/lfs.c"
@@ -98,6 +102,7 @@ done
 "$objcopy" -O binary "$elf" "$bin"
 "$objdump" -d -S "$elf" > "$out_dir/littlefs-basic.dis"
 "$readelf" -h -l -S "$elf" > "$out_dir/littlefs-basic.elf.txt"
+"$nm" -n "$elf" > "$out_dir/littlefs-basic.nm"
 
 bytes="$(stat -c '%s' "$bin")"
 words="$(((bytes + 3) / 4))"
