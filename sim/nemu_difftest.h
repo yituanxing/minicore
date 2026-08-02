@@ -37,6 +37,7 @@ class NemuDifftest {
   std::uint64_t checkedCommits() const;
   std::uint64_t zicsrShadowSteps() const;
   std::uint64_t trapShadowSteps() const;
+  std::uint64_t mretShadowSteps() const;
 
  private:
   class Impl;
