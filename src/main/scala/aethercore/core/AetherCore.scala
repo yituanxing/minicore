@@ -213,6 +213,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
 
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
+  val idExInstructionValue =
+    if (xlen == 32) idEx.inst else Cat(0.U((xlen - 32).W), idEx.inst)
 
   val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
   val storeMask = WireDefault(fullStoreMask)
@@ -335,8 +337,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     when(csrException && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
-      exMem.trap.value :=
-        if (xlen == 32) idEx.inst else Cat(0.U((xlen - 32).W), idEx.inst)
+      exMem.trap.value := idExInstructionValue
     }
 
     when(redirect) {
