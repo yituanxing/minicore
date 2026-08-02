@@ -1,0 +1,100 @@
+name: RV32IM Machine CSR
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32im-csr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  csr:
+    name: Zicsr and machine CSRs on RV32IM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+        with:
+          job: rv32im-csr
+
+      - name: Install Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils verilator \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          java -version
+          verilator --version
+          riscv64-unknown-elf-gcc --version
+
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
+
+      - name: Build exact frozen RV32 NEMU reference
+        shell: bash
+        run: |
+          mkdir -p build
+          set -o pipefail
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-probe" \
+            2>&1 | tee build/rv32-nemu-probe.log
+          grep -q '^reference_sha256=1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
+            -name 'riscv32-nemu-interpreter-so*' -print -quit)"
+          test -n "$reference_so"
+          echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
+
+      - name: Build RV32IM CSR workload
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-csr workload
+          manifest=build/rv32im-csr/software/manifest.txt
+          grep -q '^march=rv32im_zicsr$' "$manifest"
+          grep -q '^mabi=ilp32$' "$manifest"
+          grep -q '<main>:' build/rv32im-csr/software/rv32im-csr.dis
+          grep -q 'csrrw' build/rv32im-csr/software/rv32im-csr.dis
+          grep -q 'csrrs' build/rv32im-csr/software/rv32im-csr.dis
+          grep -q 'csrrc' build/rv32im-csr/software/rv32im-csr.dis
+
+      - name: Run exact CSR DiffTest
+        shell: bash
+        run: |
+          set -o pipefail
+          make -f Makefile.rv32im-csr run RV32_NEMU_SO="$RV32_NEMU_SO" \
+            2>&1 | tee build/rv32im-csr/csr-ci.log
+          grep -q 'PASS: self-check exit=0' build/rv32im-csr/csr-ci.log
+          grep -q 'DiffTest matches:' build/rv32im-csr/csr-ci.log
+
+      - name: Upload CSR evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32im-machine-csr-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32-nemu-probe.log
+            build/rv32-nemu-probe/evidence/
+            build/rv32im-csr/
