@@ -2,6 +2,7 @@ package aethercore.core
 
 import chisel3._
 import chisel3.util._
+import aethercore.common.PrivilegeMode
 import aethercore.config.IsaConfig
 
 object MachineCsrAddress {
@@ -40,16 +41,28 @@ object MachineCsrWarl {
         val requestedMpp = data(12, 11)
         val legalMpp = if (isa.hasS && isa.hasU) {
           Mux(
-            requestedMpp === 0.U || requestedMpp === 1.U || requestedMpp === 3.U,
+            requestedMpp === PrivilegeMode.User.U ||
+              requestedMpp === PrivilegeMode.Supervisor.U ||
+              requestedMpp === PrivilegeMode.Machine.U,
             requestedMpp,
-            3.U
+            PrivilegeMode.Machine.U
           )
         } else if (isa.hasS) {
-          Mux(requestedMpp === 1.U || requestedMpp === 3.U, requestedMpp, 3.U)
+          Mux(
+            requestedMpp === PrivilegeMode.Supervisor.U ||
+              requestedMpp === PrivilegeMode.Machine.U,
+            requestedMpp,
+            PrivilegeMode.Machine.U
+          )
         } else if (isa.hasU) {
-          Mux(requestedMpp === 0.U || requestedMpp === 3.U, requestedMpp, 3.U)
+          Mux(
+            requestedMpp === PrivilegeMode.User.U ||
+              requestedMpp === PrivilegeMode.Machine.U,
+            requestedMpp,
+            PrivilegeMode.Machine.U
+          )
         } else {
-          3.U(2.W)
+          PrivilegeMode.Machine.U(2.W)
         }
         result := (data & mstatusNonMppMask.U(xlen.W)) | (legalMpp << 11)
       }
@@ -70,7 +83,10 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
   private val mstatusTransitionPreserveMask = allBits & ~mstatusTransitionMask
-  private val leastPrivilege = if (isa.hasU) BigInt(0) else if (isa.hasS) BigInt(1) else BigInt(3)
+  private val leastPrivilege =
+    if (isa.hasU) BigInt(PrivilegeMode.User)
+    else if (isa.hasS) BigInt(PrivilegeMode.Supervisor)
+    else BigInt(PrivilegeMode.Machine)
 
   private val misaValue = {
     val mxl = if (xlen == 32) BigInt(1) else BigInt(2)
@@ -92,6 +108,8 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     val writeAddr = Input(UInt(12.W))
     val writeData = Input(UInt(xlen.W))
 
+    val currentPrivilege = Output(UInt(2.W))
+
     val timerInterrupt = Input(Bool())
     val machineTimerInterrupt = Output(Bool())
 
@@ -105,6 +123,7 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     val returnPc = Output(UInt(xlen.W))
   })
 
+  val privilege = RegInit(PrivilegeMode.Machine.U(2.W))
   val mstatus = RegInit(0.U(xlen.W))
   val mie = RegInit(0.U(xlen.W))
   val mtvec = RegInit(0.U(xlen.W))
@@ -141,9 +160,13 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   )
 
   val mipValue = Mux(io.timerInterrupt, machineTimerMask.U(xlen.W), 0.U(xlen.W))
+  val machineInterruptGloballyEnabled =
+    privilege < PrivilegeMode.Machine.U || effectiveMstatus(MachineCsrBit.MstatusMie)
+
+  io.currentPrivilege := privilege
   io.machineTimerInterrupt :=
-    io.timerInterrupt && effectiveMstatus(MachineCsrBit.MstatusMie) &&
-      effectiveMie(MachineCsrBit.MachineTimerInterrupt)
+    io.timerInterrupt && effectiveMie(MachineCsrBit.MachineTimerInterrupt) &&
+      machineInterruptGloballyEnabled
   io.trapVector := effectiveMtvec
   io.returnPc := mepc
   io.readData := 0.U
@@ -200,7 +223,8 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   val trapMstatus =
     (effectiveMstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
       (effectiveMstatus(MachineCsrBit.MstatusMie).asUInt << MachineCsrBit.MstatusMpie) |
-      mstatusMpp.U(xlen.W)
+      (privilege << MachineCsrBit.MstatusMppLow)
+  val returnPrivilege = mstatus(12, 11)
   val returnMstatus =
     (mstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
       (mstatus(MachineCsrBit.MstatusMpie).asUInt << MachineCsrBit.MstatusMie) |
@@ -210,6 +234,7 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   when(io.trapEnter) {
     // Preserve any retiring ordinary CSR write that is not overwritten by the
     // trap CSRs themselves. This models "retire instruction, then take IRQ".
+    privilege := PrivilegeMode.Machine.U
     mstatus := trapMstatus
     mie := effectiveMie
     mtvec := effectiveMtvec
@@ -218,6 +243,7 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     mcause := io.trapCause
     mtval := io.trapValue
   }.elsewhen(io.trapReturn) {
+    privilege := returnPrivilege
     mstatus := returnMstatus
   }.elsewhen(ordinaryWrite) {
     switch(io.writeAddr) {
