@@ -66,17 +66,23 @@ jobs:
           test -n "$reference_so"
           echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
 
-      - name: Build RV32IM CSR workload
+      - name: Build frozen RV32IM CSR workload
         shell: bash
         run: |
           make -f Makefile.rv32im-csr workload
           manifest=build/rv32im-csr/software/manifest.txt
           grep -q '^march=rv32im_zicsr$' "$manifest"
           grep -q '^mabi=ilp32$' "$manifest"
+          grep -q '^binary_bytes=388$' "$manifest"
+          grep -q '^binary_words=97$' "$manifest"
+          grep -q '^binary_sha256=84b5279e4e077fe5e6a8cf06bff9a177a2a774822b7f533c5df663e79468346f$' "$manifest"
           grep -q '<main>:' build/rv32im-csr/software/rv32im-csr.dis
           grep -q 'csrrw' build/rv32im-csr/software/rv32im-csr.dis
           grep -q 'csrrs' build/rv32im-csr/software/rv32im-csr.dis
           grep -q 'csrrc' build/rv32im-csr/software/rv32im-csr.dis
+          grep -q 'csrrwi' build/rv32im-csr/software/rv32im-csr.dis
+          grep -q 'csrrsi' build/rv32im-csr/software/rv32im-csr.dis
+          grep -q 'csrrci' build/rv32im-csr/software/rv32im-csr.dis
 
       - name: Run exact CSR DiffTest
         shell: bash
@@ -84,8 +90,25 @@ jobs:
           set -o pipefail
           make -f Makefile.rv32im-csr run RV32_NEMU_SO="$RV32_NEMU_SO" \
             2>&1 | tee build/rv32im-csr/csr-ci.log
-          grep -q 'PASS: self-check exit=0' build/rv32im-csr/csr-ci.log
-          grep -q 'DiffTest matches:' build/rv32im-csr/csr-ci.log
+          grep -q '^PASS: self-check exit=0 after 80 cycles, 65 committed instructions, stall-period=5, difftest=65, zicsr-shadow=19$' \
+            build/rv32im-csr/csr-ci.log
+
+      - name: Reject a mismatch on the first CSR retirement
+        shell: bash
+        run: |
+          set +e
+          AETHERCORE_RV32_DIFFTEST_INJECT_MISMATCH_AT=9 \
+            build/rv32im-csr/obj/VAetherCoreRV32IMSimTop \
+            build/rv32im-csr/software/rv32im-csr.bin \
+            --max-cycles 20000 --self-check-exit --stall-period 5 \
+            --difftest "$RV32_NEMU_SO" \
+            > build/rv32im-csr/csr-negative.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q 'RV32 DiffTest mismatch after 9 matched commits' \
+            build/rv32im-csr/csr-negative.log
+          grep -q 'x31' build/rv32im-csr/csr-negative.log
 
       - name: Upload CSR evidence
         if: always()
