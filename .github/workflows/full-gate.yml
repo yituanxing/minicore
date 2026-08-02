@@ -26,6 +26,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
       - name: Persistent toolchain and Mill
         shell: bash
         run: bash tools/ci/full_gate.sh toolchain
