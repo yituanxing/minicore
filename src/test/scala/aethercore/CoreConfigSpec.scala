@@ -23,6 +23,8 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform.resetVector shouldBe BigInt("80000000", 16)
     config.platform.busDataBits shouldBe 64
     config.platform.busBytes shouldBe 8
+    config.platform.mtimeAddress shouldBe BigInt("0200bff8", 16)
+    config.platform.mtimecmpAddress shouldBe BigInt("02004000", 16)
   }
 
   it should "describe the executable RV32I profile" in {
@@ -41,6 +43,8 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform.paddrBits shouldBe 32
     config.platform.busDataBits shouldBe 32
     config.platform.busBytes shouldBe 4
+    config.platform.mtimeAddress shouldBe BigInt("0200bff8", 16)
+    config.platform.mtimecmpAddress shouldBe BigInt("02004000", 16)
   }
 
   it should "describe the RV32IM real-software profile" in {
@@ -91,7 +95,9 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
         paddrBits = 40,
         busDataBits = 128,
         uartAddress = 0,
-        exitAddress = 8
+        exitAddress = 8,
+        mtimeAddress = BigInt("0200bff8", 16),
+        mtimecmpAddress = BigInt("02004000", 16)
       )
   }
 }

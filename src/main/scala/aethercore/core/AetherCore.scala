@@ -68,6 +68,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val machineTimerCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineTimer)
 
   require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
@@ -75,6 +77,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
     val dmem = new DataBusIO(paddrBits, busDataBits)
+    val timerInterrupt = Input(Bool())
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -105,11 +108,27 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.writeEnable := memWb.valid && memWb.csrWrite && !memWb.trap.valid
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
-  csrFile.io.trapEnter := takingTrap
-  csrFile.io.trapPc := memWb.pc
-  csrFile.io.trapCause := memWb.trap.cause
-  csrFile.io.trapValue := memWb.trap.value
+  csrFile.io.timerInterrupt := io.timerInterrupt
   csrFile.io.trapReturn := takingMret
+
+  // An interrupt is accepted only after a normal WB instruction retires. The
+  // oldest younger instruction has not retired and must be replayed after MRET.
+  val interruptPc = Mux(
+    exMem.valid,
+    exMem.pc,
+    Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc))
+  )
+  val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret &&
+    csrFile.io.machineTimerInterrupt
+
+  csrFile.io.trapEnter := takingTrap || takingInterrupt
+  csrFile.io.trapPc := Mux(takingInterrupt, interruptPc, memWb.pc)
+  csrFile.io.trapCause := Mux(
+    takingInterrupt,
+    machineTimerCause.U(xlen.W),
+    memWb.trap.cause
+  )
+  csrFile.io.trapValue := Mux(takingInterrupt, 0.U, memWb.trap.value)
 
   val decodedImm = WireDefault(0.U(xlen.W))
   switch(decoder.io.ctrl.immSel) {
@@ -228,11 +247,11 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(MemSize.DWord) { storeMask := fullStoreMask }
   }
 
-  // A trap or return reports from WB while a younger instruction may already
-  // occupy MEM. Suppress that younger request combinationally so no Store or
-  // MMIO side effect can escape in either architectural redirect cycle.
+  // A synchronous trap, asynchronous interrupt or return can redirect from WB
+  // while a younger instruction occupies MEM. Suppress that request before the
+  // edge so no Store/MMIO side effect escapes from an instruction being flushed.
   io.dmem.valid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-    !exMem.trap.valid && !takingTrap && !takingMret
+    !exMem.trap.valid && !takingTrap && !takingInterrupt && !takingMret
   io.dmem.write := exMem.ctrl.memWrite
   io.dmem.addr := exMem.result
   io.dmem.wdata := exMem.storeData
@@ -282,9 +301,12 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   io.commit.exception := memWb.trap.valid
   io.commit.exceptionCause := memWb.trap.cause
   io.commit.exceptionValue := memWb.trap.value
+  io.commit.interrupt := takingInterrupt
+  io.commit.interruptCause := machineTimerCause.U(xlen.W)
+  io.commit.interruptPc := interruptPc
   io.halted := false.B
 
-  when(takingTrap) {
+  when(takingTrap || takingInterrupt) {
     pc := csrFile.io.trapVector
     ifId.valid := false.B
     idEx.valid := false.B

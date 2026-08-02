@@ -17,40 +17,52 @@ concurrency:
 jobs:
   test:
     name: Chisel, Verilator and NEMU DiffTest
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Scala dependencies
-        uses: coursier/cache-action@v8
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Cache pinned NEMU reference
-        uses: actions/cache@v4
-        with:
-          path: build/nemu
-          key: nemu-${{ runner.os }}-ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
-
-      - name: Install Java
-        uses: coursier/setup-action@v3
-        with:
-          jvm: temurin:21
-
-      - name: Install native dependencies
+      - name: Verify persistent runner toolchain
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            verilator make g++ python3 curl git bison flex \
-            libreadline-dev libsdl2-dev zstd libzstd-dev
+          set -euxo pipefail
+          test "$(stat -f -c %T .)" != "9p"
+          test "$(stat -f -c %T .)" != "drvfs"
           java -version
-          verilator --version
+          javac -version
+          git --version
+          python3 --version
+          g++ --version
+          test "$(cat "$HOME/.cache/aethercore/toolchains/verilator-5.024/.aethercore-source-revision")" = \
+            "522bead374d6b7b2adb316304126e5361b18bcf1"
+          test "$(readlink -f "$(command -v verilator)")" = \
+            "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin/verilator"
+          bash tools/ensure_verilator_5_024.sh
+          verilator --version || true
+          riscv64-unknown-elf-gcc --version
+          command -v make curl bison flex zstd
+
+      - name: Probe Mill distribution network
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mill_url=https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/1.1.2/mill-dist-1.1.2.exe
+          curl -fsSIL --connect-timeout 15 --max-time 60 "$mill_url"
 
       - name: Prepare Mill launcher
+        shell: bash
         run: |
+          set -euxo pipefail
           chmod +x mill
-          ./mill --version
+          timeout 600 ./mill --version
 
       - name: Python reference and image tests
         run: make python-test

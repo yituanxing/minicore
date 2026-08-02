@@ -7,18 +7,30 @@ import aethercore.config.IsaConfig
 object MachineCsrAddress {
   val Mstatus: Int = 0x300
   val Misa: Int = 0x301
+  val Mie: Int = 0x304
   val Mtvec: Int = 0x305
   val Mscratch: Int = 0x340
   val Mepc: Int = 0x341
   val Mcause: Int = 0x342
   val Mtval: Int = 0x343
+  val Mip: Int = 0x344
+}
+
+object MachineCsrBit {
+  val MstatusMie: Int = 3
+  val MstatusMpie: Int = 7
+  val MstatusMppLow: Int = 11
+  val MachineTimerInterrupt: Int = 7
 }
 
 object MachineCsrWarl {
   def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
     val xlen = isa.xlen
     val allBits = (BigInt(1) << xlen) - 1
-    val mstatusNonMppMask = (BigInt(1) << 3) | (BigInt(1) << 7)
+    val mstatusNonMppMask =
+      (BigInt(1) << MachineCsrBit.MstatusMie) |
+        (BigInt(1) << MachineCsrBit.MstatusMpie)
+    val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
     val mtvecMask = allBits & ~BigInt(3)
     val mepcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
 
@@ -41,6 +53,7 @@ object MachineCsrWarl {
         }
         result := (data & mstatusNonMppMask.U(xlen.W)) | (legalMpp << 11)
       }
+      is(MachineCsrAddress.Mie.U) { result := data & machineTimerMask.U(xlen.W) }
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(MachineCsrAddress.Mepc.U) { result := data & mepcMask.U(xlen.W) }
     }
@@ -51,9 +64,10 @@ object MachineCsrWarl {
 class MachineCsrFile(val isa: IsaConfig) extends Module {
   private val xlen = isa.xlen
   private val allBits = (BigInt(1) << xlen) - 1
-  private val mstatusMie = BigInt(1) << 3
-  private val mstatusMpie = BigInt(1) << 7
-  private val mstatusMpp = BigInt(3) << 11
+  private val mstatusMie = BigInt(1) << MachineCsrBit.MstatusMie
+  private val mstatusMpie = BigInt(1) << MachineCsrBit.MstatusMpie
+  private val mstatusMpp = BigInt(3) << MachineCsrBit.MstatusMppLow
+  private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
   private val mstatusTransitionPreserveMask = allBits & ~mstatusTransitionMask
   private val leastPrivilege = if (isa.hasU) BigInt(0) else if (isa.hasS) BigInt(1) else BigInt(3)
@@ -78,6 +92,9 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     val writeAddr = Input(UInt(12.W))
     val writeData = Input(UInt(xlen.W))
 
+    val timerInterrupt = Input(Bool())
+    val machineTimerInterrupt = Output(Bool())
+
     val trapEnter = Input(Bool())
     val trapPc = Input(UInt(xlen.W))
     val trapCause = Input(UInt(xlen.W))
@@ -89,13 +106,45 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   })
 
   val mstatus = RegInit(0.U(xlen.W))
+  val mie = RegInit(0.U(xlen.W))
   val mtvec = RegInit(0.U(xlen.W))
   val mscratch = RegInit(0.U(xlen.W))
   val mepc = RegInit(0.U(xlen.W))
   val mcause = RegInit(0.U(xlen.W))
   val mtval = RegInit(0.U(xlen.W))
 
-  io.trapVector := mtvec
+  val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
+  val ordinaryWrite = io.writeEnable
+
+  // Interrupt entry happens after the current instruction retires. Preview an
+  // ordinary CSR write so an enabling/disabling write affects the same precise
+  // boundary and a retiring mtvec write selects the new handler immediately.
+  val effectiveMstatus = Mux(
+    ordinaryWrite && io.writeAddr === MachineCsrAddress.Mstatus.U,
+    canonicalWriteData,
+    mstatus
+  )
+  val effectiveMie = Mux(
+    ordinaryWrite && io.writeAddr === MachineCsrAddress.Mie.U,
+    canonicalWriteData,
+    mie
+  )
+  val effectiveMtvec = Mux(
+    ordinaryWrite && io.writeAddr === MachineCsrAddress.Mtvec.U,
+    canonicalWriteData,
+    mtvec
+  )
+  val effectiveMscratch = Mux(
+    ordinaryWrite && io.writeAddr === MachineCsrAddress.Mscratch.U,
+    canonicalWriteData,
+    mscratch
+  )
+
+  val mipValue = Mux(io.timerInterrupt, machineTimerMask.U(xlen.W), 0.U(xlen.W))
+  io.machineTimerInterrupt :=
+    io.timerInterrupt && effectiveMstatus(MachineCsrBit.MstatusMie) &&
+      effectiveMie(MachineCsrBit.MachineTimerInterrupt)
+  io.trapVector := effectiveMtvec
   io.returnPc := mepc
   io.readData := 0.U
   io.readImplemented := false.B
@@ -110,6 +159,11 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     is(MachineCsrAddress.Misa.U) {
       io.readData := misaValue.U(xlen.W)
       io.readImplemented := true.B
+    }
+    is(MachineCsrAddress.Mie.U) {
+      io.readData := mie
+      io.readImplemented := true.B
+      io.readWritable := true.B
     }
     is(MachineCsrAddress.Mtvec.U) {
       io.readData := mtvec
@@ -136,30 +190,39 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
       io.readImplemented := true.B
       io.readWritable := true.B
     }
+    is(MachineCsrAddress.Mip.U) {
+      io.readData := mipValue
+      io.readImplemented := true.B
+    }
   }
 
-  val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val canonicalTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
   val trapMstatus =
-    (mstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
-      (mstatus(3).asUInt << 7) |
+    (effectiveMstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
+      (effectiveMstatus(MachineCsrBit.MstatusMie).asUInt << MachineCsrBit.MstatusMpie) |
       mstatusMpp.U(xlen.W)
   val returnMstatus =
     (mstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
-      (mstatus(7).asUInt << 3) |
+      (mstatus(MachineCsrBit.MstatusMpie).asUInt << MachineCsrBit.MstatusMie) |
       mstatusMpie.U(xlen.W) |
-      (leastPrivilege << 11).U(xlen.W)
+      (leastPrivilege << MachineCsrBit.MstatusMppLow).U(xlen.W)
 
   when(io.trapEnter) {
+    // Preserve any retiring ordinary CSR write that is not overwritten by the
+    // trap CSRs themselves. This models "retire instruction, then take IRQ".
     mstatus := trapMstatus
+    mie := effectiveMie
+    mtvec := effectiveMtvec
+    mscratch := effectiveMscratch
     mepc := canonicalTrapPc
     mcause := io.trapCause
     mtval := io.trapValue
   }.elsewhen(io.trapReturn) {
     mstatus := returnMstatus
-  }.elsewhen(io.writeEnable) {
+  }.elsewhen(ordinaryWrite) {
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
+      is(MachineCsrAddress.Mie.U) { mie := canonicalWriteData }
       is(MachineCsrAddress.Mtvec.U) { mtvec := canonicalWriteData }
       is(MachineCsrAddress.Mscratch.U) { mscratch := canonicalWriteData }
       is(MachineCsrAddress.Mepc.U) { mepc := canonicalWriteData }

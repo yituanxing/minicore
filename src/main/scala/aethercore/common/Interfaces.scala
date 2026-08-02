@@ -45,6 +45,10 @@ object MachineExceptionCode {
   val EnvironmentCallFromM: Int = 11
 }
 
+object MachineInterruptCode {
+  val MachineTimer: Int = 7
+}
+
 class TrapInfo(val xlen: Int) extends Bundle {
   require(xlen == 32 || xlen == 64, s"trap XLEN must be 32 or 64, got $xlen")
 
@@ -102,6 +106,13 @@ class CommitTrace(
   val exception = Bool()
   val exceptionCause = UInt(xlen.W)
   val exceptionValue = UInt(xlen.W)
+
+  // An asynchronous interrupt is taken after this instruction retires. The
+  // interrupted PC names the oldest younger instruction that must be replayed
+  // after MRET, rather than the retiring instruction reported above.
+  val interrupt = Bool()
+  val interruptCause = UInt(xlen.W)
+  val interruptPc = UInt(xlen.W)
 }
 
 class ControlSignals extends Bundle {

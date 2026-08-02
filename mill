@@ -1,6 +1,12 @@
 #!/usr/bin/env sh
 set -eu
 
+# Mill's daemon transport can be unreliable in some WSL environments. Keep the
+# normal fast daemon mode by default, but let CI opt into one process per call.
+if [ "${AETHERCORE_MILL_NO_DAEMON:-0}" = "1" ]; then
+  set -- --no-daemon "$@"
+fi
+
 # Prefer a Mill installation supplied by CI/SDK tooling. This avoids a network
 # download on every build while keeping the repository runnable standalone.
 if command -v mill >/dev/null 2>&1; then

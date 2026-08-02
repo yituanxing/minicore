@@ -45,13 +45,19 @@ final case class PlatformConfig(
     paddrBits: Int,
     busDataBits: Int,
     uartAddress: BigInt,
-    exitAddress: BigInt
+    exitAddress: BigInt,
+    mtimeAddress: BigInt,
+    mtimecmpAddress: BigInt
 ) {
   require(paddrBits > 0 && paddrBits <= 64, s"physical address width must be 1..64, got $paddrBits")
   require(Set(32, 64).contains(busDataBits), s"busDataBits must be 32 or 64, got $busDataBits")
   require(resetVector >= 0 && resetVector.bitLength <= paddrBits, "reset vector exceeds physical address width")
   require(uartAddress >= 0 && uartAddress.bitLength <= paddrBits, "UART address exceeds physical address width")
   require(exitAddress >= 0 && exitAddress.bitLength <= paddrBits, "exit address exceeds physical address width")
+  require(mtimeAddress >= 0 && mtimeAddress.bitLength <= paddrBits, "mtime address exceeds physical address width")
+  require(mtimecmpAddress >= 0 && mtimecmpAddress.bitLength <= paddrBits, "mtimecmp address exceeds physical address width")
+  require((mtimeAddress & 7) == 0, "mtime must be 64-bit aligned")
+  require((mtimecmpAddress & 7) == 0, "mtimecmp must be 64-bit aligned")
 
   val busBytes: Int = busDataBits / 8
 }
@@ -65,12 +71,17 @@ final case class CoreConfig(
 }
 
 object CoreProfiles {
+  private val mtimeAddress = BigInt("0200bff8", 16)
+  private val mtimecmpAddress = BigInt("02004000", 16)
+
   private val rv32Platform: PlatformConfig = PlatformConfig(
     resetVector = BigInt("80000000", 16),
     paddrBits = 32,
     busDataBits = 32,
     uartAddress = BigInt("10000000", 16),
-    exitAddress = BigInt("10000008", 16)
+    exitAddress = BigInt("10000008", 16),
+    mtimeAddress = mtimeAddress,
+    mtimecmpAddress = mtimecmpAddress
   )
 
   val rv32iMinimal: CoreConfig = CoreConfig(
@@ -107,7 +118,9 @@ object CoreProfiles {
       paddrBits = 64,
       busDataBits = 64,
       uartAddress = BigInt("10000000", 16),
-      exitAddress = BigInt("10000008", 16)
+      exitAddress = BigInt("10000008", 16),
+      mtimeAddress = mtimeAddress,
+      mtimecmpAddress = mtimecmpAddress
     )
   )
 }

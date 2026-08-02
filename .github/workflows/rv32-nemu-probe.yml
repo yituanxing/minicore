@@ -17,68 +17,76 @@ concurrency:
 jobs:
   difftest:
     name: GCC RV32I commit-level NEMU DiffTest
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 60
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Scala dependencies
-        uses: coursier/cache-action@v8
-        with:
-          job: rv32-nemu-difftest
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Install Java
-        uses: coursier/setup-action@v3
-        with:
-          jvm: temurin:21
-
-      - name: Install build dependencies
+      - name: Verify persistent runner toolchain
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential git python3 bison flex \
-            libreadline-dev libsdl2-dev zstd libzstd-dev \
-            file binutils verilator \
-            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+          set -euxo pipefail
+          test "$(stat -f -c %T .)" != "9p"
+          test "$(stat -f -c %T .)" != "drvfs"
           java -version
-          verilator --version
+          javac -version
+          git --version
+          python3 --version
+          g++ --version
+          test "$(cat "$HOME/.cache/aethercore/toolchains/verilator-5.024/.aethercore-source-revision")" = \
+            "522bead374d6b7b2adb316304126e5361b18bcf1"
+          test "$(readlink -f "$(command -v verilator)")" = \
+            "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin/verilator"
           riscv64-unknown-elf-gcc --version
+          riscv64-unknown-elf-objdump --version | head -n 1
+          command -v make curl git bison flex zstd file
 
       - name: Prepare Mill launcher
+        shell: bash
         run: |
+          set -euxo pipefail
           chmod +x mill
-          ./mill --version
+          timeout 600 ./mill --version
 
-      - name: Preserve frozen optimized RV32 NEMU reference
+      - name: Establish deterministic optimized RV32 NEMU reference
         shell: bash
         run: |
           mkdir -p build
           set -o pipefail
-          # The historical unstripped shared object contains its absolute build
-          # path. Reproduce PR #18 at the exact frozen path before moving its
-          # complete evidence aside for the precise reference build.
-          bash tools/probe_rv32_nemu_historical.sh \
+          bash tools/probe_rv32_nemu_deterministic.sh \
             "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-abi.log
-          grep -q '^reference_sha256=b064aec211ae22e872d8ab7a3705a2e354e0d968289dbb7880515710d9dd5eb7$' \
-            build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^status=PASS$' build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^reproducible=true$' build/rv32-nemu-probe/evidence/result.txt
           grep -q '^single_step=0$' build/rv32-nemu-probe/evidence/result.txt
           grep -q '^perf_opt=true$' build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^reference_sha256=0e9dc52aeb2f02c399beaa6c5415ff2f4b6c54cfc9aec84f5be0282fe608cd8a$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          grep '^reference_sha256=' build/rv32-nemu-probe/evidence/result.txt \
+            | tee build/optimized-reference-sha256.txt
           mv build/rv32-nemu-probe build/rv32-nemu-abi
 
       - name: Build exact frozen RV32 NEMU reference
         shell: bash
         run: |
           set -o pipefail
-          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_deterministic.sh \
             "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-probe.log
           grep -q '^CONFIG_ENABLE_INSTR_CNT=y$' \
             build/rv32-nemu-probe/evidence/generated.config
           grep -q '^# CONFIG_PERF_OPT is not set$' \
             build/rv32-nemu-probe/evidence/generated.config
+          grep -q '^reference_sha256=e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e$' \
+            build/rv32-nemu-probe/evidence/result.txt
           grep -q '^single_step=1$' \
             build/rv32-nemu-probe/evidence/result.txt
           grep -q '^perf_opt=false$' \
@@ -123,6 +131,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
+            build/optimized-reference-sha256.txt
             build/rv32-nemu-abi.log
             build/rv32-nemu-abi/evidence/
             build/rv32-nemu-probe.log
