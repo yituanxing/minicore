@@ -45,6 +45,15 @@ object MachineExceptionCode {
   val EnvironmentCallFromM: Int = 11
 }
 
+object MachineInterruptCode {
+  val Timer: Int = 7
+
+  def cause(xlen: Int, code: Int): BigInt = {
+    require(xlen == 32 || xlen == 64, s"interrupt XLEN must be 32 or 64, got $xlen")
+    (BigInt(1) << (xlen - 1)) | BigInt(code)
+  }
+}
+
 class TrapInfo(val xlen: Int) extends Bundle {
   require(xlen == 32 || xlen == 64, s"trap XLEN must be 32 or 64, got $xlen")
 
