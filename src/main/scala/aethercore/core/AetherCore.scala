@@ -180,6 +180,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(CsrOp.Set) { csrWriteData := csrReadData | csrOperand }
     is(CsrOp.Clear) { csrWriteData := csrReadData & ~csrOperand }
   }
+  val canonicalCsrWriteData = MachineCsrWarl.canonicalize(config.isa, csrAddr, csrWriteData)
   val csrException = csrInstruction && !csrLegal
 
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
@@ -288,7 +289,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       exMem.ctrl := idEx.ctrl
       exMem.csrWrite := idEx.valid && csrInstruction && csrWriteIntent && csrLegal && !idEx.exception
       exMem.csrAddr := csrAddr
-      exMem.csrData := csrWriteData
+      exMem.csrData := canonicalCsrWriteData
       exMem.exception := idEx.exception || csrException
 
       when(redirect) {
