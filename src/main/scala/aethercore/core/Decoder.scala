@@ -192,6 +192,9 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
           when(io.inst === "h00000073".U || io.inst === "h00100073".U) {
             c.illegal := false.B
             c.trap := true.B
+          }.elsewhen(io.inst === "h30200073".U && hasZicsr.B) {
+            c.illegal := false.B
+            c.mret := true.B
           }
         }
         is("b001".U) {
