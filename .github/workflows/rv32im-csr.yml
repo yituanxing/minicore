@@ -61,7 +61,7 @@ jobs:
         run: |
           mkdir -p build
           set -o pipefail
-          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_deterministic.sh \
             "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-probe.log
           grep -q '^reference_sha256=e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e$' \
