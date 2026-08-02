@@ -20,6 +20,12 @@ struct DifftestCommit {
   bool exception = false;
   std::uint64_t exceptionCause = 0;
   std::uint64_t exceptionValue = 0;
+
+  // An interrupt is taken after this normal instruction retires. interruptPc
+  // is the oldest younger instruction that must be replayed after MRET.
+  bool interrupt = false;
+  std::uint64_t interruptCause = 0;
+  std::uint64_t interruptPc = 0;
 };
 
 class NemuDifftest {
@@ -38,6 +44,7 @@ class NemuDifftest {
   std::uint64_t zicsrShadowSteps() const;
   std::uint64_t trapShadowSteps() const;
   std::uint64_t mretShadowSteps() const;
+  std::uint64_t interruptShadowSteps() const;
 
  private:
   class Impl;
