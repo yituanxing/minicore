@@ -5,7 +5,10 @@ import aethercore.common._
 import aethercore.config.{CoreConfig, CoreProfiles}
 import aethercore.core.AetherCore
 
-class AetherCoreSimTop(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
+class AetherCoreSimTop(
+    val config: CoreConfig = CoreProfiles.rv64imCurrent,
+    val stopOnTrap: Boolean = true
+) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
@@ -64,6 +67,11 @@ class AetherCoreSimTop(val config: CoreConfig = CoreProfiles.rv64imCurrent) exte
   io.exitValid := isExit
   io.exitCode := core.io.dmem.wdata
 
+  val observedTrap = RegInit(false.B)
+  when(core.io.commit.valid && core.io.commit.exception) {
+    observedTrap := true.B
+  }
+
   io.commit := core.io.commit
-  io.halted := core.io.halted
+  io.halted := core.io.halted || (if (stopOnTrap) observedTrap else false.B)
 }
