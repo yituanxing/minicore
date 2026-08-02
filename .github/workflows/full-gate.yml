@@ -74,6 +74,10 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate.sh rv32-timer
 
+      - name: RV32 timer-preemptive two-task scheduler
+        shell: bash
+        run: bash tools/ci/full_gate_scheduler.sh
+
       - name: RV64 compiler-produced corpus
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-compiled
@@ -109,6 +113,7 @@ jobs:
             echo '- one checkout and one persistent toolchain setup'
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
             echo '- fast architectural gates run before long software workloads'
+            echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -140,33 +145,3 @@ jobs:
             !build/**/rtl/**
             !build/**/nemu/**
             !build/upstream-src/**
-
-  legacy-check-contexts:
-    name: ${{ matrix.check }}
-    needs: full-gate
-    if: ${{ needs.full-gate.result == 'success' }}
-    runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        check:
-          - Chisel, Verilator and NEMU DiffTest
-          - GCC RV64IM workloads against Verilator and NEMU
-          - Pinned CoreMark against Verilator and NEMU
-          - GCC RV32I against RV32 Verilator top
-          - GCC RV32I commit-level NEMU DiffTest
-          - Pinned CoreMark on RV32IM
-          - Pinned Embench batch on RV32IM
-          - Pinned Embench batch 2 on RV32IM
-          - Pinned littlefs on RV32IM RAM flash
-          - Zicsr and machine CSRs on RV32IM
-          - Precise synchronous traps on RV32IM
-          - Precise Machine trap return on RV32IM
-          - Precise Machine timer interrupts on RV32IM
-    steps:
-      - name: Mirror consolidated result
-        shell: bash
-        run: |
-          echo 'consolidated full-gate result: success'
