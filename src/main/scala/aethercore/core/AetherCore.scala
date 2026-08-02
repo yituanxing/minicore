@@ -59,6 +59,7 @@ class MemWb(
   val csrWrite = Bool()
   val csrAddr = UInt(12.W)
   val csrData = UInt(xlen.W)
+  val mret = Bool()
   val trap = new TrapInfo(xlen)
 }
 
@@ -90,6 +91,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val csrFile = Module(new MachineCsrFile(config.isa))
 
   val takingTrap = memWb.valid && memWb.trap.valid
+  val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
 
   io.imem.addr := pc
   decoder.io.inst := ifId.inst
@@ -107,6 +109,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.trapPc := memWb.pc
   csrFile.io.trapCause := memWb.trap.cause
   csrFile.io.trapValue := memWb.trap.value
+  csrFile.io.trapReturn := takingMret
 
   val decodedImm = WireDefault(0.U(xlen.W))
   switch(decoder.io.ctrl.immSel) {
@@ -225,11 +228,11 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(MemSize.DWord) { storeMask := fullStoreMask }
   }
 
-  // A faulting instruction reports its trap from WB while a younger instruction
-  // may already occupy MEM. Suppress that younger request combinationally so no
-  // Store or MMIO side effect can escape in the trap-entry cycle.
+  // A trap or return reports from WB while a younger instruction may already
+  // occupy MEM. Suppress that younger request combinationally so no Store or
+  // MMIO side effect can escape in either architectural redirect cycle.
   io.dmem.valid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-    !exMem.trap.valid && !takingTrap
+    !exMem.trap.valid && !takingTrap && !takingMret
   io.dmem.write := exMem.ctrl.memWrite
   io.dmem.addr := exMem.result
   io.dmem.wdata := exMem.storeData
@@ -287,6 +290,12 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
+  }.elsewhen(takingMret) {
+    pc := csrFile.io.returnPc
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    memWb.valid := false.B
   }.elsewhen(memoryStall) {
     memWb.valid := false.B
 
@@ -312,6 +321,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     memWb.csrWrite := exMem.csrWrite
     memWb.csrAddr := exMem.csrAddr
     memWb.csrData := exMem.csrData
+    memWb.mret := exMem.ctrl.mret
     memWb.trap := exMem.trap
     when(memoryFault) {
       memWb.trap.valid := true.B

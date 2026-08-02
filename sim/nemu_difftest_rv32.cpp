@@ -30,6 +30,7 @@ constexpr std::uint32_t kLoadOpcode = 0x03U;
 constexpr std::uint32_t kStoreOpcode = 0x23U;
 constexpr std::uint32_t kEcall = 0x00000073U;
 constexpr std::uint32_t kEbreak = 0x00100073U;
+constexpr std::uint32_t kMret = 0x30200073U;
 
 constexpr std::uint32_t kInstructionAccessFault = 1U;
 constexpr std::uint32_t kIllegalInstruction = 2U;
@@ -206,6 +207,7 @@ class NemuDifftest::Impl {
     NemuState32 after{};
     bool zicsrStep = false;
     bool trapStep = false;
+    bool mretStep = false;
 
     if (commit.exception) {
       validateTrap(before, commit);
@@ -220,8 +222,13 @@ class NemuDifftest::Impl {
              hex32(imageInst) + " at pc=" + hex32(commitPc));
       }
 
+      mretStep = commit.inst == kMret;
       zicsrStep = isZicsrInstruction(commit.inst);
-      if (zicsrStep) {
+      if (mretStep) {
+        after = executeMret(before, commit);
+        regcpy_(&after, kToRef);
+        ++mretShadowSteps_;
+      } else if (zicsrStep) {
         after = executeZicsr(before, commit.inst);
         regcpy_(&after, kToRef);
         ++zicsrShadowSteps_;
@@ -255,6 +262,7 @@ class NemuDifftest::Impl {
            << "] mask=0x" << std::hex << static_cast<unsigned>(commit.memWmask) << std::dec;
     }
     if (zicsrStep) line << " reference=zicsr-shadow";
+    if (mretStep) line << " reference=mret-shadow";
     if (trapStep) {
       line << " reference=trap-shadow cause="
            << hex32(checkedAddress(commit.exceptionCause, "exception cause"))
@@ -269,6 +277,7 @@ class NemuDifftest::Impl {
   std::uint64_t checkedCommits() const { return checked_; }
   std::uint64_t zicsrShadowSteps() const { return zicsrShadowSteps_; }
   std::uint64_t trapShadowSteps() const { return trapShadowSteps_; }
+  std::uint64_t mretShadowSteps() const { return mretShadowSteps_; }
 
  private:
   static std::uint32_t checkedAddress(std::uint64_t value, const char* label) {
@@ -368,6 +377,23 @@ class NemuDifftest::Impl {
       writeCsr(address, newValue);
     }
 
+    return after;
+  }
+
+  NemuState32 executeMret(const NemuState32& before, const DifftestCommit& commit) {
+    if (commit.inst != kMret || commit.rdWrite || commit.memValid) {
+      fail("MRET shadow received an invalid architectural event");
+    }
+
+    machine_.mstatus =
+        (machine_.mstatus & ~kMstatusTrapMask) |
+        ((machine_.mstatus & kMstatusMpie) ? kMstatusMie : 0U) |
+        kMstatusMpie |
+        kMstatusMppMachine;
+
+    NemuState32 after = before;
+    after.pc = machine_.mepc;
+    after.gpr[0] = 0;
     return after;
   }
 
@@ -541,6 +567,7 @@ class NemuDifftest::Impl {
   std::uint64_t checked_ = 0;
   std::uint64_t zicsrShadowSteps_ = 0;
   std::uint64_t trapShadowSteps_ = 0;
+  std::uint64_t mretShadowSteps_ = 0;
 };
 
 NemuDifftest::NemuDifftest(const std::string& sharedObject, const std::string& imagePath,
@@ -555,3 +582,4 @@ void NemuDifftest::check(const DifftestCommit& commit) { impl_->check(commit); }
 std::uint64_t NemuDifftest::checkedCommits() const { return impl_->checkedCommits(); }
 std::uint64_t NemuDifftest::zicsrShadowSteps() const { return impl_->zicsrShadowSteps(); }
 std::uint64_t NemuDifftest::trapShadowSteps() const { return impl_->trapShadowSteps(); }
+std::uint64_t NemuDifftest::mretShadowSteps() const { return impl_->mretShadowSteps(); }
