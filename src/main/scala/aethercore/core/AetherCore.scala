@@ -23,7 +23,7 @@ class IdEx(val xlen: Int = 64) extends Bundle {
   val rs2Data = UInt(xlen.W)
   val imm = UInt(xlen.W)
   val ctrl = new ControlSignals
-  val exception = Bool()
+  val trap = new TrapInfo(xlen)
 }
 
 class ExMem(val xlen: Int = 64) extends Bundle {
@@ -37,7 +37,7 @@ class ExMem(val xlen: Int = 64) extends Bundle {
   val csrWrite = Bool()
   val csrAddr = UInt(12.W)
   val csrData = UInt(xlen.W)
-  val exception = Bool()
+  val trap = new TrapInfo(xlen)
 }
 
 class MemWb(
@@ -59,7 +59,7 @@ class MemWb(
   val csrWrite = Bool()
   val csrAddr = UInt(12.W)
   val csrData = UInt(xlen.W)
-  val exception = Bool()
+  val trap = new TrapInfo(xlen)
 }
 
 class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
@@ -83,25 +83,30 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val idEx = RegInit(0.U.asTypeOf(new IdEx(xlen)))
   val exMem = RegInit(0.U.asTypeOf(new ExMem(xlen)))
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
-  val haltedReg = RegInit(false.B)
 
   val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
   val csrFile = Module(new MachineCsrFile(config.isa))
 
+  val takingTrap = memWb.valid && memWb.trap.valid
+
   io.imem.addr := pc
   decoder.io.inst := ifId.inst
 
   registerFile.io.rs1Addr := decoder.io.rs1
   registerFile.io.rs2Addr := decoder.io.rs2
-  registerFile.io.writeEnable := memWb.valid && memWb.regWrite && !memWb.exception
+  registerFile.io.writeEnable := memWb.valid && memWb.regWrite && !memWb.trap.valid
   registerFile.io.rdAddr := memWb.rd
   registerFile.io.rdData := memWb.rdData
 
-  csrFile.io.writeEnable := memWb.valid && memWb.csrWrite && !memWb.exception
+  csrFile.io.writeEnable := memWb.valid && memWb.csrWrite && !memWb.trap.valid
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
+  csrFile.io.trapEnter := takingTrap
+  csrFile.io.trapPc := memWb.pc
+  csrFile.io.trapCause := memWb.trap.cause
+  csrFile.io.trapValue := memWb.trap.value
 
   val decodedImm = WireDefault(0.U(xlen.W))
   switch(decoder.io.ctrl.immSel) {
@@ -112,8 +117,31 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(ImmSel.J) { decodedImm := Immediate.j(ifId.inst, xlen) }
   }
 
-  val exMemForward = exMem.valid && exMem.ctrl.regWrite && !exMem.ctrl.memRead && exMem.rd =/= 0.U
-  val memWbForward = memWb.valid && memWb.regWrite && !memWb.exception && memWb.rd =/= 0.U
+  val instructionTrapValue =
+    if (xlen == 32) ifId.inst else Cat(0.U((xlen - 32).W), ifId.inst)
+  val decodedTrap = WireInit(0.U.asTypeOf(new TrapInfo(xlen)))
+  when(ifId.fault) {
+    decodedTrap.valid := true.B
+    decodedTrap.cause := MachineExceptionCode.InstructionAccessFault.U(xlen.W)
+    decodedTrap.value := ifId.pc
+  }.elsewhen(decoder.io.ctrl.illegal) {
+    decodedTrap.valid := true.B
+    decodedTrap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
+    decodedTrap.value := instructionTrapValue
+  }.elsewhen(decoder.io.ctrl.trap) {
+    decodedTrap.valid := true.B
+    when(ifId.inst === "h00100073".U) {
+      decodedTrap.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
+      decodedTrap.value := ifId.pc
+    }.otherwise {
+      decodedTrap.cause := MachineExceptionCode.EnvironmentCallFromM.U(xlen.W)
+      decodedTrap.value := 0.U
+    }
+  }
+
+  val exMemForward = exMem.valid && exMem.ctrl.regWrite && !exMem.ctrl.memRead &&
+    !exMem.trap.valid && exMem.rd =/= 0.U
+  val memWbForward = memWb.valid && memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
 
   val forwardedRs1 = Mux(
     exMemForward && exMem.rd === idEx.rs1,
@@ -161,10 +189,10 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.readAddr := csrAddr
 
   val csrReadData = Mux(
-    exMem.valid && exMem.csrWrite && !exMem.exception && exMem.csrAddr === csrAddr,
+    exMem.valid && exMem.csrWrite && !exMem.trap.valid && exMem.csrAddr === csrAddr,
     exMem.csrData,
     Mux(
-      memWb.valid && memWb.csrWrite && !memWb.exception && memWb.csrAddr === csrAddr,
+      memWb.valid && memWb.csrWrite && !memWb.trap.valid && memWb.csrAddr === csrAddr,
       memWb.csrData,
       csrFile.io.readData
     )
@@ -195,12 +223,11 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(MemSize.DWord) { storeMask := fullStoreMask }
   }
 
-  // A faulting instruction retires from WB while a younger instruction may
-  // already occupy MEM. Suppress that younger request combinationally so no
-  // store or MMIO side effect can escape in the exception-retirement cycle.
-  val retiringException = memWb.valid && memWb.exception
+  // A faulting instruction reports its trap from WB while a younger instruction
+  // may already occupy MEM. Suppress that younger request combinationally so no
+  // Store or MMIO side effect can escape in the trap-entry cycle.
   io.dmem.valid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-    !exMem.exception && !retiringException
+    !exMem.trap.valid && !takingTrap
   io.dmem.write := exMem.ctrl.memWrite
   io.dmem.addr := exMem.result
   io.dmem.wdata := exMem.storeData
@@ -230,6 +257,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   }
 
   val memoryStall = io.dmem.valid && !io.dmem.ready
+  val memoryFault = io.dmem.valid && io.dmem.fault
   val loadUseHazard = idEx.valid && idEx.ctrl.memRead && idEx.rd =/= 0.U && ifId.valid && (
     (decoder.io.ctrl.usesRs1 && decoder.io.rs1 === idEx.rd) ||
       (decoder.io.ctrl.usesRs2 && decoder.io.rs2 === idEx.rd)
@@ -239,84 +267,102 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   io.commit.pc := memWb.pc
   io.commit.inst := memWb.inst
   io.commit.rd := memWb.rd
-  io.commit.rdWrite := memWb.regWrite && !memWb.exception && memWb.rd =/= 0.U
+  io.commit.rdWrite := memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
   io.commit.rdData := memWb.rdData
   io.commit.memValid := memWb.memValid
   io.commit.memWrite := memWb.memWrite
   io.commit.memAddr := memWb.memAddr
   io.commit.memWdata := memWb.memWdata
   io.commit.memWmask := memWb.memWmask
-  io.commit.exception := memWb.exception
-  io.halted := haltedReg
+  io.commit.exception := memWb.trap.valid
+  io.commit.exceptionCause := memWb.trap.cause
+  io.commit.exceptionValue := memWb.trap.value
+  io.halted := false.B
 
-  when(memWb.valid && memWb.exception) {
-    haltedReg := true.B
-  }
+  when(takingTrap) {
+    pc := csrFile.io.trapVector
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    memWb.valid := false.B
+  }.elsewhen(memoryStall) {
+    memWb.valid := false.B
 
-  when(!haltedReg) {
-    when(memoryStall) {
-      memWb.valid := false.B
+    // MEM backpressure freezes ID/EX while the current WB result retires and
+    // its forwarding source disappears. Persist the values already selected
+    // by the forwarding network so the frozen EX instruction cannot fall back
+    // to stale register-file snapshots on the following cycle.
+    idEx.rs1Data := forwardedRs1
+    idEx.rs2Data := forwardedRs2
+  }.otherwise {
+    memWb.valid := exMem.valid
+    memWb.pc := exMem.pc
+    memWb.inst := exMem.inst
+    memWb.rd := exMem.rd
+    memWb.rdData := Mux(exMem.ctrl.memRead, loadData, exMem.result)
+    memWb.regWrite := exMem.ctrl.regWrite
+    memWb.memValid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
+      !exMem.trap.valid && !memoryFault
+    memWb.memWrite := exMem.ctrl.memWrite
+    memWb.memAddr := exMem.result
+    memWb.memWdata := exMem.storeData
+    memWb.memWmask := storeMask
+    memWb.csrWrite := exMem.csrWrite
+    memWb.csrAddr := exMem.csrAddr
+    memWb.csrData := exMem.csrData
+    memWb.trap := exMem.trap
+    when(memoryFault) {
+      memWb.trap.valid := true.B
+      memWb.trap.cause := Mux(
+        exMem.ctrl.memRead,
+        MachineExceptionCode.LoadAccessFault.U(xlen.W),
+        MachineExceptionCode.StoreAccessFault.U(xlen.W)
+      )
+      memWb.trap.value := exMem.result
+    }
 
-      // MEM backpressure freezes ID/EX while the current WB result retires and
-      // its forwarding source disappears. Persist the values already selected
-      // by the forwarding network so the frozen EX instruction cannot fall
-      // back to stale register-file snapshots on the following cycle.
-      idEx.rs1Data := forwardedRs1
-      idEx.rs2Data := forwardedRs2
+    exMem.valid := idEx.valid
+    exMem.pc := idEx.pc
+    exMem.inst := idEx.inst
+    exMem.rd := idEx.rd
+    exMem.result := exResult
+    exMem.storeData := forwardedRs2
+    exMem.ctrl := idEx.ctrl
+    exMem.csrWrite := idEx.valid && csrInstruction && csrWriteIntent && csrLegal && !idEx.trap.valid
+    exMem.csrAddr := csrAddr
+    exMem.csrData := canonicalCsrWriteData
+    exMem.trap := idEx.trap
+    when(csrException && !idEx.trap.valid) {
+      exMem.trap.valid := true.B
+      exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
+      exMem.trap.value :=
+        if (xlen == 32) idEx.inst else Cat(0.U((xlen - 32).W), idEx.inst)
+    }
+
+    when(redirect) {
+      pc := redirectTarget
+      ifId.valid := false.B
+      idEx.valid := false.B
+    }.elsewhen(loadUseHazard) {
+      idEx.valid := false.B
     }.otherwise {
-      memWb.valid := exMem.valid
-      memWb.pc := exMem.pc
-      memWb.inst := exMem.inst
-      memWb.rd := exMem.rd
-      memWb.rdData := Mux(exMem.ctrl.memRead, loadData, exMem.result)
-      memWb.regWrite := exMem.ctrl.regWrite
-      memWb.memValid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite)
-      memWb.memWrite := exMem.ctrl.memWrite
-      memWb.memAddr := exMem.result
-      memWb.memWdata := exMem.storeData
-      memWb.memWmask := storeMask
-      memWb.csrWrite := exMem.csrWrite
-      memWb.csrAddr := exMem.csrAddr
-      memWb.csrData := exMem.csrData
-      memWb.exception := exMem.exception || (io.dmem.valid && io.dmem.fault)
+      idEx.valid := ifId.valid
+      idEx.pc := ifId.pc
+      idEx.inst := ifId.inst
+      idEx.rs1 := decoder.io.rs1
+      idEx.rs2 := decoder.io.rs2
+      idEx.rd := decoder.io.rd
+      idEx.rs1Data := registerFile.io.rs1Data
+      idEx.rs2Data := registerFile.io.rs2Data
+      idEx.imm := decodedImm
+      idEx.ctrl := decoder.io.ctrl
+      idEx.trap := decodedTrap
 
-      exMem.valid := idEx.valid
-      exMem.pc := idEx.pc
-      exMem.inst := idEx.inst
-      exMem.rd := idEx.rd
-      exMem.result := exResult
-      exMem.storeData := forwardedRs2
-      exMem.ctrl := idEx.ctrl
-      exMem.csrWrite := idEx.valid && csrInstruction && csrWriteIntent && csrLegal && !idEx.exception
-      exMem.csrAddr := csrAddr
-      exMem.csrData := canonicalCsrWriteData
-      exMem.exception := idEx.exception || csrException
-
-      when(redirect) {
-        pc := redirectTarget
-        ifId.valid := false.B
-        idEx.valid := false.B
-      }.elsewhen(loadUseHazard) {
-        idEx.valid := false.B
-      }.otherwise {
-        idEx.valid := ifId.valid
-        idEx.pc := ifId.pc
-        idEx.inst := ifId.inst
-        idEx.rs1 := decoder.io.rs1
-        idEx.rs2 := decoder.io.rs2
-        idEx.rd := decoder.io.rd
-        idEx.rs1Data := registerFile.io.rs1Data
-        idEx.rs2Data := registerFile.io.rs2Data
-        idEx.imm := decodedImm
-        idEx.ctrl := decoder.io.ctrl
-        idEx.exception := ifId.fault || decoder.io.ctrl.illegal || decoder.io.ctrl.trap
-
-        ifId.valid := true.B
-        ifId.pc := pc
-        ifId.inst := io.imem.inst
-        ifId.fault := io.imem.fault
-        pc := pc + 4.U
-      }
+      ifId.valid := true.B
+      ifId.pc := pc
+      ifId.inst := io.imem.inst
+      ifId.fault := io.imem.fault
+      pc := pc + 4.U
     }
   }
 }
