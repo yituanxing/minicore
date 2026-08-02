@@ -5,25 +5,33 @@ import chisel3.util.log2Ceil
 final case class IsaConfig(
     xlen: Int,
     extensions: Set[Char],
-    privilegeModes: Set[Char]
+    privilegeModes: Set[Char],
+    zExtensions: Set[String] = Set.empty
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
   require(privilegeModes.contains('M'), "machine mode is required")
+  require(
+    zExtensions.forall(name => name.startsWith("Z") && name.length > 1),
+    s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
+  )
 
   val xBytes: Int = xlen / 8
   val shiftBits: Int = log2Ceil(xlen)
   val hasM: Boolean = extensions.contains('M')
   val hasA: Boolean = extensions.contains('A')
   val hasC: Boolean = extensions.contains('C')
+  val hasZicsr: Boolean = zExtensions.contains("Zicsr")
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
   val hasWordOps: Boolean = xlen == 64
 
   val march: String = {
     val ordered = Seq('I', 'M', 'A', 'F', 'D', 'C')
-    val suffix = ordered.filter(extensions.contains).map(_.toLower).mkString
-    s"rv$xlen$suffix"
+    val baseSuffix = ordered.filter(extensions.contains).map(_.toLower).mkString
+    val multiLetterSuffix = zExtensions.toSeq.sorted.map(_.toLowerCase).mkString("_")
+    if (multiLetterSuffix.isEmpty) s"rv$xlen$baseSuffix"
+    else s"rv$xlen${baseSuffix}_$multiLetterSuffix"
   }
 
   val mabi: String = xlen match {
@@ -80,7 +88,8 @@ object CoreProfiles {
     isa = IsaConfig(
       xlen = 32,
       extensions = Set('I', 'M'),
-      privilegeModes = Set('M')
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
     ),
     platform = rv32Platform
   )
@@ -90,7 +99,8 @@ object CoreProfiles {
     isa = IsaConfig(
       xlen = 64,
       extensions = Set('I', 'M'),
-      privilegeModes = Set('M')
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
     ),
     platform = PlatformConfig(
       resetVector = BigInt("80000000", 16),
