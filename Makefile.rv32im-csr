@@ -23,6 +23,7 @@ workload:
 runner-source:
 	mkdir -p $(BUILD_DIR)
 	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); old="if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits();"; new="if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits() << \", zicsr-shadow=\" << difftest->zicsrShadowSteps();"; assert old in s; p.write_text(s.replace(old, new, 1))'
 
 sim: rtl runner-source
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM SystemVerilog files in $(RTL_DIR)"; exit 1; }
