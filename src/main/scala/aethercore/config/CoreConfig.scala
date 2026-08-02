@@ -105,6 +105,17 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  val rv32imuSoftware: CoreConfig = CoreConfig(
+    name = "rv32imu-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
   val rv64imCurrent: CoreConfig = CoreConfig(
     name = "rv64im-current",
     isa = IsaConfig(
