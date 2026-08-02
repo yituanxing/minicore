@@ -44,7 +44,7 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "decode all register and immediate Zicsr forms" in {
+  it should "decode all register and immediate Zicsr forms plus MRET" in {
     simulate(new Decoder(CoreProfiles.rv32imSoftware.isa)) { dut =>
       val cases = Seq(
         (csr(0x340, 2, 1, 3), CsrOp.Write, false, true),
@@ -64,10 +64,17 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.ctrl.csrUseImm.expect(immediate.B)
         dut.io.ctrl.usesRs1.expect(usesRs1.B)
       }
+
+      dut.io.inst.poke("h30200073".U)
+      dut.io.ctrl.illegal.expect(false.B)
+      dut.io.ctrl.mret.expect(true.B)
+      dut.io.ctrl.trap.expect(false.B)
+      dut.io.ctrl.regWrite.expect(false.B)
+      dut.io.ctrl.memWrite.expect(false.B)
     }
   }
 
-  it should "exclude RV64-only encodings and Zicsr from a plain RV32I profile" in {
+  it should "exclude RV64-only encodings, Zicsr and MRET from a plain RV32I profile" in {
     val rv32i = IsaConfig(
       xlen = 32,
       extensions = Set('I'),
@@ -99,6 +106,10 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
       dut.io.inst.poke(csr(0x340, 1, 1, 2).U)
       dut.io.ctrl.illegal.expect(true.B)
+
+      dut.io.inst.poke("h30200073".U)
+      dut.io.ctrl.illegal.expect(true.B)
+      dut.io.ctrl.mret.expect(false.B)
     }
   }
 
