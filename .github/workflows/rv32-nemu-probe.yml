@@ -68,6 +68,8 @@ jobs:
           grep -q '^reproducible=true$' build/rv32-nemu-probe/evidence/result.txt
           grep -q '^single_step=0$' build/rv32-nemu-probe/evidence/result.txt
           grep -q '^perf_opt=true$' build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^reference_sha256=0e9dc52aeb2f02c399beaa6c5415ff2f4b6c54cfc9aec84f5be0282fe608cd8a$' \
+            build/rv32-nemu-probe/evidence/result.txt
           grep '^reference_sha256=' build/rv32-nemu-probe/evidence/result.txt \
             | tee build/optimized-reference-sha256.txt
           mv build/rv32-nemu-probe build/rv32-nemu-abi
