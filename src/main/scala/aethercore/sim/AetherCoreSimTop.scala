@@ -1,6 +1,7 @@
 package aethercore.sim
 
 import chisel3._
+import chisel3.util.Cat
 import aethercore.common._
 import aethercore.config.{CoreConfig, CoreProfiles}
 import aethercore.core.AetherCore
