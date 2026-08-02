@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     name: Chisel, Verilator and NEMU DiffTest
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
 
     steps:
@@ -40,8 +40,8 @@ jobs:
 
       - name: Install native dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends \
             verilator make g++ python3 curl git bison flex \
             libreadline-dev libsdl2-dev zstd libzstd-dev
           java -version
