@@ -106,7 +106,7 @@ jobs:
           status=$?
           set -e
           test "$status" -ne 0
-          grep -q 'RV32 DiffTest mismatch after 9 matched commits' \
+          grep -q 'RV32 DiffTest mismatch after 9 matched events' \
             build/rv32im-csr/csr-negative.log
           grep -q 'x31' build/rv32im-csr/csr-negative.log
 
