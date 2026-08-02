@@ -56,6 +56,28 @@ char *strchr(const char *text, int value) {
   }
 }
 
+size_t strspn(const char *text, const char *accept) {
+  size_t length = 0;
+  while (text[length] != '\0') {
+    const char *candidate = accept;
+    while (*candidate != '\0' && *candidate != text[length]) ++candidate;
+    if (*candidate == '\0') break;
+    ++length;
+  }
+  return length;
+}
+
+size_t strcspn(const char *text, const char *reject) {
+  size_t length = 0;
+  while (text[length] != '\0') {
+    const char *candidate = reject;
+    while (*candidate != '\0' && *candidate != text[length]) ++candidate;
+    if (*candidate != '\0') break;
+    ++length;
+  }
+  return length;
+}
+
 size_t strlen(const char *text) {
   size_t length = 0;
   while (text[length] != '\0') ++length;
