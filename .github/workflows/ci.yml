@@ -26,6 +26,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
       - name: Verify persistent runner toolchain
         shell: bash
         run: |
@@ -37,7 +41,8 @@ jobs:
           git --version
           python3 --version
           g++ --version
-          verilator --version
+          verilator --version | tee /tmp/aethercore-verilator-version.txt
+          grep -q 'Verilator 5.024' /tmp/aethercore-verilator-version.txt
           riscv64-unknown-elf-gcc --version
           command -v make curl bison flex zstd
 
