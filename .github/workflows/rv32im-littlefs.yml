@@ -71,12 +71,31 @@ jobs:
         run: |
           make -f Makefile.rv32im-littlefs workload
           manifest=build/rv32im-littlefs/software/manifest.txt
+          symbols=build/rv32im-littlefs/software/littlefs-basic.nm
           grep -q '^source=littlefs@6cb4e86540eca0d9ba62500a298385c9d863c8be$' "$manifest"
           grep -q '^march=rv32im$' "$manifest"
           grep -q '^mabi=ilp32$' "$manifest"
+          grep -q '^optimization=O2$' "$manifest"
           grep -q '^lfs_no_malloc=1$' "$manifest"
+          grep -q '^lfs_no_assert=1$' "$manifest"
+          grep -q '^lfs_no_debug=1$' "$manifest"
+          grep -q '^lfs_no_warn=1$' "$manifest"
+          grep -q '^lfs_no_error=1$' "$manifest"
+          grep -q '^flash_block_size=256$' "$manifest"
+          grep -q '^flash_block_count=128$' "$manifest"
           grep -q '^flash_bytes=32768$' "$manifest"
+          grep -q '^read_size=16$' "$manifest"
+          grep -q '^prog_size=16$' "$manifest"
+          grep -q '^cache_size=64$' "$manifest"
+          grep -q '^lookahead_size=16$' "$manifest"
           grep -q '^inline_files=disabled$' "$manifest"
+          grep -q '^binary_bytes=36140$' "$manifest"
+          grep -q '^binary_words=9035$' "$manifest"
+          grep -q '^binary_sha256=0d49f8ac86a400c8e54831e9418c51c0d5093f66edf9bfa2c628a5b38f0e230c$' "$manifest"
+          for symbol in lfs_format lfs_mount lfs_file_write lfs_file_truncate lfs_rename lfs_dir_read lfs_unmount; do
+            grep -Eq "[[:space:]]${symbol}$" "$symbols"
+          done
+          ! grep -Eq '[[:space:]](malloc|calloc|realloc|free)$' "$symbols"
 
       - name: Run littlefs DiffTest
         shell: bash
@@ -84,8 +103,9 @@ jobs:
           set -o pipefail
           make -f Makefile.rv32im-littlefs run RV32_NEMU_SO="$RV32_NEMU_SO" \
             2>&1 | tee build/rv32im-littlefs/littlefs-ci.log
-          grep -q '^LFS_PASS ' build/rv32im-littlefs/littlefs.log
-          grep -q 'PASS: self-check exit=0' build/rv32im-littlefs/littlefs.log
+          log=build/rv32im-littlefs/littlefs.log
+          grep -Fx 'LFS_PASS read_ops=528 prog_ops=26 erase_ops=9 sync_ops=13 read_bytes=14304 prog_bytes=1392 used_blocks=8 image_crc32=ccb1e5e1' "$log"
+          grep -Fx 'PASS: self-check exit=0 after 6253575 cycles, 4819485 committed instructions, stall-period=5, difftest=4819485' "$log"
 
       - name: Upload littlefs evidence
         if: always()
