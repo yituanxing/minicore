@@ -46,6 +46,15 @@ void *memchr(const void *ptr, int value, size_t count) {
   return NULL;
 }
 
+char *strchr(const char *text, int value) {
+  const char target = (char)value;
+  for (;;) {
+    if (*text == target) return (char *)text;
+    if (*text == '\0') return NULL;
+    ++text;
+  }
+}
+
 size_t strlen(const char *text) {
   size_t length = 0;
   while (text[length] != '\0') ++length;
