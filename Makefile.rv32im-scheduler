@@ -1,0 +1,88 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/rv32im-scheduler
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+SOFTWARE_DIR := $(BUILD_DIR)/software
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_scheduler.cpp
+GENERATED_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32_scheduler.cpp
+TOP := AetherCoreRV32IMTrapSimTop
+VERILATOR ?= verilator
+RV32_NEMU_SO ?=
+STALL_PERIODS := 0 3 4 5 7 11
+
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+
+.PHONY: all rtl software runner-source difftest-source sim run local-reference trace context-corruption-probe clean
+
+all: run
+
+rtl:
+	./mill aethercore.runMain aethercore.ElaborateRV32IMTrap --target-dir $(RTL_DIR)
+
+software:
+	python3 tools/make_rv32im_preemptive_scheduler.py $(SOFTWARE_DIR)
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMTrapSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  commit.interrupt = top.io_commit_interrupt;\n  commit.interruptCause = static_cast<std::uint64_t>(top.io_commit_interruptCause);\n  commit.interruptPc = static_cast<std::uint64_t>(top.io_commit_interruptPc);\n  return commit;"; c="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits();"; d="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits() << \", zicsr-shadow=\" << difftest->zicsrShadowSteps() << \", mret-shadow=\" << difftest->mretShadowSteps() << \", interrupt-shadow=\" << difftest->interruptShadowSteps();"; assert a in s and c in s; p.write_text(s.replace(a,b,1).replace(c,d,1))'
+
+difftest-source:
+	python3 tools/make_rv32im_scheduler_difftest.py \
+		sim/nemu_difftest_rv32_timer.cpp $(GENERATED_DIFFTEST)
+
+sim: rtl runner-source difftest-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM scheduler SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) \
+		$(abspath $(GENERATED_DIFFTEST))
+
+run: sim software
+	@test -n "$(RV32_NEMU_SO)" || { echo "ERROR: set RV32_NEMU_SO to the exact RV32 NEMU reference"; exit 1; }
+	@test -f "$(RV32_NEMU_SO)" || { echo "ERROR: RV32 NEMU reference not found: $(RV32_NEMU_SO)"; exit 1; }
+	mkdir -p $(BUILD_DIR)/logs
+	@for stall in $(STALL_PERIODS); do \
+		echo "== RV32IM preemptive scheduler: stall=$$stall =="; \
+		args=""; \
+		if [[ "$$stall" != "0" ]]; then args="--stall-period $$stall"; fi; \
+		$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/preemptive-scheduler.bin \
+			--max-cycles 30000 --self-check-exit $$args \
+			--difftest "$(RV32_NEMU_SO)" \
+			2>&1 | tee $(BUILD_DIR)/logs/stall-$$stall.log; \
+	done
+
+local-reference: sim software
+	bash tools/run_rv32im_scheduler_reference_shim.sh \
+		$(OBJ_DIR)/V$(TOP) \
+		$(SOFTWARE_DIR)/preemptive-scheduler.bin \
+		$(BUILD_DIR)/local-reference
+
+trace: sim software
+	mkdir -p $(BUILD_DIR)/logs $(BUILD_DIR)/evidence
+	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/preemptive-scheduler.bin \
+		--max-cycles 30000 --self-check-exit --stall-period 5 --trace \
+		2>&1 | tee $(BUILD_DIR)/logs/trace-stall-5.log
+	python3 tools/check_rv32im_scheduler_vcd.py \
+		build/aethercore.vcd $(BUILD_DIR)/evidence/interrupts.txt
+
+context-corruption-probe: sim software
+	mkdir -p $(BUILD_DIR)/logs
+	python3 tools/corrupt_rv32im_scheduler_context.py \
+		$(SOFTWARE_DIR)/preemptive-scheduler.bin \
+		$(SOFTWARE_DIR)/preemptive-scheduler-corrupt-x8.bin
+	@set +e; \
+	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/preemptive-scheduler-corrupt-x8.bin \
+		--max-cycles 10000 --self-check-exit --stall-period 5 \
+		> $(BUILD_DIR)/logs/context-corruption.log 2>&1; \
+	status=$$?; \
+	set -e; \
+	test "$$status" -eq 12; \
+	grep -q '^FAIL: self-check program returned code 12$$' \
+		$(BUILD_DIR)/logs/context-corruption.log
+
+clean:
+	rm -rf $(BUILD_DIR)
