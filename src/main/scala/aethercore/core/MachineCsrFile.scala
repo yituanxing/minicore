@@ -44,10 +44,12 @@ object MachineCsrWarl {
 
 class MachineCsrFile(val isa: IsaConfig) extends Module {
   private val xlen = isa.xlen
+  private val allBits = (BigInt(1) << xlen) - 1
   private val mstatusMie = BigInt(1) << 3
   private val mstatusMpie = BigInt(1) << 7
   private val mstatusMpp = BigInt(3) << 11
   private val mstatusTrapClearMask = mstatusMie | mstatusMpie | mstatusMpp
+  private val mstatusTrapPreserveMask = allBits & ~mstatusTrapClearMask
 
   private val misaValue = {
     val mxl = if (xlen == 32) BigInt(1) else BigInt(2)
@@ -128,7 +130,7 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val canonicalTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
   val trapMstatus =
-    (mstatus & (~mstatusTrapClearMask).U(xlen.W)) |
+    (mstatus & mstatusTrapPreserveMask.U(xlen.W)) |
       (mstatus(3).asUInt << 7) |
       mstatusMpp.U(xlen.W)
 
