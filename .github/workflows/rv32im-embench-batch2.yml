@@ -70,14 +70,23 @@ jobs:
         shell: bash
         run: |
           make -f Makefile.rv32im-embench-batch2 workload
-          grep -q '^source=embench-iot@09c2ed8c3b7008c95d08b038de4a3f6dc103ed70$' \
-            build/rv32im-embench-batch2/software/batch.txt
-          grep -q '^benchmarks=aha-mont64 huffbench slre wikisort$' \
-            build/rv32im-embench-batch2/software/batch.txt
-          grep -q '^local_scale_factor=1$' \
-            build/rv32im-embench-batch2/software/batch.txt
+          metadata=build/rv32im-embench-batch2/software/batch.txt
+          manifest=build/rv32im-embench-batch2/software/manifest.tsv
+          grep -q '^source=embench-iot@09c2ed8c3b7008c95d08b038de4a3f6dc103ed70$' "$metadata"
+          grep -q '^benchmarks=aha-mont64 huffbench slre wikisort$' "$metadata"
+          grep -q '^march=rv32im$' "$metadata"
+          grep -q '^mabi=ilp32$' "$metadata"
+          grep -q '^optimization=O2$' "$metadata"
+          grep -q '^warmup_heat=0$' "$metadata"
+          grep -q '^global_scale_factor=1$' "$metadata"
+          grep -q '^local_scale_factor=1$' "$metadata"
           test "$(grep -h '^#define LOCAL_SCALE_FACTOR 1$' \
             build/rv32im-embench-batch2/software/scaled-src/*/*.c | wc -l)" -eq 4
+          grep -Fx $'aha-mont64\t2392\t598\t4e3013930725f8b6338b644ba7f08bac70bc4502a7129a22212e58162c8e617f\t1' "$manifest"
+          grep -Fx $'huffbench\t3512\t878\ta5bed4cce883ffc0ebc4f2496e3fa10d36386122ffee1f269ce72a30a4bdd8f0\t1' "$manifest"
+          grep -Fx $'slre\t4770\t1193\tfe902482d8596165198fbce4bbe6f63f61507df607015700b1ecffe4ed61b929\t1' "$manifest"
+          grep -Fx $'wikisort\t12592\t3148\t02f68287d47eaa7e1a00ba7ced3ceda0ef74096e5014d6d842992f5e51aa668a\t1' "$manifest"
+          grep -q '<sqrt>:' build/rv32im-embench-batch2/software/wikisort.dis
 
       - name: Run Embench batch 2 DiffTest
         shell: bash
@@ -85,10 +94,12 @@ jobs:
           set -o pipefail
           make -f Makefile.rv32im-embench-batch2 run RV32_NEMU_SO="$RV32_NEMU_SO" \
             2>&1 | tee build/rv32im-embench-batch2/embench-batch2.log
-          test "$(grep -c 'PASS: self-check exit=0' build/rv32im-embench-batch2/results.tsv)" -eq 4
-          for benchmark in aha-mont64 huffbench slre wikisort; do
-            grep -q "^${benchmark}[[:space:]]" build/rv32im-embench-batch2/results.tsv
-          done
+          results=build/rv32im-embench-batch2/results.tsv
+          test "$(grep -c 'PASS: self-check exit=0' "$results")" -eq 4
+          grep -Fx $'aha-mont64\tPASS: self-check exit=0 after 12667 cycles, 10885 committed instructions, stall-period=5, difftest=10885' "$results"
+          grep -Fx $'huffbench\tPASS: self-check exit=0 after 357646 cycles, 257617 committed instructions, stall-period=5, difftest=257617' "$results"
+          grep -Fx $'slre\tPASS: self-check exit=0 after 31361 cycles, 23049 committed instructions, stall-period=5, difftest=23049' "$results"
+          grep -Fx $'wikisort\tPASS: self-check exit=0 after 1213171 cycles, 853344 committed instructions, stall-period=5, difftest=853344' "$results"
 
       - name: Upload Embench batch 2 evidence
         if: always()
