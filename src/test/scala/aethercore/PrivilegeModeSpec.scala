@@ -57,6 +57,15 @@ class PrivilegeModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "declare the U privilege extension in misa" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imuSoftware.isa)) { dut =>
+      initialize(dut)
+      read(dut, MachineCsrAddress.Misa) shouldBe BigInt("40101100", 16)
+      dut.io.readImplemented.expect(true.B)
+      dut.io.readWritable.expect(false.B)
+    }
+  }
+
   it should "enter User mode with MRET and stack User privilege on a trap" in {
     simulate(new MachineCsrFile(CoreProfiles.rv32imuSoftware.isa)) { dut =>
       initialize(dut)
