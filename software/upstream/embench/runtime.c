@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include <stddef.h>
+#include "math.h"
 #include "string.h"
 #include "stdlib.h"
 
@@ -96,3 +97,27 @@ char *strncpy(char *dest, const char *src, size_t count) {
 
 int abs(int value) { return value < 0 ? -value : value; }
 long labs(long value) { return value < 0 ? -value : value; }
+
+/* WikiSort passes a small non-negative integer and immediately converts the
+ * result back to long. Keep this freestanding implementation deliberately
+ * narrow while still exercising GCC's RV32 soft-float conversion helpers. */
+double sqrt(double value) {
+  if (value <= 0.0) return 0.0;
+
+  unsigned long input = (unsigned long)value;
+  unsigned long root = 0;
+  unsigned long bit = 1UL << 30;
+
+  while (bit > input) bit >>= 2;
+  while (bit != 0) {
+    if (input >= root + bit) {
+      input -= root + bit;
+      root = (root >> 1) + bit;
+    } else {
+      root >>= 1;
+    }
+    bit >>= 2;
+  }
+
+  return (double)root;
+}
