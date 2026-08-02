@@ -90,12 +90,15 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
 
   private val misaValue = {
     val mxl = if (xlen == 32) BigInt(1) else BigInt(2)
-    val extensionBits = isa.extensions.foldLeft(BigInt(0)) { (bits, extension) =>
+    val instructionExtensionBits = isa.extensions.foldLeft(BigInt(0)) { (bits, extension) =>
       val index = extension.toUpper - 'A'
       require(index >= 0 && index < 26, s"unsupported misa extension name: $extension")
       bits | (BigInt(1) << index)
     }
-    (mxl << (xlen - 2)) | extensionBits
+    val privilegeExtensionBits =
+      (if (isa.hasS) BigInt(1) << ('S' - 'A') else BigInt(0)) |
+        (if (isa.hasU) BigInt(1) << ('U' - 'A') else BigInt(0))
+    (mxl << (xlen - 2)) | instructionExtensionBits | privilegeExtensionBits
   }
 
   val io = IO(new Bundle {
