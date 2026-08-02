@@ -66,14 +66,19 @@ jobs:
           test -n "$reference_so"
           echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
 
-      - name: Build RV32IM timer workloads
+      - name: Build frozen RV32IM timer workloads
         shell: bash
         run: |
           make -f Makefile.rv32im-timer workloads
           manifest=build/rv32im-timer/software/manifest.txt
-          test "$(wc -l < "$manifest")" -eq 4
+          diff -u <(cat <<'EOF'
+          basic 452 113 511071123de99c792c16a934b6e92af9325443c3e8ad3456f5f5db23e1f54f4b
+          global-mask 472 118 c58fec4382886f409f81f8df5347bee33a129e934571a308195e61e985c22a85
+          source-mask 472 118 f96f1214aaa25f2e2ed6d920707b8db948deb0c17ba748c5108a224ad8ab76a0
+          double 480 120 7935973f61c7a8daf47b9864ba304a7acb4581a0dd9f8b2140713fb0ceb7c28e
+          EOF
+          ) "$manifest"
           for name in basic global-mask source-mask double; do
-            grep -q "^$name " "$manifest"
             grep -q '<trap_handler>:' "build/rv32im-timer/software/$name.dis"
             grep -q '30200073.*mret' "build/rv32im-timer/software/$name.dis"
             grep -q '304.*csrw.*mie' "build/rv32im-timer/software/$name.dis"
@@ -81,18 +86,120 @@ jobs:
             grep -q '344.*csrr.*mip' "build/rv32im-timer/software/$name.dis"
           done
 
-      - name: Run Machine timer DiffTest batch
+      - name: Run frozen Machine timer DiffTest batch
         shell: bash
         run: |
           set -o pipefail
           make -f Makefile.rv32im-timer run RV32_NEMU_SO="$RV32_NEMU_SO" \
             2>&1 | tee build/rv32im-timer/timer-ci.log
-          for name in basic global-mask source-mask; do
-            grep -q '^PASS: self-check exit=0 ' "build/rv32im-timer/logs/$name.log"
-            grep -q 'interrupt-shadow=1$' "build/rv32im-timer/logs/$name.log"
-          done
-          grep -q '^PASS: self-check exit=0 ' build/rv32im-timer/logs/double.log
-          grep -q 'interrupt-shadow=2$' build/rv32im-timer/logs/double.log
+          grep -q '^PASS: self-check exit=0 after 311 cycles, 150 committed instructions, stall-period=5, difftest=150, zicsr-shadow=16, mret-shadow=1, interrupt-shadow=1$' build/rv32im-timer/logs/basic.log
+          grep -q '^PASS: self-check exit=0 after 622 cycles, 341 committed instructions, stall-period=5, difftest=341, zicsr-shadow=17, mret-shadow=1, interrupt-shadow=1$' build/rv32im-timer/logs/global-mask.log
+          grep -q '^PASS: self-check exit=0 after 622 cycles, 341 committed instructions, stall-period=5, difftest=341, zicsr-shadow=17, mret-shadow=1, interrupt-shadow=1$' build/rv32im-timer/logs/source-mask.log
+          grep -q '^PASS: self-check exit=0 after 600 cycles, 341 committed instructions, stall-period=5, difftest=341, zicsr-shadow=23, mret-shadow=2, interrupt-shadow=2$' build/rv32im-timer/logs/double.log
+
+      - name: Freeze the first precise interrupt boundary
+        shell: bash
+        run: |
+          mkdir -p build/rv32im-timer/evidence build
+          build/rv32im-timer/obj/VAetherCoreRV32IMTrapSimTop \
+            build/rv32im-timer/software/basic.bin \
+            --max-cycles 12000 --self-check-exit --stall-period 5 \
+            --difftest "$RV32_NEMU_SO" --trace \
+            > build/rv32im-timer/basic-trace.log 2>&1
+          python3 - <<'PY'
+          from pathlib import Path
+
+          vcd = Path('build/aethercore.vcd')
+          text = vcd.read_text(errors='strict').splitlines()
+          names = {
+              'clock': 'io_commit_valid',
+              'valid': 'io_commit_valid',
+              'interrupt': 'io_commit_interrupt',
+              'cause': 'io_commit_interruptCause',
+              'epc': 'io_commit_interruptPc',
+              'pc': 'io_commit_pc',
+          }
+          ids = {}
+          clock_id = None
+          reset_id = None
+          for line in text:
+              parts = line.split()
+              if len(parts) >= 5 and parts[0] == '$var':
+                  ident, name = parts[3], parts[4]
+                  if name == 'clock' and clock_id is None:
+                      clock_id = ident
+                  if name == 'reset' and reset_id is None:
+                      reset_id = ident
+                  for key, wanted in names.items():
+                      if name == wanted and key not in ids:
+                          ids[key] = ident
+              if line == '$enddefinitions $end':
+                  break
+          required = {'valid', 'interrupt', 'cause', 'epc', 'pc'}
+          assert clock_id and reset_id and required <= ids.keys(), (clock_id, reset_id, ids)
+          state = {clock_id: '0', reset_id: '1'}
+          state.update({ident: '0' for ident in ids.values()})
+          timestamp = None
+          samples = []
+          for line in text:
+              if line.startswith('#'):
+                  if timestamp is not None:
+                      samples.append((timestamp, dict(state)))
+                  timestamp = int(line[1:])
+              elif line and line[0] in '01xz':
+                  ident = line[1:]
+                  if ident in state:
+                      state[ident] = line[0]
+              elif line.startswith('b'):
+                  bits, ident = line[1:].split(' ', 1)
+                  if ident in state:
+                      state[ident] = bits
+          if timestamp is not None:
+              samples.append((timestamp, dict(state)))
+
+          events = []
+          for timestamp, values in samples:
+              if values[clock_id] == '0' and values[reset_id] == '0' and values[ids['valid']] == '1':
+                  events.append((timestamp, values))
+          matches = [(index, timestamp, values) for index, (timestamp, values) in enumerate(events)
+                     if values[ids['interrupt']] == '1']
+          assert len(matches) == 1, matches
+          index, timestamp, values = matches[0]
+          parse = lambda key: int(values[ids[key]].replace('x', '0').replace('z', '0'), 2)
+          result = (
+              f'event_index={index}\n'
+              f'vcd_timestamp={timestamp}\n'
+              f'retiring_pc=0x{parse("pc"):08x}\n'
+              f'interrupt_cause=0x{parse("cause"):08x}\n'
+              f'interrupt_pc=0x{parse("epc"):08x}\n'
+              f'committed_events={len(events)}\n'
+          )
+          Path('build/rv32im-timer/evidence/first-interrupt.txt').write_text(result)
+          print(result, end='')
+          PY
+          mv build/aethercore.vcd build/rv32im-timer/evidence/basic-interrupt.vcd
+          grep -q '^event_index=94$' build/rv32im-timer/evidence/first-interrupt.txt
+          grep -q '^retiring_pc=0x80000074$' build/rv32im-timer/evidence/first-interrupt.txt
+          grep -q '^interrupt_cause=0x80000007$' build/rv32im-timer/evidence/first-interrupt.txt
+          grep -q '^interrupt_pc=0x80000074$' build/rv32im-timer/evidence/first-interrupt.txt
+          grep -q '^committed_events=150$' build/rv32im-timer/evidence/first-interrupt.txt
+
+      - name: Reject a mismatch on the first interrupt event
+        shell: bash
+        run: |
+          set +e
+          AETHERCORE_RV32_DIFFTEST_INJECT_MISMATCH_AT=94 \
+            build/rv32im-timer/obj/VAetherCoreRV32IMTrapSimTop \
+            build/rv32im-timer/software/basic.bin \
+            --max-cycles 12000 --self-check-exit --stall-period 5 \
+            --difftest "$RV32_NEMU_SO" \
+            > build/rv32im-timer/timer-negative.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q 'RV32 timer DiffTest mismatch after 94 matched events' \
+            build/rv32im-timer/timer-negative.log
+          grep -q 'x31' build/rv32im-timer/timer-negative.log
 
       - name: Upload timer evidence
         if: always()
