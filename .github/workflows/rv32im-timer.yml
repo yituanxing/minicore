@@ -49,28 +49,18 @@ jobs:
           chmod +x mill
           timeout 600 ./mill --version
 
-      - name: Build deterministic exact RV32 NEMU reference
+      - name: Build frozen deterministic RV32 NEMU reference
         shell: bash
         run: |
           mkdir -p build
           set -o pipefail
-
-          deterministic_tools="$RUNNER_TEMP/aethercore-deterministic-tools"
-          rm -rf "$deterministic_tools"
-          mkdir -p "$deterministic_tools"
-          cat > "$deterministic_tools/find" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          /usr/bin/find "$@" | LC_ALL=C sort
-          EOF
-          chmod +x "$deterministic_tools/find"
-          export PATH="$deterministic_tools:$PATH"
-
-          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_deterministic.sh \
             "$(pwd)/build/rv32-nemu-probe" \
             2>&1 | tee build/rv32-nemu-probe.log
           grep -q '^status=PASS$' build/rv32-nemu-probe/evidence/result.txt
           grep -q '^revision=8601834e4889e6bf3b6113eb5f824ba7689126f5$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          grep -q '^reference_sha256=e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e$' \
             build/rv32-nemu-probe/evidence/result.txt
           grep -q '^reproducible=true$' build/rv32-nemu-probe/evidence/result.txt
           grep -q '^single_step=1$' build/rv32-nemu-probe/evidence/result.txt
