@@ -36,12 +36,20 @@ object MemSize extends ChiselEnum {
   val Byte, Half, Word, DWord = Value
 }
 
+object PrivilegeMode {
+  val User: Int = 0
+  val Supervisor: Int = 1
+  val Machine: Int = 3
+}
+
 object MachineExceptionCode {
   val InstructionAccessFault: Int = 1
   val IllegalInstruction: Int = 2
   val Breakpoint: Int = 3
   val LoadAccessFault: Int = 5
   val StoreAccessFault: Int = 7
+  val EnvironmentCallFromU: Int = 8
+  val EnvironmentCallFromS: Int = 9
   val EnvironmentCallFromM: Int = 11
 }
 
