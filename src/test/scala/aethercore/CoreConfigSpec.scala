@@ -16,8 +16,9 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.shiftBits shouldBe 6
     config.isa.hasM shouldBe true
     config.isa.hasA shouldBe false
+    config.isa.hasZicsr shouldBe true
     config.isa.hasWordOps shouldBe true
-    config.isa.march shouldBe "rv64im"
+    config.isa.march shouldBe "rv64im_zicsr"
     config.isa.mabi shouldBe "lp64"
     config.platform.resetVector shouldBe BigInt("80000000", 16)
     config.platform.busDataBits shouldBe 64
@@ -32,6 +33,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.xBytes shouldBe 4
     config.isa.shiftBits shouldBe 5
     config.isa.hasM shouldBe false
+    config.isa.hasZicsr shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32i"
     config.isa.mabi shouldBe "ilp32"
@@ -49,8 +51,9 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.xBytes shouldBe 4
     config.isa.shiftBits shouldBe 5
     config.isa.hasM shouldBe true
+    config.isa.hasZicsr shouldBe true
     config.isa.hasWordOps shouldBe false
-    config.isa.march shouldBe "rv32im"
+    config.isa.march shouldBe "rv32im_zicsr"
     config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
@@ -64,14 +67,23 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
     isa.xBytes shouldBe 4
     isa.shiftBits shouldBe 5
+    isa.hasZicsr shouldBe false
     isa.hasWordOps shouldBe false
     isa.march shouldBe "rv32i"
     isa.mabi shouldBe "ilp32"
   }
 
-  it should "reject unsupported architectural and platform widths early" in {
+  it should "reject unsupported architectural, extension and platform widths early" in {
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(xlen = 48, extensions = Set('I'), privilegeModes = Set('M'))
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(
+        xlen = 32,
+        extensions = Set('I'),
+        privilegeModes = Set('M'),
+        zExtensions = Set("icsr")
+      )
 
     an[IllegalArgumentException] should be thrownBy
       PlatformConfig(
