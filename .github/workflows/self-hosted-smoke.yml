@@ -1,0 +1,40 @@
+name: Self-hosted runner smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-hosted-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: WSL self-hosted runner smoke
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inspect runner environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uname -a
+          cat /etc/os-release
+          pwd
+          df -Th .
+          free -h
+          git --version
+          java -version
+          python3 --version
+          g++ --version
+          verilator --version
+          riscv64-unknown-elf-gcc --version
+          test "$(stat -f -c %T .)" != "9p"
+          test "$(stat -f -c %T .)" != "drvfs"
+          echo SELF_HOSTED_SMOKE_PASS
