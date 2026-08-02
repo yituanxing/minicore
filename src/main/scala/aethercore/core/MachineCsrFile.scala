@@ -50,24 +50,43 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   val mtval = RegInit(0.U(xlen.W))
 
   io.readData := 0.U
-  io.readImplemented := true.B
-  io.readWritable := true.B
+  io.readImplemented := false.B
+  io.readWritable := false.B
 
   switch(io.readAddr) {
-    is(MachineCsrAddress.Mstatus.U) { io.readData := mstatus }
+    is(MachineCsrAddress.Mstatus.U) {
+      io.readData := mstatus
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
     is(MachineCsrAddress.Misa.U) {
       io.readData := misaValue.U(xlen.W)
-      io.readWritable := false.B
+      io.readImplemented := true.B
     }
-    is(MachineCsrAddress.Mtvec.U) { io.readData := mtvec }
-    is(MachineCsrAddress.Mscratch.U) { io.readData := mscratch }
-    is(MachineCsrAddress.Mepc.U) { io.readData := mepc }
-    is(MachineCsrAddress.Mcause.U) { io.readData := mcause }
-    is(MachineCsrAddress.Mtval.U) { io.readData := mtval }
-    otherwise {
-      io.readData := 0.U
-      io.readImplemented := false.B
-      io.readWritable := false.B
+    is(MachineCsrAddress.Mtvec.U) {
+      io.readData := mtvec
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    is(MachineCsrAddress.Mscratch.U) {
+      io.readData := mscratch
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    is(MachineCsrAddress.Mepc.U) {
+      io.readData := mepc
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    is(MachineCsrAddress.Mcause.U) {
+      io.readData := mcause
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    is(MachineCsrAddress.Mtval.U) {
+      io.readData := mtval
+      io.readImplemented := true.B
+      io.readWritable := true.B
     }
   }
 
