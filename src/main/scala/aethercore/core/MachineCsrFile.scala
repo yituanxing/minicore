@@ -14,12 +14,36 @@ object MachineCsrAddress {
   val Mtval: Int = 0x343
 }
 
+object MachineCsrWarl {
+  def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
+    val xlen = isa.xlen
+    val allBits = (BigInt(1) << xlen) - 1
+    val mstatusNonMppMask = (BigInt(1) << 3) | (BigInt(1) << 7)
+    val mtvecMask = allBits & ~BigInt(3)
+    val mepcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
+
+    val result = WireDefault(data)
+    switch(address) {
+      is(MachineCsrAddress.Mstatus.U) {
+        val requestedMpp = data(12, 11)
+        val legalMpp = if (isa.hasS) {
+          requestedMpp
+        } else if (isa.hasU) {
+          Mux(requestedMpp === 0.U || requestedMpp === 3.U, requestedMpp, 3.U)
+        } else {
+          3.U(2.W)
+        }
+        result := (data & mstatusNonMppMask.U(xlen.W)) | (legalMpp << 11)
+      }
+      is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
+      is(MachineCsrAddress.Mepc.U) { result := data & mepcMask.U(xlen.W) }
+    }
+    result
+  }
+}
+
 class MachineCsrFile(val isa: IsaConfig) extends Module {
   private val xlen = isa.xlen
-  private val allBits = (BigInt(1) << xlen) - 1
-  private val mstatusMask = (BigInt(1) << 3) | (BigInt(1) << 7) | (BigInt(3) << 11)
-  private val mtvecMask = allBits & ~BigInt(3)
-  private val mepcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
 
   private val misaValue = {
     val mxl = if (xlen == 32) BigInt(1) else BigInt(2)
@@ -90,25 +114,16 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     }
   }
 
+  val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
+
   when(io.writeEnable) {
     switch(io.writeAddr) {
-      is(MachineCsrAddress.Mstatus.U) {
-        val requestedMpp = io.writeData(12, 11)
-        val legalMpp = if (isa.hasS) {
-          requestedMpp
-        } else if (isa.hasU) {
-          Mux(requestedMpp === 0.U || requestedMpp === 3.U, requestedMpp, 3.U)
-        } else {
-          3.U(2.W)
-        }
-        mstatus := (io.writeData & (mstatusMask & ~(BigInt(3) << 11)).U(xlen.W)) |
-          (legalMpp << 11)
-      }
-      is(MachineCsrAddress.Mtvec.U) { mtvec := io.writeData & mtvecMask.U(xlen.W) }
-      is(MachineCsrAddress.Mscratch.U) { mscratch := io.writeData }
-      is(MachineCsrAddress.Mepc.U) { mepc := io.writeData & mepcMask.U(xlen.W) }
-      is(MachineCsrAddress.Mcause.U) { mcause := io.writeData }
-      is(MachineCsrAddress.Mtval.U) { mtval := io.writeData }
+      is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
+      is(MachineCsrAddress.Mtvec.U) { mtvec := canonicalWriteData }
+      is(MachineCsrAddress.Mscratch.U) { mscratch := canonicalWriteData }
+      is(MachineCsrAddress.Mepc.U) { mepc := canonicalWriteData }
+      is(MachineCsrAddress.Mcause.U) { mcause := canonicalWriteData }
+      is(MachineCsrAddress.Mtval.U) { mtval := canonicalWriteData }
     }
   }
 }
