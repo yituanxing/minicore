@@ -26,12 +26,14 @@ object MachineCsrWarl {
     switch(address) {
       is(MachineCsrAddress.Mstatus.U) {
         val requestedMpp = data(12, 11)
-        val legalMpp = if (isa.hasS) {
+        val legalMpp = if (isa.hasS && isa.hasU) {
           Mux(
             requestedMpp === 0.U || requestedMpp === 1.U || requestedMpp === 3.U,
             requestedMpp,
             3.U
           )
+        } else if (isa.hasS) {
+          Mux(requestedMpp === 1.U || requestedMpp === 3.U, requestedMpp, 3.U)
         } else if (isa.hasU) {
           Mux(requestedMpp === 0.U || requestedMpp === 3.U, requestedMpp, 3.U)
         } else {
