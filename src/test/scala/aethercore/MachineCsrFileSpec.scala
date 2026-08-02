@@ -18,6 +18,7 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.trapPc.poke(0.U)
     dut.io.trapCause.poke(0.U)
     dut.io.trapValue.poke(0.U)
+    dut.io.trapReturn.poke(false.B)
   }
 
   private def read(dut: MachineCsrFile, address: Int): BigInt = {
@@ -49,6 +50,7 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
       write(dut, MachineCsrAddress.Mepc, BigInt("80000203", 16))
       read(dut, MachineCsrAddress.Mepc) shouldBe BigInt("80000200", 16)
+      dut.io.returnPc.expect(BigInt("80000200", 16).U)
 
       write(dut, MachineCsrAddress.Mstatus, BigInt("ffffffff", 16))
       read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00001888", 16)
@@ -84,6 +86,34 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, MachineCsrAddress.Mcause) shouldBe 5
       read(dut, MachineCsrAddress.Mtval) shouldBe BigInt("90000004", 16)
       read(dut, MachineCsrAddress.Mscratch) shouldBe 0
+    }
+  }
+
+  it should "return from an M-mode trap with status restoration and write priority" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imSoftware.isa)) { dut =>
+      initialize(dut)
+
+      write(dut, MachineCsrAddress.Mstatus, BigInt("00000008", 16))
+      dut.io.trapEnter.poke(true.B)
+      dut.io.trapPc.poke(BigInt("80000403", 16).U)
+      dut.io.trapCause.poke(11.U)
+      dut.clock.step()
+      dut.io.trapEnter.poke(false.B)
+
+      read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00001880", 16)
+      dut.io.returnPc.expect(BigInt("80000400", 16).U)
+
+      dut.io.writeEnable.poke(true.B)
+      dut.io.writeAddr.poke(MachineCsrAddress.Mscratch.U)
+      dut.io.writeData.poke(BigInt("deadbeef", 16).U)
+      dut.io.trapReturn.poke(true.B)
+      dut.clock.step()
+      dut.io.trapReturn.poke(false.B)
+      dut.io.writeEnable.poke(false.B)
+
+      read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00001888", 16)
+      read(dut, MachineCsrAddress.Mscratch) shouldBe 0
+      dut.io.returnPc.expect(BigInt("80000400", 16).U)
     }
   }
 
