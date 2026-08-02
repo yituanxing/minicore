@@ -5,6 +5,7 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scala.collection.mutable
+import aethercore.common.MachineExceptionCode
 import aethercore.config.CoreProfiles
 import aethercore.sim.AetherCoreSimTop
 
@@ -75,7 +76,7 @@ class MachineCsrCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
           word | (BigInt(memory(address + byte) & 0xff) << (byte * 8))
         }
 
-      while (!sawExit && !dut.io.halted.peek().litToBoolean && cycles < 300) {
+      while (!sawExit && cycles < 300) {
         val pc = dut.io.imemAddr.peek().litValue
         dut.io.imemInst.poke(program.getOrElse(pc, BigInt("00100073", 16)).U)
 
@@ -118,11 +119,12 @@ class MachineCsrCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "reject a write to read-only misa without architectural side effects" in {
+  it should "trap on a write to read-only misa without architectural side effects" in {
     val instruction = csr(0x301, 1, 1, 2)
+    val faultPc = base + 4
     val program = Map(
       base -> iType(1, 0, 0, 1, 0x13),
-      (base + 4) -> instruction,
+      faultPc -> instruction,
       (base + 8) -> BigInt("00100073", 16)
     )
 
@@ -135,26 +137,29 @@ class MachineCsrCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       var sawException = false
       var illegalWroteRd = false
       var cycles = 0
-      while (!dut.io.halted.peek().litToBoolean && cycles < 80) {
+      while (!sawException && cycles < 80) {
         dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, BigInt("00100073", 16)).U)
+
+        dut.clock.step()
+        cycles += 1
 
         if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
           sawException = true
           illegalWroteRd = dut.io.commit.rdWrite.peek().litToBoolean
+          dut.io.commit.pc.expect(faultPc.U)
           dut.io.commit.inst.peek().litValue shouldBe instruction
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.IllegalInstruction.U)
+          dut.io.commit.exceptionValue.expect(instruction.U)
         }
-
-        dut.clock.step()
-        cycles += 1
       }
 
       sawException shouldBe true
       illegalWroteRd shouldBe false
-      dut.io.halted.expect(true.B)
+      dut.io.halted.expect(false.B)
     }
   }
 
-  it should "reject an unimplemented CSR address" in {
+  it should "trap on an unimplemented CSR address" in {
     val instruction = csr(0x7ff, 0, 2, 3)
     val program = Map(base -> instruction, (base + 4) -> BigInt("00100073", 16))
 
@@ -166,21 +171,24 @@ class MachineCsrCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
       var sawException = false
       var cycles = 0
-      while (!dut.io.halted.peek().litToBoolean && cycles < 80) {
+      while (!sawException && cycles < 80) {
         dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, BigInt("00100073", 16)).U)
-
-        if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
-          sawException = true
-          dut.io.commit.inst.peek().litValue shouldBe instruction
-          dut.io.commit.rdWrite.expect(false.B)
-        }
 
         dut.clock.step()
         cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
+          sawException = true
+          dut.io.commit.pc.expect(base.U)
+          dut.io.commit.inst.peek().litValue shouldBe instruction
+          dut.io.commit.rdWrite.expect(false.B)
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.IllegalInstruction.U)
+          dut.io.commit.exceptionValue.expect(instruction.U)
+        }
       }
 
       sawException shouldBe true
-      dut.io.halted.expect(true.B)
+      dut.io.halted.expect(false.B)
     }
   }
 }
