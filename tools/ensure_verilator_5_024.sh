@@ -10,6 +10,34 @@ build_dir="$cache_root/build/verilator-$revision"
 marker="$prefix/.aethercore-source-revision"
 jobs="${AETHERCORE_TOOLCHAIN_JOBS:-4}"
 
+ensure_runtime_assets() {
+  if [[ -f "$prefix/include/verilated.mk" ]]; then
+    return 0
+  fi
+
+  if ! command -v autoconf >/dev/null 2>&1; then
+    printf 'ERROR: autoconf is required once to generate Verilator runtime makefiles.\n' >&2
+    printf 'Install it from an interactive WSL shell with:\n' >&2
+    printf '  sudo apt-get install -y autoconf\n' >&2
+    exit 43
+  fi
+
+  # The 5.024 CMake installation is experimental and omits the generated
+  # include/verilated.mk file required by `verilator --build`. Generate the
+  # runtime configuration through the release's standard Autoconf path, then
+  # copy only the generated runtime assets into the pinned CMake prefix.
+  (
+    cd "$source_dir"
+    autoconf
+    unset VERILATOR_ROOT
+    ./configure --prefix="$prefix" --disable-partial-static
+  )
+  install -m 0644 "$source_dir/include/verilated.mk" \
+    "$prefix/include/verilated.mk"
+  install -m 0644 "$source_dir/include/verilated_config.h" \
+    "$prefix/include/verilated_config.h"
+}
+
 verify_install() {
   test -x "$prefix/bin/verilator"
   test -x "$prefix/bin/verilator_bin"
@@ -22,13 +50,20 @@ verify_install() {
     cmp -s "$build_dir/src/verilator_bin" "$prefix/bin/verilator_bin"
   fi
 
+  ensure_runtime_assets
+  test -f "$prefix/include/verilated.mk"
+
+  # Exercise the full Verilator -> generated makefile -> C++ archive path.
+  # Lint-only is insufficient because it does not consume verilated.mk.
   local probe_dir
   probe_dir="$(mktemp -d)"
   cat > "$probe_dir/top.sv" <<'EOF'
 module top;
 endmodule
 EOF
-  "$prefix/bin/verilator" --lint-only --top-module top "$probe_dir/top.sv"
+  "$prefix/bin/verilator" --cc --build --top-module top \
+    --Mdir "$probe_dir/obj" "$probe_dir/top.sv"
+  test -f "$probe_dir/obj/Vtop__ALL.a"
   rm -rf "$probe_dir"
 }
 
@@ -39,10 +74,10 @@ activate() {
   fi
   export PATH="$prefix/bin:$PATH"
   printf 'aethercore_verilator_source_revision=%s\n' "$revision"
-  sha256sum "$prefix/bin/verilator_bin"
+  sha256sum "$prefix/bin/verilator_bin" "$prefix/include/verilated.mk"
   # A CMake build from a shallow release commit may print UNKNOWN.REV because
-  # git-describe has no tag history. The exact source marker and executable
-  # identity above are the authoritative version proof.
+  # git-describe has no tag history. The exact source marker, executable
+  # identity, generated runtime assets, and full build probe are authoritative.
   verilator --version || true
 }
 
