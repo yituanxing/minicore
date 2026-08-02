@@ -59,33 +59,33 @@ class MachineTimerPlatformSpec extends AnyFlatSpec with Matchers with ChiselSim 
     val program = Map(
       base -> uType(0x80000, 1),
       (base + 0x04) -> iType(0x80, 1, 0, 1, 0x13),
-      (base + 0x08) -> csr(0x305, 1, 1, 0),          // csrw mtvec, x1
-      (base + 0x0c) -> csr(0x340, 0, 1, 0),          // csrw mscratch, x0
-      (base + 0x10) -> uType(0x02004, 2),            // mtimecmp base
+      (base + 0x08) -> csr(0x305, 1, 1, 0),
+      (base + 0x0c) -> csr(0x340, 0, 1, 0),
+      (base + 0x10) -> uType(0x02004, 2),
       (base + 0x14) -> iType(-1, 0, 0, 3, 0x13),
-      (base + 0x18) -> sType(0, 3, 2, 2),            // low <- -1
-      (base + 0x1c) -> sType(4, 0, 2, 2),            // high <- 0
+      (base + 0x18) -> sType(0, 3, 2, 2),
+      (base + 0x1c) -> sType(4, 0, 2, 2),
       (base + 0x20) -> iType(200, 0, 0, 3, 0x13),
-      (base + 0x24) -> sType(0, 3, 2, 2),            // low <- 200
+      (base + 0x24) -> sType(0, 3, 2, 2),
       (base + 0x28) -> iType(0x80, 0, 0, 3, 0x13),
-      (base + 0x2c) -> csr(0x304, 3, 1, 0),          // csrw mie, x3
+      (base + 0x2c) -> csr(0x304, 3, 1, 0),
       (base + 0x30) -> iType(8, 0, 0, 3, 0x13),
-      waitPc -> csr(0x300, 3, 1, 0),                 // csrw mstatus, x3
-      (base + 0x38) -> csr(0x340, 0, 2, 6),          // csrr x6, mscratch
-      (base + 0x3c) -> bType(-4, 0, 6, 0),           // beq x6, x0, wait read
+      waitPc -> csr(0x300, 3, 1, 0),
+      (base + 0x38) -> csr(0x340, 0, 2, 6),
+      (base + 0x3c) -> bType(-4, 0, 6, 0),
       (base + 0x40) -> uType(0x10000, 9),
-      (base + 0x44) -> sType(8, 0, 9, 2),            // exit 0
+      (base + 0x44) -> sType(8, 0, 9, 2),
 
-      handler -> csr(0x342, 0, 2, 5),                // csrr x5, mcause
-      (handler + 0x04) -> csr(0x340, 0, 2, 6),       // csrr x6, mscratch
+      handler -> csr(0x342, 0, 2, 5),
+      (handler + 0x04) -> csr(0x340, 0, 2, 6),
       (handler + 0x08) -> iType(1, 6, 0, 6, 0x13),
-      (handler + 0x0c) -> csr(0x340, 6, 1, 0),       // csrw mscratch, x6
+      (handler + 0x0c) -> csr(0x340, 6, 1, 0),
       (handler + 0x10) -> uType(0x02004, 2),
       (handler + 0x14) -> iType(-1, 0, 0, 3, 0x13),
       (handler + 0x18) -> sType(0, 3, 2, 2),
-      (handler + 0x1c) -> sType(4, 3, 2, 2),         // mtimecmp <- all ones
-      (handler + 0x20) -> BigInt("30200073", 16),   // mret
-      (handler + 0x24) -> sType(0, 3, 0, 2)          // forbidden younger Store
+      (handler + 0x1c) -> sType(4, 3, 2, 2),
+      (handler + 0x20) -> BigInt("30200073", 16),
+      (handler + 0x24) -> sType(0, 3, 0, 2)
     )
 
     simulate(new AetherCoreRV32IMTimerSimTop) { dut =>
@@ -94,7 +94,7 @@ class MachineTimerPlatformSpec extends AnyFlatSpec with Matchers with ChiselSim 
       dut.io.memRdata.poke(0.U)
       dut.io.memFault.poke(false.B)
 
-      var sawInterrupt = false
+      var interruptCycle: Option[Int] = None
       var sawMret = false
       var causeRead: Option[BigInt] = None
       var externalStoreEscaped = false
@@ -110,7 +110,7 @@ class MachineTimerPlatformSpec extends AnyFlatSpec with Matchers with ChiselSim 
             dut.io.commit.inst.expect(0.U)
             dut.io.commit.exceptionCause.expect(timerCause.U)
             dut.io.commit.exceptionValue.expect(0.U)
-            sawInterrupt = true
+            interruptCycle = Some(cycles)
           }
           if (dut.io.commit.inst.peek().litValue == BigInt("30200073", 16)) {
             dut.io.commit.exception.expect(false.B)
@@ -132,7 +132,8 @@ class MachineTimerPlatformSpec extends AnyFlatSpec with Matchers with ChiselSim 
       }
 
       exitSeen shouldBe true
-      sawInterrupt shouldBe true
+      interruptCycle.isDefined shouldBe true
+      interruptCycle.get should be >= 190
       sawMret shouldBe true
       causeRead shouldBe Some(timerCause)
       externalStoreEscaped shouldBe false
