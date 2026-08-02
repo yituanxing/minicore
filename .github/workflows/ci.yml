@@ -39,10 +39,19 @@ jobs:
           riscv64-unknown-elf-gcc --version
           command -v make curl bison flex zstd
 
-      - name: Prepare Mill launcher
+      - name: Probe Mill distribution network
+        shell: bash
         run: |
+          set -euxo pipefail
+          mill_url=https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/1.1.2/mill-dist-1.1.2.exe
+          curl -fsSIL --connect-timeout 15 --max-time 60 "$mill_url"
+
+      - name: Prepare Mill launcher
+        shell: bash
+        run: |
+          set -euxo pipefail
           chmod +x mill
-          ./mill --version
+          timeout 600 ./mill --version
 
       - name: Python reference and image tests
         run: make python-test
