@@ -62,7 +62,7 @@ class InstructionBusIO(val addrBits: Int = 64) extends Bundle {
 }
 
 class DataBusIO(val addrBits: Int = 64, val dataBits: Int = 64) extends Bundle {
-  require(addrBits > 0, s"data address width must be positive, got $dataBits")
+  require(addrBits > 0, s"data address width must be positive, got $addrBits")
   require(dataBits > 0 && dataBits % 8 == 0, s"data width must be byte aligned, got $dataBits")
 
   val valid = Output(Bool())
@@ -124,7 +124,6 @@ class ControlSignals extends Bundle {
   val usesRs1 = Bool()
   val usesRs2 = Bool()
   val csrUseImm = Bool()
-  val ecall = Bool()
-  val ebreak = Bool()
+  val trap = Bool()
   val illegal = Bool()
 }
