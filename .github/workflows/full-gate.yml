@@ -78,6 +78,10 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate_scheduler.sh
 
+      - name: RV32IMU write, get_ticks and exit syscalls
+        shell: bash
+        run: bash tools/ci/full_gate_user.sh
+
       - name: RV64 compiler-produced corpus
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-compiled
@@ -114,6 +118,7 @@ jobs:
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
             echo '- fast architectural gates run before long software workloads'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
+            echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
             echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -141,6 +146,7 @@ jobs:
             build/upstream-workloads/
             build/rv32/
             build/rv32im-*/
+            build/rv32imu-*/
             !build/**/obj/**
             !build/**/rtl/**
             !build/**/nemu/**

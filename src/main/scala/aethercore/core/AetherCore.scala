@@ -141,6 +141,15 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
 
   val instructionTrapValue =
     if (xlen == 32) ifId.inst else Cat(0.U((xlen - 32).W), ifId.inst)
+  val environmentCallCause = Mux(
+    csrFile.io.currentPrivilege === PrivilegeMode.User.U,
+    MachineExceptionCode.EnvironmentCallFromU.U(xlen.W),
+    Mux(
+      csrFile.io.currentPrivilege === PrivilegeMode.Supervisor.U,
+      MachineExceptionCode.EnvironmentCallFromS.U(xlen.W),
+      MachineExceptionCode.EnvironmentCallFromM.U(xlen.W)
+    )
+  )
   val decodedTrap = WireInit(0.U.asTypeOf(new TrapInfo(xlen)))
   when(ifId.fault) {
     decodedTrap.valid := true.B
@@ -156,7 +165,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       decodedTrap.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
       decodedTrap.value := ifId.pc
     }.otherwise {
-      decodedTrap.cause := MachineExceptionCode.EnvironmentCallFromM.U(xlen.W)
+      decodedTrap.cause := environmentCallCause
       decodedTrap.value := 0.U
     }
   }
@@ -224,7 +233,9 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val csrSourceFieldNonZero = idEx.rs1 =/= 0.U
   val csrWriteIntent = idEx.ctrl.csrOp === CsrOp.Write ||
     ((idEx.ctrl.csrOp === CsrOp.Set || idEx.ctrl.csrOp === CsrOp.Clear) && csrSourceFieldNonZero)
-  val csrLegal = csrFile.io.readImplemented && (!csrWriteIntent || csrFile.io.readWritable)
+  val csrPrivilegeLegal = csrFile.io.currentPrivilege >= csrAddr(9, 8)
+  val csrLegal = csrFile.io.readImplemented && csrPrivilegeLegal &&
+    (!csrWriteIntent || csrFile.io.readWritable)
   val csrWriteData = WireDefault(csrOperand)
   switch(idEx.ctrl.csrOp) {
     is(CsrOp.Set) { csrWriteData := csrReadData | csrOperand }
@@ -232,6 +243,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   }
   val canonicalCsrWriteData = MachineCsrWarl.canonicalize(config.isa, csrAddr, csrWriteData)
   val csrException = csrInstruction && !csrLegal
+  val mretException =
+    idEx.ctrl.mret && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
 
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
@@ -366,7 +379,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     exMem.csrAddr := csrAddr
     exMem.csrData := canonicalCsrWriteData
     exMem.trap := idEx.trap
-    when(csrException && !idEx.trap.valid) {
+    when((csrException || mretException) && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
       exMem.trap.value := idExInstructionValue
