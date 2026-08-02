@@ -14,6 +14,7 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.writeEnable.poke(false.B)
     dut.io.writeAddr.poke(0.U)
     dut.io.writeData.poke(0.U)
+    dut.io.machineTimerInterrupt.poke(false.B)
     dut.io.trapEnter.poke(false.B)
     dut.io.trapPc.poke(0.U)
     dut.io.trapCause.poke(0.U)
@@ -55,10 +56,44 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
       write(dut, MachineCsrAddress.Mstatus, BigInt("ffffffff", 16))
       read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00001888", 16)
 
+      write(dut, MachineCsrAddress.Mie, BigInt("ffffffff", 16))
+      read(dut, MachineCsrAddress.Mie) shouldBe BigInt("00000080", 16)
+
+      dut.io.machineTimerInterrupt.poke(true.B)
+      read(dut, MachineCsrAddress.Mip) shouldBe BigInt("00000080", 16)
+      dut.io.readWritable.expect(false.B)
+      dut.io.machineTimerInterruptPending.expect(true.B)
+
+      dut.io.machineTimerInterrupt.poke(false.B)
+      read(dut, MachineCsrAddress.Mip) shouldBe 0
+      dut.io.machineTimerInterruptPending.expect(false.B)
+
       dut.io.readAddr.poke("h7ff".U)
       dut.io.readImplemented.expect(false.B)
       dut.io.readWritable.expect(false.B)
       dut.io.readData.expect(0.U)
+    }
+  }
+
+  it should "gate MTIP with both global and local enables" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imSoftware.isa)) { dut =>
+      initialize(dut)
+
+      dut.io.machineTimerInterrupt.poke(true.B)
+      dut.io.machineTimerInterruptPending.expect(false.B)
+
+      write(dut, MachineCsrAddress.Mie, BigInt("80", 16))
+      dut.io.machineTimerInterruptPending.expect(false.B)
+
+      write(dut, MachineCsrAddress.Mstatus, BigInt("8", 16))
+      dut.io.machineTimerInterruptPending.expect(true.B)
+
+      write(dut, MachineCsrAddress.Mstatus, 0)
+      dut.io.machineTimerInterruptPending.expect(false.B)
+
+      write(dut, MachineCsrAddress.Mstatus, BigInt("8", 16))
+      write(dut, MachineCsrAddress.Mie, 0)
+      dut.io.machineTimerInterruptPending.expect(false.B)
     }
   }
 
