@@ -52,7 +52,7 @@ jobs:
 
       - name: Build both frozen RV32 NEMU references once
         shell: bash
-        run: bash tools/ci/full_gate.sh rv32-reference
+        run: bash tools/ci/build_rv32_references.sh
 
       - name: RV32 GCC workload and 585-retirement DiffTest
         shell: bash
@@ -121,8 +121,8 @@ jobs:
           retention-days: 14
           path: |
             build/ci/logs/
-            build/ci/rv32-nemu-opt/evidence/
-            build/ci/rv32-nemu-single-step/evidence/
+            build/rv32-nemu-abi/evidence/
+            build/rv32-nemu-probe/evidence/
             build/logs/
             build/rtl/
             build/software/
@@ -168,4 +168,5 @@ jobs:
     steps:
       - name: Mirror consolidated result
         shell: bash
-        run: echo 'consolidated full-gate result: success'
+        run: |
+          echo 'consolidated full-gate result: success'
