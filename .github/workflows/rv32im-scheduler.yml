@@ -1,0 +1,151 @@
+name: RV32IM Preemptive Scheduler
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32im-scheduler-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scheduler:
+    name: Timer-preemptive two-task scheduler on RV32IM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Scala dependencies
+        uses: coursier/cache-action@v8
+        with:
+          job: rv32im-scheduler
+
+      - name: Install Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git python3 bison flex \
+            libreadline-dev libsdl2-dev zstd libzstd-dev \
+            file binutils verilator
+          java -version
+          verilator --version
+
+      - name: Prepare Mill launcher
+        run: |
+          chmod +x mill
+          ./mill --version
+
+      - name: Build exact frozen RV32 NEMU reference
+        shell: bash
+        run: |
+          mkdir -p build
+          set -o pipefail
+          NEMU_SINGLE_STEP=1 bash tools/probe_rv32_nemu_historical.sh \
+            "$(pwd)/build/rv32-nemu-probe" \
+            2>&1 | tee build/rv32-nemu-probe.log
+          grep -q '^reference_sha256=1dc17e1d2c8d27959fc3fa30163a350a57c688e102c64372e396f350699db577$' \
+            build/rv32-nemu-probe/evidence/result.txt
+          reference_so="$(find build/rv32-nemu-probe/nemu/build -maxdepth 1 -type f \
+            -name 'riscv32-nemu-interpreter-so*' -print -quit)"
+          test -n "$reference_so"
+          echo "RV32_NEMU_SO=$reference_so" >> "$GITHUB_ENV"
+
+      - name: Build the frozen scheduler image
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-scheduler software
+          diff -u <(cat <<'EOF'
+          preemptive-scheduler 1432 358 d62b691fe2ae85770418b3292c14e41f4a5ff16f2c9814483287b7a0cefd3eab
+          EOF
+          ) build/rv32im-scheduler/software/manifest.txt
+          grep -q '^task_a 0x80000140$' build/rv32im-scheduler/software/labels.txt
+          grep -q '^task_b 0x800001d0$' build/rv32im-scheduler/software/labels.txt
+          grep -q '^trap_handler 0x80000254$' build/rv32im-scheduler/software/labels.txt
+
+      - name: Run the fast independent RV32IM reference
+        shell: bash
+        run: |
+          set -o pipefail
+          make -f Makefile.rv32im-scheduler local-reference \
+            2>&1 | tee build/rv32im-scheduler/local-reference-ci.log
+          grep -q '^status=PASS$' build/rv32im-scheduler/local-reference/result.txt
+          grep -q '^stall_periods=0,3,4,5,7,11$' \
+            build/rv32im-scheduler/local-reference/result.txt
+          grep -q '^negative_event=152$' \
+            build/rv32im-scheduler/local-reference/result.txt
+
+      - name: Run the frozen NEMU scheduler matrix
+        shell: bash
+        run: |
+          set -o pipefail
+          make -f Makefile.rv32im-scheduler run RV32_NEMU_SO="$RV32_NEMU_SO" \
+            2>&1 | tee build/rv32im-scheduler/scheduler-ci.log
+          grep -q '^PASS: self-check exit=0 after 1509 cycles, 1345 committed instructions, difftest=1345, zicsr-shadow=53, mret-shadow=8, interrupt-shadow=8$' build/rv32im-scheduler/logs/stall-0.log
+          grep -q '^PASS: self-check exit=0 after 1671 cycles, 1252 committed instructions, stall-period=3, difftest=1252, zicsr-shadow=53, mret-shadow=8, interrupt-shadow=8$' build/rv32im-scheduler/logs/stall-3.log
+          grep -q '^PASS: self-check exit=0 after 1639 cycles, 1263 committed instructions, stall-period=4, difftest=1263, zicsr-shadow=53, mret-shadow=8, interrupt-shadow=8$' build/rv32im-scheduler/logs/stall-4.log
+          grep -q '^PASS: self-check exit=0 after 1578 cycles, 1278 committed instructions, stall-period=5, difftest=1278, zicsr-shadow=53, mret-shadow=8, interrupt-shadow=8$' build/rv32im-scheduler/logs/stall-5.log
+          grep -q '^PASS: self-check exit=0 after 1589 cycles, 1326 committed instructions, stall-period=7, difftest=1326, zicsr-shadow=53, mret-shadow=8, interrupt-shadow=8$' build/rv32im-scheduler/logs/stall-7.log
+          grep -q '^PASS: self-check exit=0 after 1553 cycles, 1334 committed instructions, stall-period=11, difftest=1334, zicsr-shadow=53, mret-shadow=8, interrupt-shadow=8$' build/rv32im-scheduler/logs/stall-11.log
+
+      - name: Prove context corruption is detected
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-scheduler context-corruption-probe
+
+      - name: Freeze every precise scheduler interrupt boundary
+        shell: bash
+        run: |
+          make -f Makefile.rv32im-scheduler trace
+          mv build/aethercore.vcd \
+            build/rv32im-scheduler/evidence/scheduler.vcd
+          grep -q '^committed_events=1278$' \
+            build/rv32im-scheduler/evidence/interrupts.txt
+          grep -q '^interrupt_events=8$' \
+            build/rv32im-scheduler/evidence/interrupts.txt
+          grep -q '^irq0_event_index=152$' \
+            build/rv32im-scheduler/evidence/interrupts.txt
+          grep -q '^irq7_event_index=1108$' \
+            build/rv32im-scheduler/evidence/interrupts.txt
+
+      - name: Reject a mismatch on the first scheduler interrupt
+        shell: bash
+        run: |
+          set +e
+          AETHERCORE_RV32_DIFFTEST_INJECT_MISMATCH_AT=152 \
+            build/rv32im-scheduler/obj/VAetherCoreRV32IMTrapSimTop \
+            build/rv32im-scheduler/software/preemptive-scheduler.bin \
+            --max-cycles 30000 --self-check-exit --stall-period 5 \
+            --difftest "$RV32_NEMU_SO" \
+            > build/rv32im-scheduler/scheduler-negative.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -q 'RV32 timer DiffTest mismatch after 152 matched events' \
+            build/rv32im-scheduler/scheduler-negative.log
+          grep -q 'x31' build/rv32im-scheduler/scheduler-negative.log
+
+      - name: Upload scheduler evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32im-preemptive-scheduler-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/rv32-nemu-probe.log
+            build/rv32-nemu-probe/evidence/
+            build/rv32im-scheduler/
