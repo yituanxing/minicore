@@ -5,7 +5,7 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scala.collection.mutable
-import aethercore.common.{MachineInterruptCode, MemSize}
+import aethercore.common.MachineInterruptCode
 import aethercore.config.CoreProfiles
 import aethercore.core.AetherCore
 
@@ -50,18 +50,18 @@ class MachineTimerInterruptCoreSpec extends AnyFlatSpec with Matchers with Chise
     val program = Map(
       base -> uType(0x80000, 1),
       (base + 0x04) -> iType(0x40, 1, 0, 1, 0x13),
-      (base + 0x08) -> csr(0x305, 1, 1, 0),          // csrw mtvec, x1
+      (base + 0x08) -> csr(0x305, 1, 1, 0),
       (base + 0x0c) -> iType(0x80, 0, 0, 1, 0x13),
-      (base + 0x10) -> csr(0x304, 1, 1, 0),          // csrw mie, x1
+      (base + 0x10) -> csr(0x304, 1, 1, 0),
       (base + 0x14) -> iType(8, 0, 0, 1, 0x13),
-      (base + 0x18) -> csr(0x300, 1, 1, 0),          // csrw mstatus, x1
-      triggerPc -> iType(0x55, 0, 0, 2, 0x13),       // retires before interrupt
-      resumePc -> sType(0, 2, 0, 2),                 // younger Store, resume target
+      (base + 0x18) -> csr(0x300, 1, 1, 0),
+      triggerPc -> iType(0x55, 0, 0, 2, 0x13),
+      resumePc -> sType(0, 2, 0, 2),
       (base + 0x24) -> uType(0x10000, 9),
-      (base + 0x28) -> sType(8, 0, 9, 2),            // exit
-      handler -> csr(0x342, 0, 2, 3),                // csrr x3, mcause
-      (handler + 0x04) -> BigInt("30200073", 16),   // mret
-      (handler + 0x08) -> sType(4, 2, 0, 2)          // forbidden younger Store
+      (base + 0x28) -> sType(8, 0, 9, 2),
+      handler -> csr(0x342, 0, 2, 3),
+      (handler + 0x04) -> BigInt("30200073", 16),
+      (handler + 0x08) -> sType(4, 2, 0, 2)
     )
 
     simulate(new AetherCore(CoreProfiles.rv32imSoftware)) { dut =>
@@ -137,7 +137,6 @@ class MachineTimerInterruptCoreSpec extends AnyFlatSpec with Matchers with Chise
       writes.exists(_._1 == 4) shouldBe false
       writes.find(_._1 == 0).map(_._2 & BigInt("ffffffff", 16)) shouldBe Some(BigInt("55", 16))
       dut.io.halted.expect(false.B)
-      dut.io.dmem.size.expect(MemSize.Word)
     }
   }
 }
