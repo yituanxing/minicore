@@ -19,6 +19,8 @@ jobs:
     name: Chisel, Verilator and NEMU DiffTest
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
 
     steps:
       - name: Checkout
