@@ -137,13 +137,15 @@ class MachineCsrCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       var cycles = 0
       while (!dut.io.halted.peek().litToBoolean && cycles < 80) {
         dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, BigInt("00100073", 16)).U)
-        dut.clock.step()
-        cycles += 1
+
         if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
           sawException = true
           illegalWroteRd = dut.io.commit.rdWrite.peek().litToBoolean
           dut.io.commit.inst.peek().litValue shouldBe instruction
         }
+
+        dut.clock.step()
+        cycles += 1
       }
 
       sawException shouldBe true
@@ -166,13 +168,15 @@ class MachineCsrCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       var cycles = 0
       while (!dut.io.halted.peek().litToBoolean && cycles < 80) {
         dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, BigInt("00100073", 16)).U)
-        dut.clock.step()
-        cycles += 1
+
         if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
           sawException = true
           dut.io.commit.inst.peek().litValue shouldBe instruction
           dut.io.commit.rdWrite.expect(false.B)
         }
+
+        dut.clock.step()
+        cycles += 1
       }
 
       sawException shouldBe true
