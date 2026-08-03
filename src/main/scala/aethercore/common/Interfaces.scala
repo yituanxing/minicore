@@ -21,11 +21,15 @@ object OpBSel extends ChiselEnum {
 }
 
 object WbSel extends ChiselEnum {
-  val Alu, PcPlus4, Memory, Csr = Value
+  val Alu, PcPlus4, Memory, Csr, Atomic = Value
 }
 
 object CsrOp extends ChiselEnum {
   val None, Write, Set, Clear = Value
+}
+
+object AtomicOp extends ChiselEnum {
+  val None, LoadReserved, StoreConditional = Value
 }
 
 object BranchType extends ChiselEnum {
@@ -130,6 +134,7 @@ class ControlSignals extends Bundle {
   val opBSel = OpBSel()
   val wbSel = WbSel()
   val csrOp = CsrOp()
+  val atomicOp = AtomicOp()
   val branch = BranchType()
   val memSize = MemSize()
 
@@ -143,6 +148,8 @@ class ControlSignals extends Bundle {
   val usesRs1 = Bool()
   val usesRs2 = Bool()
   val csrUseImm = Bool()
+  val atomicAcquire = Bool()
+  val atomicRelease = Bool()
   val wfi = Bool()
   val mret = Bool()
   val trap = Bool()

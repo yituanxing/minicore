@@ -7,6 +7,7 @@ import aethercore.config.{CoreProfiles, IsaConfig}
 
 class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Module {
   private val hasM = isa.hasM
+  private val hasA = isa.hasA
   private val hasZicsr = isa.hasZicsr
   private val hasWordOps = isa.hasWordOps
 
@@ -22,6 +23,7 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   val funct3 = io.inst(14, 12)
   val funct7 = io.inst(31, 25)
   val funct6 = io.inst(31, 26)
+  val funct5 = io.inst(31, 27)
 
   val shiftLogicalImmediate =
     if (isa.xlen == 64) funct6 === "b000000".U else funct7 === "b0000000".U
@@ -39,6 +41,7 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   c.opBSel := OpBSel.Rs2
   c.wbSel := WbSel.Alu
   c.csrOp := CsrOp.None
+  c.atomicOp := AtomicOp.None
   c.branch := BranchType.None
   if (hasWordOps) c.memSize := MemSize.DWord else c.memSize := MemSize.Word
   c.illegal := true.B
@@ -182,6 +185,30 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
           }
           is("b110".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Rem } }
           is("b111".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Remu } }
+        }
+      }
+    }
+    is("b0101111".U) {
+      val wordWidth = funct3 === "b010".U
+      val dwordWidth = funct3 === "b011".U && hasWordOps.B
+      when(hasA.B && (wordWidth || dwordWidth)) {
+        c.usesRs1 := true.B
+        c.regWrite := true.B
+        c.wbSel := WbSel.Atomic
+        c.atomicAcquire := io.inst(26)
+        c.atomicRelease := io.inst(25)
+        when(wordWidth) { c.memSize := MemSize.Word }
+        when(dwordWidth) { c.memSize := MemSize.DWord }
+
+        when(funct5 === "b00010".U && io.inst(24, 20) === 0.U) {
+          c.illegal := false.B
+          c.memRead := true.B
+          c.atomicOp := AtomicOp.LoadReserved
+        }.elsewhen(funct5 === "b00011".U) {
+          c.illegal := false.B
+          c.usesRs2 := true.B
+          c.memWrite := true.B
+          c.atomicOp := AtomicOp.StoreConditional
         }
       }
     }
