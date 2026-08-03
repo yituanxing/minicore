@@ -58,6 +58,41 @@ class RV32IMUIsolatedSchedulerTest(unittest.TestCase):
         self.assertLess(workload.B_MESSAGE + len(workload.MESSAGE_B), workload.TASK_B_LIMIT)
         self.assertEqual(workload.PMPCFG0_VALUE, 0x000B0D08)
 
+    def test_context_frames_and_kernel_state_do_not_overlap(self) -> None:
+        # x1..x31 occupy offsets 4..124 and saved mepc occupies offset 128.
+        frame_bytes = 33 * 4
+        kernel_state_bytes = workload.K_B_FAULTS + 4
+        self.assertEqual(workload.CTX_A % 4, 0)
+        self.assertEqual(workload.CTX_B % 4, 0)
+        self.assertEqual(workload.KSTATE % 4, 0)
+        self.assertLessEqual(workload.CTX_A + frame_bytes, workload.CTX_B)
+        self.assertLessEqual(workload.CTX_B + frame_bytes, workload.KSTATE)
+        self.assertLessEqual(workload.KSTATE + kernel_state_bytes, workload.KERNEL_LIMIT)
+
+    def test_private_stacks_and_dynamic_tor_bounds_are_complete(self) -> None:
+        for text, data, limit, stack in (
+            (
+                workload.TASK_A_TEXT,
+                workload.TASK_A_DATA,
+                workload.TASK_A_LIMIT,
+                workload.TASK_A_STACK,
+            ),
+            (
+                workload.TASK_B_TEXT,
+                workload.TASK_B_DATA,
+                workload.TASK_B_LIMIT,
+                workload.TASK_B_STACK,
+            ),
+        ):
+            self.assertEqual(text % 4, 0)
+            self.assertEqual(data % 4, 0)
+            self.assertEqual(limit % 4, 0)
+            self.assertLess(text >> 2, data >> 2)
+            self.assertLess(data >> 2, limit >> 2)
+            self.assertGreaterEqual(stack, data)
+            self.assertLessEqual(stack + 4, limit)
+            self.assertEqual(stack % 4, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
