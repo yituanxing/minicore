@@ -51,17 +51,33 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("RISCV_MTIME_CLINT_no_extensions", text)
         self.assertIn("--self-check-exit --stall-period 5", text)
 
-    def test_build_is_parallel_and_incremental_without_weakening_clean_full_gate(self) -> None:
+    def test_build_is_parallel_incremental_and_invalidates_every_configured_object(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn("JOBS ?= $(shell nproc)", text)
         self.assertIn("SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready", text)
         self.assertNotIn("SOURCE_STAMP := $(SOURCE_DIR)", text)
         self.assertIn("rm -f $(SOURCE_DIR)/.aethercore-source-ready", text)
         self.assertIn(
-            "$(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)",
+            "FREERTOS_CONFIG_DEPS := $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h",
             text,
         )
-        self.assertIn("must not race the pinned kernel fetch", text)
+        self.assertIn(
+            "$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)",
+            text,
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/port.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/portASM.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/heap_4.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/$(1:.c=.o): $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn("cannot mix incompatible kernel options", text)
         self.assertIn("RTL_STAMP :=", text)
         self.assertIn("SIM_BINARY :=", text)
         self.assertIn("$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN)", text)
