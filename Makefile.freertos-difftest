@@ -54,6 +54,7 @@ run-difftest: qualification image difftest-sim
 	grep -Eq 'difftest=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'zicsr-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'trap-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
+	grep -Eq 'fence-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'wfi-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'mret-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'interrupt-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
