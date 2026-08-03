@@ -69,6 +69,15 @@ class WaitForInterruptCoreSpec extends AnyFlatSpec with Matchers with ChiselSim 
       }
 
       dut.io.halted.expect(true.B)
+      dut.io.commit.valid.expect(false.B)
+      dut.io.dmem.valid.expect(false.B)
+
+      // halted becomes visible combinationally when WFI first reaches WB. The
+      // first waiting edge then discards speculative younger fetch state and
+      // pins the architectural fetch address to WFI+4.
+      dut.clock.step()
+      cycles += 1
+      dut.io.halted.expect(true.B)
       dut.io.imem.addr.expect(resumePc.U)
 
       for (_ <- 0 until 8) {
@@ -78,6 +87,7 @@ class WaitForInterruptCoreSpec extends AnyFlatSpec with Matchers with ChiselSim 
         dut.io.halted.expect(true.B)
         dut.io.imem.addr.expect(resumePc.U)
         dut.clock.step()
+        cycles += 1
       }
 
       dut.io.timerInterrupt.poke(true.B)
@@ -91,6 +101,7 @@ class WaitForInterruptCoreSpec extends AnyFlatSpec with Matchers with ChiselSim 
       dut.io.commit.interruptPc.expect(resumePc.U)
       dut.io.dmem.valid.expect(false.B)
       dut.clock.step()
+      cycles += 1
       dut.io.timerInterrupt.poke(false.B)
 
       var wfiCommits = 1
