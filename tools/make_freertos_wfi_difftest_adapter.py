@@ -19,9 +19,10 @@ def adapt(source: str) -> str:
         "constexpr std::uint32_t kEcall = 0x00000073U;\n"
         "constexpr std::uint32_t kMret = 0x30200073U;\n",
         "constexpr std::uint32_t kEcall = 0x00000073U;\n"
+        "constexpr std::uint32_t kFenceIorw = 0x0ff0000fU;\n"
         "constexpr std::uint32_t kWfi = 0x10500073U;\n"
         "constexpr std::uint32_t kMret = 0x30200073U;\n",
-        "WFI instruction constant",
+        "WFI instruction constants",
     )
     text = replace_once(
         text,
@@ -34,6 +35,7 @@ def adapt(source: str) -> str:
         "      ++trapShadowSteps_;\n"
         "    } else if (mretStep) {\n",
         "    const bool ecallTrapStep = commit.exception;\n"
+        "    const bool fenceStep = commit.inst == kFenceIorw;\n"
         "    const bool wfiStep = commit.inst == kWfi;\n"
         "    const bool mretStep = commit.inst == kMret;\n"
         "    const bool zicsrStep = isZicsrInstruction(commit.inst);\n"
@@ -41,6 +43,9 @@ def adapt(source: str) -> str:
         "      after = executeEcallTrap(before, commit);\n"
         "      regcpy_(&after, kToRef);\n"
         "      ++trapShadowSteps_;\n"
+        "    } else if (fenceStep) {\n"
+        "      after = executeFence(before, commit);\n"
+        "      regcpy_(&after, kToRef);\n"
         "    } else if (wfiStep) {\n"
         "      after = executeWfi(before, commit);\n"
         "      regcpy_(&after, kToRef);\n"
@@ -53,9 +58,10 @@ def adapt(source: str) -> str:
         "    if (mtimeLoadStep) line << \" reference=mtime-load-shadow\";\n"
         "    if (zicsrStep) line << \" reference=zicsr-shadow\";\n",
         "    if (mtimeLoadStep) line << \" reference=mtime-load-shadow\";\n"
+        "    if (fenceStep) line << \" reference=fence-shadow\";\n"
         "    if (wfiStep) line << \" reference=wfi-shadow\";\n"
         "    if (zicsrStep) line << \" reference=zicsr-shadow\";\n",
-        "WFI trace label",
+        "WFI trace labels",
     )
     text = replace_once(
         text,
@@ -66,7 +72,23 @@ def adapt(source: str) -> str:
         "  std::uint64_t mretShadowSteps() const { return mretShadowSteps_; }\n",
         "WFI counter accessor",
     )
-    method = r'''  NemuState32 executeWfi(const NemuState32& before,
+    method = r'''  NemuState32 executeFence(const NemuState32& before,
+                           const DifftestCommit& commit) {
+    if (commit.inst != kFenceIorw || commit.rdWrite || commit.memValid ||
+        commit.exception || commit.interrupt) {
+      fail("FreeRTOS tickless fence shadow received an invalid architectural event");
+    }
+
+    // The pinned historical NEMU does not decode FENCE IORW, IORW. In this
+    // single-hart, strongly ordered simulation it has no architectural state
+    // effect beyond retiring at PC+4, so model that exact boundary explicitly.
+    NemuState32 after = before;
+    after.pc = before.pc + 4U;
+    after.gpr[0] = 0;
+    return after;
+  }
+
+  NemuState32 executeWfi(const NemuState32& before,
                          const DifftestCommit& commit) {
     if (commit.inst != kWfi || commit.rdWrite || commit.memValid || commit.exception) {
       fail("FreeRTOS WFI shadow received an invalid architectural wake event");
