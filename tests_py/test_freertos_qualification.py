@@ -11,6 +11,14 @@ LOCK = ROOT / "software" / "freertos" / "FreeRTOS-Kernel.lock"
 FETCH = ROOT / "tools" / "fetch_freertos_kernel.sh"
 AUDIT = ROOT / "tools" / "audit_freertos_riscv_port.py"
 CSR_FILE = ROOT / "src" / "main" / "scala" / "aethercore" / "core" / "MachineCsrFile.scala"
+CHIP_EXTENSION = (
+    Path("portable")
+    / "GCC"
+    / "RISC-V"
+    / "chip_specific_extensions"
+    / "RISCV_MTIME_CLINT_no_extensions"
+    / "freertos_risc_v_chip_specific_extensions.h"
+)
 
 
 class FreeRtosQualificationTest(unittest.TestCase):
@@ -80,6 +88,20 @@ class FreeRtosQualificationTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        extension = root / CHIP_EXTENSION
+        extension.parent.mkdir(parents=True)
+        extension.write_text(
+            "\n".join(
+                (
+                    "portasmHAS_SIFIVE_CLINT",
+                    "portasmHAS_MTIME",
+                    "portasmADDITIONAL_CONTEXT_SIZE",
+                    "portasmSAVE_ADDITIONAL_REGISTERS",
+                    "portasmRESTORE_ADDITIONAL_REGISTERS",
+                )
+            ),
+            encoding="utf-8",
+        )
 
     def test_lock_pins_exact_v1130_sources_and_platform_addresses(self) -> None:
         values = self.lock_values()
@@ -94,7 +116,16 @@ class FreeRtosQualificationTest(unittest.TestCase):
         self.assertEqual(values["expected_mhartid"], "0")
         self.assertEqual(values["mtime_address"], "0x0200bff8")
         self.assertEqual(values["mtimecmp_address"], "0x02004000")
-        for key in ("port_c_blob_sha", "port_asm_blob_sha", "portmacro_blob_sha"):
+        self.assertEqual(
+            values["chip_extension_directory"],
+            CHIP_EXTENSION.parent.as_posix(),
+        )
+        for key in (
+            "port_c_blob_sha",
+            "port_asm_blob_sha",
+            "portmacro_blob_sha",
+            "chip_extension_blob_sha",
+        ):
             self.assertEqual(len(values[key]), 40)
             int(values[key], 16)
 
@@ -106,6 +137,7 @@ class FreeRtosQualificationTest(unittest.TestCase):
         self.assertIn('timeout "$FETCH_TIMEOUT"', text)
         self.assertIn("http.version=HTTP/1.1", text)
         self.assertIn("git -C \"$tree\" hash-object portable/GCC/RISC-V/port.c", text)
+        self.assertIn('git -C "$tree" hash-object "$CHIP_EXTENSION_PATH"', text)
         self.assertIn("status --porcelain --untracked-files=all", text)
         self.assertIn("checkout --quiet --detach", text)
 
@@ -121,7 +153,9 @@ class FreeRtosQualificationTest(unittest.TestCase):
             self.assertEqual(contract["upstream"]["release"], "V11.3.0")
             self.assertEqual(contract["initial_target"]["profile"], "rv32im_zicsr_m")
             self.assertEqual(contract["initial_target"]["mhartid"], 0)
+            self.assertEqual(contract["initial_target"]["additional_context_registers"], 0)
             self.assertIn("mhartid", contract["required_architecture"]["csrs"])
+            self.assertIn("chip_extension.h", contract["files"])
             self.assertIn(
                 "startup and linker script",
                 contract["aethercore_boundary"]["platform_glue_pending"],
