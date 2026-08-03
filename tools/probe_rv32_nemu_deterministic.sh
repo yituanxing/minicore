@@ -41,13 +41,15 @@ set -euo pipefail
 
 if [[ $# -eq 6 \
   && "$1" == "-C" \
-  && "$2" == "$AETHERCORE_NEMU_SOURCE_DIR" \
   && "$3" == "fetch" \
   && "$4" == "--depth=1" \
   && "$5" == "origin" \
   && "$6" == "$AETHERCORE_NEMU_REVISION" ]]; then
-  exec "$AETHERCORE_REAL_GIT" -C "$2" fetch --depth=1 \
-    "$AETHERCORE_NEMU_CACHE_CHECKOUT" "$AETHERCORE_NEMU_REVISION"
+  candidate_dir="$(cd "$2" 2>/dev/null && pwd || true)"
+  if [[ "$candidate_dir" == "$AETHERCORE_NEMU_SOURCE_DIR" ]]; then
+    exec "$AETHERCORE_REAL_GIT" -C "$2" fetch --depth=1 \
+      "$AETHERCORE_NEMU_CACHE_CHECKOUT" "$AETHERCORE_NEMU_REVISION"
+  fi
 fi
 
 exec "$AETHERCORE_REAL_GIT" "$@"
