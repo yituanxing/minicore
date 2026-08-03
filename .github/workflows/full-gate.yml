@@ -82,6 +82,10 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate_user.sh
 
+      - name: RV32IMU PMP user isolation
+        shell: bash
+        run: bash tools/ci/full_gate_pmp.sh
+
       - name: RV64 compiler-produced corpus
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-compiled
@@ -119,6 +123,7 @@ jobs:
             echo '- fast architectural gates run before long software workloads'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
+            echo '- PMP partitions kernel, user text and user data before any MMIO side effect'
             echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
           } >> "$GITHUB_STEP_SUMMARY"
 
