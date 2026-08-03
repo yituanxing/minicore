@@ -33,14 +33,21 @@ esac
 
 test -f "$sysroot/include/stdlib.h"
 test -f "$sysroot/include/string.h"
-test -f "$(riscv-none-elf-gcc -march=rv32im_zicsr -mabi=ilp32 -print-file-name=libc.a)"
-test -f "$(riscv-none-elf-gcc -march=rv32im_zicsr -mabi=ilp32 -print-libgcc-file-name)"
+test "$(riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -print-multi-directory)" = \
+  "rv32im/ilp32"
+test -f "$(riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -print-file-name=libc.a)"
+test -f "$(riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -print-libgcc-file-name)"
 
-printf '#include <stdlib.h>\n#include <string.h>\n' | \
+printf '%s\n' '#include <stddef.h>' '#include <stdint.h>' \
+  '#include <stdlib.h>' '#include <string.h>' | \
   riscv-none-elf-gcc --sysroot="$sysroot" -march=rv32im_zicsr -mabi=ilp32 \
-    -ffreestanding -fno-builtin -E -Wp,-v -x c - \
+    -ffreestanding -fno-builtin -E -H -Wp,-v -x c - \
     >/dev/null 2> "$LOG_DIR/freertos-toolchain-include-search.log"
 grep -Fq "$sysroot/include" "$LOG_DIR/freertos-toolchain-include-search.log"
+grep -Fq "$sysroot/include/stdlib.h" "$LOG_DIR/freertos-toolchain-include-search.log"
+grep -Fq "$sysroot/include/string.h" "$LOG_DIR/freertos-toolchain-include-search.log"
+! grep -Eq '(^|[[:space:].])(/usr/include|/usr/local/include)(/|$)' \
+  "$LOG_DIR/freertos-toolchain-include-search.log"
 ! grep -Fq "$ROOT/software/freertos/aethercore/freestanding" \
   "$LOG_DIR/freertos-toolchain-include-search.log"
 
@@ -74,8 +81,8 @@ binary_sha="$(sha256sum "$binary" | awk '{print $1}')"
 binary_bytes="$(stat -c %s "$binary")"
 stdlib_sha="$(sha256sum "$sysroot/include/stdlib.h" | awk '{print $1}')"
 string_sha="$(sha256sum "$sysroot/include/string.h" | awk '{print $1}')"
-libc_path="$(riscv-none-elf-gcc -march=rv32im_zicsr -mabi=ilp32 -print-file-name=libc.a)"
-libgcc_path="$(riscv-none-elf-gcc -march=rv32im_zicsr -mabi=ilp32 -print-libgcc-file-name)"
+libc_path="$(riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -print-file-name=libc.a)"
+libgcc_path="$(riscv-none-elf-gcc -march=rv32im -mabi=ilp32 -print-libgcc-file-name)"
 
 cat > "$EVIDENCE_DIR/result.txt" <<EOF
 status=PASS
@@ -92,6 +99,7 @@ toolchain=xpack-riscv-none-elf-gcc-15.2.0-1
 toolchain_archive_sha256=$TOOLCHAIN_SHA256
 toolchain_target=riscv-none-elf
 toolchain_sysroot=$sysroot
+toolchain_multilib=rv32im/ilp32
 sysroot_stdlib_sha256=$stdlib_sha
 sysroot_string_sha256=$string_sha
 rv32_libc=$libc_path
