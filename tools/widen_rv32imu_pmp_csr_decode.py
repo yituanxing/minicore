@@ -4,8 +4,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-OLD = "switch (address & 0xffU) {"
-NEW = "switch (address & 0xfffU) {"
+LOW_BYTE = "switch (address & 0xffU) {"
+FULL_ADDRESS = "switch (address) {"
+WIDENED = "switch (address & 0xfffU) {"
 EXPECTED = 3
 
 
@@ -15,16 +16,29 @@ def main() -> None:
 
     path = Path(sys.argv[1])
     text = path.read_text(encoding="utf-8")
-    count = text.count(OLD)
-    if count != EXPECTED:
-        raise SystemExit(
-            f"expected {EXPECTED} low-byte CSR decode switches, found {count}"
-        )
-    if NEW in text:
-        raise SystemExit("PMP CSR decode was already widened")
 
-    path.write_text(text.replace(OLD, NEW), encoding="utf-8")
-    print(f"widened {count} PMP CSR decode switches in {path}")
+    low_byte_count = text.count(LOW_BYTE)
+    full_address_count = text.count(FULL_ADDRESS)
+    widened_count = text.count(WIDENED)
+
+    if low_byte_count == EXPECTED and full_address_count == 0 and widened_count == 0:
+        path.write_text(text.replace(LOW_BYTE, WIDENED), encoding="utf-8")
+        print(f"widened {low_byte_count} PMP CSR decode switches in {path}")
+        return
+
+    if full_address_count == EXPECTED and low_byte_count == 0 and widened_count == 0:
+        print(f"validated {full_address_count} full-address PMP CSR decode switches in {path}")
+        return
+
+    if widened_count == EXPECTED and low_byte_count == 0 and full_address_count == 0:
+        print(f"validated {widened_count} already-widened PMP CSR decode switches in {path}")
+        return
+
+    raise SystemExit(
+        "unexpected PMP CSR decode shape: "
+        f"low-byte={low_byte_count}, full-address={full_address_count}, "
+        f"widened={widened_count}; expected exactly {EXPECTED} switches in one form"
+    )
 
 
 if __name__ == "__main__":
