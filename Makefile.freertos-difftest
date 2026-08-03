@@ -9,14 +9,17 @@ STALL_PERIOD ?= 5
 DIFFTEST_LOG ?= $(DIFFTEST_LOG_DIR)/difftest-stall$(STALL_PERIOD).log
 NEGATIVE_LOG ?= $(DIFFTEST_LOG_DIR)/difftest-negative-stall$(STALL_PERIOD).log
 
-.PHONY: difftest-adapter difftest-sim run-difftest run-difftest-negative
+.PHONY: difftest-adapter difftest-runner-source difftest-sim run-difftest run-difftest-negative
 
 difftest-adapter: $(FREERTOS_DIFFTEST_CPP)
 
 $(FREERTOS_DIFFTEST_CPP): sim/nemu_difftest_rv32_timer.cpp tools/make_freertos_difftest_adapter.py
 	python3 tools/make_freertos_difftest_adapter.py $< $@
 
-difftest-sim: rtl runner-source difftest-adapter
+difftest-runner-source: runner-source
+	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits();\n"; b="      if (difftest) {\n        std::cout << \", difftest=\" << difftest->checkedCommits()\n                  << \", zicsr-shadow=\" << difftest->zicsrShadowSteps()\n                  << \", trap-shadow=\" << difftest->trapShadowSteps()\n                  << \", mret-shadow=\" << difftest->mretShadowSteps()\n                  << \", interrupt-shadow=\" << difftest->interruptShadowSteps();\n      }\n"; assert s.count(a) == 1; p.write_text(s.replace(a,b,1))'
+
+difftest-sim: rtl difftest-runner-source difftest-adapter
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(DIFFTEST_SIM_OBJ_DIR) \
