@@ -10,6 +10,11 @@ EVIDENCE_DIR="$BUILD_DIR/evidence"
 LOCK_FILE="$ROOT/software/freertos/FreeRTOS-Kernel.lock"
 TOOLCHAIN_ROOT="${AETHERCORE_RISCV_NONE_ELF_ROOT:-${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/xpack-riscv-none-elf-gcc-15.2.0-1}"
 TOOLCHAIN_SHA256="aaaa8060c914851a3e5ee1ba82cc3d6f80972f90638a05c6e823a37557a33758"
+JOBS="${AETHERCORE_JOBS:-0}"
+if [[ "$JOBS" == "0" ]]; then
+  JOBS="$(nproc)"
+fi
+[[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: invalid AETHERCORE_JOBS=$JOBS" >&2; exit 1; }
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$LOG_DIR" "$EVIDENCE_DIR"
@@ -65,7 +70,7 @@ grep -Fxq "$expected_string" "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
   "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
 
 set -o pipefail
-make -f Makefile.freertos run-local \
+make -j"$JOBS" -f Makefile.freertos JOBS="$JOBS" TRACE=1 run-local \
   2>&1 | tee "$LOG_DIR/freertos-rv32-local.log"
 
 contract="$BUILD_DIR/port-contract.json"
@@ -84,7 +89,9 @@ grep -q '"mhartid": 0' "$contract"
 grep -q '<freertos_risc_v_trap_handler>:' "$disassembly"
 grep -Eq '\bcsrr[[:space:]].*mhartid' "$disassembly"
 grep -q '\bmret\b' "$disassembly"
+grep -Eq '\bwfi\b' "$disassembly"
 grep -Fq 'FREERTOS BOOT V11.3.0 RV32IM' "$LOG_DIR/freertos-rv32-local.log"
+grep -Fq 'FREERTOS IDLE PASS wfi>=1 wake>=1' "$LOG_DIR/freertos-rv32-local.log"
 grep -Fq 'FREERTOS PASS queue=64 semaphore=8 ticks>=16' "$LOG_DIR/freertos-rv32-local.log"
 grep -Fq 'PASS: self-check exit=0' "$LOG_DIR/freertos-rv32-local.log"
 ! grep -Fq 'FAIL:' "$LOG_DIR/freertos-rv32-local.log"
@@ -108,6 +115,9 @@ mtimecmp=0x02004000
 workload_messages=64
 workload_semaphore_batches=8
 minimum_ticks=16
+idle_wfi=true
+idle_wfi_wake=true
+parallel_jobs=$JOBS
 toolchain=xpack-riscv-none-elf-gcc-15.2.0-1
 toolchain_archive_sha256=$TOOLCHAIN_SHA256
 toolchain_target=riscv-none-elf
