@@ -1,0 +1,100 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/rv32imu-pmp
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+SOFTWARE_DIR := $(BUILD_DIR)/software
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32imu_pmp.cpp
+GENERATED_RV32IMU_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32imu.cpp
+GENERATED_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32imu_pmp.cpp
+TOP := AetherCoreRV32IMUPmpSimTop
+VERILATOR ?= verilator
+RV32_NEMU_SO ?=
+STALL_PERIODS := 0 5
+MISMATCH_EVENT ?= 0
+MESSAGE := PMP isolation via SYS_WRITE
+
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+
+.PHONY: all rtl software contract runner-source difftest-source sim local-reference run mismatch-probe clean
+
+all: run
+
+rtl:
+	./mill aethercore.runMain aethercore.ElaborateRV32IMUPmp --target-dir $(RTL_DIR)
+
+software:
+	python3 tools/make_rv32imu_pmp.py $(SOFTWARE_DIR)
+
+contract: software
+	python3 tools/check_rv32imu_pmp_contract.py \
+		$(SOFTWARE_DIR)/pmp-isolation.bin \
+		$(SOFTWARE_DIR)/labels.txt \
+		$(SOFTWARE_DIR)/contract.txt
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	python3 tools/make_rv32imu_pmp_runner.py \
+		sim/sim_main.cpp $(GENERATED_MAIN)
+
+difftest-source:
+	mkdir -p $(BUILD_DIR)
+	python3 tools/make_rv32imu_difftest.py \
+		sim/nemu_difftest_rv32.cpp $(GENERATED_RV32IMU_DIFFTEST)
+	python3 tools/widen_rv32imu_pmp_csr_decode.py \
+		$(GENERATED_RV32IMU_DIFFTEST)
+	python3 tools/make_rv32imu_pmp_difftest.py \
+		$(GENERATED_RV32IMU_DIFFTEST) $(GENERATED_DIFFTEST)
+
+sim: rtl runner-source difftest-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IMU PMP SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) \
+		$(abspath $(GENERATED_DIFFTEST))
+
+local-reference: sim contract
+	mkdir -p $(BUILD_DIR)/logs
+	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/pmp-isolation.bin \
+		--max-cycles 50000 --self-check-exit --stall-period 5 \
+		2>&1 | tee $(BUILD_DIR)/logs/local-reference.log
+	grep -Fxq '$(MESSAGE)' $(BUILD_DIR)/logs/local-reference.log
+	! grep -Fq '@' $(BUILD_DIR)/logs/local-reference.log
+	grep -Fq 'PASS: self-check exit=0' $(BUILD_DIR)/logs/local-reference.log
+
+run: sim contract
+	@test -n "$(RV32_NEMU_SO)" || { echo "ERROR: set RV32_NEMU_SO to the exact RV32 NEMU reference"; exit 1; }
+	@test -f "$(RV32_NEMU_SO)" || { echo "ERROR: RV32 NEMU reference not found: $(RV32_NEMU_SO)"; exit 1; }
+	mkdir -p $(BUILD_DIR)/logs
+	@for stall in $(STALL_PERIODS); do \
+		echo "== RV32IMU PMP isolation: stall=$$stall =="; \
+		args=""; \
+		if [[ "$$stall" != "0" ]]; then args="--stall-period $$stall"; fi; \
+		$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/pmp-isolation.bin \
+			--max-cycles 50000 --self-check-exit $$args \
+			--difftest "$(RV32_NEMU_SO)" \
+			2>&1 | tee $(BUILD_DIR)/logs/stall-$$stall.log; \
+		grep -Fxq '$(MESSAGE)' $(BUILD_DIR)/logs/stall-$$stall.log; \
+		! grep -Fq '@' $(BUILD_DIR)/logs/stall-$$stall.log; \
+		grep -Fq 'PASS: self-check exit=0' $(BUILD_DIR)/logs/stall-$$stall.log; \
+	done
+
+mismatch-probe: sim contract
+	@test -n "$(RV32_NEMU_SO)" || { echo "ERROR: set RV32_NEMU_SO to the exact RV32 NEMU reference"; exit 1; }
+	mkdir -p $(BUILD_DIR)/logs
+	@set +e; \
+	AETHERCORE_RV32_DIFFTEST_INJECT_MISMATCH_AT=$(MISMATCH_EVENT) \
+		$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/pmp-isolation.bin \
+		--max-cycles 50000 --self-check-exit --stall-period 5 \
+		--difftest "$(RV32_NEMU_SO)" \
+		> $(BUILD_DIR)/logs/mismatch.log 2>&1; \
+	status=$$?; \
+	set -e; \
+	test "$$status" -ne 0; \
+	grep -q 'RV32 DiffTest mismatch after $(MISMATCH_EVENT) matched events' $(BUILD_DIR)/logs/mismatch.log; \
+	grep -q 'x31' $(BUILD_DIR)/logs/mismatch.log
+
+clean:
+	rm -rf $(BUILD_DIR)

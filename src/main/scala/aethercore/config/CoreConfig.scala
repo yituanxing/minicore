@@ -6,7 +6,8 @@ final case class IsaConfig(
     xlen: Int,
     extensions: Set[Char],
     privilegeModes: Set[Char],
-    zExtensions: Set[String] = Set.empty
+    zExtensions: Set[String] = Set.empty,
+    pmpEntries: Int = 0
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
@@ -15,6 +16,8 @@ final case class IsaConfig(
     zExtensions.forall(name => name.startsWith("Z") && name.length > 1),
     s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
   )
+  require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
+  require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
 
   val xBytes: Int = xlen / 8
   val shiftBits: Int = log2Ceil(xlen)
@@ -25,6 +28,7 @@ final case class IsaConfig(
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
   val hasWordOps: Boolean = xlen == 64
+  val hasPmp: Boolean = pmpEntries > 0
 
   val march: String = {
     val ordered = Seq('I', 'M', 'A', 'F', 'D', 'C')
@@ -112,6 +116,18 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imuPmpSoftware: CoreConfig = CoreConfig(
+    name = "rv32imu-pmp-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr"),
+      pmpEntries = 4
     ),
     platform = rv32Platform
   )

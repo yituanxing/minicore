@@ -92,6 +92,20 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
   val csrFile = Module(new MachineCsrFile(config.isa))
+  val instructionPmp = Module(new PmpChecker(xlen))
+  val dataPmp = Module(new PmpChecker(xlen))
+
+  instructionPmp.io.privilege := csrFile.io.currentPrivilege
+  instructionPmp.io.address := pc
+  instructionPmp.io.bytes := 4.U
+  instructionPmp.io.write := false.B
+  instructionPmp.io.execute := true.B
+  instructionPmp.io.config := csrFile.io.pmpConfig
+  instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
+
+  dataPmp.io.privilege := csrFile.io.currentPrivilege
+  dataPmp.io.config := csrFile.io.pmpConfig
+  dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
   val takingTrap = memWb.valid && memWb.trap.valid
   val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
@@ -253,18 +267,40 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
 
   val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
   val storeMask = WireDefault(fullStoreMask)
+  val dataAccessBytes = WireDefault(busBytes.U(4.W))
   switch(exMem.ctrl.memSize) {
-    is(MemSize.Byte)  { storeMask := 1.U(busBytes.W) }
-    is(MemSize.Half)  { storeMask := 3.U(busBytes.W) }
-    is(MemSize.Word)  { storeMask := 15.U(busBytes.W) }
-    is(MemSize.DWord) { storeMask := fullStoreMask }
+    is(MemSize.Byte) {
+      storeMask := 1.U(busBytes.W)
+      dataAccessBytes := 1.U
+    }
+    is(MemSize.Half) {
+      storeMask := 3.U(busBytes.W)
+      dataAccessBytes := 2.U
+    }
+    is(MemSize.Word) {
+      storeMask := 15.U(busBytes.W)
+      dataAccessBytes := 4.U
+    }
+    is(MemSize.DWord) {
+      storeMask := fullStoreMask
+      dataAccessBytes := 8.U
+    }
   }
+
+  dataPmp.io.address := exMem.result
+  dataPmp.io.bytes := dataAccessBytes
+  dataPmp.io.write := exMem.ctrl.memWrite
+  dataPmp.io.execute := false.B
 
   // A synchronous trap, asynchronous interrupt or return can redirect from WB
   // while a younger instruction occupies MEM. Suppress that request before the
   // edge so no Store/MMIO side effect escapes from an instruction being flushed.
-  io.dmem.valid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
+  val candidateDataRequest = exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
     !exMem.trap.valid && !takingTrap && !takingInterrupt && !takingMret
+  val dataPmpFault = candidateDataRequest &&
+    (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+
+  io.dmem.valid := candidateDataRequest && !dataPmpFault
   io.dmem.write := exMem.ctrl.memWrite
   io.dmem.addr := exMem.result
   io.dmem.wdata := exMem.storeData
@@ -294,7 +330,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   }
 
   val memoryStall = io.dmem.valid && !io.dmem.ready
-  val memoryFault = io.dmem.valid && io.dmem.fault
+  val memoryFault = dataPmpFault || (io.dmem.valid && io.dmem.fault)
   val loadUseHazard = idEx.valid && idEx.ctrl.memRead && idEx.rd =/= 0.U && ifId.valid && (
     (decoder.io.ctrl.usesRs1 && decoder.io.rs1 === idEx.rd) ||
       (decoder.io.ctrl.usesRs2 && decoder.io.rs2 === idEx.rd)
@@ -407,7 +443,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       ifId.valid := true.B
       ifId.pc := pc
       ifId.inst := io.imem.inst
-      ifId.fault := io.imem.fault
+      ifId.fault := io.imem.fault ||
+        (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
       pc := pc + 4.U
     }
   }

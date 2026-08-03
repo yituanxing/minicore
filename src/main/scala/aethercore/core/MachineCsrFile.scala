@@ -70,6 +70,17 @@ object MachineCsrWarl {
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(MachineCsrAddress.Mepc.U) { result := data & mepcMask.U(xlen.W) }
     }
+
+    if (isa.hasPmp) {
+      when(address === PmpCsrAddress.Pmpcfg0.U) {
+        result := PmpCsrWarl.canonicalize(isa, address, data)
+      }
+      for (entry <- 0 until isa.pmpEntries) {
+        when(address === PmpCsrAddress.pmpaddr(entry).U) {
+          result := PmpCsrWarl.canonicalize(isa, address, data)
+        }
+      }
+    }
     result
   }
 }
@@ -112,6 +123,8 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     val writeData = Input(UInt(xlen.W))
 
     val currentPrivilege = Output(UInt(2.W))
+    val pmpConfig = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
+    val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt((xlen - 2).W)))
 
     val timerInterrupt = Input(Bool())
     val machineTimerInterrupt = Output(Bool())
@@ -134,6 +147,14 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   val mepc = RegInit(0.U(xlen.W))
   val mcause = RegInit(0.U(xlen.W))
   val mtval = RegInit(0.U(xlen.W))
+
+  val pmp = Module(new PmpCsrFile(isa))
+  pmp.io.readAddr := io.readAddr
+  pmp.io.writeEnable := io.writeEnable
+  pmp.io.writeAddr := io.writeAddr
+  pmp.io.writeData := io.writeData
+  io.pmpConfig := pmp.io.config
+  io.pmpAddress := pmp.io.pmpAddress
 
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val ordinaryWrite = io.writeEnable
@@ -220,6 +241,12 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
       io.readData := mipValue
       io.readImplemented := true.B
     }
+  }
+
+  when(pmp.io.readImplemented) {
+    io.readData := pmp.io.readData
+    io.readImplemented := true.B
+    io.readWritable := pmp.io.readWritable
   }
 
   val canonicalTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
