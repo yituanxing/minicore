@@ -32,7 +32,7 @@ make -f Makefile.rv32imu-pmp software contract
   printf 'github_run_attempt=%s\n' "${GITHUB_RUN_ATTEMPT:-local}"
   printf 'nemu_so=%s\n' "$RV32_NEMU_SO"
   sha256sum \
-    "$SOFTWARE_DIR/program.bin" \
+    "$SOFTWARE_DIR/pmp-isolation.bin" \
     "$SOFTWARE_DIR/labels.txt" \
     "$SOFTWARE_DIR/manifest.txt" \
     "$SOFTWARE_DIR/contract.txt"
