@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 revision="${NEMU_REVISION:-8601834e4889e6bf3b6113eb5f824ba7689126f5}"
 work_dir="${1:-build/rv32-nemu-probe}"
 source_dir="$work_dir/nemu"
@@ -21,6 +22,17 @@ git -C "$source_dir" init -q
 git -C "$source_dir" remote add origin https://github.com/OpenXiangShan/NEMU.git
 git -C "$source_dir" fetch --depth=1 origin "$revision"
 git -C "$source_dir" checkout -q FETCH_HEAD
+
+# NEMU's fixed commit otherwise performs an implicit, unpinned SoftFloat clone
+# while Make parses scripts/softfloat.mk. Preseed the expected directory from a
+# separately pinned persistent cache so the reference build has no hidden
+# source drift and transient proxy failures do not restart the whole Full Gate.
+softfloat_revision="$(
+  bash "$ROOT/tools/ensure_berkeley_softfloat.sh" \
+    "$source_dir/resource/softfloat/repo"
+)"
+printf '%s\n' "$softfloat_revision" | tee "$evidence_dir/softfloat-revision.txt"
+
 export NEMU_HOME="$(cd "$source_dir" && pwd)"
 export CFLAGS="${CFLAGS:-} -Wno-error=format -Wno-error=array-bounds"
 export LDFLAGS="${LDFLAGS:-} -lreadline -Wl,--build-id=none"
@@ -145,6 +157,7 @@ if ! cmp -s "$work_dir/riscv32-reference-first.so" "$reference_so"; then
 reproducible=false
 first_sha256=$first_sha
 second_sha256=$second_sha
+softfloat_revision=$softfloat_revision
 single_step=$single_step
 EOF
   cat "$evidence_dir/reproducibility.txt" >&2
@@ -157,6 +170,7 @@ first_sha256=$first_sha
 second_sha256=$second_sha
 source_date_epoch=$SOURCE_DATE_EPOCH
 build_id=disabled
+softfloat_revision=$softfloat_revision
 single_step=$single_step
 EOF
 cat "$evidence_dir/reproducibility.txt"
@@ -231,6 +245,7 @@ PY
 cat > "$evidence_dir/result.txt" <<EOF
 status=PASS
 revision=$revision
+softfloat_revision=$softfloat_revision
 config=$config_name
 reference_so=$(basename "$reference_so")
 reference_sha256=$second_sha
