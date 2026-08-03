@@ -6,7 +6,6 @@ SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
 CONTRACT := $(BUILD_DIR)/port-contract.json
 LOCK_FILE := software/freertos/FreeRTOS-Kernel.lock
 APP_DIR := software/freertos/aethercore
-FREESTANDING_DIR := $(APP_DIR)/freestanding
 OBJ_DIR := $(BUILD_DIR)/obj
 ELF := $(BUILD_DIR)/aethercore-freertos.elf
 BIN := $(BUILD_DIR)/aethercore-freertos.bin
@@ -20,24 +19,26 @@ GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_freertos.cpp
 TOP := AetherCoreRV32IMTrapSimTop
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-CROSS_COMPILE ?= riscv64-unknown-elf-
+CROSS_COMPILE ?= riscv-none-elf-
 CC := $(CROSS_COMPILE)gcc
 OBJCOPY := $(CROSS_COMPILE)objcopy
 OBJDUMP := $(CROSS_COMPILE)objdump
 READELF := $(CROSS_COMPILE)readelf
 VERILATOR ?= verilator
 
+TOOLCHAIN_SYSROOT := $(shell $(CC) --print-sysroot 2>/dev/null)
+SYSROOT_FLAGS := --sysroot=$(TOOLCHAIN_SYSROOT)
 ARCH_FLAGS := -march=rv32im_zicsr -mabi=ilp32 -mcmodel=medany -msmall-data-limit=0
-COMMON_FLAGS := $(ARCH_FLAGS) -ffreestanding -fno-builtin -fdata-sections -ffunction-sections
+COMMON_FLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) -ffreestanding -fno-builtin -fdata-sections -ffunction-sections
 CFLAGS := $(COMMON_FLAGS) -std=c11 -Os -g -Wall -Wextra
 ASFLAGS := $(COMMON_FLAGS) -x assembler-with-cpp
-LDFLAGS := $(ARCH_FLAGS) -nostdlib -nostartfiles \
+LDFLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) -nostdlib -nostartfiles \
 	-Wl,--gc-sections -Wl,--build-id=none -Wl,-Map,$(MAP) \
 	-T $(APP_DIR)/linker.ld
 
 PORT_DIR := $(SOURCE_DIR)/portable/GCC/RISC-V
 CHIP_EXTENSION_DIR := $(PORT_DIR)/chip_specific_extensions/RISCV_MTIME_CLINT_no_extensions
-INCLUDES := -I$(FREESTANDING_DIR) -I$(APP_DIR) -I$(SOURCE_DIR)/include -I$(PORT_DIR) -I$(CHIP_EXTENSION_DIR)
+INCLUDES := -I$(APP_DIR) -I$(SOURCE_DIR)/include -I$(PORT_DIR) -I$(CHIP_EXTENSION_DIR)
 
 KERNEL_C_SOURCES := tasks.c queue.c list.c
 KERNEL_OBJECTS := $(addprefix $(OBJ_DIR)/,$(KERNEL_C_SOURCES:.c=.o))
@@ -45,9 +46,8 @@ PORT_OBJECTS := $(OBJ_DIR)/port.o $(OBJ_DIR)/portASM.o $(OBJ_DIR)/heap_4.o
 APP_C_SOURCES := main.c platform.c runtime.c
 APP_OBJECTS := $(addprefix $(OBJ_DIR)/,$(APP_C_SOURCES:.c=.o)) $(OBJ_DIR)/startup.o
 OBJECTS := $(APP_OBJECTS) $(KERNEL_OBJECTS) $(PORT_OBJECTS)
-FREESTANDING_HEADERS := $(FREESTANDING_DIR)/stdlib.h $(FREESTANDING_DIR)/string.h
 
-.PHONY: all source audit qualification elf image rtl runner-source sim run-local clean
+.PHONY: all source audit toolchain-check qualification elf image rtl runner-source sim run-local clean
 
 all: image
 
@@ -59,7 +59,19 @@ $(CONTRACT): source tools/audit_freertos_riscv_port.py
 
 audit: $(CONTRACT)
 
-qualification: audit
+toolchain-check:
+	test -n "$(TOOLCHAIN_SYSROOT)"
+	test "$$($(CC) -dumpmachine)" = "riscv-none-elf"
+	test "$$($(CC) -dumpfullversion)" = "15.2.0"
+	test -f "$(TOOLCHAIN_SYSROOT)/include/stddef.h"
+	test -f "$(TOOLCHAIN_SYSROOT)/include/stdint.h"
+	test -f "$(TOOLCHAIN_SYSROOT)/include/stdlib.h"
+	test -f "$(TOOLCHAIN_SYSROOT)/include/string.h"
+	test -f "$$($(CC) $(SYSROOT_FLAGS) $(ARCH_FLAGS) -print-file-name=libc.a)"
+	test -f "$$($(CC) $(SYSROOT_FLAGS) $(ARCH_FLAGS) -print-libgcc-file-name)"
+	@echo "PASS: pinned RISC-V newlib sysroot is complete for RV32 ILP32"
+
+qualification: audit toolchain-check
 	grep -q '"status": "PASS"' $(CONTRACT)
 	grep -q '"release": "V11.3.0"' $(CONTRACT)
 	grep -q '"profile": "rv32im_zicsr_m"' $(CONTRACT)
@@ -70,23 +82,23 @@ qualification: audit
 $(OBJ_DIR):
 	mkdir -p $@
 
-$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(FREESTANDING_HEADERS) | $(OBJ_DIR)
+$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $< -o $@
 
-$(OBJ_DIR)/port.o: source $(FREESTANDING_HEADERS) | $(OBJ_DIR)
+$(OBJ_DIR)/port.o: source | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(PORT_DIR)/port.c -o $@
 
 $(OBJ_DIR)/portASM.o: source | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $(PORT_DIR)/portASM.S -o $@
 
-$(OBJ_DIR)/heap_4.o: source $(FREESTANDING_HEADERS) | $(OBJ_DIR)
+$(OBJ_DIR)/heap_4.o: source | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/portable/MemMang/heap_4.c -o $@
 
 define KERNEL_C_RULE
-$(OBJ_DIR)/$(1:.c=.o): source $(FREESTANDING_HEADERS) | $(OBJ_DIR)
+$(OBJ_DIR)/$(1:.c=.o): source | $(OBJ_DIR)
 	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$(SOURCE_DIR)/$(1) -o $$@
 endef
 $(foreach source,$(KERNEL_C_SOURCES),$(eval $(call KERNEL_C_RULE,$(source))))
