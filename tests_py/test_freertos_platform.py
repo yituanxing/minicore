@@ -36,23 +36,31 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertNotIn("-march=rv32imac", text)
         self.assertNotIn("-march=rv32ima", text)
         self.assertNotIn("-march=rv32imaf", text)
+        self.assertIn("KERNEL_C_SOURCES := tasks.c queue.c list.c", text)
+        self.assertNotIn("event_groups.c", text)
+        self.assertNotIn("stream_buffer.c", text)
+        self.assertNotIn("croutine.c", text)
         self.assertIn("portable/MemMang/heap_4.c", text)
         self.assertIn("portable/GCC/RISC-V", text)
         self.assertIn("RISCV_MTIME_CLINT_no_extensions", text)
         self.assertIn("--self-check-exit --stall-period 5", text)
 
-    def test_startup_delegates_traps_to_the_official_port(self) -> None:
+    def test_startup_delegates_traps_and_initializes_invariant_gp(self) -> None:
         text = (APP / "startup.S").read_text(encoding="utf-8")
         self.assertIn("freertos_risc_v_trap_handler", text)
         self.assertIn("csrw mtvec, t0", text)
+        self.assertIn(".option norelax", text)
+        self.assertIn("la gp, __global_pointer$", text)
         self.assertIn("call main", text)
         self.assertNotIn("vTaskSwitchContext", text)
         self.assertNotIn("xTaskIncrementTick", text)
+        linker = (APP / "linker.ld").read_text(encoding="utf-8")
+        self.assertIn("__global_pointer$ = . + 0x800", linker)
 
-    def test_configuration_matches_the_existing_machine_timer_model(self) -> None:
+    def test_configuration_leaves_headroom_before_the_first_tick(self) -> None:
         text = (APP / "FreeRTOSConfig.h").read_text(encoding="utf-8")
         self.assertIn("configUSE_PREEMPTION                    1", text)
-        self.assertIn("configCPU_CLOCK_HZ                      96000UL", text)
+        self.assertIn("configCPU_CLOCK_HZ                      1000000UL", text)
         self.assertIn("configTICK_RATE_HZ                      1000UL", text)
         self.assertIn("configMTIME_BASE_ADDRESS                0x0200bff8UL", text)
         self.assertIn("configMTIMECMP_BASE_ADDRESS             0x02004000UL", text)
