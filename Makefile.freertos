@@ -61,6 +61,8 @@ LDFLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) -nostdlib -nostartfiles \
 PORT_DIR := $(SOURCE_DIR)/portable/GCC/RISC-V
 CHIP_EXTENSION_DIR := $(PORT_DIR)/chip_specific_extensions/RISCV_MTIME_CLINT_no_extensions
 INCLUDES := -I$(APP_DIR) -I$(SOURCE_DIR)/include -I$(PORT_DIR) -I$(CHIP_EXTENSION_DIR)
+FREERTOS_CONFIG_DEPS := $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h \
+	$(SOURCE_STAMP) $(BUILD_RULES)
 
 KERNEL_C_SOURCES := tasks.c queue.c list.c
 KERNEL_OBJECTS := $(addprefix $(OBJ_DIR)/,$(KERNEL_C_SOURCES:.c=.o))
@@ -118,25 +120,26 @@ qualification: $(CONTRACT) toolchain-check
 $(OBJ_DIR):
 	mkdir -p $@
 
-# Application sources include FreeRTOS headers. On a cold parallel build they
-# must not race the pinned kernel fetch that materializes those headers.
-$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
+# Every C or assembly unit sees FreeRTOSConfig.h directly or through
+# FreeRTOS.h/portContext.h. Rebuild all objects when the platform contract
+# changes so an incremental build cannot mix incompatible kernel options.
+$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S $(BUILD_RULES) | $(OBJ_DIR)
+$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $< -o $@
 
-$(OBJ_DIR)/port.o: $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
+$(OBJ_DIR)/port.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(PORT_DIR)/port.c -o $@
 
-$(OBJ_DIR)/portASM.o: $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
+$(OBJ_DIR)/portASM.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $(PORT_DIR)/portASM.S -o $@
 
-$(OBJ_DIR)/heap_4.o: $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
+$(OBJ_DIR)/heap_4.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/portable/MemMang/heap_4.c -o $@
 
 define KERNEL_C_RULE
-$(OBJ_DIR)/$(1:.c=.o): $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
+$(OBJ_DIR)/$(1:.c=.o): $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$(SOURCE_DIR)/$(1) -o $$@
 endef
 $(foreach source,$(KERNEL_C_SOURCES),$(eval $(call KERNEL_C_RULE,$(source))))
@@ -194,8 +197,9 @@ run-local: qualification image sim
 		--max-cycles 2000000 --self-check-exit --stall-period 5 \
 		2>&1 | tee $(BUILD_DIR)/logs/local.log
 	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(BUILD_DIR)/logs/local.log)" -eq 1
-	test "$$(grep -c '^FREERTOS IDLE PASS wfi>=1 wake>=1$$' $(BUILD_DIR)/logs/local.log)" -eq 1
-	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=16$$' $(BUILD_DIR)/logs/local.log)" -eq 1
+	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(BUILD_DIR)/logs/local.log)" -eq 1
+	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=48$$' $(BUILD_DIR)/logs/local.log)" -eq 1
+	grep -Eq 'masked-wfi-commits=[1-9][0-9]*' $(BUILD_DIR)/logs/local.log
 	grep -Fq 'PASS: self-check exit=0' $(BUILD_DIR)/logs/local.log
 	! grep -Fq 'FAIL:' $(BUILD_DIR)/logs/local.log
 
