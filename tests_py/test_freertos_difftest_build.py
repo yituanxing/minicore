@@ -10,40 +10,51 @@ WORKFLOW = ROOT / ".github" / "workflows" / "full-gate.yml"
 
 
 class FreeRtosDifftestBuildTest(unittest.TestCase):
-    def test_build_generates_a_dedicated_adapter_without_replacing_the_timer_reference(self) -> None:
+    def test_build_generates_layered_adapters_without_replacing_timer_reference(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn("include Makefile.freertos", text)
-        self.assertIn("nemu_difftest_rv32_freertos.cpp", text)
+        self.assertIn("nemu_difftest_rv32_freertos_base.cpp", text)
+        self.assertIn("nemu_difftest_rv32_freertos_wfi.cpp", text)
         self.assertIn("tools/make_freertos_difftest_adapter.py", text)
+        self.assertIn("tools/make_freertos_wfi_difftest_adapter.py", text)
         self.assertIn("sim/nemu_difftest_rv32_timer.cpp", text)
         self.assertIn("DIFFTEST_SIM_OBJ_DIR", text)
         self.assertNotIn("update_file", text)
 
     def test_generated_runner_emits_all_shadow_counters(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("difftest-runner-source: runner-source", text)
-        self.assertIn("difftest-sim: rtl difftest-runner-source difftest-adapter", text)
+        runner = (ROOT / "tools" / "make_freertos_difftest_runner.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("difftest-runner-source: $(DIFFTEST_GENERATED_MAIN)", text)
+        self.assertIn("difftest-sim: $(DIFFTEST_SIM_BINARY)", text)
+        self.assertIn("tools/make_freertos_difftest_runner.py", text)
         for accessor in (
             "checkedCommits()",
             "zicsrShadowSteps()",
             "trapShadowSteps()",
+            "wfiShadowSteps()",
             "mretShadowSteps()",
             "interruptShadowSteps()",
         ):
-            self.assertIn(accessor, text)
+            self.assertIn(accessor, runner)
 
     def test_positive_gate_keeps_local_self_check_and_external_reference(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("run-difftest: image difftest-sim", text)
+        self.assertIn("run-difftest: qualification image difftest-sim", text)
         self.assertIn("STALL_PERIOD ?= 5", text)
         self.assertIn("--self-check-exit --stall-period $(STALL_PERIOD)", text)
         self.assertIn('--difftest "$(abspath $(RV32_NEMU_SO))"', text)
         self.assertIn("FREERTOS BOOT V11.3.0 RV32IM", text)
+        self.assertIn("FREERTOS IDLE PASS wfi>=1 wake>=1", text)
         self.assertIn("FREERTOS PASS queue=64 semaphore=8 ticks>=16", text)
         for counter in (
+            "wfi-commits=",
+            "wfi-sleep-cycles=",
             "difftest=",
             "zicsr-shadow=",
             "trap-shadow=",
+            "wfi-shadow=",
             "mret-shadow=",
             "interrupt-shadow=",
         ):
