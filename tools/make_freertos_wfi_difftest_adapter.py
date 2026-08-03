@@ -44,6 +44,7 @@ def adapt(source: str) -> str:
         "    } else if (wfiStep) {\n"
         "      after = executeWfi(before, commit);\n"
         "      regcpy_(&after, kToRef);\n"
+        "      ++wfiShadowSteps_;\n"
         "    } else if (mretStep) {\n",
         "WFI reference dispatch",
     )
@@ -55,6 +56,15 @@ def adapt(source: str) -> str:
         "    if (wfiStep) line << \" reference=wfi-shadow\";\n"
         "    if (zicsrStep) line << \" reference=zicsr-shadow\";\n",
         "WFI trace label",
+    )
+    text = replace_once(
+        text,
+        "  std::uint64_t trapShadowSteps() const { return trapShadowSteps_; }\n"
+        "  std::uint64_t mretShadowSteps() const { return mretShadowSteps_; }\n",
+        "  std::uint64_t trapShadowSteps() const { return trapShadowSteps_; }\n"
+        "  std::uint64_t wfiShadowSteps() const { return wfiShadowSteps_; }\n"
+        "  std::uint64_t mretShadowSteps() const { return mretShadowSteps_; }\n",
+        "WFI counter accessor",
     )
     method = r'''  NemuState32 executeWfi(const NemuState32& before,
                          const DifftestCommit& commit) {
@@ -77,6 +87,24 @@ def adapt(source: str) -> str:
         method
         + "  NemuState32 executeMret(const NemuState32& before, const DifftestCommit& commit) {\n",
         "MRET method",
+    )
+    text = replace_once(
+        text,
+        "  std::uint64_t trapShadowSteps_ = 0;\n"
+        "  std::uint64_t mretShadowSteps_ = 0;\n",
+        "  std::uint64_t trapShadowSteps_ = 0;\n"
+        "  std::uint64_t wfiShadowSteps_ = 0;\n"
+        "  std::uint64_t mretShadowSteps_ = 0;\n",
+        "WFI counter storage",
+    )
+    text = replace_once(
+        text,
+        "std::uint64_t NemuDifftest::trapShadowSteps() const { return impl_->trapShadowSteps(); }\n"
+        "std::uint64_t NemuDifftest::mretShadowSteps() const { return impl_->mretShadowSteps(); }\n",
+        "std::uint64_t NemuDifftest::trapShadowSteps() const { return impl_->trapShadowSteps(); }\n"
+        "std::uint64_t NemuDifftest::wfiShadowSteps() const { return impl_->wfiShadowSteps(); }\n"
+        "std::uint64_t NemuDifftest::mretShadowSteps() const { return impl_->mretShadowSteps(); }\n",
+        "WFI public counter wrapper",
     )
     return text
 
