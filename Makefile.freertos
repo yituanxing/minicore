@@ -38,14 +38,7 @@ PORT_DIR := $(SOURCE_DIR)/portable/GCC/RISC-V
 CHIP_EXTENSION_DIR := $(PORT_DIR)/chip_specific_extensions/RISCV_MTIME_CLINT_no_extensions
 INCLUDES := -I$(APP_DIR) -I$(SOURCE_DIR)/include -I$(PORT_DIR) -I$(CHIP_EXTENSION_DIR)
 
-KERNEL_C_SOURCES := \
-	tasks.c \
-	queue.c \
-	list.c \
-	timers.c \
-	event_groups.c \
-	stream_buffer.c \
-	croutine.c
+KERNEL_C_SOURCES := tasks.c queue.c list.c
 KERNEL_OBJECTS := $(addprefix $(OBJ_DIR)/,$(KERNEL_C_SOURCES:.c=.o))
 PORT_OBJECTS := $(OBJ_DIR)/port.o $(OBJ_DIR)/portASM.o $(OBJ_DIR)/heap_4.o
 APP_C_SOURCES := main.c platform.c runtime.c
