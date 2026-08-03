@@ -58,7 +58,7 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertNotIn("SOURCE_STAMP := $(SOURCE_DIR)", text)
         self.assertIn("rm -f $(SOURCE_DIR)/.aethercore-source-ready", text)
         self.assertIn(
-            "$(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) | $(OBJ_DIR)",
+            "$(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)",
             text,
         )
         self.assertIn("must not race the pinned kernel fetch", text)
