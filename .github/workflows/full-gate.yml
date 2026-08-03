@@ -34,6 +34,10 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate.sh toolchain
 
+      - name: Provision pinned RISC-V newlib sysroot
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
       - name: Fast source and image tests
         shell: bash
         run: bash tools/ci/full_gate.sh python
@@ -127,6 +131,7 @@ jobs:
             echo
             echo "- head: \`${GITHUB_SHA}\`"
             echo '- one checkout and one persistent toolchain setup'
+            echo '- pinned xPack RISC-V GCC 15.2.0 with a verified newlib 4.5.0 sysroot'
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
             echo '- fast architectural gates run before long software workloads'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
