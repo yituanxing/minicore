@@ -53,7 +53,9 @@ class FreeRtosPlatformTest(unittest.TestCase):
     def test_build_is_parallel_and_incremental_without_weakening_clean_full_gate(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn("JOBS ?= $(shell nproc)", text)
-        self.assertIn("SOURCE_STAMP :=", text)
+        self.assertIn("SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready", text)
+        self.assertNotIn("SOURCE_STAMP := $(SOURCE_DIR)", text)
+        self.assertIn("rm -f $(SOURCE_DIR)/.aethercore-source-ready", text)
         self.assertIn("RTL_STAMP :=", text)
         self.assertIn("SIM_BINARY :=", text)
         self.assertIn("$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN)", text)
@@ -129,6 +131,7 @@ class FreeRtosPlatformTest(unittest.TestCase):
     def test_fast_gate_preserves_per_pr_outputs_and_skips_wave_traces(self) -> None:
         text = FAST_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("clean: false", text)
+        self.assertIn("chmod +x mill", text)
         self.assertIn("MILL_OUTPUT_DIR=", text)
         self.assertIn("FAST_FREERTOS_BUILD=", text)
         self.assertIn("AETHERCORE_JOBS=$(nproc)", text)
