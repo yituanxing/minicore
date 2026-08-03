@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
 
     steps:
       - name: Checkout without deleting incremental outputs
@@ -101,6 +102,7 @@ jobs:
             echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
+            echo '- cached Verilator identity is checked without a disposable build probe'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- the exact 29-stage gate remains mandatory through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
