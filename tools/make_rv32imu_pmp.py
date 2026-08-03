@@ -288,8 +288,9 @@ def build_image() -> PrivilegedProgram:
     ecall(p)
     p.beq(10, 0, "user_fail_ticks")
 
-    # Six hardware-enforced attacks. A missing fault leaves mscratch behind;
-    # either the next trap mismatches its stage or SYS_EXIT rejects completion.
+    # Trap entry preserves no GPRs in hardware. This minimal handler deliberately
+    # uses temporary registers instead of building a full trap frame, so every
+    # attack rematerializes its target after the preceding M-mode handler.
     absolute(p, 5, UART)
     p.addi(6, 0, ATTACK_BYTE)
     p.label("attack_uart_store")
@@ -299,7 +300,7 @@ def build_image() -> PrivilegedProgram:
     p.label("attack_kernel_load")
     p.lbu(6, 5, 0)
 
-    p.addi(6, 0, 0x33)
+    absolute(p, 5, BASE)
     p.label("attack_kernel_store")
     p.sb(6, 5, 0)
 
