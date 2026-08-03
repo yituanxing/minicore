@@ -24,7 +24,7 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_generated_adapter_shadows_interrupting_and_masked_wfi_wakes(self) -> None:
+    def test_generated_adapter_shadows_tickless_fence_and_wfi_wakes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary) / "base.cpp"
             output = Path(temporary) / "wfi.cpp"
@@ -35,6 +35,11 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
             )
             self.run_tool(str(WFI_ADAPTER), str(base), str(output))
             text = output.read_text(encoding="utf-8")
+            self.assertIn("constexpr std::uint32_t kFenceIorw = 0x0ff0000fU", text)
+            self.assertIn("const bool fenceStep = commit.inst == kFenceIorw", text)
+            self.assertIn("after = executeFence(before, commit)", text)
+            self.assertIn("reference=fence-shadow", text)
+            self.assertIn("historical NEMU does not decode FENCE IORW", text)
             self.assertIn("constexpr std::uint32_t kWfi = 0x10500073U", text)
             self.assertIn("const bool wfiStep = commit.inst == kWfi", text)
             self.assertIn("after = executeWfi(before, commit)", text)
