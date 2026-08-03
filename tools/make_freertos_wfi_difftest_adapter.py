@@ -68,12 +68,19 @@ def adapt(source: str) -> str:
     )
     method = r'''  NemuState32 executeWfi(const NemuState32& before,
                          const DifftestCommit& commit) {
-    const auto interruptPc = checkedAddress(commit.interruptPc, "WFI interrupt PC");
-    if (commit.inst != kWfi || commit.rdWrite || commit.memValid || commit.exception ||
-        !commit.interrupt || interruptPc != before.pc + 4U) {
+    if (commit.inst != kWfi || commit.rdWrite || commit.memValid || commit.exception) {
       fail("FreeRTOS WFI shadow received an invalid architectural wake event");
     }
 
+    if (commit.interrupt) {
+      const auto interruptPc = checkedAddress(commit.interruptPc, "WFI interrupt PC");
+      if (interruptPc != before.pc + 4U) {
+        fail("FreeRTOS interrupting WFI wake did not preserve PC+4");
+      }
+    }
+
+    // A masked tickless WFI retires without trap entry when raw MTIP becomes
+    // pending. The later mstatus.MIE restore is the precise interrupt boundary.
     NemuState32 after = before;
     after.pc = before.pc + 4U;
     after.gpr[0] = 0;
