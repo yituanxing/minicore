@@ -19,6 +19,19 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
         self.assertIn("DIFFTEST_SIM_OBJ_DIR", text)
         self.assertNotIn("update_file", text)
 
+    def test_generated_runner_emits_all_shadow_counters(self) -> None:
+        text = MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn("difftest-runner-source: runner-source", text)
+        self.assertIn("difftest-sim: rtl difftest-runner-source difftest-adapter", text)
+        for accessor in (
+            "checkedCommits()",
+            "zicsrShadowSteps()",
+            "trapShadowSteps()",
+            "mretShadowSteps()",
+            "interruptShadowSteps()",
+        ):
+            self.assertIn(accessor, text)
+
     def test_positive_gate_keeps_local_self_check_and_external_reference(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn("run-difftest: image difftest-sim", text)
