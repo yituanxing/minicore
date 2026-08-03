@@ -12,6 +12,7 @@ BIN := $(BUILD_DIR)/aethercore-freertos.bin
 MAP := $(BUILD_DIR)/aethercore-freertos.map
 DIS := $(BUILD_DIR)/aethercore-freertos.dis
 ATTRIBUTES := $(BUILD_DIR)/aethercore-freertos.attributes
+TOOLCHAIN_PROBE := $(BUILD_DIR)/toolchain-sysroot-probe.o
 
 RTL_DIR := $(BUILD_DIR)/rtl
 SIM_OBJ_DIR := $(BUILD_DIR)/sim-obj
@@ -29,6 +30,7 @@ VERILATOR ?= verilator
 TOOLCHAIN_SYSROOT := $(shell $(CC) --print-sysroot 2>/dev/null)
 SYSROOT_FLAGS := --sysroot=$(TOOLCHAIN_SYSROOT)
 ARCH_FLAGS := -march=rv32im_zicsr -mabi=ilp32 -mcmodel=medany -msmall-data-limit=0
+LIBRARY_ARCH_FLAGS := -march=rv32im -mabi=ilp32
 COMMON_FLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) -ffreestanding -fno-builtin -fdata-sections -ffunction-sections
 CFLAGS := $(COMMON_FLAGS) -std=c11 -Os -g -Wall -Wextra
 ASFLAGS := $(COMMON_FLAGS) -x assembler-with-cpp
@@ -60,15 +62,23 @@ $(CONTRACT): source tools/audit_freertos_riscv_port.py
 audit: $(CONTRACT)
 
 toolchain-check:
+	mkdir -p $(BUILD_DIR)
 	test -n "$(TOOLCHAIN_SYSROOT)"
 	test "$$($(CC) -dumpmachine)" = "riscv-none-elf"
 	test "$$($(CC) -dumpfullversion)" = "15.2.0"
-	test -f "$(TOOLCHAIN_SYSROOT)/include/stddef.h"
-	test -f "$(TOOLCHAIN_SYSROOT)/include/stdint.h"
 	test -f "$(TOOLCHAIN_SYSROOT)/include/stdlib.h"
 	test -f "$(TOOLCHAIN_SYSROOT)/include/string.h"
-	test -f "$$($(CC) $(SYSROOT_FLAGS) $(ARCH_FLAGS) -print-file-name=libc.a)"
-	test -f "$$($(CC) $(SYSROOT_FLAGS) $(ARCH_FLAGS) -print-libgcc-file-name)"
+	test "$$($(CC) $(LIBRARY_ARCH_FLAGS) -print-multi-directory)" = "rv32im/ilp32"
+	test -f "$$($(CC) $(LIBRARY_ARCH_FLAGS) -print-file-name=libc.a)"
+	test -f "$$($(CC) $(LIBRARY_ARCH_FLAGS) -print-libgcc-file-name)"
+	printf '%s\n' '#include <stddef.h>' '#include <stdint.h>' '#include <stdlib.h>' '#include <string.h>' \
+		'_Static_assert(sizeof(void *) == 4, "RV32 pointer width");' \
+		'int probe(void *d, const void *s, size_t n) { return memcmp(memcpy(d, s, n), s, n); }' | \
+		$(CC) $(SYSROOT_FLAGS) $(ARCH_FLAGS) -ffreestanding -fno-builtin -std=c11 \
+		-x c -c -o $(TOOLCHAIN_PROBE) -
+	$(READELF) -h $(TOOLCHAIN_PROBE) | grep -q 'Class:[[:space:]]*ELF32'
+	$(READELF) -h $(TOOLCHAIN_PROBE) | grep -q 'Machine:[[:space:]]*RISC-V'
+	rm -f $(TOOLCHAIN_PROBE)
 	@echo "PASS: pinned RISC-V newlib sysroot is complete for RV32 ILP32"
 
 qualification: audit toolchain-check
