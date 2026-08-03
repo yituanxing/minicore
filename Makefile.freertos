@@ -5,10 +5,56 @@ BUILD_DIR ?= build/freertos-qualification
 SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
 CONTRACT := $(BUILD_DIR)/port-contract.json
 LOCK_FILE := software/freertos/FreeRTOS-Kernel.lock
+APP_DIR := software/freertos/aethercore
+OBJ_DIR := $(BUILD_DIR)/obj
+ELF := $(BUILD_DIR)/aethercore-freertos.elf
+BIN := $(BUILD_DIR)/aethercore-freertos.bin
+MAP := $(BUILD_DIR)/aethercore-freertos.map
+DIS := $(BUILD_DIR)/aethercore-freertos.dis
+ATTRIBUTES := $(BUILD_DIR)/aethercore-freertos.attributes
 
-.PHONY: all source audit qualification clean
+RTL_DIR := $(BUILD_DIR)/rtl
+SIM_OBJ_DIR := $(BUILD_DIR)/sim-obj
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_freertos.cpp
+TOP := AetherCoreRV32IMTrapSimTop
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
-all: qualification
+CROSS_COMPILE ?= riscv64-unknown-elf-
+CC := $(CROSS_COMPILE)gcc
+OBJCOPY := $(CROSS_COMPILE)objcopy
+OBJDUMP := $(CROSS_COMPILE)objdump
+READELF := $(CROSS_COMPILE)readelf
+VERILATOR ?= verilator
+
+ARCH_FLAGS := -march=rv32im_zicsr -mabi=ilp32 -mcmodel=medany -msmall-data-limit=0
+COMMON_FLAGS := $(ARCH_FLAGS) -ffreestanding -fno-builtin -fdata-sections -ffunction-sections
+CFLAGS := $(COMMON_FLAGS) -std=c11 -Os -g -Wall -Wextra
+ASFLAGS := $(COMMON_FLAGS) -x assembler-with-cpp
+LDFLAGS := $(ARCH_FLAGS) -nostdlib -nostartfiles \
+	-Wl,--gc-sections -Wl,--build-id=none -Wl,-Map,$(MAP) \
+	-T $(APP_DIR)/linker.ld
+
+PORT_DIR := $(SOURCE_DIR)/portable/GCC/RISC-V
+CHIP_EXTENSION_DIR := $(PORT_DIR)/chip_specific_extensions/RISCV_MTIME_CLINT_no_extensions
+INCLUDES := -I$(APP_DIR) -I$(SOURCE_DIR)/include -I$(PORT_DIR) -I$(CHIP_EXTENSION_DIR)
+
+KERNEL_C_SOURCES := \
+	tasks.c \
+	queue.c \
+	list.c \
+	timers.c \
+	event_groups.c \
+	stream_buffer.c \
+	croutine.c
+KERNEL_OBJECTS := $(addprefix $(OBJ_DIR)/,$(KERNEL_C_SOURCES:.c=.o))
+PORT_OBJECTS := $(OBJ_DIR)/port.o $(OBJ_DIR)/portASM.o $(OBJ_DIR)/heap_4.o
+APP_C_SOURCES := main.c platform.c runtime.c
+APP_OBJECTS := $(addprefix $(OBJ_DIR)/,$(APP_C_SOURCES:.c=.o)) $(OBJ_DIR)/startup.o
+OBJECTS := $(APP_OBJECTS) $(KERNEL_OBJECTS) $(PORT_OBJECTS)
+
+.PHONY: all source audit qualification elf image rtl runner-source sim run-local clean
+
+all: image
 
 source: $(LOCK_FILE) tools/fetch_freertos_kernel.sh
 	bash tools/fetch_freertos_kernel.sh $(SOURCE_DIR)
@@ -25,6 +71,76 @@ qualification: audit
 	grep -q '"mhartid": 0' $(CONTRACT)
 	grep -q '"additional_context_registers": 0' $(CONTRACT)
 	@echo "PASS: pinned FreeRTOS RV32 source and port qualification"
+
+$(OBJ_DIR):
+	mkdir -p $@
+
+$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S | $(OBJ_DIR)
+	$(CC) $(ASFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJ_DIR)/port.o: source | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $(PORT_DIR)/port.c -o $@
+
+$(OBJ_DIR)/portASM.o: source | $(OBJ_DIR)
+	$(CC) $(ASFLAGS) $(INCLUDES) -c $(PORT_DIR)/portASM.S -o $@
+
+$(OBJ_DIR)/heap_4.o: source | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/portable/MemMang/heap_4.c -o $@
+
+define KERNEL_C_RULE
+$(OBJ_DIR)/$(1:.c=.o): source | $(OBJ_DIR)
+	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$(SOURCE_DIR)/$(1) -o $$@
+endef
+$(foreach source,$(KERNEL_C_SOURCES),$(eval $(call KERNEL_C_RULE,$(source))))
+
+$(ELF): qualification $(OBJECTS) $(APP_DIR)/linker.ld
+	$(CC) $(LDFLAGS) $(OBJECTS) -lgcc -o $@
+	$(OBJDUMP) -d $@ > $(DIS)
+	$(READELF) -A $@ > $(ATTRIBUTES)
+	grep -q '<_start>:' $(DIS)
+	grep -q '<main>:' $(DIS)
+	grep -q '<xPortStartScheduler>:' $(DIS)
+	grep -q '<freertos_risc_v_trap_handler>:' $(DIS)
+	grep -Eq '\bcsrr[[:space:]].*mhartid' $(DIS)
+	grep -q '\bmret\b' $(DIS)
+
+elf: $(ELF)
+
+$(BIN): $(ELF)
+	$(OBJCOPY) -O binary $< $@
+	sha256sum $@ > $@.sha256
+
+image: $(BIN)
+
+rtl:
+	./mill aethercore.runMain aethercore.ElaborateRV32IMTrap --target-dir $(RTL_DIR)
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMTrapSimTop/g' \
+		sim/sim_main.cpp > $(GENERATED_MAIN)
+	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  commit.interrupt = top.io_commit_interrupt;\n  commit.interruptCause = static_cast<std::uint64_t>(top.io_commit_interruptCause);\n  commit.interruptPc = static_cast<std::uint64_t>(top.io_commit_interruptPc);\n  return commit;"; assert a in s; p.write_text(s.replace(a,b,1))'
+
+sim: rtl runner-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(SIM_OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) \
+		$(abspath sim/nemu_difftest_rv32_timer.cpp)
+
+run-local: image sim
+	mkdir -p $(BUILD_DIR)/logs
+	$(SIM_OBJ_DIR)/V$(TOP) $(BIN) \
+		--max-cycles 2000000 --self-check-exit --stall-period 5 \
+		2>&1 | tee $(BUILD_DIR)/logs/local.log
+	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(BUILD_DIR)/logs/local.log)" -eq 1
+	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=16$$' $(BUILD_DIR)/logs/local.log)" -eq 1
+	grep -Fq 'PASS: self-check exit=0' $(BUILD_DIR)/logs/local.log
+	! grep -Fq 'FAIL:' $(BUILD_DIR)/logs/local.log
 
 clean:
 	rm -rf $(BUILD_DIR)
