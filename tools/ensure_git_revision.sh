@@ -28,6 +28,7 @@ validate_tree() {
   [[ "$(git -C "$tree" rev-parse HEAD 2>/dev/null)" == "$revision" ]] || return 1
   git -C "$tree" diff --quiet --ignore-submodules -- || return 1
   git -C "$tree" diff --cached --quiet --ignore-submodules -- || return 1
+  [[ -z "$(git -C "$tree" status --porcelain --untracked-files=all)" ]] || return 1
 }
 
 mkdir -p "$cache_root"
