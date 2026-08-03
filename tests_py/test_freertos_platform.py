@@ -97,11 +97,13 @@ class FreeRtosPlatformTest(unittest.TestCase):
     def test_timer_glue_uses_the_safe_rv32_compare_sequence(self) -> None:
         text = (APP / "platform.c").read_text(encoding="utf-8")
         self.assertIn('csrr %0, mhartid', text)
+        self.assertIn("static void aether_write_mtimecmp", text)
         first = text.index("compare[ 0 ] = UINT32_MAX")
         high = text.index("compare[ 1 ] =", first)
-        low = text.index("compare[ 0 ] = ( uint32_t ) firstDeadline", high)
+        low = text.index("compare[ 0 ] = ( uint32_t ) deadline", high)
         self.assertLess(first, high)
         self.assertLess(high, low)
+        self.assertIn("aether_write_mtimecmp( compare, firstDeadline )", text)
         self.assertIn("ullNextTime = firstDeadline +", text)
         self.assertIn("pullMachineTimerCompareRegister", text)
 
