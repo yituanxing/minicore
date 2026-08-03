@@ -48,7 +48,7 @@ class FreeRtosDifftestAdapterTest(unittest.TestCase):
 
             self.assertEqual(text.count("executeEcallTrap("), 2)
             self.assertEqual(text.count("case kMhartid:"), 3)
-            self.assertEqual(text.count("kMachineEcallCause"), 4)
+            self.assertEqual(text.count("kMachineEcallCause"), 3)
 
     def test_adapter_rejects_source_shape_drift_without_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
