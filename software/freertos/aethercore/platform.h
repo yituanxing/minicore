@@ -9,6 +9,12 @@
 #define AETHERCORE_MTIMECMP      0x02004000UL
 #define AETHERCORE_MTIME         0x0200bff8UL
 
+extern volatile uint32_t aetherTicklessEntries;
+extern volatile uint32_t aetherTicklessWakeups;
+extern volatile uint32_t aetherTicklessSuppressedTicks;
+extern volatile uint32_t aetherTicklessEarlyWakeups;
+extern volatile uint32_t aetherTicklessAborts;
+
 void aether_uart_putc( char value );
 void aether_uart_write( const char * text );
 void aether_exit( uint32_t code ) __attribute__( ( noreturn ) );
