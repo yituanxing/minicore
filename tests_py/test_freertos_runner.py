@@ -25,6 +25,15 @@ class FreeRtosRunnerTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             return output.read_text(encoding="utf-8")
 
+    def assert_wfi_wait_semantics(self, text: str) -> None:
+        self.assertIn("options.selfCheckExit || !top.io_halted", text)
+        self.assertIn("if (cycles >= options.maxCycles && !exitRequested)", text)
+        self.assertNotIn(
+            "cycles < options.maxCycles && !top.io_halted && !exitRequested",
+            text,
+        )
+        self.assertNotIn("!top.io_halted && cycles >= options.maxCycles", text)
+
     def test_fast_runner_removes_all_vcd_link_dependencies(self) -> None:
         text = self.generate(0)
         self.assertIn("VAetherCoreRV32IMTrapSimTop", text)
@@ -34,6 +43,7 @@ class FreeRtosRunnerTest(unittest.TestCase):
         self.assertNotIn("top.trace", text)
         self.assertIn("--trace is unavailable in this fast runner", text)
         self.assertIn("commit.interruptPc", text)
+        self.assert_wfi_wait_semantics(text)
 
     def test_full_runner_retains_vcd_support(self) -> None:
         text = self.generate(1)
@@ -43,6 +53,7 @@ class FreeRtosRunnerTest(unittest.TestCase):
         self.assertIn("wave->dump", text)
         self.assertIn("top.trace", text)
         self.assertIn("commit.interruptPc", text)
+        self.assert_wfi_wait_semantics(text)
 
 
 if __name__ == "__main__":
