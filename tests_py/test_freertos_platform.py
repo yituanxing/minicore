@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "software" / "freertos" / "aethercore"
 MAKEFILE = ROOT / "Makefile.freertos"
 CI_SCRIPT = ROOT / "tools" / "ci" / "full_gate_freertos.sh"
+VERILATOR_INSTALLER = ROOT / "tools" / "ensure_verilator_5_024.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "full-gate.yml"
 FAST_WORKFLOW = ROOT / ".github" / "workflows" / "fast-gate.yml"
 
@@ -117,6 +118,7 @@ class FreeRtosPlatformTest(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("- .github/full-gate-request", text)
         self.assertIn("workflow_dispatch:", text)
+        self.assertNotIn("AETHERCORE_VERILATOR_FAST_VERIFY", text)
         newlib = text.index("Provision pinned RISC-V newlib sysroot")
         source_tests = text.index("Fast source and image tests")
         freertos = text.index("FreeRTOS V11.3.0 preemptive queue workload")
@@ -131,6 +133,7 @@ class FreeRtosPlatformTest(unittest.TestCase):
     def test_fast_gate_preserves_per_pr_outputs_and_skips_wave_traces(self) -> None:
         text = FAST_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("clean: false", text)
+        self.assertIn('AETHERCORE_VERILATOR_FAST_VERIFY: "1"', text)
         self.assertIn("chmod +x mill", text)
         self.assertIn("MILL_OUTPUT_DIR=", text)
         self.assertIn("FAST_FREERTOS_BUILD=", text)
@@ -138,6 +141,16 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("TRACE=0 run-local", text)
         self.assertIn("aethercore.WaitForInterruptCoreSpec", text)
         self.assertNotIn("full_gate_freertos_difftest.sh", text)
+
+    def test_verilator_fast_verify_skips_only_the_disposable_probe(self) -> None:
+        text = VERILATOR_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn('fast_verify="${AETHERCORE_VERILATOR_FAST_VERIFY:-0}"', text)
+        self.assertIn('if [[ "$fast_verify" == "1" ]]; then', text)
+        self.assertIn("cmp -s \"$build_dir/src/verilator_bin\"", text)
+        self.assertIn("cmp -s \"$source_dir/bin/verilator_includer\"", text)
+        self.assertIn('probe_dir="$(mktemp -d)"', text)
+        self.assertEqual(text.count("verify_install\n  activate"), 2)
+        self.assertIn("verify_install\nactivate", text)
 
 
 if __name__ == "__main__":
