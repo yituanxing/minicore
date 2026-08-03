@@ -8,6 +8,7 @@ CACHE_ROOT="${AETHERCORE_REFERENCE_CACHE:-$HOME/.cache/aethercore/references}"
 CACHE_DIR="$CACHE_ROOT/rv32-nemu-single-step-$REVISION"
 REFERENCE_SO="$CACHE_DIR/riscv32-nemu-interpreter-so"
 EVIDENCE_DIR="$CACHE_DIR/evidence"
+CANONICAL_WORK_DIR="${AETHERCORE_RV32_NEMU_WORK_DIR:-$ROOT/build/rv32-nemu-probe}"
 
 validate_reference() {
   local path="$1"
@@ -29,6 +30,7 @@ revision=$REVISION
 reference_sha256=$EXPECTED_SHA256
 single_step=1
 cache_format=rv32-nemu-single-step-v1
+canonical_work_dir=$CANONICAL_WORK_DIR
 EOF
   rm -rf "$CACHE_DIR"
   mv "$staging" "$CACHE_DIR"
@@ -68,15 +70,15 @@ for candidate in "${candidates[@]}"; do
   fi
 done
 
+# The historical NEMU binary contains its absolute build path. The accepted
+# SHA256 is therefore reproducible only at the same repository-relative path
+# used by the Full Gate. Build there once, then copy the verified .so into the
+# path-independent persistent cache for all later Fast Gate runs.
 printf 'aethercore_rv32_nemu_cache=build\n' >&2
-work_dir="$(mktemp -d "$CACHE_ROOT/.rv32-nemu-build.XXXXXX")"
-cleanup() {
-  rm -rf "$work_dir"
-}
-trap cleanup EXIT
-
-NEMU_SINGLE_STEP=1 bash "$ROOT/tools/probe_rv32_nemu_deterministic.sh" "$work_dir/probe" >&2
-candidate="$(find "$work_dir/probe/nemu/build" -maxdepth 1 -type f \
+printf 'aethercore_rv32_nemu_canonical_work_dir=%s\n' "$CANONICAL_WORK_DIR" >&2
+NEMU_SINGLE_STEP=1 bash "$ROOT/tools/probe_rv32_nemu_deterministic.sh" \
+  "$CANONICAL_WORK_DIR" >&2
+candidate="$(find "$CANONICAL_WORK_DIR/nemu/build" -maxdepth 1 -type f \
   -name 'riscv32-nemu-interpreter-so*' -print -quit)"
 [[ -n "$candidate" ]] || {
   printf 'ERROR: exact RV32 NEMU build did not produce a shared object\n' >&2
@@ -84,13 +86,13 @@ candidate="$(find "$work_dir/probe/nemu/build" -maxdepth 1 -type f \
 }
 validate_reference "$candidate" || {
   actual="$(sha256sum "$candidate" | awk '{print $1}')"
-  printf 'ERROR: exact RV32 NEMU SHA256 changed: expected=%s actual=%s\n' \
+  printf 'ERROR: canonical exact RV32 NEMU SHA256 changed: expected=%s actual=%s\n' \
     "$EXPECTED_SHA256" "$actual" >&2
   exit 1
 }
 
 install_candidate "$candidate"
-cp -a "$work_dir/probe/evidence/." "$EVIDENCE_DIR/"
+cp -a "$CANONICAL_WORK_DIR/evidence/." "$EVIDENCE_DIR/"
 printf 'aethercore_rv32_nemu_revision=%s\n' "$REVISION" >&2
 printf 'aethercore_rv32_nemu_sha256=%s\n' "$EXPECTED_SHA256" >&2
 printf '%s\n' "$REFERENCE_SO"
