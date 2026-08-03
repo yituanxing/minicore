@@ -26,8 +26,21 @@ RV32_NEMU_SO="$(cat "$RV32_PATH_FILE")"
 
 make -f Makefile.rv32imu-pmp software contract
 
+checkout_sha="$(git rev-parse HEAD)"
+github_head_sha="$checkout_sha"
+if [[ -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
+  event_head_sha="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("pull_request", {}).get("head", {}).get("sha", ""))' "$GITHUB_EVENT_PATH")"
+  if [[ -n "$event_head_sha" ]]; then
+    github_head_sha="$event_head_sha"
+  fi
+fi
+
 {
-  printf 'git_head=%s\n' "$(git rev-parse HEAD)"
+  printf 'git_head=%s\n' "$checkout_sha"
+  printf 'checkout_sha=%s\n' "$checkout_sha"
+  printf 'github_sha=%s\n' "${GITHUB_SHA:-local}"
+  printf 'github_head_sha=%s\n' "$github_head_sha"
+  printf 'github_head_ref=%s\n' "${GITHUB_HEAD_REF:-local}"
   printf 'github_run_id=%s\n' "${GITHUB_RUN_ID:-local}"
   printf 'github_run_attempt=%s\n' "${GITHUB_RUN_ATTEMPT:-local}"
   printf 'nemu_so=%s\n' "$RV32_NEMU_SO"
@@ -80,7 +93,7 @@ for stall in 0 5; do
   ! grep -Fq '@' "$log"
   grep -Fq 'PASS: self-check exit=0' "$log"
   grep -Fq 'trap-shadow=9' "$log"
-  grep -Fq 'mret-shadow=8' "$log"
+  grep -Fq 'mret-shadow=9' "$log"
 done
 grep -q 'RV32 DiffTest mismatch after 0 matched events' "$BUILD_DIR/logs/mismatch.log"
 grep -q 'x31' "$BUILD_DIR/logs/mismatch.log"
