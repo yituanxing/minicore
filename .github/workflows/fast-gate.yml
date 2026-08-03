@@ -91,6 +91,26 @@ jobs:
             BUILD_DIR="$FAST_FREERTOS_BUILD" \
             JOBS="$AETHERCORE_JOBS" TRACE=0 run-local
 
+      - name: Incremental FreeRTOS WFI exact DiffTest
+        if: steps.changes.outputs.run_freertos == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          path_file="build/ci/rv32-nemu-so.txt"
+          test -s "$path_file"
+          rv32_nemu_so="$(cat "$path_file")"
+          test -f "$rv32_nemu_so"
+          for stall in 0 5; do
+            make -j"$AETHERCORE_JOBS" -f Makefile.freertos-difftest \
+              BUILD_DIR="$FAST_FREERTOS_BUILD" \
+              JOBS="$AETHERCORE_JOBS" TRACE=0 \
+              RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD="$stall" run-difftest
+          done
+          make -j"$AETHERCORE_JOBS" -f Makefile.freertos-difftest \
+            BUILD_DIR="$FAST_FREERTOS_BUILD" \
+            JOBS="$AETHERCORE_JOBS" TRACE=0 \
+            RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD=5 run-difftest-negative
+
       - name: Write fast-gate summary
         if: always()
         shell: bash
@@ -103,6 +123,7 @@ jobs:
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
             echo '- cached Verilator identity is checked without a disposable build probe'
+            echo '- FreeRTOS exact WFI DiffTest runs incrementally at stall=0 and stall=5'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- the exact 29-stage gate remains mandatory through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
