@@ -10,6 +10,12 @@ extern volatile uint64_t * pullMachineTimerCompareRegister;
 extern const size_t uxTimerIncrementsForOneTick;
 extern UBaseType_t const ullMachineTimerCompareRegisterBase;
 
+volatile uint32_t aetherTicklessEntries;
+volatile uint32_t aetherTicklessWakeups;
+volatile uint32_t aetherTicklessSuppressedTicks;
+volatile uint32_t aetherTicklessEarlyWakeups;
+volatile uint32_t aetherTicklessAborts;
+
 static uint64_t aether_read_mtime( void )
 {
     volatile uint32_t * const time = ( volatile uint32_t * ) AETHERCORE_MTIME;
@@ -46,6 +52,26 @@ static void aether_write_mtimecmp( volatile uint32_t * compare,
     compare[ 0 ] = UINT32_MAX;
     compare[ 1 ] = ( uint32_t ) ( deadline >> 32 );
     compare[ 0 ] = ( uint32_t ) deadline;
+}
+
+static uint32_t aether_disable_machine_interrupts( void )
+{
+    const uint32_t mieMask = 0x8U;
+    uint32_t previousMstatus;
+
+    __asm volatile ( "csrrc %0, mstatus, %1"
+                     : "=r" ( previousMstatus )
+                     : "r" ( mieMask )
+                     : "memory" );
+    return previousMstatus;
+}
+
+static void aether_restore_machine_interrupts( uint32_t previousMstatus )
+{
+    if( ( previousMstatus & 0x8U ) != 0U )
+    {
+        __asm volatile ( "csrsi mstatus, 8" ::: "memory" );
+    }
 }
 
 static void write_unsigned( uint32_t value )
@@ -125,4 +151,100 @@ void vPortSetupTimerInterrupt( void )
 
     pullMachineTimerCompareRegister = ( volatile uint64_t * ) compare;
     ullNextTime = firstDeadline + ( uint64_t ) uxTimerIncrementsForOneTick;
+}
+
+void vPortSuppressTicksAndSleep( TickType_t expectedIdleTicks )
+{
+    const uint64_t tickCounts = ( uint64_t ) uxTimerIncrementsForOneTick;
+    volatile uint32_t * const compare = aether_mtimecmp_for_current_hart();
+    uint32_t previousMstatus;
+    uint64_t nextPeriodicDeadline;
+    uint64_t sleepDeadline;
+    uint64_t now;
+
+    if( expectedIdleTicks < ( TickType_t ) 2U )
+    {
+        return;
+    }
+
+    previousMstatus = aether_disable_machine_interrupts();
+
+    if( eTaskConfirmSleepModeStatus() == eAbortSleep )
+    {
+        aetherTicklessAborts++;
+        aether_restore_machine_interrupts( previousMstatus );
+        return;
+    }
+
+    configASSERT( tickCounts != 0U );
+    configASSERT( ullNextTime >= tickCounts );
+
+    /* ullNextTime is always one periodic interval beyond the currently armed
+     * mtimecmp value. Derive the next unsuppressed tick boundary from it. */
+    nextPeriodicDeadline = ullNextTime - tickCounts;
+    now = aether_read_mtime();
+
+    /* A tick became pending before the suppression window was installed. Do
+     * not erase it by moving mtimecmp; restore MIE and let the normal handler
+     * account for that tick. */
+    if( now >= nextPeriodicDeadline )
+    {
+        aetherTicklessAborts++;
+        aether_restore_machine_interrupts( previousMstatus );
+        return;
+    }
+
+    sleepDeadline = nextPeriodicDeadline +
+                    ( ( uint64_t ) ( expectedIdleTicks - 1U ) * tickCounts );
+    aether_write_mtimecmp( compare, sleepDeadline );
+    ullNextTime = sleepDeadline + tickCounts;
+
+    aetherTicklessEntries++;
+    __asm volatile ( "fence iorw, iorw\n\twfi" ::: "memory" );
+    aetherTicklessWakeups++;
+
+    now = aether_read_mtime();
+
+    if( now >= sleepDeadline )
+    {
+        /* The pending Machine timer interrupt performs the final
+         * xTaskIncrementTick() after MIE is restored. Step only the fully
+         * suppressed periods here so the task at the wake deadline is released
+         * exactly once by the normal interrupt path. */
+        const TickType_t suppressedTicks = expectedIdleTicks - 1U;
+
+        if( suppressedTicks != 0U )
+        {
+            vTaskStepTick( suppressedTicks );
+            aetherTicklessSuppressedTicks += ( uint32_t ) suppressedTicks;
+        }
+    }
+    else
+    {
+        /* Future external-interrupt support can wake WFI before the timer
+         * deadline. Restore the first periodic boundary after 'now' and account
+         * only for complete tick periods that elapsed before that early wake. */
+        uint64_t elapsedTicks = 0U;
+        uint64_t restoredDeadline;
+
+        if( now >= nextPeriodicDeadline )
+        {
+            elapsedTicks = ( ( now - nextPeriodicDeadline ) / tickCounts ) + 1U;
+        }
+
+        configASSERT( elapsedTicks < ( uint64_t ) expectedIdleTicks );
+        restoredDeadline = nextPeriodicDeadline + ( elapsedTicks * tickCounts );
+        aether_write_mtimecmp( compare, restoredDeadline );
+        ullNextTime = restoredDeadline + tickCounts;
+
+        if( elapsedTicks != 0U )
+        {
+            vTaskStepTick( ( TickType_t ) elapsedTicks );
+            aetherTicklessSuppressedTicks += ( uint32_t ) elapsedTicks;
+        }
+
+        aetherTicklessEarlyWakeups++;
+    }
+
+    aether_restore_machine_interrupts( previousMstatus );
 }
