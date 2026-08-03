@@ -30,7 +30,7 @@ void aether_assert_fail( const char * file, int line );
 #define configGENERATE_RUN_TIME_STATS           0
 #define configCHECK_FOR_STACK_OVERFLOW          2
 #define configUSE_MALLOC_FAILED_HOOK            1
-#define configUSE_IDLE_HOOK                     0
+#define configUSE_IDLE_HOOK                     1
 #define configUSE_TICK_HOOK                     0
 #define configUSE_DAEMON_TASK_STARTUP_HOOK      0
 #define configSUPPORT_STATIC_ALLOCATION         0
