@@ -59,6 +59,7 @@ class MemWb(
   val csrWrite = Bool()
   val csrAddr = UInt(12.W)
   val csrData = UInt(xlen.W)
+  val wfi = Bool()
   val mret = Bool()
   val trap = new TrapInfo(xlen)
 }
@@ -125,12 +126,16 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.timerInterrupt := io.timerInterrupt
   csrFile.io.trapReturn := takingMret
 
-  // An interrupt is accepted only after a normal WB instruction retires. The
-  // oldest younger instruction has not retired and must be replayed after MRET.
+  val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
+  val waitingForInterrupt = wfiRetiring && !csrFile.io.machineTimerInterrupt
+
+  // An interrupt is accepted only after a normal WB instruction retires. WFI
+  // remains at the retirement boundary until an enabled Machine timer interrupt
+  // arrives, so its architectural resume PC is exactly the following instruction.
   val interruptPc = Mux(
-    exMem.valid,
-    exMem.pc,
-    Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc))
+    wfiRetiring,
+    memWb.pc + 4.U,
+    Mux(exMem.valid, exMem.pc, Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc)))
   )
   val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret &&
     csrFile.io.machineTimerInterrupt
@@ -257,6 +262,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   }
   val canonicalCsrWriteData = MachineCsrWarl.canonicalize(config.isa, csrAddr, csrWriteData)
   val csrException = csrInstruction && !csrLegal
+  val wfiException =
+    idEx.ctrl.wfi && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
   val mretException =
     idEx.ctrl.mret && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
 
@@ -292,11 +299,12 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   dataPmp.io.write := exMem.ctrl.memWrite
   dataPmp.io.execute := false.B
 
-  // A synchronous trap, asynchronous interrupt or return can redirect from WB
-  // while a younger instruction occupies MEM. Suppress that request before the
-  // edge so no Store/MMIO side effect escapes from an instruction being flushed.
+  // A synchronous trap, asynchronous interrupt, return or waiting WFI can
+  // redirect/freeze from WB while a younger instruction occupies MEM. Suppress
+  // that request before the edge so no flushed Store/MMIO side effect escapes.
   val candidateDataRequest = exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-    !exMem.trap.valid && !takingTrap && !takingInterrupt && !takingMret
+    !exMem.trap.valid && !takingTrap && !takingInterrupt && !takingMret &&
+    !waitingForInterrupt
   val dataPmpFault = candidateDataRequest &&
     (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
 
@@ -336,7 +344,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       (decoder.io.ctrl.usesRs2 && decoder.io.rs2 === idEx.rd)
   )
 
-  io.commit.valid := memWb.valid
+  io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
   io.commit.inst := memWb.inst
   io.commit.rd := memWb.rd
@@ -353,7 +361,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   io.commit.interrupt := takingInterrupt
   io.commit.interruptCause := machineTimerCause.U(xlen.W)
   io.commit.interruptPc := interruptPc
-  io.halted := false.B
+  io.halted := waitingForInterrupt
 
   when(takingTrap || takingInterrupt) {
     pc := csrFile.io.trapVector
@@ -367,6 +375,11 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
+  }.elsewhen(waitingForInterrupt) {
+    pc := memWb.pc + 4.U
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
   }.elsewhen(memoryStall) {
     memWb.valid := false.B
 
@@ -392,6 +405,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     memWb.csrWrite := exMem.csrWrite
     memWb.csrAddr := exMem.csrAddr
     memWb.csrData := exMem.csrData
+    memWb.wfi := exMem.ctrl.wfi
     memWb.mret := exMem.ctrl.mret
     memWb.trap := exMem.trap
     when(memoryFault) {
@@ -415,7 +429,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     exMem.csrAddr := csrAddr
     exMem.csrData := canonicalCsrWriteData
     exMem.trap := idEx.trap
-    when((csrException || mretException) && !idEx.trap.valid) {
+    when((csrException || wfiException || mretException) && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
       exMem.trap.value := idExInstructionValue
