@@ -10,14 +10,18 @@ RV64M_DIR := $(BUILD_DIR)/rv64m-regressions
 GENERATED_M_DIR := $(BUILD_DIR)/generated-rv64m
 NEMU_DIR := $(BUILD_DIR)/nemu
 NEMU_HOME := $(abspath $(NEMU_DIR))
+NEMU_REPOSITORY := https://github.com/OpenXiangShan/NEMU.git
 NEMU_COMMIT := ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
 NEMU_SO := $(NEMU_DIR)/build/riscv64-nemu-interpreter-so
 DIFFTEST_PROBE := $(BUILD_DIR)/nemu_difftest_mismatch_probe
+RTL_STAMP := $(RTL_DIR)/.elaborated.stamp
 TOP := AetherCoreSimTop
+SIM_BIN := $(OBJ_DIR)/V$(TOP)
 VERILATOR ?= verilator
 PYTHON ?= python3
 CXX ?= g++
 SIM_SOURCES := $(abspath sim/sim_main.cpp) $(abspath sim/nemu_difftest.cpp)
+CHISEL_SOURCES := $(shell find src -type f -name '*.scala' 2>/dev/null) build.mill mill
 
 # Chisel/CIRCT emits the top and child modules as separate SystemVerilog files.
 # Keep this recursive so the wildcard is expanded after the `rtl` prerequisite.
@@ -27,8 +31,12 @@ RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 
 all: test run-smoke run-regressions run-completion-regressions run-fault-regressions
 
-rtl:
+rtl: $(RTL_STAMP)
+
+$(RTL_STAMP): $(CHISEL_SOURCES) Makefile
+	mkdir -p $(RTL_DIR)
 	./mill aethercore.runMain aethercore.Elaborate --target-dir $(RTL_DIR)
+	touch $@
 
 test:
 	./mill aethercore.test
@@ -55,15 +63,30 @@ rv64m-regressions:
 generated-rv64m:
 	$(PYTHON) tools/make_generated_rv64m.py $(GENERATED_M_DIR)
 
-$(NEMU_SO):
-	rm -rf $(NEMU_DIR)
-	mkdir -p $(NEMU_DIR)
-	git -C $(NEMU_DIR) init
-	git -C $(NEMU_DIR) remote add origin https://github.com/OpenXiangShan/NEMU.git
-	git -C $(NEMU_DIR) fetch --depth=1 origin $(NEMU_COMMIT)
-	git -C $(NEMU_DIR) checkout --detach FETCH_HEAD
-	NEMU_HOME=$(NEMU_HOME) $(MAKE) -C $(NEMU_DIR) riscv64-nutshell-ref_defconfig
-	NEMU_HOME=$(NEMU_HOME) $(MAKE) -C $(NEMU_DIR) -j$$(nproc)
+$(NEMU_SO): tools/ensure_git_revision.sh Makefile
+	bash tools/ensure_git_revision.sh \
+		$(NEMU_REPOSITORY) $(NEMU_COMMIT) $(NEMU_DIR) nemu
+	@set -e; \
+	for attempt in 1 2 3; do \
+		echo "NEMU configure/build attempt $$attempt/3"; \
+		if GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0=http.version \
+			GIT_CONFIG_VALUE_0=HTTP/1.1 \
+			NEMU_HOME=$(NEMU_HOME) \
+			$(MAKE) -C $(NEMU_DIR) riscv64-nutshell-ref_defconfig && \
+		   GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0=http.version \
+			GIT_CONFIG_VALUE_0=HTTP/1.1 \
+			NEMU_HOME=$(NEMU_HOME) \
+			$(MAKE) -C $(NEMU_DIR) -j$$(nproc); then \
+			break; \
+		fi; \
+		if [ $$attempt -eq 3 ]; then \
+			echo "ERROR: NEMU configure/build failed after 3 attempts" >&2; \
+			exit 1; \
+		fi; \
+		sleep $$((attempt * 3)); \
+	done
 	@test -f $@ || { echo "ERROR: NEMU shared object was not produced"; exit 1; }
 
 nemu: $(NEMU_SO)
@@ -74,15 +97,17 @@ $(DIFFTEST_PROBE): sim/nemu_difftest_mismatch_probe.cpp sim/nemu_difftest.cpp si
 		sim/nemu_difftest_mismatch_probe.cpp sim/nemu_difftest.cpp \
 		-ldl -o $@
 
-sim: rtl smoke
+sim: $(SIM_BIN)
+
+$(SIM_BIN): $(RTL_STAMP) $(SIM_SOURCES) sim/nemu_difftest.h Makefile
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no generated SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2" -LDFLAGS "-ldl" \
 		$(RTL_SOURCES) $(SIM_SOURCES)
 
-run-smoke: sim
-	$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/smoke.bin --max-cycles 200
+run-smoke: sim smoke
+	$(SIM_BIN) $(SOFTWARE_DIR)/smoke.bin --max-cycles 200
 
 run-regressions: sim regressions
 	@set -e; \
@@ -90,7 +115,7 @@ run-regressions: sim regressions
 		echo "== regression: $$name =="; \
 		stall_args=""; \
 		if [ "$$stall" != "0" ]; then stall_args="--stall-period $$stall"; fi; \
-		$(OBJ_DIR)/V$(TOP) $(REGRESSION_DIR)/$$name.bin \
+		$(SIM_BIN) $(REGRESSION_DIR)/$$name.bin \
 			--max-cycles 500 --self-check-exit $$stall_args; \
 	done < $(REGRESSION_DIR)/manifest.txt
 
@@ -98,7 +123,7 @@ run-completion-regressions: sim completion-regressions
 	@set -e; \
 	while read name; do \
 		echo "== completion regression: $$name =="; \
-		$(OBJ_DIR)/V$(TOP) $(COMPLETION_DIR)/$$name.bin \
+		$(SIM_BIN) $(COMPLETION_DIR)/$$name.bin \
 			--max-cycles 500 --self-check-exit; \
 	done < $(COMPLETION_DIR)/manifest.txt
 
@@ -110,7 +135,7 @@ run-fault-regressions: sim fault-regressions
 		if [ "$$stall" != "0" ]; then args="$$args --stall-period $$stall"; fi; \
 		if [ "$$forbidden" != "-" ]; then args="$$args --forbid-rd $$forbidden"; fi; \
 		if [ "$$memaddr" != "-" ]; then args="$$args --expect-memory64 $$memaddr $$memval"; fi; \
-		$(OBJ_DIR)/V$(TOP) $(FAULT_DIR)/$$name.bin $$args; \
+		$(SIM_BIN) $(FAULT_DIR)/$$name.bin $$args; \
 	done < $(FAULT_DIR)/manifest.txt
 
 run-difftest: sim regressions completion-regressions $(NEMU_SO)
@@ -120,12 +145,12 @@ run-difftest: sim regressions completion-regressions $(NEMU_SO)
 		echo "== NEMU DiffTest: $$name =="; \
 		stall_args=""; \
 		if [ "$$stall" != "0" ]; then stall_args="--stall-period $$stall"; fi; \
-		$(OBJ_DIR)/V$(TOP) $(REGRESSION_DIR)/$$name.bin \
+		$(SIM_BIN) $(REGRESSION_DIR)/$$name.bin \
 			--max-cycles 500 --self-check-exit --difftest "$$so" $$stall_args; \
 	done < $(REGRESSION_DIR)/manifest.txt; \
 	while read name; do \
 		echo "== NEMU DiffTest: $$name =="; \
-		$(OBJ_DIR)/V$(TOP) $(COMPLETION_DIR)/$$name.bin \
+		$(SIM_BIN) $(COMPLETION_DIR)/$$name.bin \
 			--max-cycles 500 --self-check-exit --difftest "$$so"; \
 	done < $(COMPLETION_DIR)/manifest.txt
 
@@ -139,7 +164,7 @@ run-generated-difftest: sim generated-difftest $(NEMU_SO)
 		echo "== generated NEMU DiffTest: $$name seed=$$seed operations=$$operations words=$$words =="; \
 		stall_args=""; \
 		if [ "$$stall" != "0" ]; then stall_args="--stall-period $$stall"; fi; \
-		$(OBJ_DIR)/V$(TOP) $(GENERATED_DIR)/$$name.bin \
+		$(SIM_BIN) $(GENERATED_DIR)/$$name.bin \
 			--max-cycles 5000 --self-check-exit --difftest "$$so" $$stall_args; \
 	done < $(GENERATED_DIR)/manifest.txt
 
@@ -148,7 +173,7 @@ run-rv64m-regressions: sim rv64m-regressions $(NEMU_SO)
 	so="$(abspath $(NEMU_SO))"; \
 	while read name words; do \
 		echo "== directed RV64M NEMU DiffTest: $$name words=$$words =="; \
-		$(OBJ_DIR)/V$(TOP) $(RV64M_DIR)/$$name.bin \
+		$(SIM_BIN) $(RV64M_DIR)/$$name.bin \
 			--max-cycles 2000 --self-check-exit --difftest "$$so"; \
 	done < $(RV64M_DIR)/manifest.txt
 
@@ -159,7 +184,7 @@ run-generated-rv64m: sim generated-rv64m $(NEMU_SO)
 		echo "== generated RV64M NEMU DiffTest: $$name seed=$$seed operations=$$operations words=$$words =="; \
 		stall_args=""; \
 		if [ "$$stall" != "0" ]; then stall_args="--stall-period $$stall"; fi; \
-		$(OBJ_DIR)/V$(TOP) $(GENERATED_M_DIR)/$$name.bin \
+		$(SIM_BIN) $(GENERATED_M_DIR)/$$name.bin \
 			--max-cycles 10000 --self-check-exit --difftest "$$so" $$stall_args; \
 	done < $(GENERATED_M_DIR)/manifest.txt
 
