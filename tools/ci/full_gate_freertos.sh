@@ -43,13 +43,26 @@ printf '%s\n' '#include <stddef.h>' '#include <stdint.h>' \
   riscv-none-elf-gcc --sysroot="$sysroot" -march=rv32im_zicsr -mabi=ilp32 \
     -ffreestanding -fno-builtin -E -H -Wp,-v -x c - \
     >/dev/null 2> "$LOG_DIR/freertos-toolchain-include-search.log"
-grep -Fq "$sysroot/include" "$LOG_DIR/freertos-toolchain-include-search.log"
-grep -Fq "$sysroot/include/stdlib.h" "$LOG_DIR/freertos-toolchain-include-search.log"
-grep -Fq "$sysroot/include/string.h" "$LOG_DIR/freertos-toolchain-include-search.log"
-! grep -Eq '(^|[[:space:].])(/usr/include|/usr/local/include)(/|$)' \
-  "$LOG_DIR/freertos-toolchain-include-search.log"
+
+awk '/^\.+ \/.*$/ { sub(/^\.+ /, ""); print }' \
+  "$LOG_DIR/freertos-toolchain-include-search.log" \
+  > "$LOG_DIR/freertos-toolchain-header-paths.txt"
+: > "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
+while IFS= read -r header; do
+  test -f "$header" || continue
+  readlink -f "$header" >> "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
+done < "$LOG_DIR/freertos-toolchain-header-paths.txt"
+sort -u -o "$LOG_DIR/freertos-toolchain-header-paths-real.txt" \
+  "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
+
+expected_stdlib="$(readlink -f "$sysroot/include/stdlib.h")"
+expected_string="$(readlink -f "$sysroot/include/string.h")"
+grep -Fxq "$expected_stdlib" "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
+grep -Fxq "$expected_string" "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
+! grep -Eq '^(/usr/include|/usr/local/include)(/|$)' \
+  "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
 ! grep -Fq "$ROOT/software/freertos/aethercore/freestanding" \
-  "$LOG_DIR/freertos-toolchain-include-search.log"
+  "$LOG_DIR/freertos-toolchain-header-paths-real.txt"
 
 set -o pipefail
 make -f Makefile.freertos run-local \
@@ -100,6 +113,8 @@ toolchain_archive_sha256=$TOOLCHAIN_SHA256
 toolchain_target=riscv-none-elf
 toolchain_sysroot=$sysroot
 toolchain_multilib=rv32im/ilp32
+sysroot_stdlib=$expected_stdlib
+sysroot_string=$expected_string
 sysroot_stdlib_sha256=$stdlib_sha
 sysroot_string_sha256=$string_sha
 rv32_libc=$libc_path
@@ -115,6 +130,8 @@ cp "$contract" "$EVIDENCE_DIR/port-contract.json"
 cp "$attributes" "$EVIDENCE_DIR/elf-attributes.txt"
 cp "$LOG_DIR/freertos-toolchain-include-search.log" \
   "$EVIDENCE_DIR/toolchain-include-search.txt"
+cp "$LOG_DIR/freertos-toolchain-header-paths-real.txt" \
+  "$EVIDENCE_DIR/toolchain-header-paths-real.txt"
 riscv-none-elf-gcc --version > "$EVIDENCE_DIR/toolchain-version.txt"
 riscv-none-elf-gcc -print-multi-lib > "$EVIDENCE_DIR/toolchain-multilib.txt"
 sha256sum "$elf" "$binary" > "$EVIDENCE_DIR/artifacts.sha256"
