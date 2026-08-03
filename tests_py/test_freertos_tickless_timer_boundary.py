@@ -28,6 +28,17 @@ class FreeRtosTicklessTimerBoundaryTest(unittest.TestCase):
         self.assertLess(first, high)
         self.assertLess(high, low)
 
+    def test_riscv_port_is_explicitly_connected_to_the_application_sleep_hook(self) -> None:
+        config = CONFIG.read_text(encoding="utf-8")
+        self.assertIn(
+            "void vPortSuppressTicksAndSleep( uint32_t expectedIdleTicks )", config
+        )
+        self.assertIn("portSUPPRESS_TICKS_AND_SLEEP( expectedIdleTicks )", config)
+        self.assertIn(
+            "vPortSuppressTicksAndSleep( ( uint32_t ) ( expectedIdleTicks ) )",
+            config,
+        )
+
     def test_tickless_mode_disables_mie_closes_the_race_and_steps_ticks(self) -> None:
         config = CONFIG.read_text(encoding="utf-8")
         text = PLATFORM.read_text(encoding="utf-8")
