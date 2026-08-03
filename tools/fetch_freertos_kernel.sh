@@ -30,9 +30,12 @@ REVISION="$(lock_value revision)"
 PORT_C_SHA="$(lock_value port_c_blob_sha)"
 PORT_ASM_SHA="$(lock_value port_asm_blob_sha)"
 PORTMACRO_SHA="$(lock_value portmacro_blob_sha)"
+CHIP_EXTENSION_DIRECTORY="$(lock_value chip_extension_directory)"
+CHIP_EXTENSION_SHA="$(lock_value chip_extension_blob_sha)"
+CHIP_EXTENSION_PATH="$CHIP_EXTENSION_DIRECTORY/freertos_risc_v_chip_specific_extensions.h"
 
 [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] || fail "revision is not a full lowercase SHA"
-for digest in "$PORT_C_SHA" "$PORT_ASM_SHA" "$PORTMACRO_SHA"; do
+for digest in "$PORT_C_SHA" "$PORT_ASM_SHA" "$PORTMACRO_SHA" "$CHIP_EXTENSION_SHA"; do
   [[ "$digest" =~ ^[0-9a-f]{40}$ ]] || fail "port blob SHA is invalid: $digest"
 done
 
@@ -45,6 +48,7 @@ validate_tree() {
   [[ "$(git -C "$tree" hash-object portable/GCC/RISC-V/port.c 2>/dev/null)" == "$PORT_C_SHA" ]] || return 1
   [[ "$(git -C "$tree" hash-object portable/GCC/RISC-V/portASM.S 2>/dev/null)" == "$PORT_ASM_SHA" ]] || return 1
   [[ "$(git -C "$tree" hash-object portable/GCC/RISC-V/portmacro.h 2>/dev/null)" == "$PORTMACRO_SHA" ]] || return 1
+  [[ "$(git -C "$tree" hash-object "$CHIP_EXTENSION_PATH" 2>/dev/null)" == "$CHIP_EXTENSION_SHA" ]] || return 1
   git -C "$tree" diff --quiet --ignore-submodules -- || return 1
   git -C "$tree" diff --cached --quiet --ignore-submodules -- || return 1
   [[ -z "$(git -C "$tree" status --porcelain --untracked-files=all)" ]] || return 1
