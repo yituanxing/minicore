@@ -44,7 +44,13 @@ TOOLCHAIN_SYSROOT := $(shell $(CC) --print-sysroot 2>/dev/null)
 SYSROOT_FLAGS := --sysroot=$(TOOLCHAIN_SYSROOT)
 ARCH_FLAGS := -march=rv32im_zicsr -mabi=ilp32 -mcmodel=medany -msmall-data-limit=0
 LIBRARY_ARCH_FLAGS := -march=rv32im -mabi=ilp32
-COMMON_FLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) -ffreestanding -fno-builtin -fdata-sections -ffunction-sections
+DEBUG_PREFIX_ROOT := /aethercore/freertos-build
+DEBUG_PREFIX_FLAGS := \
+	-ffile-prefix-map=$(abspath $(BUILD_DIR))=$(DEBUG_PREFIX_ROOT) \
+	-fdebug-prefix-map=$(abspath $(BUILD_DIR))=$(DEBUG_PREFIX_ROOT) \
+	-fmacro-prefix-map=$(abspath $(BUILD_DIR))=$(DEBUG_PREFIX_ROOT)
+COMMON_FLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) $(DEBUG_PREFIX_FLAGS) \
+	-ffreestanding -fno-builtin -fdata-sections -ffunction-sections
 CFLAGS := $(COMMON_FLAGS) -std=c11 -Os -g -Wall -Wextra
 ASFLAGS := $(COMMON_FLAGS) -x assembler-with-cpp
 LDFLAGS := $(SYSROOT_FLAGS) $(ARCH_FLAGS) -nostdlib -nostartfiles \
