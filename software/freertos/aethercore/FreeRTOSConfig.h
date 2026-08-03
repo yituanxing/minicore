@@ -7,7 +7,8 @@ void aether_assert_fail( const char * file, int line );
 
 #define configUSE_PREEMPTION                    1
 #define configUSE_TIME_SLICING                  1
-#define configUSE_TICKLESS_IDLE                 0
+#define configUSE_TICKLESS_IDLE                 1
+#define configEXPECTED_IDLE_TIME_BEFORE_SLEEP  2
 #define configCPU_CLOCK_HZ                      1000000UL
 #define configTICK_RATE_HZ                      1000UL
 #define configTICK_TYPE_WIDTH_IN_BITS           TICK_TYPE_WIDTH_32_BITS
@@ -30,7 +31,7 @@ void aether_assert_fail( const char * file, int line );
 #define configGENERATE_RUN_TIME_STATS           0
 #define configCHECK_FOR_STACK_OVERFLOW          2
 #define configUSE_MALLOC_FAILED_HOOK            1
-#define configUSE_IDLE_HOOK                     1
+#define configUSE_IDLE_HOOK                     0
 #define configUSE_TICK_HOOK                     0
 #define configUSE_DAEMON_TASK_STARTUP_HOOK      0
 #define configSUPPORT_STATIC_ALLOCATION         0
