@@ -26,6 +26,13 @@ OBJCOPY := $(CROSS_COMPILE)objcopy
 OBJDUMP := $(CROSS_COMPILE)objdump
 READELF := $(CROSS_COMPILE)readelf
 VERILATOR ?= verilator
+JOBS ?= $(shell nproc)
+TRACE ?= 1
+ifeq ($(TRACE),1)
+VERILATOR_TRACE_FLAGS := --trace
+else
+VERILATOR_TRACE_FLAGS :=
+endif
 
 TOOLCHAIN_SYSROOT := $(shell $(CC) --print-sysroot 2>/dev/null)
 SYSROOT_FLAGS := --sysroot=$(TOOLCHAIN_SYSROOT)
@@ -123,6 +130,7 @@ $(ELF): qualification $(OBJECTS) $(APP_DIR)/linker.ld
 	grep -q '<freertos_risc_v_trap_handler>:' $(DIS)
 	grep -Eq '\bcsrr[[:space:]].*mhartid' $(DIS)
 	grep -q '\bmret\b' $(DIS)
+	grep -Eq '\bwfi\b' $(DIS)
 
 elf: $(ELF)
 
@@ -143,7 +151,7 @@ runner-source:
 
 sim: rtl runner-source
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
-	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+	$(VERILATOR) --cc --exe --build -j $(JOBS) $(VERILATOR_TRACE_FLAGS) -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(SIM_OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
 		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) \
@@ -155,6 +163,7 @@ run-local: image sim
 		--max-cycles 2000000 --self-check-exit --stall-period 5 \
 		2>&1 | tee $(BUILD_DIR)/logs/local.log
 	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(BUILD_DIR)/logs/local.log)" -eq 1
+	test "$$(grep -c '^FREERTOS IDLE PASS wfi>=1 wake>=1$$' $(BUILD_DIR)/logs/local.log)" -eq 1
 	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=16$$' $(BUILD_DIR)/logs/local.log)" -eq 1
 	grep -Fq 'PASS: self-check exit=0' $(BUILD_DIR)/logs/local.log
 	! grep -Fq 'FAIL:' $(BUILD_DIR)/logs/local.log
