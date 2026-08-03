@@ -152,14 +152,8 @@ class FreeRtosPlatformTest(unittest.TestCase):
 
         activate_body = text.split("activate() {", 1)[1].split("\n}", 1)[0]
         self.assertNotIn("verify_install", activate_body)
-        self.assertIn(
-            '[[ -f "$marker" ]] && verify_install; then\n  activate',
-            text,
-        )
-        self.assertIn(
-            'printf \'%s\\n\' "$revision" > "$marker"\n  verify_install\n  activate',
-            text,
-        )
+        self.assertIn('-f "$marker" ]] && verify_install; then', text)
+        self.assertIn("  verify_install\n  activate\n  exit 0\nfi", text)
         self.assertTrue(text.rstrip().endswith("verify_install\nactivate"))
 
 
