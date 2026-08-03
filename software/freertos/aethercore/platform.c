@@ -10,6 +10,44 @@ extern volatile uint64_t * pullMachineTimerCompareRegister;
 extern const size_t uxTimerIncrementsForOneTick;
 extern UBaseType_t const ullMachineTimerCompareRegisterBase;
 
+static uint64_t aether_read_mtime( void )
+{
+    volatile uint32_t * const time = ( volatile uint32_t * ) AETHERCORE_MTIME;
+    uint32_t highBefore;
+    uint32_t low;
+    uint32_t highAfter;
+
+    do
+    {
+        highBefore = time[ 1 ];
+        low = time[ 0 ];
+        highAfter = time[ 1 ];
+    } while( highBefore != highAfter );
+
+    return ( ( uint64_t ) highAfter << 32 ) | low;
+}
+
+static volatile uint32_t * aether_mtimecmp_for_current_hart( void )
+{
+    uint32_t hartId;
+
+    __asm volatile ( "csrr %0, mhartid" : "=r" ( hartId ) );
+
+    return ( volatile uint32_t * )
+           ( ( uintptr_t ) ullMachineTimerCompareRegisterBase +
+             ( ( uintptr_t ) hartId * sizeof( uint64_t ) ) );
+}
+
+static void aether_write_mtimecmp( volatile uint32_t * compare,
+                                   uint64_t deadline )
+{
+    /* RV32 requires an ordered three-store sequence to avoid a transient
+     * compare value lower than both the old and new deadlines. */
+    compare[ 0 ] = UINT32_MAX;
+    compare[ 1 ] = ( uint32_t ) ( deadline >> 32 );
+    compare[ 0 ] = ( uint32_t ) deadline;
+}
+
 static void write_unsigned( uint32_t value )
 {
     char digits[ 10 ];
@@ -79,33 +117,11 @@ void vApplicationStackOverflowHook( TaskHandle_t task, char * taskName )
 
 void vPortSetupTimerInterrupt( void )
 {
-    volatile uint32_t * const time = ( volatile uint32_t * ) AETHERCORE_MTIME;
-    uint32_t highBefore;
-    uint32_t low;
-    uint32_t highAfter;
-    uint32_t hartId;
-
-    __asm volatile ( "csrr %0, mhartid" : "=r" ( hartId ) );
-
-    do
-    {
-        highBefore = time[ 1 ];
-        low = time[ 0 ];
-        highAfter = time[ 1 ];
-    } while( highBefore != highAfter );
-
-    const uint64_t now = ( ( uint64_t ) highAfter << 32 ) | low;
+    const uint64_t now = aether_read_mtime();
     const uint64_t firstDeadline = now + ( uint64_t ) uxTimerIncrementsForOneTick;
-    volatile uint32_t * const compare =
-        ( volatile uint32_t * )
-        ( ( uintptr_t ) ullMachineTimerCompareRegisterBase +
-          ( ( uintptr_t ) hartId * sizeof( uint64_t ) ) );
+    volatile uint32_t * const compare = aether_mtimecmp_for_current_hart();
 
-    /* RV32 requires an ordered three-store sequence to avoid a transient
-     * compare value lower than both the old and new deadlines. */
-    compare[ 0 ] = UINT32_MAX;
-    compare[ 1 ] = ( uint32_t ) ( firstDeadline >> 32 );
-    compare[ 0 ] = ( uint32_t ) firstDeadline;
+    aether_write_mtimecmp( compare, firstDeadline );
 
     pullMachineTimerCompareRegister = ( volatile uint64_t * ) compare;
     ullNextTime = firstDeadline + ( uint64_t ) uxTimerIncrementsForOneTick;
