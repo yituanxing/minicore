@@ -15,6 +15,7 @@ object MachineCsrAddress {
   val Mcause: Int = 0x342
   val Mtval: Int = 0x343
   val Mip: Int = 0x344
+  val Mhartid: Int = 0xf14
 }
 
 object MachineCsrBit {
@@ -239,6 +240,11 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     }
     is(MachineCsrAddress.Mip.U) {
       io.readData := mipValue
+      io.readImplemented := true.B
+    }
+    is(MachineCsrAddress.Mhartid.U) {
+      // AetherCore currently exposes one architectural hart, numbered zero.
+      io.readData := 0.U
       io.readImplemented := true.B
     }
   }
