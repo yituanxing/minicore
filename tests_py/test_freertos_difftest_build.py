@@ -73,7 +73,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
         self.assertIn("test $$status -ne 0", text)
         self.assertIn("mismatch after 0 matched events", text)
 
-    def test_ci_gate_freezes_wfi_counts_hashes_and_clean_trace_zero_build(self) -> None:
+    def test_ci_gate_freezes_tickless_counts_hashes_and_clean_trace_zero_build(self) -> None:
         syntax = subprocess.run(
             ["bash", "-n", str(CI_SCRIPT)],
             cwd=ROOT,
@@ -92,36 +92,46 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
         self.assertIn("for stall in 0 5", text)
         self.assertIn("run-difftest-negative", text)
         self.assertIn("negative_mismatch_at=0", text)
+        self.assertIn("tickless_idle=true", text)
+        self.assertIn("masked_wfi_wake=true", text)
+        self.assertIn("fence_shadow=true", text)
         self.assertIn("wfi_shadow=true", text)
         self.assertIn("wfi_quiescence=true", text)
-        self.assertIn("contract=freertos-rv32-exact-difftest-wfi-v1", text)
+        self.assertIn(
+            "contract=freertos-rv32-exact-difftest-tickless-v1", text
+        )
         self.assertIn("reference_revision=8601834e4889e6bf3b6113eb5f824ba7689126f5", text)
         self.assertIn(
             'EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e"',
             text,
         )
         self.assertIn(
-            'EXPECTED_ADAPTER_SHA256="2ff3fa8f3c2cfc1005d7edd0b704c636d48c7ef042c002298568faad6c9aadd4"',
+            'EXPECTED_ADAPTER_SHA256="ef8871db8119ec7ae3091e289f55c8c621042fd44d044bfb746028572d616810"',
             text,
         )
         self.assertIn(
-            'EXPECTED_RUNNER_SHA256="e9446402b2d9f51aa636438badc7bbb338376194abd01b968a3b6d842f764744"',
+            'EXPECTED_RUNNER_SHA256="36e0da5570e4fa47ec152b55631e7fc9e596581ba1548179724c4e2bd0628c78"',
             text,
         )
         self.assertIn(
-            'EXPECTED_ELF_SHA256="21a73cec3f2923708117fb71d5cd4339f22d5ed08b4994314b2c1a3b3cd242a0"',
+            'EXPECTED_ELF_SHA256="50ac3adcbcb2b3beb73493048e6cf2f1f1a04114c341c0b446a3f90c3d81f2c5"',
             text,
         )
         self.assertIn(
-            'EXPECTED_BINARY_SHA256="ddb1cb7e8b50687de1ef450ff85392bbfa5987cfc4b2a93f727d5dd2e08e9572"',
+            'EXPECTED_BINARY_SHA256="b7c29d7da5bc29cb98bb747e2bb34251f27801810003b108db9e7417f3ae2cc3"',
             text,
         )
-        self.assertIn("wfi-commits=2, wfi-sleep-cycles=1332", text)
-        self.assertIn("difftest=167808", text)
-        self.assertIn("wfi-shadow=2", text)
-        self.assertIn("wfi-commits=3, wfi-sleep-cycles=1693", text)
-        self.assertIn("difftest=166608", text)
-        self.assertIn("wfi-shadow=3", text)
+        self.assertIn(
+            "wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199",
+            text,
+        )
+        self.assertIn("difftest=168046", text)
+        self.assertIn("fence-shadow=1", text)
+        self.assertIn(
+            "wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30059",
+            text,
+        )
+        self.assertIn("difftest=169735", text)
         self.assertIn('cp "$adapter" "$EVIDENCE_DIR/"', text)
         self.assertIn('cp "$runner" "$EVIDENCE_DIR/"', text)
         self.assertIn('cp "$elf" "$EVIDENCE_DIR/"', text)
