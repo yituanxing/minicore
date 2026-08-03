@@ -24,6 +24,14 @@ def adapt(source: str) -> str:
     )
     text = replace_once(
         text,
+        "constexpr std::uint32_t kMtimeAddress = 0x0200bff8U;\n",
+        "constexpr std::uint32_t kMtimeAddress = 0x0200bff8U;\n"
+        "constexpr std::uint32_t kLoadOpcode = 0x03U;\n"
+        "constexpr std::uint32_t kLwFunct3 = 0x02U;\n",
+        "mtime load instruction constants",
+    )
+    text = replace_once(
+        text,
         "constexpr std::uint32_t kMip = 0x344U;\n",
         "constexpr std::uint32_t kMip = 0x344U;\n"
         "constexpr std::uint32_t kMhartid = 0xf14U;\n",
@@ -60,6 +68,7 @@ def adapt(source: str) -> str:
         "      ++mretShadowSteps_;\n"
         "    } else if (zicsrStep) {\n",
         "    NemuState32 after{};\n"
+        "    bool mtimeLoadStep = false;\n"
         "    const bool ecallTrapStep = commit.exception;\n"
         "    const bool mretStep = commit.inst == kMret;\n"
         "    const bool zicsrStep = isZicsrInstruction(commit.inst);\n"
@@ -77,12 +86,29 @@ def adapt(source: str) -> str:
 
     text = replace_once(
         text,
+        "    } else {\n"
+        "      exec_(1);\n"
+        "      regcpy_(&after, kToDut);\n"
+        "    }\n\n"
+        "    if (commit.rdWrite && commit.rd != 0) {\n",
+        "    } else {\n"
+        "      mtimeLoadStep = synchronizeMtimeLoad(commit);\n"
+        "      exec_(1);\n"
+        "      regcpy_(&after, kToDut);\n"
+        "    }\n\n"
+        "    if (commit.rdWrite && commit.rd != 0) {\n",
+        "normal reference execution",
+    )
+
+    text = replace_once(
+        text,
         "    if (zicsrStep) line << \" reference=zicsr-shadow\";\n"
         "    if (mretStep) line << \" reference=mret-shadow\";\n",
         "    if (ecallTrapStep) {\n"
         "      line << \" reference=machine-ecall-shadow cause=\"\n"
         "           << hex32(checkedAddress(commit.exceptionCause, \"exception cause\"));\n"
         "    }\n"
+        "    if (mtimeLoadStep) line << \" reference=mtime-load-shadow\";\n"
         "    if (zicsrStep) line << \" reference=zicsr-shadow\";\n"
         "    if (mretStep) line << \" reference=mret-shadow\";\n",
         "trace shadow labels",
@@ -137,7 +163,30 @@ def adapt(source: str) -> str:
         "CSR write switch",
     )
 
-    ecall_method = r'''  NemuState32 executeEcallTrap(const NemuState32& before,
+    shadow_methods = r'''  bool synchronizeMtimeLoad(const DifftestCommit& commit) {
+    if (!commit.memValid || commit.memWrite) return false;
+
+    const auto address = checkedAddress(commit.memAddr, "mtime load address");
+    if (address != kMtimeAddress && address != kMtimeAddress + 4U) return false;
+
+    const std::uint32_t opcode = commit.inst & 0x7fU;
+    const std::uint32_t funct3 = (commit.inst >> 12) & 0x7U;
+    if (opcode != kLoadOpcode || funct3 != kLwFunct3 || !commit.rdWrite ||
+        commit.rd == 0 || commit.exception || commit.interrupt) {
+      fail("FreeRTOS mtime shadow received an invalid architectural load event");
+    }
+
+    auto* mapped = mappedPointer(address, sizeof(std::uint32_t));
+    if (mapped == nullptr) {
+      fail("FreeRTOS mtime shadow could not resolve the passive MMIO mapping");
+    }
+
+    const std::uint32_t value = checkedAddress(commit.rdData, "mtime load value");
+    std::memcpy(mapped, &value, sizeof(value));
+    return true;
+  }
+
+  NemuState32 executeEcallTrap(const NemuState32& before,
                                    const DifftestCommit& commit) {
     const auto cause = checkedAddress(commit.exceptionCause, "exception cause");
     const auto value = checkedAddress(commit.exceptionValue, "exception value");
@@ -167,7 +216,7 @@ def adapt(source: str) -> str:
     text = replace_once(
         text,
         "  NemuState32 executeMret(const NemuState32& before, const DifftestCommit& commit) {\n",
-        ecall_method
+        shadow_methods
         + "  NemuState32 executeMret(const NemuState32& before, const DifftestCommit& commit) {\n",
         "MRET method",
     )
