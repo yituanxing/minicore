@@ -7,7 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "software" / "freertos" / "aethercore"
 MAKEFILE = ROOT / "Makefile.freertos"
 CI_SCRIPT = ROOT / "tools" / "ci" / "full_gate_freertos.sh"
+VERILATOR_INSTALLER = ROOT / "tools" / "ensure_verilator_5_024.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "full-gate.yml"
+FAST_WORKFLOW = ROOT / ".github" / "workflows" / "fast-gate.yml"
 
 
 class FreeRtosPlatformTest(unittest.TestCase):
@@ -22,9 +24,13 @@ class FreeRtosPlatformTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         text = CI_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("make -f Makefile.freertos run-local", text)
+        self.assertIn('make -j"$JOBS" -f Makefile.freertos', text)
+        self.assertIn('JOBS="${AETHERCORE_JOBS:-0}"', text)
         self.assertIn("workload_messages=64", text)
         self.assertIn("workload_semaphore_batches=8", text)
+        self.assertIn("idle_wfi=true", text)
+        self.assertIn("idle_wfi_wake=true", text)
+        self.assertIn("parallel_jobs=$JOBS", text)
         self.assertIn("local_stall_period=5", text)
         self.assertIn("binary_sha256=", text)
 
@@ -44,6 +50,26 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("portable/GCC/RISC-V", text)
         self.assertIn("RISCV_MTIME_CLINT_no_extensions", text)
         self.assertIn("--self-check-exit --stall-period 5", text)
+
+    def test_build_is_parallel_and_incremental_without_weakening_clean_full_gate(self) -> None:
+        text = MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn("JOBS ?= $(shell nproc)", text)
+        self.assertIn("SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready", text)
+        self.assertNotIn("SOURCE_STAMP := $(SOURCE_DIR)", text)
+        self.assertIn("rm -f $(SOURCE_DIR)/.aethercore-source-ready", text)
+        self.assertIn(
+            "$(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)",
+            text,
+        )
+        self.assertIn("must not race the pinned kernel fetch", text)
+        self.assertIn("RTL_STAMP :=", text)
+        self.assertIn("SIM_BINARY :=", text)
+        self.assertIn("$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN)", text)
+        self.assertIn("--build -j $(JOBS) $(VERILATOR_TRACE_FLAGS)", text)
+        self.assertIn("TRACE ?= 1", text)
+        shell = CI_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('rm -rf "$BUILD_DIR"', shell)
+        self.assertIn("TRACE=1 run-local", shell)
 
     def test_startup_delegates_traps_and_initializes_invariant_gp(self) -> None:
         text = (APP / "startup.S").read_text(encoding="utf-8")
@@ -93,8 +119,11 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("ticks >= 16U", text)
         self.assertIn("aether_exit( 0U )", text)
 
-    def test_full_gate_runs_freertos_immediately_after_fast_source_tests(self) -> None:
+    def test_full_gate_is_milestone_only_and_keeps_the_complete_order(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("- .github/full-gate-request", text)
+        self.assertIn("workflow_dispatch:", text)
+        self.assertNotIn("AETHERCORE_VERILATOR_FAST_VERIFY", text)
         newlib = text.index("Provision pinned RISC-V newlib sysroot")
         source_tests = text.index("Fast source and image tests")
         freertos = text.index("FreeRTOS V11.3.0 preemptive queue workload")
@@ -105,6 +134,32 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertLess(freertos, chisel)
         self.assertLess(freertos, isolated)
         self.assertIn("bash tools/ci/full_gate_freertos.sh", text)
+
+    def test_fast_gate_preserves_per_pr_outputs_and_skips_wave_traces(self) -> None:
+        text = FAST_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("clean: false", text)
+        self.assertIn('AETHERCORE_VERILATOR_FAST_VERIFY: "1"', text)
+        self.assertIn("chmod +x mill", text)
+        self.assertIn("MILL_OUTPUT_DIR=", text)
+        self.assertIn("FAST_FREERTOS_BUILD=", text)
+        self.assertIn("AETHERCORE_JOBS=$(nproc)", text)
+        self.assertIn("TRACE=0 run-local", text)
+        self.assertIn("aethercore.WaitForInterruptCoreSpec", text)
+        self.assertNotIn("full_gate_freertos_difftest.sh", text)
+
+    def test_verilator_fast_verify_skips_only_the_disposable_probe(self) -> None:
+        text = VERILATOR_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn('fast_verify="${AETHERCORE_VERILATOR_FAST_VERIFY:-0}"', text)
+        self.assertIn('if [[ "$fast_verify" == "1" ]]; then', text)
+        self.assertIn("cmp -s \"$build_dir/src/verilator_bin\"", text)
+        self.assertIn("cmp -s \"$source_dir/bin/verilator_includer\"", text)
+        self.assertIn('probe_dir="$(mktemp -d)"', text)
+
+        activate_body = text.split("activate() {", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("verify_install", activate_body)
+        self.assertIn('-f "$marker" ]] && verify_install; then', text)
+        self.assertIn("  verify_install\n  activate\n  exit 0\nfi", text)
+        self.assertTrue(text.rstrip().endswith("verify_install\nactivate"))
 
 
 if __name__ == "__main__":

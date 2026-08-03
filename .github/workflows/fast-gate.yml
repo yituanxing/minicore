@@ -1,0 +1,135 @@
+name: AetherCore Fast Gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-gate:
+    name: Incremental source, WFI and FreeRTOS checks
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 15
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+
+    steps:
+      - name: Checkout without deleting incremental outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 2
+
+      - name: Classify changed paths
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only HEAD^1 HEAD || git show --pretty='' --name-only HEAD)"
+          printf '%s\n' "$changed"
+
+          run_chisel=false
+          run_freertos=false
+
+          if grep -Eq '^(src/main/scala/|src/test/scala/|build\.mill$|mill$)' <<<"$changed"; then
+            run_chisel=true
+            run_freertos=true
+          fi
+
+          if grep -Eq '^(software/freertos/|Makefile\.freertos($|-)|sim/|tools/(make_freertos|ci/full_gate_freertos)|tools/ensure_(riscv_none_elf|rv32_nemu))' <<<"$changed"; then
+            run_freertos=true
+          fi
+
+          echo "run_chisel=$run_chisel" >> "$GITHUB_OUTPUT"
+          echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
+
+      - name: Configure persistent fast cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          key="pr-${{ github.event.pull_request.number || github.ref_name }}"
+          root="$HOME/.cache/aethercore/fast-gate/$key"
+          mkdir -p "$root/mill-out" "$root/freertos"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+          echo "FAST_FREERTOS_BUILD=$root/freertos" >> "$GITHUB_ENV"
+          echo "AETHERCORE_JOBS=$(nproc)" >> "$GITHUB_ENV"
+          echo "fast_cache=$root"
+          echo "parallel_jobs=$(nproc)"
+
+      - name: Provision fixed Verilator
+        if: steps.changes.outputs.run_chisel == 'true' || steps.changes.outputs.run_freertos == 'true'
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V newlib sysroot
+        if: steps.changes.outputs.run_freertos == 'true'
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Fast source contract tests
+        shell: bash
+        run: python3 -m unittest discover -s tests_py -v
+
+      - name: Focused WFI Chisel test
+        if: steps.changes.outputs.run_chisel == 'true'
+        shell: bash
+        run: ./mill aethercore.test.testOnly aethercore.WaitForInterruptCoreSpec
+
+      - name: Incremental FreeRTOS WFI workload
+        if: steps.changes.outputs.run_freertos == 'true'
+        shell: bash
+        run: |
+          make -j"$AETHERCORE_JOBS" -f Makefile.freertos \
+            BUILD_DIR="$FAST_FREERTOS_BUILD" \
+            JOBS="$AETHERCORE_JOBS" TRACE=0 run-local
+
+      - name: Incremental FreeRTOS WFI exact DiffTest
+        if: steps.changes.outputs.run_freertos == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rv32_nemu_so="$(bash tools/ensure_rv32_nemu_single_step.sh)"
+          test -f "$rv32_nemu_so"
+          for stall in 0 5; do
+            make -j"$AETHERCORE_JOBS" -f Makefile.freertos-difftest \
+              BUILD_DIR="$FAST_FREERTOS_BUILD" \
+              JOBS="$AETHERCORE_JOBS" TRACE=0 \
+              RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD="$stall" run-difftest
+          done
+          make -j"$AETHERCORE_JOBS" -f Makefile.freertos-difftest \
+            BUILD_DIR="$FAST_FREERTOS_BUILD" \
+            JOBS="$AETHERCORE_JOBS" TRACE=0 \
+            RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD=5 run-difftest-negative
+          sha256sum \
+            "$rv32_nemu_so" \
+            "$FAST_FREERTOS_BUILD/nemu_difftest_rv32_freertos_wfi.cpp" \
+            "$FAST_FREERTOS_BUILD/sim_main_rv32im_freertos_difftest.cpp" \
+            "$FAST_FREERTOS_BUILD/aethercore-freertos.elf" \
+            "$FAST_FREERTOS_BUILD/aethercore-freertos.bin"
+
+      - name: Write fast-gate summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore fast gate'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
+            echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
+            echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
+            echo '- cached Verilator identity is checked without a disposable build probe'
+            echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
+            echo '- FreeRTOS exact WFI DiffTest runs incrementally at stall=0 and stall=5'
+            echo '- exact reference, adapter, runner, ELF and binary hashes are emitted'
+            echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
+            echo '- the exact 29-stage gate remains mandatory through .github/full-gate-request'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -8,6 +8,8 @@
 
 #define MESSAGE_COUNT 64U
 #define EXPECTED_SUM  ( ( MESSAGE_COUNT * ( MESSAGE_COUNT + 1U ) ) / 2U )
+#define IDLE_WAKE_ATTEMPTS    4U
+#define IDLE_WAKE_DELAY_TICKS 4U
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -17,6 +19,15 @@ static volatile uint32_t consumedCount;
 static volatile uint32_t consumedSum;
 static volatile uint32_t producerDone;
 static volatile uint32_t consumerDone;
+static volatile uint32_t idleWfiEntries;
+static volatile uint32_t idleWfiWakeups;
+
+void vApplicationIdleHook( void )
+{
+    idleWfiEntries++;
+    __asm__ volatile ( "wfi" ::: "memory" );
+    idleWfiWakeups++;
+}
 
 static void producer_task( void * context )
 {
@@ -78,12 +89,28 @@ static void monitor_task( void * context )
         vTaskDelay( 1 );
     }
 
+    /*
+     * A one-tick delay can expire before the RISC-V context switch reaches
+     * the idle hook. Keep the monitor blocked across several complete timer
+     * periods so the idle task can enter WFI, take a later timer interrupt,
+     * and then resume at the instruction following WFI.
+     */
+    for( uint32_t attempt = 0U;
+         ( idleWfiWakeups == 0U ) && ( attempt < IDLE_WAKE_ATTEMPTS );
+         ++attempt )
+    {
+        vTaskDelay( IDLE_WAKE_DELAY_TICKS );
+    }
+
     const TickType_t ticks = xTaskGetTickCount();
     configASSERT( producedCount == MESSAGE_COUNT );
     configASSERT( consumedCount == MESSAGE_COUNT );
     configASSERT( consumedSum == EXPECTED_SUM );
     configASSERT( ticks >= 16U );
+    configASSERT( idleWfiEntries >= 1U );
+    configASSERT( idleWfiWakeups >= 1U );
 
+    aether_uart_write( "FREERTOS IDLE PASS wfi>=1 wake>=1\n" );
     aether_uart_write( "FREERTOS PASS queue=64 semaphore=8 ticks>=16\n" );
     aether_exit( 0U );
 }
