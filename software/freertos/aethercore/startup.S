@@ -8,9 +8,15 @@
 .extern freertos_risc_v_trap_handler
 .extern __bss_start
 .extern __bss_end
+.extern __global_pointer$
 .extern __stack_top
 
 _start:
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
+
     la sp, __stack_top
 
     la t0, __bss_start
