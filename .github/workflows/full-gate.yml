@@ -42,6 +42,10 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate.sh python
 
+      - name: FreeRTOS V11.3.0 preemptive queue workload
+        shell: bash
+        run: bash tools/ci/full_gate_freertos.sh
+
       - name: Chisel unit tests
         shell: bash
         run: bash tools/ci/full_gate.sh chisel
@@ -94,10 +98,6 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate_isolated_scheduler.sh
 
-      - name: FreeRTOS V11.3.0 preemptive queue workload
-        shell: bash
-        run: bash tools/ci/full_gate_freertos.sh
-
       - name: RV64 compiler-produced corpus
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-compiled
@@ -132,6 +132,7 @@ jobs:
             echo "- head: \`${GITHUB_SHA}\`"
             echo '- one checkout and one persistent toolchain setup'
             echo '- pinned xPack RISC-V GCC 15.2.0 with a verified newlib 4.5.0 sysroot'
+            echo '- FreeRTOS acceptance runs immediately after fast source tests'
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
             echo '- fast architectural gates run before long software workloads'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
