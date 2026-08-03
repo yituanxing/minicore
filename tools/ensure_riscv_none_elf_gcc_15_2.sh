@@ -20,39 +20,40 @@ fail() {
   exit 1
 }
 
-verify_payload() {
+validate_payload() {
   local root="$1"
   local gcc="$root/bin/riscv-none-elf-gcc"
   local readelf="$root/bin/riscv-none-elf-readelf"
-  local sysroot libc libgcc probe_dir
+  local sysroot libc libgcc probe_dir machine fullversion
 
-  test -x "$gcc"
-  test -x "$root/bin/riscv-none-elf-objcopy"
-  test -x "$root/bin/riscv-none-elf-objdump"
-  test -x "$readelf"
-  test "$($gcc -dumpmachine)" = "riscv-none-elf"
-  test "$($gcc -dumpfullversion)" = "15.2.0"
+  [[ -x "$gcc" ]] || return 1
+  [[ -x "$root/bin/riscv-none-elf-objcopy" ]] || return 1
+  [[ -x "$root/bin/riscv-none-elf-objdump" ]] || return 1
+  [[ -x "$readelf" ]] || return 1
 
-  sysroot="$($gcc --print-sysroot)"
-  test -n "$sysroot"
-  test -d "$sysroot"
+  machine="$($gcc -dumpmachine 2>/dev/null)" || return 1
+  fullversion="$($gcc -dumpfullversion 2>/dev/null)" || return 1
+  [[ "$machine" = "riscv-none-elf" ]] || return 1
+  [[ "$fullversion" = "15.2.0" ]] || return 1
+
+  sysroot="$($gcc --print-sysroot 2>/dev/null)" || return 1
+  [[ -n "$sysroot" && -d "$sysroot" ]] || return 1
   case "$sysroot" in
     "$root"/*) ;;
-    *) fail "compiler sysroot escapes the pinned toolchain: $sysroot" ;;
+    *) return 1 ;;
   esac
 
   for header in stddef.h stdint.h stdlib.h string.h; do
-    test -f "$sysroot/include/$header" || fail "missing newlib header: $sysroot/include/$header"
+    [[ -f "$sysroot/include/$header" ]] || return 1
   done
 
-  libc="$($gcc -march=rv32im_zicsr -mabi=ilp32 -print-file-name=libc.a)"
-  libgcc="$($gcc -march=rv32im_zicsr -mabi=ilp32 -print-libgcc-file-name)"
-  test "$libc" != "libc.a"
-  test -f "$libc" || fail "missing RV32 ILP32 newlib libc.a: $libc"
-  test -f "$libgcc" || fail "missing RV32 ILP32 libgcc.a: $libgcc"
+  libc="$($gcc -march=rv32im_zicsr -mabi=ilp32 -print-file-name=libc.a 2>/dev/null)" || return 1
+  libgcc="$($gcc -march=rv32im_zicsr -mabi=ilp32 -print-libgcc-file-name 2>/dev/null)" || return 1
+  [[ "$libc" != "libc.a" && -f "$libc" ]] || return 1
+  [[ -f "$libgcc" ]] || return 1
 
-  probe_dir="$(mktemp -d "$cache_root/.riscv-none-elf-probe.XXXXXX")"
-  cat > "$probe_dir/sysroot_probe.c" <<'EOF'
+  probe_dir="$(mktemp -d "$cache_root/.riscv-none-elf-probe.XXXXXX")" || return 1
+  if ! cat > "$probe_dir/sysroot_probe.c" <<'EOF'
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -66,25 +67,46 @@ int sysroot_probe( void * destination, const void * source, size_t bytes )
     return memcmp( memcpy( destination, source, bytes ), source, bytes ) + abs( -1 ) - 1;
 }
 EOF
+  then
+    rm -rf "$probe_dir"
+    return 1
+  fi
 
-  "$gcc" --sysroot="$sysroot" -march=rv32im_zicsr -mabi=ilp32 \
+  if ! "$gcc" --sysroot="$sysroot" -march=rv32im_zicsr -mabi=ilp32 \
     -mcmodel=medany -ffreestanding -fno-builtin -std=c11 \
-    -c "$probe_dir/sysroot_probe.c" -o "$probe_dir/sysroot_probe.o"
-  "$readelf" -h "$probe_dir/sysroot_probe.o" > "$probe_dir/elf-header.txt"
-  grep -q 'Class:[[:space:]]*ELF32' "$probe_dir/elf-header.txt"
-  grep -q 'Machine:[[:space:]]*RISC-V' "$probe_dir/elf-header.txt"
+    -c "$probe_dir/sysroot_probe.c" -o "$probe_dir/sysroot_probe.o"; then
+    rm -rf "$probe_dir"
+    return 1
+  fi
+  if ! "$readelf" -h "$probe_dir/sysroot_probe.o" > "$probe_dir/elf-header.txt"; then
+    rm -rf "$probe_dir"
+    return 1
+  fi
+  if ! grep -q 'Class:[[:space:]]*ELF32' "$probe_dir/elf-header.txt" || \
+     ! grep -q 'Machine:[[:space:]]*RISC-V' "$probe_dir/elf-header.txt"; then
+    rm -rf "$probe_dir"
+    return 1
+  fi
 
-  "$gcc" --sysroot="$sysroot" -march=rv32im_zicsr -mabi=ilp32 \
+  if ! "$gcc" --sysroot="$sysroot" -march=rv32im_zicsr -mabi=ilp32 \
     -E -Wp,-v "$probe_dir/sysroot_probe.c" \
-    >/dev/null 2> "$probe_dir/include-search.txt"
-  grep -Fq "$sysroot/include" "$probe_dir/include-search.txt"
+    >/dev/null 2> "$probe_dir/include-search.txt"; then
+    rm -rf "$probe_dir"
+    return 1
+  fi
+  if ! grep -Fq "$sysroot/include" "$probe_dir/include-search.txt"; then
+    rm -rf "$probe_dir"
+    return 1
+  fi
+
   rm -rf "$probe_dir"
+  return 0
 }
 
 verify_install() {
-  test -f "$marker"
-  test "$(cat "$marker")" = "$archive_sha256"
-  verify_payload "$prefix"
+  [[ -f "$marker" ]] || return 1
+  [[ "$(cat "$marker" 2>/dev/null)" = "$archive_sha256" ]] || return 1
+  validate_payload "$prefix"
 }
 
 activate() {
@@ -115,8 +137,10 @@ fi
 
 mkdir -p "$download_dir" "$cache_root"
 
-if [[ -f "$archive" ]] && ! printf '%s  %s\n' "$archive_sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
-  rm -f "$archive"
+if [[ -f "$archive" ]]; then
+  if ! printf '%s  %s\n' "$archive_sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+    rm -f "$archive"
+  fi
 fi
 
 if [[ ! -f "$archive" ]]; then
@@ -132,7 +156,7 @@ if [[ ! -f "$archive" ]]; then
     fi
     rm -f "$tmp_archive"
   done
-  test "$downloaded" -eq 1 || fail "unable to download $archive_name"
+  [[ "$downloaded" -eq 1 ]] || fail "unable to download $archive_name"
   printf '%s  %s\n' "$archive_sha256" "$tmp_archive" | sha256sum -c -
   mv "$tmp_archive" "$archive"
 fi
@@ -144,11 +168,11 @@ trap 'rm -rf "$extract_dir"' EXIT
 
 tar -xzf "$archive" -C "$extract_dir"
 candidate="$extract_dir/xpack-riscv-none-elf-gcc-$version"
-test -d "$candidate" || fail "archive root mismatch: expected $candidate"
-verify_payload "$candidate"
+[[ -d "$candidate" ]] || fail "archive root mismatch: expected $candidate"
+validate_payload "$candidate" || fail "downloaded toolchain failed the RV32/newlib sysroot probe"
 printf '%s\n' "$archive_sha256" > "$candidate/.aethercore-archive-sha256"
 
 rm -rf "$prefix"
 mv "$candidate" "$prefix"
-verify_install
+verify_install || fail "installed toolchain failed post-install verification"
 activate
