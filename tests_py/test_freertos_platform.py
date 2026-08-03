@@ -93,13 +93,17 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("ticks >= 16U", text)
         self.assertIn("aether_exit( 0U )", text)
 
-    def test_full_gate_runs_freertos_after_the_isolated_scheduler(self) -> None:
+    def test_full_gate_runs_freertos_immediately_after_fast_source_tests(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        isolated = text.index("RV32IMU isolated preemptive scheduler")
+        newlib = text.index("Provision pinned RISC-V newlib sysroot")
+        source_tests = text.index("Fast source and image tests")
         freertos = text.index("FreeRTOS V11.3.0 preemptive queue workload")
-        compiled = text.index("RV64 compiler-produced corpus")
-        self.assertLess(isolated, freertos)
-        self.assertLess(freertos, compiled)
+        chisel = text.index("Chisel unit tests")
+        isolated = text.index("RV32IMU isolated preemptive scheduler")
+        self.assertLess(newlib, source_tests)
+        self.assertLess(source_tests, freertos)
+        self.assertLess(freertos, chisel)
+        self.assertLess(freertos, isolated)
         self.assertIn("bash tools/ci/full_gate_freertos.sh", text)
 
 
