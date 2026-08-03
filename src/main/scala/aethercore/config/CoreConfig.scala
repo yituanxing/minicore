@@ -17,6 +17,7 @@ final case class IsaConfig(
     s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
   )
   require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
+  require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
 
   val xBytes: Int = xlen / 8
   val shiftBits: Int = log2Ceil(xlen)
