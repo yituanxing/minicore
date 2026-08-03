@@ -20,6 +20,7 @@ RTL_STAMP := $(RTL_DIR)/.aethercore-rtl-ready
 SIM_OBJ_DIR := $(BUILD_DIR)/sim-obj
 SIM_BINARY := $(SIM_OBJ_DIR)/VAetherCoreRV32IMTrapSimTop
 GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_freertos.cpp
+RUNNER_TOOL := tools/make_freertos_runner.py
 TOP := AetherCoreRV32IMTrapSimTop
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 SCALA_SOURCES := $(shell find src/main/scala -type f -name '*.scala' -print) build.mill
@@ -37,6 +38,7 @@ VERILATOR_TRACE_FLAGS := --trace
 else
 VERILATOR_TRACE_FLAGS :=
 endif
+TRACE_STAMP := $(BUILD_DIR)/.trace-$(TRACE)
 
 TOOLCHAIN_SYSROOT := $(shell $(CC) --print-sysroot 2>/dev/null)
 SYSROOT_FLAGS := --sysroot=$(TOOLCHAIN_SYSROOT)
@@ -157,17 +159,19 @@ $(RTL_STAMP): $(SCALA_SOURCES)
 
 rtl: $(RTL_STAMP)
 
-$(GENERATED_MAIN): sim/sim_main.cpp
+$(TRACE_STAMP):
 	mkdir -p $(BUILD_DIR)
-	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMTrapSimTop/g' \
-		sim/sim_main.cpp > $(GENERATED_MAIN)
-	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  commit.interrupt = top.io_commit_interrupt;\n  commit.interruptCause = static_cast<std::uint64_t>(top.io_commit_interruptCause);\n  commit.interruptPc = static_cast<std::uint64_t>(top.io_commit_interruptPc);\n  return commit;"; assert a in s; p.write_text(s.replace(a,b,1))'
+	rm -f $(BUILD_DIR)/.trace-0 $(BUILD_DIR)/.trace-1
+	touch $@
+
+$(GENERATED_MAIN): sim/sim_main.cpp $(RUNNER_TOOL) $(TRACE_STAMP)
+	python3 $(RUNNER_TOOL) $< $@ --trace $(TRACE)
 
 runner-source: $(GENERATED_MAIN)
 
 $(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN) sim/nemu_difftest_rv32_timer.cpp
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
-	$(VERILATOR) --cc --exe --build -j $(JOBS) $(VERILATOR_TRACE_FLAGS) -Wall -Wno-fatal \
+	+$(VERILATOR) --cc --exe --build -j $(JOBS) $(VERILATOR_TRACE_FLAGS) -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(SIM_OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
 		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) \
