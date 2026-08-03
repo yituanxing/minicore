@@ -149,8 +149,18 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("cmp -s \"$build_dir/src/verilator_bin\"", text)
         self.assertIn("cmp -s \"$source_dir/bin/verilator_includer\"", text)
         self.assertIn('probe_dir="$(mktemp -d)"', text)
-        self.assertEqual(text.count("verify_install\n  activate"), 2)
-        self.assertIn("verify_install\nactivate", text)
+
+        activate_body = text.split("activate() {", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("verify_install", activate_body)
+        self.assertIn(
+            '[[ -f "$marker" ]] && verify_install; then\n  activate',
+            text,
+        )
+        self.assertIn(
+            'printf \'%s\\n\' "$revision" > "$marker"\n  verify_install\n  activate',
+            text,
+        )
+        self.assertTrue(text.rstrip().endswith("verify_install\nactivate"))
 
 
 if __name__ == "__main__":
