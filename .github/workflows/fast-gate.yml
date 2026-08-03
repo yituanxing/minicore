@@ -108,6 +108,12 @@ jobs:
             BUILD_DIR="$FAST_FREERTOS_BUILD" \
             JOBS="$AETHERCORE_JOBS" TRACE=0 \
             RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD=5 run-difftest-negative
+          sha256sum \
+            "$rv32_nemu_so" \
+            "$FAST_FREERTOS_BUILD/nemu_difftest_rv32_freertos_wfi.cpp" \
+            "$FAST_FREERTOS_BUILD/sim_main_rv32im_freertos_difftest.cpp" \
+            "$FAST_FREERTOS_BUILD/aethercore-freertos.elf" \
+            "$FAST_FREERTOS_BUILD/aethercore-freertos.bin"
 
       - name: Write fast-gate summary
         if: always()
@@ -123,6 +129,7 @@ jobs:
             echo '- cached Verilator identity is checked without a disposable build probe'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- FreeRTOS exact WFI DiffTest runs incrementally at stall=0 and stall=5'
+            echo '- exact reference, adapter, runner, ELF and binary hashes are emitted'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- the exact 29-stage gate remains mandatory through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
