@@ -46,10 +46,13 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
         self.assertIn("--self-check-exit --stall-period $(STALL_PERIOD)", text)
         self.assertIn('--difftest "$(abspath $(RV32_NEMU_SO))"', text)
         self.assertIn("FREERTOS BOOT V11.3.0 RV32IM", text)
-        self.assertIn("FREERTOS IDLE PASS wfi>=1 wake>=1", text)
-        self.assertIn("FREERTOS PASS queue=64 semaphore=8 ticks>=16", text)
+        self.assertIn(
+            "FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2", text
+        )
+        self.assertIn("FREERTOS PASS queue=64 semaphore=8 ticks>=48", text)
         for counter in (
             "wfi-commits=",
+            "masked-wfi-commits=",
             "wfi-sleep-cycles=",
             "difftest=",
             "zicsr-shadow=",
