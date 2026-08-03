@@ -8,7 +8,8 @@
 
 #define MESSAGE_COUNT 64U
 #define EXPECTED_SUM  ( ( MESSAGE_COUNT * ( MESSAGE_COUNT + 1U ) ) / 2U )
-#define IDLE_WAKE_ATTEMPTS 4U
+#define IDLE_WAKE_ATTEMPTS    4U
+#define IDLE_WAKE_DELAY_TICKS 4U
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -89,15 +90,16 @@ static void monitor_task( void * context )
     }
 
     /*
-     * A timer interrupt may switch directly from the sleeping idle task to
-     * this higher-priority monitor. Give the idle task a bounded opportunity
-     * to resume after WFI and execute the post-wake accounting instruction.
+     * A one-tick delay can expire before the RISC-V context switch reaches
+     * the idle hook. Keep the monitor blocked across several complete timer
+     * periods so the idle task can enter WFI, take a later timer interrupt,
+     * and then resume at the instruction following WFI.
      */
     for( uint32_t attempt = 0U;
          ( idleWfiWakeups == 0U ) && ( attempt < IDLE_WAKE_ATTEMPTS );
          ++attempt )
     {
-        vTaskDelay( 1 );
+        vTaskDelay( IDLE_WAKE_DELAY_TICKS );
     }
 
     const TickType_t ticks = xTaskGetTickCount();
