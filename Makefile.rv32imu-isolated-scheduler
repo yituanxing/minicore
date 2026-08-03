@@ -5,9 +5,11 @@ BUILD_DIR ?= build/rv32imu-isolated-scheduler
 RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 SOFTWARE_DIR := $(BUILD_DIR)/software
+PMP_MAIN := $(BUILD_DIR)/sim_main_rv32imu_pmp.cpp
 GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32imu_isolated_scheduler.cpp
 GENERATED_RV32IMU_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32imu.cpp
-GENERATED_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32imu_pmp.cpp
+PMP_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32imu_pmp.cpp
+GENERATED_DIFFTEST := $(BUILD_DIR)/nemu_difftest_rv32imu_isolated_scheduler.cpp
 TOP := AetherCoreRV32IMUPmpSimTop
 VERILATOR ?= verilator
 STALL_PERIODS := 0 5
@@ -45,7 +47,9 @@ contract: software
 runner-source:
 	mkdir -p $(BUILD_DIR)
 	python3 tools/make_rv32imu_pmp_runner.py \
-		sim/sim_main.cpp $(GENERATED_MAIN)
+		sim/sim_main.cpp $(PMP_MAIN)
+	python3 tools/make_rv32imu_isolated_scheduler_adapters.py runner \
+		$(PMP_MAIN) $(GENERATED_MAIN)
 
 difftest-source:
 	mkdir -p $(BUILD_DIR)
@@ -54,7 +58,9 @@ difftest-source:
 	python3 tools/widen_rv32imu_pmp_csr_decode.py \
 		$(GENERATED_RV32IMU_DIFFTEST)
 	python3 tools/make_rv32imu_pmp_difftest.py \
-		$(GENERATED_RV32IMU_DIFFTEST) $(GENERATED_DIFFTEST)
+		$(GENERATED_RV32IMU_DIFFTEST) $(PMP_DIFFTEST)
+	python3 tools/make_rv32imu_isolated_scheduler_adapters.py difftest \
+		$(PMP_DIFFTEST) $(GENERATED_DIFFTEST)
 
 sim: rtl runner-source difftest-source
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IMU PMP SystemVerilog files in $(RTL_DIR)"; exit 1; }
