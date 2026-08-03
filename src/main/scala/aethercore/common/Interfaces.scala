@@ -143,6 +143,7 @@ class ControlSignals extends Bundle {
   val usesRs1 = Bool()
   val usesRs2 = Bool()
   val csrUseImm = Bool()
+  val wfi = Bool()
   val mret = Bool()
   val trap = Bool()
   val illegal = Bool()
