@@ -18,6 +18,7 @@ def main() -> None:
         "        std::cout << \", difftest=\" << difftest->checkedCommits()\n"
         "                  << \", zicsr-shadow=\" << difftest->zicsrShadowSteps()\n"
         "                  << \", trap-shadow=\" << difftest->trapShadowSteps()\n"
+        "                  << \", fence-shadow=\" << difftest->fenceShadowSteps()\n"
         "                  << \", wfi-shadow=\" << difftest->wfiShadowSteps()\n"
         "                  << \", mret-shadow=\" << difftest->mretShadowSteps()\n"
         "                  << \", interrupt-shadow=\" << difftest->interruptShadowSteps();\n"
