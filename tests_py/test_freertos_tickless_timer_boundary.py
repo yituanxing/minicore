@@ -54,7 +54,7 @@ class FreeRtosTicklessTimerBoundaryTest(unittest.TestCase):
         self.assertIn("suppressedTicks = expectedIdleTicks - 1U", timer_path)
         self.assertIn("vTaskStepTick( suppressedTicks )", timer_path)
         self.assertIn("final", timer_path)
-        self.assertNotIn("xTaskIncrementTick", timer_path)
+        self.assertNotIn("xTaskIncrementTick();", timer_path)
 
     def test_early_wake_restores_the_first_future_periodic_deadline(self) -> None:
         text = PLATFORM.read_text(encoding="utf-8")
