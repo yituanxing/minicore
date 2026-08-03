@@ -1,0 +1,30 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/freertos-qualification
+SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
+CONTRACT := $(BUILD_DIR)/port-contract.json
+LOCK_FILE := software/freertos/FreeRTOS-Kernel.lock
+
+.PHONY: all source audit qualification clean
+
+all: qualification
+
+source: $(LOCK_FILE) tools/fetch_freertos_kernel.sh
+	bash tools/fetch_freertos_kernel.sh $(SOURCE_DIR)
+
+$(CONTRACT): source tools/audit_freertos_riscv_port.py
+	python3 tools/audit_freertos_riscv_port.py $(SOURCE_DIR) $(CONTRACT)
+
+audit: $(CONTRACT)
+
+qualification: audit
+	grep -q '"status": "PASS"' $(CONTRACT)
+	grep -q '"release": "V11.3.0"' $(CONTRACT)
+	grep -q '"profile": "rv32im_zicsr_m"' $(CONTRACT)
+	grep -q '"mhartid": 0' $(CONTRACT)
+	grep -q '"additional_context_registers": 0' $(CONTRACT)
+	@echo "PASS: pinned FreeRTOS RV32 source and port qualification"
+
+clean:
+	rm -rf $(BUILD_DIR)
