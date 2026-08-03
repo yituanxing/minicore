@@ -24,7 +24,7 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_generated_adapter_shadows_precise_wfi_wakeup(self) -> None:
+    def test_generated_adapter_shadows_interrupting_and_masked_wfi_wakes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary) / "base.cpp"
             output = Path(temporary) / "wfi.cpp"
@@ -40,11 +40,12 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
             self.assertIn("after = executeWfi(before, commit)", text)
             self.assertIn("++wfiShadowSteps_", text)
             self.assertIn("reference=wfi-shadow", text)
-            self.assertIn("!commit.interrupt", text)
+            self.assertIn("if (commit.interrupt)", text)
             self.assertIn("interruptPc != before.pc + 4U", text)
+            self.assertIn("masked tickless WFI", text)
             self.assertIn("wfiShadowSteps() const", text)
 
-    def test_generated_runner_rejects_retirement_during_sleep(self) -> None:
+    def test_generated_runner_rejects_retirement_and_requires_masked_wfi(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             local = Path(temporary) / "local.cpp"
             output = Path(temporary) / "difftest.cpp"
@@ -59,6 +60,8 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
             text = output.read_text(encoding="utf-8")
             self.assertIn("if (options.selfCheckExit && top.io_halted)", text)
             self.assertIn("instruction retired while WFI sleep was asserted", text)
+            self.assertIn("maskedWfiCommits", text)
+            self.assertIn("masked-wfi-commits=", text)
             self.assertIn("wfi-commits=", text)
             self.assertIn("wfi-sleep-cycles=", text)
             self.assertIn("wfi-shadow=", text)
@@ -72,6 +75,7 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
         self.assertIn("tools/make_freertos_wfi_difftest_adapter.py", text)
         self.assertIn("tools/make_freertos_difftest_runner.py", text)
         self.assertIn("wfi-shadow=[1-9][0-9]*", text)
+        self.assertIn("masked-wfi-commits=[1-9][0-9]*", text)
         self.assertIn("wfi-sleep-cycles=[1-9][0-9]*", text)
         self.assertIn("retired while WFI sleep was asserted", text)
 
