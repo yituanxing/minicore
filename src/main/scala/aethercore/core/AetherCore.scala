@@ -127,11 +127,12 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.trapReturn := takingMret
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
-  val waitingForInterrupt = wfiRetiring && !csrFile.io.machineTimerInterrupt
+  val waitingForInterrupt = wfiRetiring && !io.timerInterrupt
 
-  // An interrupt is accepted only after a normal WB instruction retires. WFI
-  // remains at the retirement boundary until an enabled Machine timer interrupt
-  // arrives, so its architectural resume PC is exactly the following instruction.
+  // A raw pending timer is sufficient to resume WFI even while mstatus.MIE is
+  // clear. Trap entry remains gated by csrFile.io.machineTimerInterrupt, so a
+  // masked WFI resumes at PC+4 and software can restore MIE without a lost-wake
+  // window. An enabled interrupt is still accepted at the precise WB boundary.
   val interruptPc = Mux(
     wfiRetiring,
     memWb.pc + 4.U,

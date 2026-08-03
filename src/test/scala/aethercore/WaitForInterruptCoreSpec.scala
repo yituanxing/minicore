@@ -139,4 +139,117 @@ class WaitForInterruptCoreSpec extends AnyFlatSpec with Matchers with ChiselSim 
       sawResume shouldBe true
     }
   }
+
+  it should "resume masked WFI on a pending timer and trap only after MIE is restored" in {
+    val enableMiePc = base + 0x28
+    val afterEnablePc = enableMiePc + 4
+    val program = Map(
+      base -> uType(0x80000, 1),
+      (base + 0x04) -> iType(0x80, 1, 0, 1, 0x13), // handler address
+      (base + 0x08) -> csr(0x305, 1, 1, 0),         // csrw mtvec, x1
+      (base + 0x0c) -> iType(0x80, 0, 0, 2, 0x13), // MTIE
+      (base + 0x10) -> csr(0x304, 2, 1, 0),         // csrw mie, x2
+      (base + 0x14) -> iType(8, 0, 0, 3, 0x13),    // future MIE value
+      (base + 0x18) -> iType(0, 0, 0, 4, 0x13),
+      (base + 0x1c) -> BigInt("00000013", 16),
+      wfiPc -> wfi,
+      resumePc -> iType(1, 4, 0, 4, 0x13),
+      enableMiePc -> csr(0x300, 3, 1, 0),           // csrw mstatus, x3
+      afterEnablePc -> iType(1, 4, 0, 4, 0x13),
+      (base + 0x30) -> BigInt("0000006f", 16),
+      handler -> csr(0x342, 0, 2, 6),              // csrr x6, mcause
+      (handler + 0x04) -> csr(0x341, 0, 2, 7),     // csrr x7, mepc
+      (handler + 0x08) -> BigInt("30200073", 16)   // mret
+    )
+
+    simulate(new AetherCore(CoreProfiles.rv32imSoftware)) { dut =>
+      dut.io.imem.fault.poke(false.B)
+      dut.io.dmem.ready.poke(true.B)
+      dut.io.dmem.rdata.poke(0.U)
+      dut.io.dmem.fault.poke(false.B)
+      dut.io.timerInterrupt.poke(false.B)
+
+      var cycles = 0
+      while (!dut.io.halted.peek().litToBoolean && cycles < 80) {
+        val fetchPc = dut.io.imem.addr.peek().litValue
+        dut.io.imem.inst.poke(program.getOrElse(fetchPc, BigInt("00000013", 16)).U)
+        dut.clock.step()
+        cycles += 1
+      }
+
+      dut.io.halted.expect(true.B)
+      dut.clock.step()
+      cycles += 1
+      dut.io.halted.expect(true.B)
+      dut.io.imem.addr.expect(resumePc.U)
+
+      dut.io.timerInterrupt.poke(true.B)
+      dut.io.halted.expect(false.B)
+      dut.io.commit.valid.expect(true.B)
+      dut.io.commit.pc.expect(wfiPc.U)
+      dut.io.commit.inst.expect(wfi.U)
+      dut.io.commit.interrupt.expect(false.B)
+      dut.io.commit.exception.expect(false.B)
+      dut.clock.step()
+      cycles += 1
+
+      var sawFirstResume = false
+      var sawEnableInterrupt = false
+      while (!sawEnableInterrupt && cycles < 180) {
+        val fetchPc = dut.io.imem.addr.peek().litValue
+        dut.io.imem.inst.poke(program.getOrElse(fetchPc, BigInt("00000013", 16)).U)
+
+        if (dut.io.commit.valid.peek().litToBoolean) {
+          if (dut.io.commit.rdWrite.peek().litToBoolean &&
+              dut.io.commit.rd.peek().litValue == 4 &&
+              dut.io.commit.rdData.peek().litValue == 1) {
+            sawFirstResume = true
+          }
+
+          if (dut.io.commit.interrupt.peek().litToBoolean) {
+            dut.io.commit.pc.expect(enableMiePc.U)
+            dut.io.commit.interruptCause.expect(BigInt("80000007", 16).U)
+            dut.io.commit.interruptPc.expect(afterEnablePc.U)
+            sawEnableInterrupt = true
+          }
+        }
+
+        dut.clock.step()
+        cycles += 1
+        if (sawEnableInterrupt) dut.io.timerInterrupt.poke(false.B)
+      }
+
+      var sawCause = false
+      var sawEpc = false
+      var sawMret = false
+      var sawSecondResume = false
+      while ((!sawCause || !sawEpc || !sawMret || !sawSecondResume) && cycles < 320) {
+        val fetchPc = dut.io.imem.addr.peek().litValue
+        dut.io.imem.inst.poke(program.getOrElse(fetchPc, BigInt("00000013", 16)).U)
+
+        if (dut.io.commit.valid.peek().litToBoolean) {
+          val instruction = dut.io.commit.inst.peek().litValue
+          if (instruction == BigInt("30200073", 16)) sawMret = true
+
+          if (dut.io.commit.rdWrite.peek().litToBoolean) {
+            val rd = dut.io.commit.rd.peek().litValue
+            val value = dut.io.commit.rdData.peek().litValue
+            if (rd == 6 && value == BigInt("80000007", 16)) sawCause = true
+            if (rd == 7 && value == afterEnablePc) sawEpc = true
+            if (rd == 4 && value == 2) sawSecondResume = true
+          }
+        }
+
+        dut.clock.step()
+        cycles += 1
+      }
+
+      sawFirstResume shouldBe true
+      sawEnableInterrupt shouldBe true
+      sawCause shouldBe true
+      sawEpc shouldBe true
+      sawMret shouldBe true
+      sawSecondResume shouldBe true
+    }
+  }
 }

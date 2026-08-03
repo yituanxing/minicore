@@ -24,7 +24,6 @@ $(FREERTOS_DIFFTEST_CPP): $(FREERTOS_BASE_DIFFTEST_CPP) tools/make_freertos_wfi_
 
 $(DIFFTEST_GENERATED_MAIN): $(GENERATED_MAIN) tools/make_freertos_difftest_runner.py
 	python3 tools/make_freertos_difftest_runner.py $< $@
-
 difftest-runner-source: $(DIFFTEST_GENERATED_MAIN)
 
 $(DIFFTEST_SIM_BINARY): $(RTL_STAMP) $(DIFFTEST_GENERATED_MAIN) $(FREERTOS_DIFFTEST_CPP)
@@ -46,14 +45,16 @@ run-difftest: qualification image difftest-sim
 		--difftest "$(abspath $(RV32_NEMU_SO))" \
 		2>&1 | tee $(DIFFTEST_LOG)
 	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(DIFFTEST_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS IDLE PASS wfi>=1 wake>=1$$' $(DIFFTEST_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=16$$' $(DIFFTEST_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(DIFFTEST_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=48$$' $(DIFFTEST_LOG))" -eq 1
 	grep -Fq 'PASS: self-check exit=0' $(DIFFTEST_LOG)
 	grep -Eq 'wfi-commits=[1-9][0-9]*' $(DIFFTEST_LOG)
+	grep -Eq 'masked-wfi-commits=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'wfi-sleep-cycles=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'difftest=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'zicsr-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'trap-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
+	grep -Eq 'fence-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'wfi-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'mret-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)
 	grep -Eq 'interrupt-shadow=[1-9][0-9]*' $(DIFFTEST_LOG)

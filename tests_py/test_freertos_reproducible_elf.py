@@ -33,17 +33,22 @@ class FreeRtosReproducibleElfTest(unittest.TestCase):
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn("BUILD_RULES := Makefile.freertos", text)
         self.assertIn(
-            "$(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)",
+            "FREERTOS_CONFIG_DEPS := $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h",
             text,
         )
+        self.assertIn("$(SOURCE_STAMP) $(BUILD_RULES)", text)
         self.assertIn(
-            "$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S $(BUILD_RULES)", text
+            "$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(FREERTOS_CONFIG_DEPS)", text
         )
-        self.assertIn("$(OBJ_DIR)/port.o: $(SOURCE_STAMP) $(BUILD_RULES)", text)
-        self.assertIn("$(OBJ_DIR)/portASM.o: $(SOURCE_STAMP) $(BUILD_RULES)", text)
-        self.assertIn("$(OBJ_DIR)/heap_4.o: $(SOURCE_STAMP) $(BUILD_RULES)", text)
         self.assertIn(
-            "$(OBJ_DIR)/$(1:.c=.o): $(SOURCE_STAMP) $(BUILD_RULES)", text
+            "$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S $(FREERTOS_CONFIG_DEPS)",
+            text,
+        )
+        self.assertIn("$(OBJ_DIR)/port.o: $(FREERTOS_CONFIG_DEPS)", text)
+        self.assertIn("$(OBJ_DIR)/portASM.o: $(FREERTOS_CONFIG_DEPS)", text)
+        self.assertIn("$(OBJ_DIR)/heap_4.o: $(FREERTOS_CONFIG_DEPS)", text)
+        self.assertIn(
+            "$(OBJ_DIR)/$(1:.c=.o): $(FREERTOS_CONFIG_DEPS)", text
         )
         self.assertIn(
             "$(ELF): $(OBJECTS) $(APP_DIR)/linker.ld $(BUILD_RULES)", text

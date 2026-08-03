@@ -87,12 +87,15 @@ grep -q '"status": "PASS"' "$contract"
 grep -q '"release": "V11.3.0"' "$contract"
 grep -q '"mhartid": 0' "$contract"
 grep -q '<freertos_risc_v_trap_handler>:' "$disassembly"
+grep -q '<vPortSuppressTicksAndSleep>:' "$disassembly"
 grep -Eq '\bcsrr[[:space:]].*mhartid' "$disassembly"
 grep -q '\bmret\b' "$disassembly"
+grep -Eq '\bfence\b' "$disassembly"
 grep -Eq '\bwfi\b' "$disassembly"
 grep -Fq 'FREERTOS BOOT V11.3.0 RV32IM' "$LOG_DIR/freertos-rv32-local.log"
-grep -Fq 'FREERTOS IDLE PASS wfi>=1 wake>=1' "$LOG_DIR/freertos-rv32-local.log"
-grep -Fq 'FREERTOS PASS queue=64 semaphore=8 ticks>=16' "$LOG_DIR/freertos-rv32-local.log"
+grep -Fq 'FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2' "$LOG_DIR/freertos-rv32-local.log"
+grep -Fq 'FREERTOS PASS queue=64 semaphore=8 ticks>=48' "$LOG_DIR/freertos-rv32-local.log"
+grep -Eq 'masked-wfi-commits=[1-9][0-9]*' "$LOG_DIR/freertos-rv32-local.log"
 grep -Fq 'PASS: self-check exit=0' "$LOG_DIR/freertos-rv32-local.log"
 ! grep -Fq 'FAIL:' "$LOG_DIR/freertos-rv32-local.log"
 
@@ -114,9 +117,10 @@ mtime=0x0200bff8
 mtimecmp=0x02004000
 workload_messages=64
 workload_semaphore_batches=8
-minimum_ticks=16
-idle_wfi=true
-idle_wfi_wake=true
+minimum_ticks=48
+tickless_idle=true
+masked_wfi_wake=true
+minimum_suppressed_ticks=2
 parallel_jobs=$JOBS
 toolchain=xpack-riscv-none-elf-gcc-15.2.0-1
 toolchain_archive_sha256=$TOOLCHAIN_SHA256

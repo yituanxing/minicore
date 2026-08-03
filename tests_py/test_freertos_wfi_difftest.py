@@ -24,7 +24,7 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_generated_adapter_shadows_precise_wfi_wakeup(self) -> None:
+    def test_generated_adapter_shadows_tickless_fence_and_wfi_wakes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary) / "base.cpp"
             output = Path(temporary) / "wfi.cpp"
@@ -35,16 +35,24 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
             )
             self.run_tool(str(WFI_ADAPTER), str(base), str(output))
             text = output.read_text(encoding="utf-8")
+            self.assertIn("constexpr std::uint32_t kFenceIorw = 0x0ff0000fU", text)
+            self.assertIn("const bool fenceStep = commit.inst == kFenceIorw", text)
+            self.assertIn("after = executeFence(before, commit)", text)
+            self.assertIn("++fenceShadowSteps_", text)
+            self.assertIn("reference=fence-shadow", text)
+            self.assertIn("historical NEMU does not decode FENCE IORW", text)
+            self.assertIn("fenceShadowSteps() const", text)
             self.assertIn("constexpr std::uint32_t kWfi = 0x10500073U", text)
             self.assertIn("const bool wfiStep = commit.inst == kWfi", text)
             self.assertIn("after = executeWfi(before, commit)", text)
             self.assertIn("++wfiShadowSteps_", text)
             self.assertIn("reference=wfi-shadow", text)
-            self.assertIn("!commit.interrupt", text)
+            self.assertIn("if (commit.interrupt)", text)
             self.assertIn("interruptPc != before.pc + 4U", text)
+            self.assertIn("masked tickless WFI", text)
             self.assertIn("wfiShadowSteps() const", text)
 
-    def test_generated_runner_rejects_retirement_during_sleep(self) -> None:
+    def test_generated_runner_rejects_retirement_and_emits_tickless_shadows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             local = Path(temporary) / "local.cpp"
             output = Path(temporary) / "difftest.cpp"
@@ -59,8 +67,11 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
             text = output.read_text(encoding="utf-8")
             self.assertIn("if (options.selfCheckExit && top.io_halted)", text)
             self.assertIn("instruction retired while WFI sleep was asserted", text)
+            self.assertIn("maskedWfiCommits", text)
+            self.assertIn("masked-wfi-commits=", text)
             self.assertIn("wfi-commits=", text)
             self.assertIn("wfi-sleep-cycles=", text)
+            self.assertIn("fence-shadow=", text)
             self.assertIn("wfi-shadow=", text)
 
     def test_makefile_runs_both_runtime_proofs_incrementally(self) -> None:
@@ -71,7 +82,9 @@ class FreeRtosWfiDifftestTest(unittest.TestCase):
         self.assertIn("DIFFTEST_SIM_BINARY", text)
         self.assertIn("tools/make_freertos_wfi_difftest_adapter.py", text)
         self.assertIn("tools/make_freertos_difftest_runner.py", text)
+        self.assertIn("fence-shadow=[1-9][0-9]*", text)
         self.assertIn("wfi-shadow=[1-9][0-9]*", text)
+        self.assertIn("masked-wfi-commits=[1-9][0-9]*", text)
         self.assertIn("wfi-sleep-cycles=[1-9][0-9]*", text)
         self.assertIn("retired while WFI sleep was asserted", text)
 

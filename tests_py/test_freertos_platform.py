@@ -28,8 +28,10 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn('JOBS="${AETHERCORE_JOBS:-0}"', text)
         self.assertIn("workload_messages=64", text)
         self.assertIn("workload_semaphore_batches=8", text)
-        self.assertIn("idle_wfi=true", text)
-        self.assertIn("idle_wfi_wake=true", text)
+        self.assertIn("minimum_ticks=48", text)
+        self.assertIn("tickless_idle=true", text)
+        self.assertIn("masked_wfi_wake=true", text)
+        self.assertIn("minimum_suppressed_ticks=2", text)
         self.assertIn("parallel_jobs=$JOBS", text)
         self.assertIn("local_stall_period=5", text)
         self.assertIn("binary_sha256=", text)
@@ -51,17 +53,33 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("RISCV_MTIME_CLINT_no_extensions", text)
         self.assertIn("--self-check-exit --stall-period 5", text)
 
-    def test_build_is_parallel_and_incremental_without_weakening_clean_full_gate(self) -> None:
+    def test_build_is_parallel_incremental_and_invalidates_every_configured_object(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn("JOBS ?= $(shell nproc)", text)
         self.assertIn("SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready", text)
         self.assertNotIn("SOURCE_STAMP := $(SOURCE_DIR)", text)
         self.assertIn("rm -f $(SOURCE_DIR)/.aethercore-source-ready", text)
         self.assertIn(
-            "$(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)",
+            "FREERTOS_CONFIG_DEPS := $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h",
             text,
         )
-        self.assertIn("must not race the pinned kernel fetch", text)
+        self.assertIn(
+            "$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)",
+            text,
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/port.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/portASM.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/heap_4.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn(
+            "$(OBJ_DIR)/$(1:.c=.o): $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)", text
+        )
+        self.assertIn("cannot mix incompatible kernel options", text)
         self.assertIn("RTL_STAMP :=", text)
         self.assertIn("SIM_BINARY :=", text)
         self.assertIn("$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN)", text)
@@ -97,15 +115,17 @@ class FreeRtosPlatformTest(unittest.TestCase):
     def test_timer_glue_uses_the_safe_rv32_compare_sequence(self) -> None:
         text = (APP / "platform.c").read_text(encoding="utf-8")
         self.assertIn('csrr %0, mhartid', text)
+        self.assertIn("static void aether_write_mtimecmp", text)
         first = text.index("compare[ 0 ] = UINT32_MAX")
         high = text.index("compare[ 1 ] =", first)
-        low = text.index("compare[ 0 ] = ( uint32_t ) firstDeadline", high)
+        low = text.index("compare[ 0 ] = ( uint32_t ) deadline", high)
         self.assertLess(first, high)
         self.assertLess(high, low)
+        self.assertIn("aether_write_mtimecmp( compare, firstDeadline )", text)
         self.assertIn("ullNextTime = firstDeadline +", text)
         self.assertIn("pullMachineTimerCompareRegister", text)
 
-    def test_workload_requires_tick_preemption_queue_and_semaphore_progress(self) -> None:
+    def test_workload_requires_tick_preemption_queue_semaphore_and_tickless_progress(self) -> None:
         text = (APP / "main.c").read_text(encoding="utf-8")
         self.assertIn("xQueueCreate", text)
         self.assertIn("xQueueSend", text)
@@ -116,7 +136,9 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("vTaskDelay( 1 )", text)
         self.assertIn("taskYIELD()", text)
         self.assertIn("consumedSum == EXPECTED_SUM", text)
-        self.assertIn("ticks >= 16U", text)
+        self.assertIn("TICKLESS_PROOF_DELAY_TICKS 32U", text)
+        self.assertIn("aetherTicklessSuppressedTicks", text)
+        self.assertIn("ticks >= ( TickType_t ) ( 16U + TICKLESS_PROOF_DELAY_TICKS )", text)
         self.assertIn("aether_exit( 0U )", text)
 
     def test_full_gate_is_milestone_only_and_keeps_the_complete_order(self) -> None:

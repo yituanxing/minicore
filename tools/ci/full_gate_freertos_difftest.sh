@@ -19,12 +19,12 @@ fi
 }
 
 EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e"
-EXPECTED_ADAPTER_SHA256="2ff3fa8f3c2cfc1005d7edd0b704c636d48c7ef042c002298568faad6c9aadd4"
-EXPECTED_RUNNER_SHA256="e9446402b2d9f51aa636438badc7bbb338376194abd01b968a3b6d842f764744"
-EXPECTED_ELF_SHA256="21a73cec3f2923708117fb71d5cd4339f22d5ed08b4994314b2c1a3b3cd242a0"
-EXPECTED_BINARY_SHA256="ddb1cb7e8b50687de1ef450ff85392bbfa5987cfc4b2a93f727d5dd2e08e9572"
-EXPECTED_STALL0_SUMMARY="PASS: self-check exit=0 after 242170 cycles, 167808 committed instructions, wfi-commits=2, wfi-sleep-cycles=1332, difftest=167808, zicsr-shadow=3194, trap-shadow=220, wfi-shadow=2, mret-shadow=361, interrupt-shadow=141"
-EXPECTED_STALL5_SUMMARY="PASS: self-check exit=0 after 260658 cycles, 166608 committed instructions, wfi-commits=3, wfi-sleep-cycles=1693, stall-period=5, difftest=166608, zicsr-shadow=3207, trap-shadow=214, wfi-shadow=3, mret-shadow=366, interrupt-shadow=152"
+EXPECTED_ADAPTER_SHA256="ef8871db8119ec7ae3091e289f55c8c621042fd44d044bfb746028572d616810"
+EXPECTED_RUNNER_SHA256="36e0da5570e4fa47ec152b55631e7fc9e596581ba1548179724c4e2bd0628c78"
+EXPECTED_ELF_SHA256="50ac3adcbcb2b3beb73493048e6cf2f1f1a04114c341c0b446a3f90c3d81f2c5"
+EXPECTED_BINARY_SHA256="b7c29d7da5bc29cb98bb747e2bb34251f27801810003b108db9e7417f3ae2cc3"
+EXPECTED_STALL0_SUMMARY="PASS: self-check exit=0 after 271664 cycles, 168046 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199, difftest=168046, zicsr-shadow=3191, trap-shadow=220, fence-shadow=1, wfi-shadow=1, mret-shadow=360, interrupt-shadow=140"
+EXPECTED_STALL5_SUMMARY="PASS: self-check exit=0 after 294180 cycles, 169735 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30059, stall-period=5, difftest=169735, zicsr-shadow=3259, trap-shadow=219, fence-shadow=1, wfi-shadow=1, mret-shadow=374, interrupt-shadow=155"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -62,14 +62,16 @@ for stall in 0 5; do
     RV32_NEMU_SO="$RV32_NEMU_SO" STALL_PERIOD="$stall"
   log="$LOG_DIR/difftest-stall${stall}.log"
   [[ -s "$log" ]] || fail "missing FreeRTOS DiffTest log for stall=$stall"
-  grep -Fxq 'FREERTOS IDLE PASS wfi>=1 wake>=1' "$log"
-  grep -Fxq 'FREERTOS PASS queue=64 semaphore=8 ticks>=16' "$log"
+  grep -Fxq 'FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2' "$log"
+  grep -Fxq 'FREERTOS PASS queue=64 semaphore=8 ticks>=48' "$log"
   grep -Fq 'PASS: self-check exit=0' "$log"
   grep -Eq 'wfi-commits=[1-9][0-9]*' "$log"
+  grep -Eq 'masked-wfi-commits=[1-9][0-9]*' "$log"
   grep -Eq 'wfi-sleep-cycles=[1-9][0-9]*' "$log"
   grep -Eq 'difftest=[1-9][0-9]*' "$log"
   grep -Eq 'zicsr-shadow=[1-9][0-9]*' "$log"
   grep -Eq 'trap-shadow=[1-9][0-9]*' "$log"
+  grep -Eq 'fence-shadow=[1-9][0-9]*' "$log"
   grep -Eq 'wfi-shadow=[1-9][0-9]*' "$log"
   grep -Eq 'mret-shadow=[1-9][0-9]*' "$log"
   grep -Eq 'interrupt-shadow=[1-9][0-9]*' "$log"
@@ -82,7 +84,7 @@ for stall in 0 5; do
     5) expected_summary="$EXPECTED_STALL5_SUMMARY" ;;
     *) fail "unqualified FreeRTOS DiffTest stall profile: $stall" ;;
   esac
-  require_equal "FreeRTOS WFI DiffTest stall=$stall architectural summary" \
+  require_equal "FreeRTOS tickless DiffTest stall=$stall architectural summary" \
     "$actual_summary" "$expected_summary"
 done
 
@@ -98,7 +100,7 @@ runner="$BUILD_DIR/sim_main_rv32im_freertos_difftest.cpp"
 elf="$BUILD_DIR/aethercore-freertos.elf"
 binary="$BUILD_DIR/aethercore-freertos.bin"
 for path in "$adapter" "$runner" "$elf" "$binary"; do
-  [[ -s "$path" ]] || fail "missing FreeRTOS WFI DiffTest artifact: $path"
+  [[ -s "$path" ]] || fail "missing FreeRTOS tickless DiffTest artifact: $path"
 done
 
 stall0_summary="$(grep -F 'PASS: self-check exit=0' "$LOG_DIR/difftest-stall0.log" | tail -n 1)"
@@ -108,16 +110,16 @@ runner_sha="$(sha256sum "$runner" | awk '{print $1}')"
 elf_sha="$(sha256sum "$elf" | awk '{print $1}')"
 binary_sha="$(sha256sum "$binary" | awk '{print $1}')"
 
-require_equal "generated FreeRTOS WFI DiffTest adapter SHA256" \
+require_equal "generated FreeRTOS tickless DiffTest adapter SHA256" \
   "$adapter_sha" "$EXPECTED_ADAPTER_SHA256"
-require_equal "generated FreeRTOS WFI DiffTest runner SHA256" \
+require_equal "generated FreeRTOS tickless DiffTest runner SHA256" \
   "$runner_sha" "$EXPECTED_RUNNER_SHA256"
-require_equal "FreeRTOS WFI ELF SHA256" "$elf_sha" "$EXPECTED_ELF_SHA256"
-require_equal "FreeRTOS WFI binary SHA256" "$binary_sha" "$EXPECTED_BINARY_SHA256"
+require_equal "FreeRTOS tickless ELF SHA256" "$elf_sha" "$EXPECTED_ELF_SHA256"
+require_equal "FreeRTOS tickless binary SHA256" "$binary_sha" "$EXPECTED_BINARY_SHA256"
 
 cat > "$EVIDENCE_DIR/result.txt" <<EOF
 status=PASS
-contract=freertos-rv32-exact-difftest-wfi-v1
+contract=freertos-rv32-exact-difftest-tickless-v1
 release=V11.3.0
 profile=rv32im_zicsr_m
 reference_revision=8601834e4889e6bf3b6113eb5f824ba7689126f5
@@ -125,6 +127,9 @@ reference_sha256=$reference_sha
 trace=0
 parallel_jobs=$JOBS
 stall_periods=0,5
+tickless_idle=true
+masked_wfi_wake=true
+fence_shadow=true
 wfi_shadow=true
 wfi_quiescence=true
 negative_mismatch_at=0
