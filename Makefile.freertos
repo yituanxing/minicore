@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 BUILD_DIR ?= build/freertos-qualification
 SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
-SOURCE_STAMP := $(SOURCE_DIR)/.aethercore-source-ready
+SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready
 CONTRACT := $(BUILD_DIR)/port-contract.json
 LOCK_FILE := software/freertos/FreeRTOS-Kernel.lock
 APP_DIR := software/freertos/aethercore
@@ -65,7 +65,10 @@ OBJECTS := $(APP_OBJECTS) $(KERNEL_OBJECTS) $(PORT_OBJECTS)
 all: image
 
 $(SOURCE_STAMP): $(LOCK_FILE) tools/fetch_freertos_kernel.sh
+	mkdir -p $(BUILD_DIR)
+	rm -f $(SOURCE_DIR)/.aethercore-source-ready
 	bash tools/fetch_freertos_kernel.sh $(SOURCE_DIR)
+	rm -f $(SOURCE_DIR)/.aethercore-source-ready
 	touch $@
 
 source: $(SOURCE_STAMP)
