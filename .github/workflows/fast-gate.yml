@@ -53,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          chmod +x mill
           key="pr-${{ github.event.pull_request.number || github.ref_name }}"
           root="$HOME/.cache/aethercore/fast-gate/$key"
           mkdir -p "$root/mill-out" "$root/freertos"
