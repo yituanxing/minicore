@@ -111,7 +111,9 @@ qualification: $(CONTRACT) toolchain-check
 $(OBJ_DIR):
 	mkdir -p $@
 
-$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h | $(OBJ_DIR)
+# Application sources include FreeRTOS headers. On a cold parallel build they
+# must not race the pinned kernel fetch that materializes those headers.
+$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S | $(OBJ_DIR)
