@@ -32,6 +32,18 @@ class Rv32NemuReferenceCacheTest(unittest.TestCase):
         self.assertIn("aethercore_rv32_nemu_cache=seeded", text)
         self.assertIn("aethercore_rv32_nemu_cache=build", text)
 
+    def test_cache_build_uses_the_hash_canonical_repository_path(self) -> None:
+        text = ENSURE.read_text(encoding="utf-8")
+        self.assertIn(
+            'CANONICAL_WORK_DIR="${AETHERCORE_RV32_NEMU_WORK_DIR:-$ROOT/build/rv32-nemu-probe}"',
+            text,
+        )
+        self.assertIn('"$CANONICAL_WORK_DIR" >&2', text)
+        self.assertIn('find "$CANONICAL_WORK_DIR/nemu/build"', text)
+        self.assertIn('cp -a "$CANONICAL_WORK_DIR/evidence/."', text)
+        self.assertNotIn(".rv32-nemu-build.XXXXXX", text)
+        self.assertIn("absolute build path", text)
+
     def test_fast_gate_resolves_reference_without_workspace_path_dependency(self) -> None:
         text = FAST.read_text(encoding="utf-8")
         exact_step = text[text.index("Incremental FreeRTOS WFI exact DiffTest") :]
