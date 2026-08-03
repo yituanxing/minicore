@@ -3,6 +3,7 @@ SHELL := /bin/bash
 
 BUILD_DIR ?= build/freertos-qualification
 SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
+SOURCE_STAMP := $(SOURCE_DIR)/.aethercore-source-ready
 CONTRACT := $(BUILD_DIR)/port-contract.json
 LOCK_FILE := software/freertos/FreeRTOS-Kernel.lock
 APP_DIR := software/freertos/aethercore
@@ -15,10 +16,13 @@ ATTRIBUTES := $(BUILD_DIR)/aethercore-freertos.attributes
 TOOLCHAIN_PROBE := $(BUILD_DIR)/toolchain-sysroot-probe.o
 
 RTL_DIR := $(BUILD_DIR)/rtl
+RTL_STAMP := $(RTL_DIR)/.aethercore-rtl-ready
 SIM_OBJ_DIR := $(BUILD_DIR)/sim-obj
+SIM_BINARY := $(SIM_OBJ_DIR)/VAetherCoreRV32IMTrapSimTop
 GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_freertos.cpp
 TOP := AetherCoreRV32IMTrapSimTop
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+SCALA_SOURCES := $(shell find src/main/scala -type f -name '*.scala' -print) build.mill
 
 CROSS_COMPILE ?= riscv-none-elf-
 CC := $(CROSS_COMPILE)gcc
@@ -60,10 +64,13 @@ OBJECTS := $(APP_OBJECTS) $(KERNEL_OBJECTS) $(PORT_OBJECTS)
 
 all: image
 
-source: $(LOCK_FILE) tools/fetch_freertos_kernel.sh
+$(SOURCE_STAMP): $(LOCK_FILE) tools/fetch_freertos_kernel.sh
 	bash tools/fetch_freertos_kernel.sh $(SOURCE_DIR)
+	touch $@
 
-$(CONTRACT): source tools/audit_freertos_riscv_port.py
+source: $(SOURCE_STAMP)
+
+$(CONTRACT): $(SOURCE_STAMP) tools/audit_freertos_riscv_port.py
 	python3 tools/audit_freertos_riscv_port.py $(SOURCE_DIR) $(CONTRACT)
 
 audit: $(CONTRACT)
@@ -88,7 +95,7 @@ toolchain-check:
 	rm -f $(TOOLCHAIN_PROBE)
 	@echo "PASS: pinned RISC-V newlib sysroot is complete for RV32 ILP32"
 
-qualification: audit toolchain-check
+qualification: $(CONTRACT) toolchain-check
 	grep -q '"status": "PASS"' $(CONTRACT)
 	grep -q '"release": "V11.3.0"' $(CONTRACT)
 	grep -q '"profile": "rv32im_zicsr_m"' $(CONTRACT)
@@ -105,22 +112,22 @@ $(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h
 $(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $< -o $@
 
-$(OBJ_DIR)/port.o: source | $(OBJ_DIR)
+$(OBJ_DIR)/port.o: $(SOURCE_STAMP) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(PORT_DIR)/port.c -o $@
 
-$(OBJ_DIR)/portASM.o: source | $(OBJ_DIR)
+$(OBJ_DIR)/portASM.o: $(SOURCE_STAMP) | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $(PORT_DIR)/portASM.S -o $@
 
-$(OBJ_DIR)/heap_4.o: source | $(OBJ_DIR)
+$(OBJ_DIR)/heap_4.o: $(SOURCE_STAMP) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/portable/MemMang/heap_4.c -o $@
 
 define KERNEL_C_RULE
-$(OBJ_DIR)/$(1:.c=.o): source | $(OBJ_DIR)
+$(OBJ_DIR)/$(1:.c=.o): $(SOURCE_STAMP) | $(OBJ_DIR)
 	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$(SOURCE_DIR)/$(1) -o $$@
 endef
 $(foreach source,$(KERNEL_C_SOURCES),$(eval $(call KERNEL_C_RULE,$(source))))
 
-$(ELF): qualification $(OBJECTS) $(APP_DIR)/linker.ld
+$(ELF): $(OBJECTS) $(APP_DIR)/linker.ld
 	$(CC) $(LDFLAGS) $(OBJECTS) -lgcc -o $@
 	$(OBJDUMP) -d $@ > $(DIS)
 	$(READELF) -A $@ > $(ATTRIBUTES)
@@ -140,16 +147,22 @@ $(BIN): $(ELF)
 
 image: $(BIN)
 
-rtl:
+$(RTL_STAMP): $(SCALA_SOURCES)
+	rm -rf $(RTL_DIR)
 	./mill aethercore.runMain aethercore.ElaborateRV32IMTrap --target-dir $(RTL_DIR)
+	touch $@
 
-runner-source:
+rtl: $(RTL_STAMP)
+
+$(GENERATED_MAIN): sim/sim_main.cpp
 	mkdir -p $(BUILD_DIR)
 	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMTrapSimTop/g' \
 		sim/sim_main.cpp > $(GENERATED_MAIN)
 	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  commit.interrupt = top.io_commit_interrupt;\n  commit.interruptCause = static_cast<std::uint64_t>(top.io_commit_interruptCause);\n  commit.interruptPc = static_cast<std::uint64_t>(top.io_commit_interruptPc);\n  return commit;"; assert a in s; p.write_text(s.replace(a,b,1))'
 
-sim: rtl runner-source
+runner-source: $(GENERATED_MAIN)
+
+$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN) sim/nemu_difftest_rv32_timer.cpp
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	$(VERILATOR) --cc --exe --build -j $(JOBS) $(VERILATOR_TRACE_FLAGS) -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(SIM_OBJ_DIR) \
@@ -157,9 +170,11 @@ sim: rtl runner-source
 		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) \
 		$(abspath sim/nemu_difftest_rv32_timer.cpp)
 
-run-local: image sim
+sim: $(SIM_BINARY)
+
+run-local: qualification image sim
 	mkdir -p $(BUILD_DIR)/logs
-	$(SIM_OBJ_DIR)/V$(TOP) $(BIN) \
+	$(SIM_BINARY) $(BIN) \
 		--max-cycles 2000000 --self-check-exit --stall-period 5 \
 		2>&1 | tee $(BUILD_DIR)/logs/local.log
 	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(BUILD_DIR)/logs/local.log)" -eq 1
