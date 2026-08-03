@@ -34,9 +34,17 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate.sh toolchain
 
+      - name: Provision pinned RISC-V newlib sysroot
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
       - name: Fast source and image tests
         shell: bash
         run: bash tools/ci/full_gate.sh python
+
+      - name: FreeRTOS V11.3.0 preemptive queue workload
+        shell: bash
+        run: bash tools/ci/full_gate_freertos.sh
 
       - name: Chisel unit tests
         shell: bash
@@ -123,12 +131,15 @@ jobs:
             echo
             echo "- head: \`${GITHUB_SHA}\`"
             echo '- one checkout and one persistent toolchain setup'
+            echo '- pinned xPack RISC-V GCC 15.2.0 with a verified newlib 4.5.0 sysroot'
+            echo '- FreeRTOS acceptance runs immediately after fast source tests'
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
             echo '- fast architectural gates run before long software workloads'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
             echo '- PMP partitions kernel, user text and user data before any MMIO side effect'
             echo '- timer, syscalls, context switching and dynamic PMP isolate two U-mode tasks'
+            echo '- pinned FreeRTOS V11.3.0 drives timer ticks, preemption, queues and semaphores'
             echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -157,6 +168,12 @@ jobs:
             build/rv32/
             build/rv32im-*/
             build/rv32imu-*/
+            build/freertos-qualification/evidence/
+            build/freertos-qualification/aethercore-freertos.elf
+            build/freertos-qualification/aethercore-freertos.bin
+            build/freertos-qualification/aethercore-freertos.map
+            build/freertos-qualification/aethercore-freertos.dis
+            build/freertos-qualification/aethercore-freertos.attributes
             !build/**/obj/**
             !build/**/rtl/**
             !build/**/nemu/**

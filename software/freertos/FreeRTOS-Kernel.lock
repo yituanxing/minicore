@@ -1,0 +1,17 @@
+repository=https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+release=V11.3.0
+revision=9b777ae5c5b8e9e456065a00294d1e5f5f9facf5
+license=MIT
+port_directory=portable/GCC/RISC-V
+chip_extension_directory=portable/GCC/RISC-V/chip_specific_extensions/RISCV_MTIME_CLINT_no_extensions
+port_c_blob_sha=3efa1c52aef69ffe3baaf6644a5bbb3664fd41cb
+port_asm_blob_sha=949ace3bf21fcb4b4fe2cab535aa8c9c1dec0078
+portmacro_blob_sha=5ba2f8ea23cc690900b32395609f485ef0ee1954
+chip_extension_blob_sha=628ed8ad3135315fa44d8cd136016bb9086855b0
+initial_profile=rv32im_zicsr_m
+initial_harts=1
+expected_mhartid=0
+mtime_address=0x0200bff8
+mtimecmp_address=0x02004000
+uart_address=0x10000000
+exit_address=0x10000008
