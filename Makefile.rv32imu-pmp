@@ -35,8 +35,8 @@ contract: software
 
 runner-source:
 	mkdir -p $(BUILD_DIR)
-	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMUPmpSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
-	python3 -c 'from pathlib import Path; p=Path("$(GENERATED_MAIN)"); s=p.read_text(); a="  commit.exception = top.io_commit_exception;\n  return commit;"; b="  commit.exception = top.io_commit_exception;\n  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n  commit.exceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);\n  return commit;"; c="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits();"; d="      if (difftest) std::cout << \", difftest=\" << difftest->checkedCommits() << \", zicsr-shadow=\" << difftest->zicsrShadowSteps() << \", trap-shadow=\" << difftest->trapShadowSteps() << \", mret-shadow=\" << difftest->mretShadowSteps();"; assert a in s and c in s; p.write_text(s.replace(a,b,1).replace(c,d,1))'
+	python3 tools/make_rv32imu_pmp_runner.py \
+		sim/sim_main.cpp $(GENERATED_MAIN)
 
 difftest-source:
 	mkdir -p $(BUILD_DIR)
