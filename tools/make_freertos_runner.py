@@ -26,6 +26,20 @@ def adapt(source: str, trace: bool) -> str:
         "  return commit;",
         "commit metadata",
     )
+    text = replace_once(
+        text,
+        "    for (; cycles < options.maxCycles && !top.io_halted && !exitRequested; ++cycles) {\n",
+        "    for (; cycles < options.maxCycles &&\n"
+        "           (options.selfCheckExit || !top.io_halted) && !exitRequested;\n"
+        "         ++cycles) {\n",
+        "simulation loop",
+    )
+    text = replace_once(
+        text,
+        "    if (!top.io_halted && cycles >= options.maxCycles) {\n",
+        "    if (cycles >= options.maxCycles && !exitRequested) {\n",
+        "simulation timeout",
+    )
 
     if trace:
         return text
