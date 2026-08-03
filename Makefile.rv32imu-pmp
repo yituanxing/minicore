@@ -42,6 +42,8 @@ difftest-source:
 	mkdir -p $(BUILD_DIR)
 	python3 tools/make_rv32imu_difftest.py \
 		sim/nemu_difftest_rv32.cpp $(GENERATED_RV32IMU_DIFFTEST)
+	python3 tools/widen_rv32imu_pmp_csr_decode.py \
+		$(GENERATED_RV32IMU_DIFFTEST)
 	python3 tools/make_rv32imu_pmp_difftest.py \
 		$(GENERATED_RV32IMU_DIFFTEST) $(GENERATED_DIFFTEST)
 
