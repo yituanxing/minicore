@@ -22,7 +22,7 @@ def adapt(source: str) -> str:
         "constexpr std::uint32_t kFenceIorw = 0x0ff0000fU;\n"
         "constexpr std::uint32_t kWfi = 0x10500073U;\n"
         "constexpr std::uint32_t kMret = 0x30200073U;\n",
-        "WFI instruction constants",
+        "tickless instruction constants",
     )
     text = replace_once(
         text,
@@ -46,12 +46,13 @@ def adapt(source: str) -> str:
         "    } else if (fenceStep) {\n"
         "      after = executeFence(before, commit);\n"
         "      regcpy_(&after, kToRef);\n"
+        "      ++fenceShadowSteps_;\n"
         "    } else if (wfiStep) {\n"
         "      after = executeWfi(before, commit);\n"
         "      regcpy_(&after, kToRef);\n"
         "      ++wfiShadowSteps_;\n"
         "    } else if (mretStep) {\n",
-        "WFI reference dispatch",
+        "tickless reference dispatch",
     )
     text = replace_once(
         text,
@@ -61,27 +62,29 @@ def adapt(source: str) -> str:
         "    if (fenceStep) line << \" reference=fence-shadow\";\n"
         "    if (wfiStep) line << \" reference=wfi-shadow\";\n"
         "    if (zicsrStep) line << \" reference=zicsr-shadow\";\n",
-        "WFI trace labels",
+        "tickless trace labels",
     )
     text = replace_once(
         text,
         "  std::uint64_t trapShadowSteps() const { return trapShadowSteps_; }\n"
         "  std::uint64_t mretShadowSteps() const { return mretShadowSteps_; }\n",
         "  std::uint64_t trapShadowSteps() const { return trapShadowSteps_; }\n"
+        "  std::uint64_t fenceShadowSteps() const { return fenceShadowSteps_; }\n"
         "  std::uint64_t wfiShadowSteps() const { return wfiShadowSteps_; }\n"
         "  std::uint64_t mretShadowSteps() const { return mretShadowSteps_; }\n",
-        "WFI counter accessor",
+        "tickless counter accessors",
     )
     method = r'''  NemuState32 executeFence(const NemuState32& before,
                            const DifftestCommit& commit) {
     if (commit.inst != kFenceIorw || commit.rdWrite || commit.memValid ||
-        commit.exception || commit.interrupt) {
+        commit.exception) {
       fail("FreeRTOS tickless fence shadow received an invalid architectural event");
     }
 
     // The pinned historical NEMU does not decode FENCE IORW, IORW. In this
     // single-hart, strongly ordered simulation it has no architectural state
-    // effect beyond retiring at PC+4, so model that exact boundary explicitly.
+    // effect beyond retiring at PC+4. A possible interrupt after retirement is
+    // still handled by the generic precise-interrupt shadow below.
     NemuState32 after = before;
     after.pc = before.pc + 4U;
     after.gpr[0] = 0;
@@ -122,18 +125,20 @@ def adapt(source: str) -> str:
         "  std::uint64_t trapShadowSteps_ = 0;\n"
         "  std::uint64_t mretShadowSteps_ = 0;\n",
         "  std::uint64_t trapShadowSteps_ = 0;\n"
+        "  std::uint64_t fenceShadowSteps_ = 0;\n"
         "  std::uint64_t wfiShadowSteps_ = 0;\n"
         "  std::uint64_t mretShadowSteps_ = 0;\n",
-        "WFI counter storage",
+        "tickless counter storage",
     )
     text = replace_once(
         text,
         "std::uint64_t NemuDifftest::trapShadowSteps() const { return impl_->trapShadowSteps(); }\n"
         "std::uint64_t NemuDifftest::mretShadowSteps() const { return impl_->mretShadowSteps(); }\n",
         "std::uint64_t NemuDifftest::trapShadowSteps() const { return impl_->trapShadowSteps(); }\n"
+        "std::uint64_t NemuDifftest::fenceShadowSteps() const { return impl_->fenceShadowSteps(); }\n"
         "std::uint64_t NemuDifftest::wfiShadowSteps() const { return impl_->wfiShadowSteps(); }\n"
         "std::uint64_t NemuDifftest::mretShadowSteps() const { return impl_->mretShadowSteps(); }\n",
-        "WFI public counter wrapper",
+        "tickless public counter wrappers",
     )
     return text
 
@@ -148,7 +153,7 @@ def main() -> None:
     output = adapt(source)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(output, encoding="utf-8")
-    print(f"wrote FreeRTOS WFI DiffTest adapter: {arguments.output}")
+    print(f"wrote FreeRTOS WFI/FENCE DiffTest adapter: {arguments.output}")
 
 
 if __name__ == "__main__":
