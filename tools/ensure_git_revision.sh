@@ -18,6 +18,9 @@ cache_name="$4"
 
 cache_root="${AETHERCORE_SOURCE_CACHE:-${HOME}/.cache/aethercore/sources}"
 cache_dir="${cache_root}/${cache_name}-${revision}"
+fetch_timeout="${AETHERCORE_SOURCE_FETCH_TIMEOUT:-180}"
+
+[[ "$fetch_timeout" =~ ^[1-9][0-9]*$ ]] || fail "AETHERCORE_SOURCE_FETCH_TIMEOUT must be a positive integer"
 
 validate_tree() {
   local tree="$1"
@@ -43,7 +46,8 @@ if ! validate_tree "$cache_dir"; then
   fetched=false
   for attempt in 1 2 3 4 5; do
     echo "${cache_name} fetch attempt ${attempt}/5 at ${revision}" >&2
-    if git -c http.version=HTTP/1.1 \
+    if timeout "$fetch_timeout" \
+      git -c http.version=HTTP/1.1 \
       -c http.lowSpeedLimit=1024 \
       -c http.lowSpeedTime=60 \
       -C "$temporary" fetch --quiet --depth=1 origin "$revision"; then
