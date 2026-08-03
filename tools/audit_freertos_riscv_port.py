@@ -6,15 +6,20 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_FILE = ROOT / "software" / "freertos" / "FreeRTOS-Kernel.lock"
+CHIP_EXTENSION = Path(
+    "portable/GCC/RISC-V/chip_specific_extensions/"
+    "RISCV_MTIME_CLINT_no_extensions/"
+    "freertos_risc_v_chip_specific_extensions.h"
+)
 PORT_FILES = {
     "port.c": Path("portable/GCC/RISC-V/port.c"),
     "portASM.S": Path("portable/GCC/RISC-V/portASM.S"),
     "portmacro.h": Path("portable/GCC/RISC-V/portmacro.h"),
+    "chip_extension.h": CHIP_EXTENSION,
 }
 
 REQUIRED_FRAGMENTS = {
@@ -47,6 +52,13 @@ REQUIRED_FRAGMENTS = {
         "configMTIME_BASE_ADDRESS",
         "configMTIMECMP_BASE_ADDRESS",
         "__builtin_clz",
+    ),
+    "chip_extension.h": (
+        "portasmHAS_SIFIVE_CLINT",
+        "portasmHAS_MTIME",
+        "portasmADDITIONAL_CONTEXT_SIZE",
+        "portasmSAVE_ADDITIONAL_REGISTERS",
+        "portasmRESTORE_ADDITIONAL_REGISTERS",
     ),
 }
 
@@ -87,6 +99,9 @@ def audit(source: Path, lock: dict[str, str]) -> dict[str, object]:
     if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
         fail("locked revision is not a full lowercase SHA")
 
+    if Path(lock["chip_extension_directory"]) / CHIP_EXTENSION.name != CHIP_EXTENSION:
+        fail("locked chip extension directory does not match the selected initial port")
+
     if (source / ".git").is_dir():
         actual_revision = git_output(source, "rev-parse", "HEAD")
         if actual_revision != revision:
@@ -96,7 +111,6 @@ def audit(source: Path, lock: dict[str, str]) -> dict[str, object]:
     else:
         actual_revision = revision
 
-    texts: dict[str, str] = {}
     files: dict[str, dict[str, object]] = {}
     for name, relative in PORT_FILES.items():
         path = source / relative
@@ -104,7 +118,6 @@ def audit(source: Path, lock: dict[str, str]) -> dict[str, object]:
             fail(f"missing required RISC-V port file: {relative}")
         payload = path.read_bytes()
         text = payload.decode("utf-8")
-        texts[name] = text
         missing = [fragment for fragment in REQUIRED_FRAGMENTS[name] if fragment not in text]
         if missing:
             fail(f"{name} is missing required fragments: {', '.join(missing)}")
@@ -119,6 +132,7 @@ def audit(source: Path, lock: dict[str, str]) -> dict[str, object]:
         "port.c": lock["port_c_blob_sha"],
         "portASM.S": lock["port_asm_blob_sha"],
         "portmacro.h": lock["portmacro_blob_sha"],
+        "chip_extension.h": lock["chip_extension_blob_sha"],
     }
     if (source / ".git").is_dir():
         for name, relative in PORT_FILES.items():
@@ -146,6 +160,8 @@ def audit(source: Path, lock: dict[str, str]) -> dict[str, object]:
             "mtimecmp": lock["mtimecmp_address"],
             "uart": lock["uart_address"],
             "exit": lock["exit_address"],
+            "chip_extension": lock["chip_extension_directory"],
+            "additional_context_registers": 0,
             "fpu": False,
             "vpu": False,
             "supervisor_mode": False,
@@ -173,6 +189,7 @@ def audit(source: Path, lock: dict[str, str]) -> dict[str, object]:
             "critical_sections": "mstatus.MIE clear/set",
             "tick_source": "memory-mapped mtime/mtimecmp",
             "context_switch": "compiler-created task stacks plus assembly trap frame",
+            "chip_context_extension": "none",
             "initial_task_privilege": "M-mode",
         },
         "aethercore_boundary": {
@@ -219,9 +236,11 @@ def main() -> None:
         "revision",
         "license",
         "port_directory",
+        "chip_extension_directory",
         "port_c_blob_sha",
         "port_asm_blob_sha",
         "portmacro_blob_sha",
+        "chip_extension_blob_sha",
         "initial_profile",
         "initial_harts",
         "expected_mhartid",
