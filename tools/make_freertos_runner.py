@@ -16,6 +16,13 @@ def adapt(source: str, trace: bool) -> str:
     text = source.replace("VAetherCoreSimTop", "VAetherCoreRV32IMTrapSimTop")
     text = replace_once(
         text,
+        "constexpr std::uint32_t kEbreak = 0x00100073U;\n",
+        "constexpr std::uint32_t kEbreak = 0x00100073U;\n"
+        "constexpr std::uint32_t kWfi = 0x10500073U;\n",
+        "WFI instruction constant",
+    )
+    text = replace_once(
+        text,
         "  commit.exception = top.io_commit_exception;\n  return commit;",
         "  commit.exception = top.io_commit_exception;\n"
         "  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n"
@@ -28,6 +35,16 @@ def adapt(source: str, trace: bool) -> str:
     )
     text = replace_once(
         text,
+        "    std::uint64_t committed = 0;\n"
+        "    std::uint64_t exceptions = 0;\n",
+        "    std::uint64_t committed = 0;\n"
+        "    std::uint64_t wfiCommits = 0;\n"
+        "    std::uint64_t wfiSleepCycles = 0;\n"
+        "    std::uint64_t exceptions = 0;\n",
+        "WFI counters",
+    )
+    text = replace_once(
+        text,
         "    for (; cycles < options.maxCycles && !top.io_halted && !exitRequested; ++cycles) {\n",
         "    for (; cycles < options.maxCycles &&\n"
         "           (options.selfCheckExit || !top.io_halted) && !exitRequested;\n"
@@ -36,9 +53,62 @@ def adapt(source: str, trace: bool) -> str:
     )
     text = replace_once(
         text,
+        "      if (!top.reset) {\n"
+        "        if (top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault) {\n",
+        "      if (!top.reset) {\n"
+        "        if (options.selfCheckExit && top.io_halted) {\n"
+        "          ++wfiSleepCycles;\n"
+        "          if (top.io_commit_valid) {\n"
+        "            std::cerr << \"FAIL: instruction retired while WFI sleep was asserted at cycle \"\n"
+        "                      << cycles << '\\n';\n"
+        "            return 27;\n"
+        "          }\n"
+        "        }\n\n"
+        "        if (top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault) {\n",
+        "WFI quiescence assertion",
+    )
+    text = replace_once(
+        text,
+        "        if (top.io_commit_valid) {\n"
+        "          ++committed;\n"
+        "          if (difftest) difftest->check(makeDifftestCommit(top));\n",
+        "        if (top.io_commit_valid) {\n"
+        "          ++committed;\n"
+        "          if (static_cast<std::uint32_t>(top.io_commit_inst) == kWfi) ++wfiCommits;\n"
+        "          if (difftest) difftest->check(makeDifftestCommit(top));\n",
+        "WFI retirement counter",
+    )
+    text = replace_once(
+        text,
         "    if (!top.io_halted && cycles >= options.maxCycles) {\n",
         "    if (cycles >= options.maxCycles && !exitRequested) {\n",
         "simulation timeout",
+    )
+    text = replace_once(
+        text,
+        "      if (exitCode != 0) {\n"
+        "        std::cerr << \"FAIL: self-check program returned code \" << exitCode << '\\n';\n"
+        "        return static_cast<int>(exitCode > 125 ? 125 : exitCode);\n"
+        "      }\n"
+        "      std::cout << \"PASS: self-check exit=0 after \" << cycles << \" cycles, \" << committed\n"
+        "                << \" committed instructions\";\n",
+        "      if (exitCode != 0) {\n"
+        "        std::cerr << \"FAIL: self-check program returned code \" << exitCode << '\\n';\n"
+        "        return static_cast<int>(exitCode > 125 ? 125 : exitCode);\n"
+        "      }\n"
+        "      if (wfiCommits == 0) {\n"
+        "        std::cerr << \"FAIL: self-check program completed without retiring WFI\\n\";\n"
+        "        return 28;\n"
+        "      }\n"
+        "      if (wfiSleepCycles == 0) {\n"
+        "        std::cerr << \"FAIL: self-check program completed without an observable WFI sleep cycle\\n\";\n"
+        "        return 29;\n"
+        "      }\n"
+        "      std::cout << \"PASS: self-check exit=0 after \" << cycles << \" cycles, \" << committed\n"
+        "                << \" committed instructions\"\n"
+        "                << \", wfi-commits=\" << wfiCommits\n"
+        "                << \", wfi-sleep-cycles=\" << wfiSleepCycles;\n",
+        "self-check WFI summary",
     )
 
     if trace:
