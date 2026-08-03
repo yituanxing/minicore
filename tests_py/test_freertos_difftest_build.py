@@ -59,6 +59,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
             "interrupt-shadow=",
         ):
             self.assertIn(counter, text)
+        self.assertIn("retired while WFI sleep was asserted", text)
 
     def test_negative_gate_requires_a_first_event_mismatch(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
@@ -67,7 +68,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
         self.assertIn("test $$status -ne 0", text)
         self.assertIn("mismatch after 0 matched events", text)
 
-    def test_ci_gate_runs_both_stall_profiles_and_archives_evidence(self) -> None:
+    def test_ci_gate_freezes_wfi_counts_hashes_and_clean_trace_zero_build(self) -> None:
         syntax = subprocess.run(
             ["bash", "-n", str(CI_SCRIPT)],
             cwd=ROOT,
@@ -78,21 +79,62 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
         )
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         text = CI_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'BUILD_DIR="$QUALIFICATION_ROOT/difftest-build"', text
+        )
+        self.assertIn('rm -rf "$BUILD_DIR" "$EVIDENCE_DIR"', text)
+        self.assertIn('BUILD_DIR="$BUILD_DIR" JOBS="$JOBS" TRACE=0', text)
         self.assertIn("for stall in 0 5", text)
         self.assertIn("run-difftest-negative", text)
         self.assertIn("negative_mismatch_at=0", text)
+        self.assertIn("wfi_shadow=true", text)
+        self.assertIn("wfi_quiescence=true", text)
+        self.assertIn("contract=freertos-rv32-exact-difftest-wfi-v1", text)
         self.assertIn("reference_revision=8601834e4889e6bf3b6113eb5f824ba7689126f5", text)
+        self.assertIn(
+            'EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e"',
+            text,
+        )
+        self.assertIn(
+            'EXPECTED_ADAPTER_SHA256="2ff3fa8f3c2cfc1005d7edd0b704c636d48c7ef042c002298568faad6c9aadd4"',
+            text,
+        )
+        self.assertIn(
+            'EXPECTED_RUNNER_SHA256="e9446402b2d9f51aa636438badc7bbb338376194abd01b968a3b6d842f764744"',
+            text,
+        )
+        self.assertIn(
+            'EXPECTED_ELF_SHA256="726f855cdf21b0ad6de2a34dc37ce922716e8538b473e2ae0841b4825ce4d319"',
+            text,
+        )
+        self.assertIn(
+            'EXPECTED_BINARY_SHA256="19c13144689b2166a15d21f9315d37e3c9a48642dc5e4bdb2dc2e7787f26bf83"',
+            text,
+        )
+        self.assertIn("wfi-commits=2, wfi-sleep-cycles=1332", text)
+        self.assertIn("difftest=167808", text)
+        self.assertIn("wfi-shadow=2", text)
+        self.assertIn("wfi-commits=3, wfi-sleep-cycles=1693", text)
+        self.assertIn("difftest=166608", text)
+        self.assertIn("wfi-shadow=3", text)
+        self.assertIn('cp "$adapter" "$EVIDENCE_DIR/"', text)
+        self.assertIn('cp "$runner" "$EVIDENCE_DIR/"', text)
+        self.assertIn('cp "$elf" "$EVIDENCE_DIR/"', text)
+        self.assertIn('cp "$binary" "$EVIDENCE_DIR/"', text)
         self.assertIn("stall0_summary=", text)
         self.assertIn("stall5_summary=", text)
 
     def test_full_gate_runs_freertos_difftest_after_reference_build(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
+        local = text.index("FreeRTOS V11.3.0 preemptive queue workload")
         reference = text.index("Build both frozen RV32 NEMU references once")
         freertos_difftest = text.index("FreeRTOS exact RV32 NEMU DiffTest")
         rv32_gcc = text.index("RV32 GCC workload and 585-retirement DiffTest")
+        self.assertLess(local, reference)
         self.assertLess(reference, freertos_difftest)
         self.assertLess(freertos_difftest, rv32_gcc)
         self.assertIn("bash tools/ci/full_gate_freertos_difftest.sh", text)
+        self.assertIn("build/freertos-qualification/difftest-evidence/", text)
 
 
 if __name__ == "__main__":
