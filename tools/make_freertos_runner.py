@@ -39,6 +39,7 @@ def adapt(source: str, trace: bool) -> str:
         "    std::uint64_t exceptions = 0;\n",
         "    std::uint64_t committed = 0;\n"
         "    std::uint64_t wfiCommits = 0;\n"
+        "    std::uint64_t maskedWfiCommits = 0;\n"
         "    std::uint64_t wfiSleepCycles = 0;\n"
         "    std::uint64_t exceptions = 0;\n",
         "WFI counters",
@@ -74,7 +75,10 @@ def adapt(source: str, trace: bool) -> str:
         "          if (difftest) difftest->check(makeDifftestCommit(top));\n",
         "        if (top.io_commit_valid) {\n"
         "          ++committed;\n"
-        "          if (static_cast<std::uint32_t>(top.io_commit_inst) == kWfi) ++wfiCommits;\n"
+        "          if (static_cast<std::uint32_t>(top.io_commit_inst) == kWfi) {\n"
+        "            ++wfiCommits;\n"
+        "            if (!top.io_commit_interrupt) ++maskedWfiCommits;\n"
+        "          }\n"
         "          if (difftest) difftest->check(makeDifftestCommit(top));\n",
         "WFI retirement counter",
     )
@@ -100,6 +104,10 @@ def adapt(source: str, trace: bool) -> str:
         "        std::cerr << \"FAIL: self-check program completed without retiring WFI\\n\";\n"
         "        return 28;\n"
         "      }\n"
+        "      if (maskedWfiCommits == 0) {\n"
+        "        std::cerr << \"FAIL: self-check program completed without a masked tickless WFI wake\\n\";\n"
+        "        return 30;\n"
+        "      }\n"
         "      if (wfiSleepCycles == 0) {\n"
         "        std::cerr << \"FAIL: self-check program completed without an observable WFI sleep cycle\\n\";\n"
         "        return 29;\n"
@@ -107,6 +115,7 @@ def adapt(source: str, trace: bool) -> str:
         "      std::cout << \"PASS: self-check exit=0 after \" << cycles << \" cycles, \" << committed\n"
         "                << \" committed instructions\"\n"
         "                << \", wfi-commits=\" << wfiCommits\n"
+        "                << \", masked-wfi-commits=\" << maskedWfiCommits\n"
         "                << \", wfi-sleep-cycles=\" << wfiSleepCycles;\n",
         "self-check WFI summary",
     )
