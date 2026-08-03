@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
+BUILD_RULES := Makefile.freertos
 BUILD_DIR ?= build/freertos-qualification
 SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
 SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready
@@ -119,28 +120,28 @@ $(OBJ_DIR):
 
 # Application sources include FreeRTOS headers. On a cold parallel build they
 # must not race the pinned kernel fetch that materializes those headers.
-$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) | $(OBJ_DIR)
+$(OBJ_DIR)/%.o: $(APP_DIR)/%.c $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S | $(OBJ_DIR)
+$(OBJ_DIR)/startup.o: $(APP_DIR)/startup.S $(BUILD_RULES) | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $< -o $@
 
-$(OBJ_DIR)/port.o: $(SOURCE_STAMP) | $(OBJ_DIR)
+$(OBJ_DIR)/port.o: $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(PORT_DIR)/port.c -o $@
 
-$(OBJ_DIR)/portASM.o: $(SOURCE_STAMP) | $(OBJ_DIR)
+$(OBJ_DIR)/portASM.o: $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) $(INCLUDES) -c $(PORT_DIR)/portASM.S -o $@
 
-$(OBJ_DIR)/heap_4.o: $(SOURCE_STAMP) | $(OBJ_DIR)
+$(OBJ_DIR)/heap_4.o: $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/portable/MemMang/heap_4.c -o $@
 
 define KERNEL_C_RULE
-$(OBJ_DIR)/$(1:.c=.o): $(SOURCE_STAMP) | $(OBJ_DIR)
+$(OBJ_DIR)/$(1:.c=.o): $(SOURCE_STAMP) $(BUILD_RULES) | $(OBJ_DIR)
 	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$(SOURCE_DIR)/$(1) -o $$@
 endef
 $(foreach source,$(KERNEL_C_SOURCES),$(eval $(call KERNEL_C_RULE,$(source))))
 
-$(ELF): $(OBJECTS) $(APP_DIR)/linker.ld
+$(ELF): $(OBJECTS) $(APP_DIR)/linker.ld $(BUILD_RULES)
 	$(CC) $(LDFLAGS) $(OBJECTS) -lgcc -o $@
 	$(OBJDUMP) -d $@ > $(DIS)
 	$(READELF) -A $@ > $(ATTRIBUTES)
@@ -172,12 +173,12 @@ $(TRACE_STAMP):
 	rm -f $(BUILD_DIR)/.trace-0 $(BUILD_DIR)/.trace-1
 	touch $@
 
-$(GENERATED_MAIN): sim/sim_main.cpp $(RUNNER_TOOL) $(TRACE_STAMP)
+$(GENERATED_MAIN): sim/sim_main.cpp $(RUNNER_TOOL) $(TRACE_STAMP) $(BUILD_RULES)
 	python3 $(RUNNER_TOOL) $< $@ --trace $(TRACE)
 
 runner-source: $(GENERATED_MAIN)
 
-$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN) sim/nemu_difftest_rv32_timer.cpp
+$(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN) sim/nemu_difftest_rv32_timer.cpp $(BUILD_RULES)
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
 	+$(VERILATOR) --cc --exe --build -j $(JOBS) $(VERILATOR_TRACE_FLAGS) -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(SIM_OBJ_DIR) \
