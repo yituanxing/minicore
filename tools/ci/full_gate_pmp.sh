@@ -9,7 +9,11 @@ RV32_PATH_FILE="$ROOT/build/ci/rv32-nemu-so.txt"
 BUILD_DIR="$ROOT/build/rv32imu-pmp"
 SOFTWARE_DIR="$BUILD_DIR/software"
 
-mkdir -p "$LOG_DIR"
+# Self-hosted runners retain their worktree between jobs. PMP evidence must never
+# inherit binaries, labels, or logs from an earlier run.
+rm -rf "$BUILD_DIR"
+rm -f "$LOG_DIR"/rv32imu-pmp*.log
+mkdir -p "$LOG_DIR" "$BUILD_DIR"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -21,6 +25,19 @@ RV32_NEMU_SO="$(cat "$RV32_PATH_FILE")"
 [[ -f "$RV32_NEMU_SO" ]] || fail "missing shared RV32 NEMU reference: $RV32_NEMU_SO"
 
 make -f Makefile.rv32imu-pmp software contract
+
+{
+  printf 'git_head=%s\n' "$(git rev-parse HEAD)"
+  printf 'github_run_id=%s\n' "${GITHUB_RUN_ID:-local}"
+  printf 'github_run_attempt=%s\n' "${GITHUB_RUN_ATTEMPT:-local}"
+  printf 'nemu_so=%s\n' "$RV32_NEMU_SO"
+  sha256sum \
+    "$SOFTWARE_DIR/program.bin" \
+    "$SOFTWARE_DIR/labels.txt" \
+    "$SOFTWARE_DIR/manifest.txt" \
+    "$SOFTWARE_DIR/contract.txt"
+} > "$SOFTWARE_DIR/provenance.txt"
+cat "$SOFTWARE_DIR/provenance.txt"
 
 grep -q '^march=rv32im_zicsr$' "$SOFTWARE_DIR/manifest.txt"
 grep -q '^mabi=ilp32$' "$SOFTWARE_DIR/manifest.txt"
@@ -50,12 +67,12 @@ grep -q '^user_jalr_attack_sites=2$' "$SOFTWARE_DIR/contract.txt"
 grep -q '^kernel_sys_write_store_sites=1$' "$SOFTWARE_DIR/contract.txt"
 grep -q '^expected_fault_stages=6$' "$SOFTWARE_DIR/contract.txt"
 
-set -o pipefail
 make -f Makefile.rv32imu-pmp local-reference \
   2>&1 | tee "$LOG_DIR/rv32imu-pmp-local.log"
 make -f Makefile.rv32imu-pmp run RV32_NEMU_SO="$RV32_NEMU_SO" \
   2>&1 | tee "$LOG_DIR/rv32imu-pmp.log"
-make -f Makefile.rv32imu-pmp mismatch-probe RV32_NEMU_SO="$RV32_NEMU_SO"
+make -f Makefile.rv32imu-pmp mismatch-probe RV32_NEMU_SO="$RV32_NEMU_SO" \
+  2>&1 | tee "$LOG_DIR/rv32imu-pmp-mismatch-probe.log"
 
 for stall in 0 5; do
   log="$BUILD_DIR/logs/stall-$stall.log"
