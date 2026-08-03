@@ -40,4 +40,10 @@ reference_so="$(find "$PROBE_DIR/nemu/build" -maxdepth 1 -type f \
   -name 'riscv32-nemu-interpreter-so*' -print -quit)"
 test -n "$reference_so"
 test -f "$reference_so"
-printf '%s\n' "$reference_so" > "$PATH_FILE"
+
+cached_reference="$(
+  AETHERCORE_RV32_NEMU_CANDIDATE="$reference_so" \
+    bash tools/ensure_rv32_nemu_single_step.sh
+)"
+test -f "$cached_reference"
+printf '%s\n' "$cached_reference" > "$PATH_FILE"
