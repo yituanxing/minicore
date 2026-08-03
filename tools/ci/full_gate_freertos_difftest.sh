@@ -21,8 +21,8 @@ fi
 EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e"
 EXPECTED_ADAPTER_SHA256="2ff3fa8f3c2cfc1005d7edd0b704c636d48c7ef042c002298568faad6c9aadd4"
 EXPECTED_RUNNER_SHA256="e9446402b2d9f51aa636438badc7bbb338376194abd01b968a3b6d842f764744"
-EXPECTED_ELF_SHA256="726f855cdf21b0ad6de2a34dc37ce922716e8538b473e2ae0841b4825ce4d319"
-EXPECTED_BINARY_SHA256="19c13144689b2166a15d21f9315d37e3c9a48642dc5e4bdb2dc2e7787f26bf83"
+EXPECTED_ELF_SHA256="21a73cec3f2923708117fb71d5cd4339f22d5ed08b4994314b2c1a3b3cd242a0"
+EXPECTED_BINARY_SHA256="ddb1cb7e8b50687de1ef450ff85392bbfa5987cfc4b2a93f727d5dd2e08e9572"
 EXPECTED_STALL0_SUMMARY="PASS: self-check exit=0 after 242170 cycles, 167808 committed instructions, wfi-commits=2, wfi-sleep-cycles=1332, difftest=167808, zicsr-shadow=3194, trap-shadow=220, wfi-shadow=2, mret-shadow=361, interrupt-shadow=141"
 EXPECTED_STALL5_SUMMARY="PASS: self-check exit=0 after 260658 cycles, 166608 committed instructions, wfi-commits=3, wfi-sleep-cycles=1693, stall-period=5, difftest=166608, zicsr-shadow=3207, trap-shadow=214, wfi-shadow=3, mret-shadow=366, interrupt-shadow=152"
 
