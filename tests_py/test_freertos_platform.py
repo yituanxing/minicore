@@ -107,7 +107,7 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("ullNextTime = firstDeadline +", text)
         self.assertIn("pullMachineTimerCompareRegister", text)
 
-    def test_workload_requires_tick_preemption_queue_and_semaphore_progress(self) -> None:
+    def test_workload_requires_tick_preemption_queue_semaphore_and_tickless_progress(self) -> None:
         text = (APP / "main.c").read_text(encoding="utf-8")
         self.assertIn("xQueueCreate", text)
         self.assertIn("xQueueSend", text)
@@ -118,7 +118,9 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("vTaskDelay( 1 )", text)
         self.assertIn("taskYIELD()", text)
         self.assertIn("consumedSum == EXPECTED_SUM", text)
-        self.assertIn("ticks >= 16U", text)
+        self.assertIn("TICKLESS_PROOF_DELAY_TICKS 32U", text)
+        self.assertIn("aetherTicklessSuppressedTicks", text)
+        self.assertIn("ticks >= ( TickType_t ) ( 16U + TICKLESS_PROOF_DELAY_TICKS )", text)
         self.assertIn("aether_exit( 0U )", text)
 
     def test_full_gate_is_milestone_only_and_keeps_the_complete_order(self) -> None:
