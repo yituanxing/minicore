@@ -17,6 +17,15 @@ static volatile uint32_t consumedCount;
 static volatile uint32_t consumedSum;
 static volatile uint32_t producerDone;
 static volatile uint32_t consumerDone;
+static volatile uint32_t idleWfiEntries;
+static volatile uint32_t idleWfiWakeups;
+
+void vApplicationIdleHook( void )
+{
+    idleWfiEntries++;
+    __asm__ volatile ( "wfi" ::: "memory" );
+    idleWfiWakeups++;
+}
 
 static void producer_task( void * context )
 {
@@ -83,7 +92,10 @@ static void monitor_task( void * context )
     configASSERT( consumedCount == MESSAGE_COUNT );
     configASSERT( consumedSum == EXPECTED_SUM );
     configASSERT( ticks >= 16U );
+    configASSERT( idleWfiEntries >= 1U );
+    configASSERT( idleWfiWakeups >= 1U );
 
+    aether_uart_write( "FREERTOS IDLE PASS wfi>=1 wake>=1\n" );
     aether_uart_write( "FREERTOS PASS queue=64 semaphore=8 ticks>=16\n" );
     aether_exit( 0U );
 }
