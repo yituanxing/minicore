@@ -4,11 +4,14 @@
 #include <stdint.h>
 
 void aether_assert_fail( const char * file, int line );
+void vPortSuppressTicksAndSleep( uint32_t expectedIdleTicks );
 
 #define configUSE_PREEMPTION                    1
 #define configUSE_TIME_SLICING                  1
 #define configUSE_TICKLESS_IDLE                 1
 #define configEXPECTED_IDLE_TIME_BEFORE_SLEEP  2
+#define portSUPPRESS_TICKS_AND_SLEEP( expectedIdleTicks ) \
+    vPortSuppressTicksAndSleep( ( uint32_t ) ( expectedIdleTicks ) )
 #define configCPU_CLOCK_HZ                      1000000UL
 #define configTICK_RATE_HZ                      1000UL
 #define configTICK_TYPE_WIDTH_IN_BITS           TICK_TYPE_WIDTH_32_BITS
