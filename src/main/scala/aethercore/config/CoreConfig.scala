@@ -115,6 +115,17 @@ object CoreProfiles {
       xlen = 32,
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imuPmpSoftware: CoreConfig = CoreConfig(
+    name = "rv32imu-pmp-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr"),
       pmpEntries = 4
     ),
