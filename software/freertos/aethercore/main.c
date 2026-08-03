@@ -8,6 +8,7 @@
 
 #define MESSAGE_COUNT 64U
 #define EXPECTED_SUM  ( ( MESSAGE_COUNT * ( MESSAGE_COUNT + 1U ) ) / 2U )
+#define IDLE_WAKE_ATTEMPTS 4U
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -83,6 +84,18 @@ static void monitor_task( void * context )
     ( void ) context;
 
     while( ( producerDone == 0U ) || ( consumerDone == 0U ) )
+    {
+        vTaskDelay( 1 );
+    }
+
+    /*
+     * A timer interrupt may switch directly from the sleeping idle task to
+     * this higher-priority monitor. Give the idle task a bounded opportunity
+     * to resume after WFI and execute the post-wake accounting instruction.
+     */
+    for( uint32_t attempt = 0U;
+         ( idleWfiWakeups == 0U ) && ( attempt < IDLE_WAKE_ATTEMPTS );
+         ++attempt )
     {
         vTaskDelay( 1 );
     }
