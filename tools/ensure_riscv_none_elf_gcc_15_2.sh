@@ -30,6 +30,7 @@ validate_payload() {
   local gcc="$root/bin/riscv-none-elf-gcc"
   local readelf="$root/bin/riscv-none-elf-readelf"
   local sysroot libc libgcc multi_dir probe_dir machine fullversion
+  local expected_stdlib expected_string
 
   [[ -x "$gcc" ]] || validation_error "missing compiler: $gcc" || return 1
   [[ -x "$root/bin/riscv-none-elf-objcopy" ]] || validation_error "missing objcopy" || return 1
@@ -50,12 +51,14 @@ validate_payload() {
   esac
 
   # stddef.h and GCC's stdint.h wrapper legitimately live in GCC's internal
-  # include directory.  The authoritative boundary is that a real RV32 compile
+  # include directory. The authoritative boundary is that a real RV32 compile
   # can resolve them, while newlib's hosted-surface headers come from sysroot.
   [[ -f "$sysroot/include/stdlib.h" ]] || validation_error "missing newlib stdlib.h: $sysroot/include/stdlib.h" || return 1
   [[ -f "$sysroot/include/string.h" ]] || validation_error "missing newlib string.h: $sysroot/include/string.h" || return 1
+  expected_stdlib="$(readlink -f "$sysroot/include/stdlib.h")" || validation_error "cannot canonicalize newlib stdlib.h" || return 1
+  expected_string="$(readlink -f "$sysroot/include/string.h")" || validation_error "cannot canonicalize newlib string.h" || return 1
 
-  # The published soft-float multilib is rv32im/ilp32.  Zicsr is an ISA
+  # The published soft-float multilib is rv32im/ilp32. Zicsr is an ISA
   # extension used by our objects, not a separate newlib directory.
   multi_dir="$($gcc -march=rv32im -mabi=ilp32 -print-multi-directory 2>/dev/null)" || \
     validation_error "cannot select rv32im/ilp32 multilib" || return 1
@@ -115,22 +118,30 @@ EOF
     rm -rf "$probe_dir"
     return 1
   fi
-  if ! grep -Fq "$sysroot/include" "$probe_dir/include-search.txt"; then
-    validation_error "newlib sysroot is absent from compiler include search"
+
+  # GCC may print equivalent paths containing bin/../. Canonicalize every
+  # header reported by -H before comparing it with the canonical sysroot files.
+  awk '/^\.+ \/.*$/ { sub(/^\.+ /, ""); print }' \
+    "$probe_dir/include-search.txt" > "$probe_dir/header-paths.txt"
+  : > "$probe_dir/header-paths-real.txt"
+  while IFS= read -r header; do
+    [[ -f "$header" ]] || continue
+    readlink -f "$header" >> "$probe_dir/header-paths-real.txt"
+  done < "$probe_dir/header-paths.txt"
+  sort -u -o "$probe_dir/header-paths-real.txt" "$probe_dir/header-paths-real.txt"
+
+  if ! grep -Fxq "$expected_stdlib" "$probe_dir/header-paths-real.txt" || \
+     ! grep -Fxq "$expected_string" "$probe_dir/header-paths-real.txt"; then
+    validation_error "stdlib.h/string.h were not resolved from the canonical newlib sysroot"
     cat "$probe_dir/include-search.txt" >&2
+    printf 'expected_stdlib=%s\nexpected_string=%s\n' "$expected_stdlib" "$expected_string" >&2
+    cat "$probe_dir/header-paths-real.txt" >&2
     rm -rf "$probe_dir"
     return 1
   fi
-  if ! grep -Fq "$sysroot/include/stdlib.h" "$probe_dir/include-search.txt" || \
-     ! grep -Fq "$sysroot/include/string.h" "$probe_dir/include-search.txt"; then
-    validation_error "stdlib.h/string.h were not resolved from the newlib sysroot"
-    cat "$probe_dir/include-search.txt" >&2
-    rm -rf "$probe_dir"
-    return 1
-  fi
-  if grep -Eq '(^|[[:space:].])(/usr/include|/usr/local/include)(/|$)' "$probe_dir/include-search.txt"; then
+  if grep -Eq '^(/usr/include|/usr/local/include)(/|$)' "$probe_dir/header-paths-real.txt"; then
     validation_error "host C headers leaked into the RISC-V compile"
-    cat "$probe_dir/include-search.txt" >&2
+    cat "$probe_dir/header-paths-real.txt" >&2
     rm -rf "$probe_dir"
     return 1
   fi
@@ -141,6 +152,8 @@ EOF
   printf 'validated_multilib=%s\n' "$multi_dir"
   printf 'validated_libc=%s\n' "$libc"
   printf 'validated_libgcc=%s\n' "$libgcc"
+  printf 'validated_stdlib=%s\n' "$expected_stdlib"
+  printf 'validated_string=%s\n' "$expected_string"
   rm -rf "$probe_dir"
   return 0
 }
