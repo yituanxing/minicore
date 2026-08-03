@@ -21,7 +21,7 @@ class FreeRtosDifftestAdapterTest(unittest.TestCase):
             check=False,
         )
 
-    def test_real_timer_adapter_gains_ecall_and_mhartid_shadows(self) -> None:
+    def test_real_timer_adapter_gains_ecall_mhartid_and_mtime_shadows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "nemu_difftest_rv32_freertos.cpp"
             result = self.run_adapter(SOURCE, output)
@@ -31,8 +31,12 @@ class FreeRtosDifftestAdapterTest(unittest.TestCase):
             self.assertIn("constexpr std::uint32_t kEcall = 0x00000073U", text)
             self.assertIn("constexpr std::uint32_t kMhartid = 0xf14U", text)
             self.assertIn("constexpr std::uint32_t kMachineEcallCause = 11U", text)
+            self.assertIn("constexpr std::uint32_t kLoadOpcode = 0x03U", text)
+            self.assertIn("constexpr std::uint32_t kLwFunct3 = 0x02U", text)
             self.assertIn("after = executeEcallTrap(before, commit)", text)
+            self.assertIn("mtimeLoadStep = synchronizeMtimeLoad(commit)", text)
             self.assertIn("reference=machine-ecall-shadow", text)
+            self.assertIn("reference=mtime-load-shadow", text)
             self.assertIn("case kMhartid: return 0U", text)
             self.assertIn("case kMhartid:\n        return false", text)
             self.assertIn("machine_.mepc = before.pc", text)
@@ -41,12 +45,30 @@ class FreeRtosDifftestAdapterTest(unittest.TestCase):
             self.assertIn("after.pc = machine_.mtvec", text)
             self.assertIn("return trapShadowSteps_", text)
             self.assertIn("std::uint64_t trapShadowSteps_ = 0", text)
+
+            self.assertIn(
+                "address != kMtimeAddress && address != kMtimeAddress + 4U",
+                text,
+            )
+            self.assertIn(
+                "opcode != kLoadOpcode || funct3 != kLwFunct3",
+                text,
+            )
+            self.assertIn(
+                "std::memcpy(mapped, &value, sizeof(value))",
+                text,
+            )
+            self.assertIn(
+                "FreeRTOS mtime shadow received an invalid architectural load event",
+                text,
+            )
             self.assertNotIn(
                 "timer workload reported an unexpected synchronous exception",
                 text,
             )
 
             self.assertEqual(text.count("executeEcallTrap("), 2)
+            self.assertEqual(text.count("synchronizeMtimeLoad("), 2)
             self.assertEqual(text.count("case kMhartid:"), 3)
             self.assertEqual(text.count("kMachineEcallCause"), 3)
 
@@ -67,6 +89,25 @@ class FreeRtosDifftestAdapterTest(unittest.TestCase):
             result = self.run_adapter(source, output)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("SYSTEM instruction", result.stderr)
+            self.assertFalse(output.exists())
+
+    def test_adapter_rejects_missing_mtime_anchor_without_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "timer.cpp"
+            output = root / "freertos.cpp"
+            text = SOURCE.read_text(encoding="utf-8")
+            source.write_text(
+                text.replace(
+                    "constexpr std::uint32_t kMtimeAddress = 0x0200bff8U;",
+                    "constexpr std::uint32_t kMtimeAddressChanged = 0x0200bff8U;",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_adapter(source, output)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("mtime load instruction constants", result.stderr)
             self.assertFalse(output.exists())
 
     def test_adapter_script_compiles_as_python(self) -> None:
