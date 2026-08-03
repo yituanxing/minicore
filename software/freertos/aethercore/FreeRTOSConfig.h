@@ -8,7 +8,7 @@ void aether_assert_fail( const char * file, int line );
 #define configUSE_PREEMPTION                    1
 #define configUSE_TIME_SLICING                  1
 #define configUSE_TICKLESS_IDLE                 0
-#define configCPU_CLOCK_HZ                      96000UL
+#define configCPU_CLOCK_HZ                      1000000UL
 #define configTICK_RATE_HZ                      1000UL
 #define configTICK_TYPE_WIDTH_IN_BITS           TICK_TYPE_WIDTH_32_BITS
 #define configMAX_PRIORITIES                    5
