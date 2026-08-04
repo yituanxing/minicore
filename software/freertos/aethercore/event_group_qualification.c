@@ -19,7 +19,11 @@ static EventGroupHandle_t qualificationEventGroup;
 static TimerHandle_t qualificationSoftwareTimer;
 static volatile uint32_t eventGroupProducerDone;
 static volatile uint32_t eventGroupWaiterDone;
+
+volatile uint32_t aetherEventGroupDone;
 volatile uint32_t aetherSoftwareTimerDone;
+
+void aether_start_buffer_qualification( void );
 
 static void software_timer_callback( TimerHandle_t timer )
 {
@@ -48,6 +52,7 @@ static void event_group_waiter_task( void * context )
     configASSERT( eventGroupProducerDone == 1U );
 
     eventGroupWaiterDone = 1U;
+    aetherEventGroupDone = 1U;
     aether_uart_write( "FREERTOS EVENT GROUP PASS all=3 clear=1\n" );
     vTaskDelete( NULL );
 }
@@ -105,6 +110,8 @@ void vApplicationDaemonTaskStartupHook( void )
                      NULL,
                      EVENT_TASK_PRIORITY,
                      NULL ) == pdPASS );
+
+    aether_start_buffer_qualification();
 }
 
 #endif
