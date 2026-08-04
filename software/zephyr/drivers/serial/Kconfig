@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config UART_AETHERCORE
+	bool "AetherCore simulation UART"
+	default y
+	depends on DT_HAS_ZEPHYR_AETHERCORE_UART_ENABLED
+	select SERIAL_HAS_DRIVER
+	help
+	  Enable the polling UART used by AetherCoreSimTop. Interrupt-driven RX
+	  is intentionally deferred to the Zephyr external-interrupt milestone.
