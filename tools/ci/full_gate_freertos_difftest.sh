@@ -21,7 +21,7 @@ fi
 EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e"
 EXPECTED_ADAPTER_SHA256="ef8871db8119ec7ae3091e289f55c8c621042fd44d044bfb746028572d616810"
 EXPECTED_RUNNER_SHA256="91f8831718240acdc6541f0b749ba3983d4627487fbebe0d056e5f19c0794ab9"
-EXPECTED_ELF_SHA256="50ac3adcbcb2b3beb73493048e6cf2f1f1a04114c341c0b446a3f90c3d81f2c5"
+EXPECTED_ELF_SHA256="81870780703da81e49d521f8137d8ec2f695d8fc0f7e6bd86aeb96b6fca91396"
 EXPECTED_BINARY_SHA256="b7c29d7da5bc29cb98bb747e2bb34251f27801810003b108db9e7417f3ae2cc3"
 EXPECTED_STALL0_SUMMARY="PASS: self-check exit=0 after 271664 cycles, 168046 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199, uart-rx-injected=0, external-seen=0, difftest=168046, zicsr-shadow=3191, trap-shadow=220, fence-shadow=1, wfi-shadow=1, mret-shadow=360, interrupt-shadow=140"
 EXPECTED_STALL5_SUMMARY="PASS: self-check exit=0 after 294180 cycles, 169735 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30059, uart-rx-injected=0, external-seen=0, stall-period=5, difftest=169735, zicsr-shadow=3259, trap-shadow=219, fence-shadow=1, wfi-shadow=1, mret-shadow=374, interrupt-shadow=155"
