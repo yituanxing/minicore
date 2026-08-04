@@ -3,6 +3,23 @@ include Makefile.freertos
 
 CFLAGS += -DAETHERCORE_FREERTOS_EXTERNAL_IRQ=1
 
+IRQ_EXTRA_OBJECTS := \
+	$(OBJ_DIR)/event_groups.o \
+	$(OBJ_DIR)/timers.o \
+	$(OBJ_DIR)/event_group_qualification.o
+OBJECTS += $(IRQ_EXTRA_OBJECTS)
+$(ELF): $(IRQ_EXTRA_OBJECTS)
+
+$(OBJ_DIR)/event_groups.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/event_groups.c -o $@
+
+$(OBJ_DIR)/timers.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/timers.c -o $@
+
+$(OBJ_DIR)/event_group_qualification.o: \
+	$(APP_DIR)/event_group_qualification.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
 IRQ_LOG := $(BUILD_DIR)/logs/irq-local.log
 
 .PHONY: run-irq-local
@@ -17,6 +34,7 @@ run-irq-local: qualification image sim
 	test "$$(grep -c '^FREERTOS RUNNER RX INJECT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS RUNNER EXTERNAL ASSERT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS IRQ ENTER$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS EVENT GROUP PASS all=3 clear=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS MUTEX PASS inherited=4$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(IRQ_LOG))" -eq 1
