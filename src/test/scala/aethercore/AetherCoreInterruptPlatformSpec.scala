@@ -48,7 +48,9 @@ class AetherCoreInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chi
       (base + 0x08) -> csr(0x305, 1, 1, 0),
       (base + 0x0c) -> uType(0x10000, 10),
       (base + 0x10) -> iType(1, 0, 0, 5, 0x13),
-      (base + 0x14) -> sType(8, 5, 10, 2),
+      // UART RX control is intentionally placed at 0x10000108 so the legacy
+      // self-check exit register remains exclusively mapped at 0x10000008.
+      (base + 0x14) -> sType(0x108, 5, 10, 2),
       (base + 0x18) -> uType(0x0c000, 11),
       (base + 0x1c) -> sType(4, 5, 11, 2),
       (base + 0x20) -> uType(0x0c002, 12),
@@ -88,6 +90,7 @@ class AetherCoreInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chi
       var sawEpc = false
       var externalMemoryRequests = 0
       var uartTxWrites = 0
+      var exitWrites = 0
 
       while ((!sawCause || !sawEpc) && cycles < 500) {
         val fetchPc = dut.io.imemAddr.peek().litValue
@@ -95,6 +98,7 @@ class AetherCoreInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chi
 
         if (dut.io.memValid.peek().litToBoolean) externalMemoryRequests += 1
         if (dut.io.uartValid.peek().litToBoolean) uartTxWrites += 1
+        if (dut.io.exitValid.peek().litToBoolean) exitWrites += 1
 
         if (!injected && dut.io.halted.peek().litToBoolean) {
           sawWfi = true
@@ -135,6 +139,7 @@ class AetherCoreInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chi
       sawEpc shouldBe true
       externalMemoryRequests shouldBe 0
       uartTxWrites shouldBe 0
+      exitWrites shouldBe 0
     }
   }
 }
