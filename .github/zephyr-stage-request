@@ -10,4 +10,4 @@ west_init=workspace-root-local-manifest
 host_tools=zephyr-sdk-dtc,user-cached-gperf
 sdk_download=resumable-split-assets-sha256-verified
 sdk_layout=auto-discovered-and-normalized
-request=7
+request=8
