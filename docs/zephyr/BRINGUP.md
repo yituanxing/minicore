@@ -2,7 +2,7 @@
 
 ## Baseline
 
-The initial port is pinned to **Zephyr v3.7.2 LTS**. It uses the hardware-model-v2 board/SoC layout and remains fixed until the first complete AetherCore Zephyr contract is frozen.
+The initial port is pinned to **Zephyr v3.7.2 LTS** with the matching **Zephyr SDK 0.16.9** RISC-V toolchain. It uses the hardware-model-v2 board/SoC layout and remains fixed until the first complete AetherCore Zephyr contract is frozen.
 
 The branch starts from the accepted FreeRTOS platform head `69d862344ee1964db2d319c36603cac58d40e5b3`. FreeRTOS remains a permanent regression workload; Zephyr becomes the primary source of new CPU requirements.
 
@@ -64,12 +64,28 @@ This workload separates architecture failures from Zephyr subsystem complexity. 
 
 The self-hosted `minicore-wsl` runner must never be the development scheduler.
 
-1. **Host gate:** branch pushes run only static contract tests on `ubuntu-latest`. It has a five-minute timeout and cancels obsolete runs.
+1. **Host gate:** branch pushes run static contracts and a real `west build` on `ubuntu-latest`. The job has a 20-minute hard timeout, uses only SDK 0.16.9 `riscv64-zephyr-elf`, caches ccache/SDK state and cancels obsolete runs.
 2. **No automatic self-hosted PR gate during exploration:** the Zephyr branch stays without a PR until Z1 has a reproducible build contract. This prevents the repository-wide Fast Gate from consuming the runner for every metadata edit.
 3. **Stage gate:** RTL execution is requested only for a coherent milestone. It uses one cached toolchain, one cached Zephyr workspace, incremental simulator outputs and `cancel-in-progress` concurrency.
 4. **Failure locality:** a stage gate stops at the first failed layer and emits the exact command, output signature and artifact hashes. It does not continue into unrelated CPU regressions.
 5. **Full gate:** the historical FreeRTOS/RV32/RV64/CoreMark/Embench/littlefs gate runs only at a milestone freeze, never for ordinary Zephyr iteration.
 6. **Front-end progress continues:** while a stage run executes, repository analysis, Devicetree/Kconfig work and the next small patch continue independently; no workflow is used as a substitute for design work.
+
+## Hosted Z1 evidence
+
+The hosted build uses `tools/ci/zephyr_host_build.sh` as the single reproducible command path. It requires and archives:
+
+```text
+build/zephyr-host/zephyr/zephyr.elf
+build/zephyr-host/zephyr/zephyr.bin
+build/zephyr-host/zephyr/zephyr.map
+build/zephyr-host/zephyr/zephyr.dts
+build/zephyr-host/zephyr/.config
+build/zephyr-host/evidence/result.txt
+build/zephyr-host/evidence/artifacts.sha256
+```
+
+The build fails closed if Zephyr enables unsupported RISC-V A or C extensions, loses RV32IM/Zicsr/Zifencei, changes the board/SoC selection, or no longer emits the frozen RAM/UART/PLIC/timer nodes.
 
 ## Persistent cache layout
 
@@ -79,7 +95,7 @@ The eventual self-hosted stage gate will reuse:
 ~/.cache/aethercore/zephyr/
 ├── zephyr-v3.7.2/
 ├── modules-v3.7.2/
-├── sdk/
+├── sdk-0.16.9/
 ├── host-tools/
 └── builds/
     └── <stage-contract>/
