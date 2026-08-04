@@ -1,3 +1,5 @@
+#include <aethercore/exit.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
@@ -49,5 +51,5 @@ int main(void)
 
 	k_sem_take(&done_sem, K_FOREVER);
 	printk("AETHERCORE ZEPHYR PASS handoffs=%d\n", HANDOFF_COUNT);
-	return 0;
+	aethercore_exit(0U);
 }
