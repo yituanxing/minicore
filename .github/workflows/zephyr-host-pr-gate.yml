@@ -1,0 +1,84 @@
+name: Zephyr Hosted PR Gate
+
+on:
+  pull_request:
+    branches:
+      - agent/zephyr-host-ci-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zephyr-host-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Zephyr platform and host build contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout manifest repository
+        uses: actions/checkout@v4
+        with:
+          path: minicore
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Java for Chisel compile
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Validate Zephyr stage contracts
+        working-directory: minicore
+        run: python3 -m unittest discover -s tests_py -p 'test_zephyr_*.py' -v
+
+      - name: Compile Zephyr-facing Chisel sources
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x mill
+          ./mill aethercore.compile
+
+      - name: Set up pinned Zephyr workspace and RISC-V SDK
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: minicore
+          sdk-version: 0.16.9
+          toolchains: riscv64-zephyr-elf
+          west-version: 1.3.0
+          ccache-cache-key: zephyr-v3.7.2-aethercore-rv32
+          west-group-filter: -hal,-tools,-bootloader,-babblesim
+
+      - name: Build AetherCore Zephyr kernel smoke image
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_host_build.sh
+          bash tools/ci/zephyr_host_build.sh
+
+      - name: Upload Zephyr host-build evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-zephyr-host-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            minicore/build/zephyr-host/zephyr/zephyr.elf
+            minicore/build/zephyr-host/zephyr/zephyr.bin
+            minicore/build/zephyr-host/zephyr/zephyr.map
+            minicore/build/zephyr-host/zephyr/zephyr.dts
+            minicore/build/zephyr-host/zephyr/.config
+            minicore/build/zephyr-host/zephyr/include/generated/zephyr/devicetree_generated.h
+            minicore/build/zephyr-host/CMakeCache.txt
+            minicore/build/zephyr-host/evidence/
+            minicore/build/zephyr-host/elf-file.txt
