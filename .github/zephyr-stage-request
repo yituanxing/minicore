@@ -6,5 +6,6 @@ cache=persistent
 fail_closed=true
 sudo_required=false
 python_bootstrap=ensurepip,get-pip-fallback
+west_init=workspace-root-local-manifest
 host_tools=zephyr-sdk-dtc,user-cached-gperf
-request=3
+request=4
