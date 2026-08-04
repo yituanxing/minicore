@@ -22,7 +22,7 @@ EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355
 EXPECTED_ADAPTER_SHA256="ef8871db8119ec7ae3091e289f55c8c621042fd44d044bfb746028572d616810"
 EXPECTED_RUNNER_SHA256="91f8831718240acdc6541f0b749ba3983d4627487fbebe0d056e5f19c0794ab9"
 EXPECTED_ELF_SHA256="81870780703da81e49d521f8137d8ec2f695d8fc0f7e6bd86aeb96b6fca91396"
-EXPECTED_BINARY_SHA256="b7c29d7da5bc29cb98bb747e2bb34251f27801810003b108db9e7417f3ae2cc3"
+EXPECTED_BINARY_SHA256="eb98b161627a9226bd3fe94077d714aedbb116f85bca875dcd5c43e5613468df"
 EXPECTED_STALL0_SUMMARY="PASS: self-check exit=0 after 271664 cycles, 168046 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199, uart-rx-injected=0, external-seen=0, difftest=168046, zicsr-shadow=3191, trap-shadow=220, fence-shadow=1, wfi-shadow=1, mret-shadow=360, interrupt-shadow=140"
 EXPECTED_STALL5_SUMMARY="PASS: self-check exit=0 after 294180 cycles, 169735 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30059, uart-rx-injected=0, external-seen=0, stall-period=5, difftest=169735, zicsr-shadow=3259, trap-shadow=219, fence-shadow=1, wfi-shadow=1, mret-shadow=374, interrupt-shadow=155"
 
@@ -50,9 +50,6 @@ reference_sha="$(sha256sum "$RV32_NEMU_SO" | awk '{print $1}')"
 require_equal "frozen single-step RV32 NEMU SHA256" \
   "$reference_sha" "$EXPECTED_REFERENCE_SHA256"
 
-# The local FreeRTOS stage keeps TRACE=1 and its waveform-capable simulator.
-# Exact architectural qualification uses a separate clean TRACE=0 directory so
-# its generated runner and hashes cannot depend on stale local-build outputs.
 rm -rf "$BUILD_DIR" "$EVIDENCE_DIR"
 mkdir -p "$LOG_DIR" "$EVIDENCE_DIR"
 
