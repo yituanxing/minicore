@@ -24,7 +24,8 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
             "0x10000100 0x10",
             "0x0c000000 0x00400000",
             "0x02000000 0x00010000",
-            "riscv,ndev = <1>",
+            "riscv,ndev = <2>",
+            "Source zero is reserved; source one is UART RX",
             "timebase-frequency = <1000000>",
         ):
             self.assertIn(token, text)
@@ -38,11 +39,16 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
         profile = (
             ZEPHYR / "soc" / "aethercore" / "aethercore32" / "Kconfig"
         ).read_text(encoding="utf-8")
+        defaults = (
+            ZEPHYR / "soc" / "aethercore" / "Kconfig.defconfig"
+        ).read_text(encoding="utf-8")
         self.assertIn("select ATOMIC_OPERATIONS_C", family)
         self.assertIn("select RISCV_HAS_PLIC", family)
         self.assertIn("select RISCV_ISA_EXT_M", profile)
         self.assertIn("select RISCV_ISA_EXT_ZICSR", profile)
         self.assertIn("select RISCV_ISA_EXT_ZIFENCEI", profile)
+        self.assertIn("config MAX_IRQ_PER_AGGREGATOR\n\tdefault 2", defaults)
+        self.assertIn("config NUM_IRQS\n\tdefault 13", defaults)
         self.assertNotIn("RISCV_ISA_EXT_A", family + profile)
         self.assertNotIn("RISCV_ISA_EXT_C", family + profile)
 
