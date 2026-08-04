@@ -1,0 +1,9 @@
+name: aethercore-platform
+
+build:
+  cmake: software/zephyr
+  kconfig: software/zephyr/Kconfig
+  settings:
+    board_root: software/zephyr
+    dts_root: software/zephyr
+    soc_root: software/zephyr
