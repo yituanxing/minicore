@@ -1,0 +1,57 @@
+name: Zephyr Self-Hosted Stage Slot
+
+on:
+  pull_request:
+    branches:
+      - agent/zephyr-host-ci-base
+    paths:
+      - .github/zephyr-stage-request
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zephyr-stage-slot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  z1-build:
+    name: Cached bounded Zephyr Z1 build
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 25
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout without deleting persistent workspace siblings
+        uses: actions/checkout@v4
+        with:
+          path: minicore
+          clean: false
+          fetch-depth: 2
+
+      - name: Run cached fail-closed Zephyr stage
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_self_hosted_stage.sh
+          bash tools/ci/zephyr_self_hosted_stage.sh
+
+      - name: Upload bounded stage evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-zephyr-stage-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            minicore/build/zephyr-stage/stage-state.txt
+            minicore/build/zephyr-stage/logs/
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.elf
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.bin
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.map
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.dts
+            minicore/build/zephyr-stage/host-build/zephyr/.config
+            minicore/build/zephyr-stage/host-build/evidence/
