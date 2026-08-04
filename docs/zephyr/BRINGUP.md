@@ -2,7 +2,7 @@
 
 ## Baseline
 
-The initial port is pinned to **Zephyr v3.7.0 LTS**. It uses the hardware-model-v2 board/SoC layout and remains fixed until the first complete AetherCore Zephyr contract is frozen.
+The initial port is pinned to **Zephyr v3.7.2 LTS**. It uses the hardware-model-v2 board/SoC layout and remains fixed until the first complete AetherCore Zephyr contract is frozen.
 
 The branch starts from the accepted FreeRTOS platform head `69d862344ee1964db2d319c36603cac58d40e5b3`. FreeRTOS remains a permanent regression workload; Zephyr becomes the primary source of new CPU requirements.
 
@@ -77,8 +77,8 @@ The eventual self-hosted stage gate will reuse:
 
 ```text
 ~/.cache/aethercore/zephyr/
-├── zephyr-v3.7.0/
-├── modules-v3.7.0/
+├── zephyr-v3.7.2/
+├── modules-v3.7.2/
 ├── sdk/
 ├── host-tools/
 └── builds/
