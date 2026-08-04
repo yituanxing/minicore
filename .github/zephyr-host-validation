@@ -1,0 +1,4 @@
+contract=zephyr-v3.7.2-aethercore-z1-host-build-v1
+base=agent/zephyr-host-ci-base
+runner=ubuntu-latest
+self_hosted=false
