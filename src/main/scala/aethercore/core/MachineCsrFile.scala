@@ -23,6 +23,7 @@ object MachineCsrBit {
   val MstatusMpie: Int = 7
   val MstatusMppLow: Int = 11
   val MachineTimerInterrupt: Int = 7
+  val MachineExternalInterrupt: Int = 11
 }
 
 object MachineCsrWarl {
@@ -32,7 +33,9 @@ object MachineCsrWarl {
     val mstatusNonMppMask =
       (BigInt(1) << MachineCsrBit.MstatusMie) |
         (BigInt(1) << MachineCsrBit.MstatusMpie)
-    val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
+    val machineInterruptMask =
+      (BigInt(1) << MachineCsrBit.MachineTimerInterrupt) |
+        (BigInt(1) << MachineCsrBit.MachineExternalInterrupt)
     val mtvecMask = allBits & ~BigInt(3)
     val mepcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
 
@@ -67,7 +70,7 @@ object MachineCsrWarl {
         }
         result := (data & mstatusNonMppMask.U(xlen.W)) | (legalMpp << 11)
       }
-      is(MachineCsrAddress.Mie.U) { result := data & machineTimerMask.U(xlen.W) }
+      is(MachineCsrAddress.Mie.U) { result := data & machineInterruptMask.U(xlen.W) }
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(MachineCsrAddress.Mepc.U) { result := data & mepcMask.U(xlen.W) }
     }
@@ -86,13 +89,17 @@ object MachineCsrWarl {
   }
 }
 
-class MachineCsrFile(val isa: IsaConfig) extends Module {
+class MachineCsrFile(
+    val isa: IsaConfig,
+    val withMachineExternalInterrupt: Boolean = false
+) extends Module {
   private val xlen = isa.xlen
   private val allBits = (BigInt(1) << xlen) - 1
   private val mstatusMie = BigInt(1) << MachineCsrBit.MstatusMie
   private val mstatusMpie = BigInt(1) << MachineCsrBit.MstatusMpie
   private val mstatusMpp = BigInt(3) << MachineCsrBit.MstatusMppLow
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
+  private val machineExternalMask = BigInt(1) << MachineCsrBit.MachineExternalInterrupt
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
   private val mstatusTransitionPreserveMask = allBits & ~mstatusTransitionMask
   private val leastPrivilege =
@@ -129,6 +136,9 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
 
     val timerInterrupt = Input(Bool())
     val machineTimerInterrupt = Output(Bool())
+    val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
+    val machineExternalInterrupt =
+      if (withMachineExternalInterrupt) Some(Output(Bool())) else None
 
     val trapEnter = Input(Bool())
     val trapPc = Input(UInt(xlen.W))
@@ -160,9 +170,6 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val ordinaryWrite = io.writeEnable
 
-  // Interrupt entry happens after the current instruction retires. Preview an
-  // ordinary CSR write so an enabling/disabling write affects the same precise
-  // boundary and a retiring mtvec write selects the new handler immediately.
   val effectiveMstatus = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mstatus.U,
     canonicalWriteData,
@@ -184,7 +191,11 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
     mscratch
   )
 
-  val mipValue = Mux(io.timerInterrupt, machineTimerMask.U(xlen.W), 0.U(xlen.W))
+  val rawExternalInterrupt =
+    if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
+  val mipValue =
+    Mux(io.timerInterrupt, machineTimerMask.U(xlen.W), 0.U(xlen.W)) |
+      Mux(rawExternalInterrupt, machineExternalMask.U(xlen.W), 0.U(xlen.W))
   val machineInterruptGloballyEnabled =
     privilege < PrivilegeMode.Machine.U || effectiveMstatus(MachineCsrBit.MstatusMie)
 
@@ -192,6 +203,11 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
   io.machineTimerInterrupt :=
     io.timerInterrupt && effectiveMie(MachineCsrBit.MachineTimerInterrupt) &&
       machineInterruptGloballyEnabled
+  if (withMachineExternalInterrupt) {
+    io.machineExternalInterrupt.get :=
+      rawExternalInterrupt && effectiveMie(MachineCsrBit.MachineExternalInterrupt) &&
+        machineInterruptGloballyEnabled
+  }
   io.trapVector := effectiveMtvec
   io.returnPc := mepc
   io.readData := 0.U
@@ -243,7 +259,6 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
       io.readImplemented := true.B
     }
     is(MachineCsrAddress.Mhartid.U) {
-      // AetherCore currently exposes one architectural hart, numbered zero.
       io.readData := 0.U
       io.readImplemented := true.B
     }
@@ -268,8 +283,6 @@ class MachineCsrFile(val isa: IsaConfig) extends Module {
       (leastPrivilege << MachineCsrBit.MstatusMppLow).U(xlen.W)
 
   when(io.trapEnter) {
-    // Preserve any retiring ordinary CSR write that is not overwritten by the
-    // trap CSRs themselves. This models "retire instruction, then take IRQ".
     privilege := PrivilegeMode.Machine.U
     mstatus := trapMstatus
     mie := effectiveMie
