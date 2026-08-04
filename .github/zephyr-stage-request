@@ -4,4 +4,6 @@ runner=minicore-wsl
 timeout_minutes=25
 cache=persistent
 fail_closed=true
-request=1
+sudo_required=false
+host_tools=zephyr-sdk-dtc,user-cached-gperf
+request=2
