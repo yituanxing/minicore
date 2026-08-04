@@ -8,6 +8,7 @@ APP_ROOT = ROOT / "software" / "zephyr" / "apps" / "kernel_smoke"
 BRINGUP = ROOT / "docs" / "zephyr" / "BRINGUP.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "zephyr-host-gate.yml"
 BUILD_SCRIPT = ROOT / "tools" / "ci" / "zephyr_host_build.sh"
+SOC_CMAKE = ROOT / "software" / "zephyr" / "soc" / "aethercore" / "CMakeLists.txt"
 
 
 class ZephyrStageContractTest(unittest.TestCase):
@@ -36,9 +37,21 @@ class ZephyrStageContractTest(unittest.TestCase):
 
         self.assertIn("#include <aethercore/exit.h>", source)
         self.assertNotIn("0x10000008", source)
-        self.assertIn("CONFIG_MULTITHREADING=y", config)
-        self.assertIn("CONFIG_UART_CONSOLE=y", config)
+        for option in (
+            "CONFIG_MULTITHREADING=y",
+            "CONFIG_UART_CONSOLE=y",
+            "CONFIG_UART_AETHERCORE=y",
+            "CONFIG_AETHERCORE_SIM_EXIT=y",
+        ):
+            self.assertIn(option, config)
         self.assertIn("target_sources(app PRIVATE src/main.c)", cmake)
+
+    def test_soc_selects_the_generic_riscv_linker_script(self) -> None:
+        text = SOC_CMAKE.read_text(encoding="utf-8")
+        self.assertIn(
+            "set(SOC_LINKER_SCRIPT ${ZEPHYR_BASE}/include/zephyr/arch/riscv/common/linker.ld CACHE INTERNAL \"\")",
+            text,
+        )
 
     def test_runner_policy_keeps_exploration_off_self_hosted(self) -> None:
         text = BRINGUP.read_text(encoding="utf-8")
