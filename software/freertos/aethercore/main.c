@@ -13,6 +13,8 @@
 #define EXPECTED_UART_RX_BYTE       0x5aU
 #define UART_ISR_COMPLETION_COUNT   3U
 #define UART_ISR_TASK_PRIORITY      4U
+#define MUTEX_LOW_TASK_PRIORITY     1U
+#define MUTEX_HIGH_TASK_PRIORITY    4U
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -28,10 +30,16 @@ static volatile uint32_t consumerDone;
     static SemaphoreHandle_t uartRxSignalSemaphore;
     static SemaphoreHandle_t uartRxDoneSemaphore;
     static TaskHandle_t uartRxNotificationTaskHandle;
+    static SemaphoreHandle_t priorityInheritanceMutex;
+    static SemaphoreHandle_t priorityInheritanceReady;
+    static SemaphoreHandle_t priorityInheritanceDone;
     static volatile uint32_t uartRxQueueTaskDone;
     static volatile uint32_t uartRxSemaphoreTaskDone;
     static volatile uint32_t uartRxNotificationTaskDone;
     static volatile uint32_t uartRxObservedByte;
+    static volatile uint32_t inheritedMutexPriority;
+    static volatile uint32_t mutexLowTaskDone;
+    static volatile uint32_t mutexHighTaskDone;
 #endif
 
 static void producer_task( void * context )
@@ -120,6 +128,38 @@ static void uart_rx_notification_task( void * context )
     configASSERT( xSemaphoreGive( uartRxDoneSemaphore ) == pdPASS );
     vTaskDelete( NULL );
 }
+
+static void mutex_high_task( void * context )
+{
+    ( void ) context;
+    configASSERT(
+        xSemaphoreTake( priorityInheritanceReady, portMAX_DELAY ) == pdPASS );
+    configASSERT(
+        xSemaphoreTake( priorityInheritanceMutex, portMAX_DELAY ) == pdPASS );
+
+    mutexHighTaskDone = 1U;
+    configASSERT( xSemaphoreGive( priorityInheritanceMutex ) == pdPASS );
+    configASSERT( xSemaphoreGive( priorityInheritanceDone ) == pdPASS );
+    vTaskDelete( NULL );
+}
+
+static void mutex_low_task( void * context )
+{
+    ( void ) context;
+    configASSERT(
+        xSemaphoreTake( priorityInheritanceMutex, portMAX_DELAY ) == pdPASS );
+
+    /* Giving the ready semaphore preempts to the high-priority task. That task
+     * blocks on the held mutex, so execution returns here only after FreeRTOS
+     * has inherited MUTEX_HIGH_TASK_PRIORITY into this low-priority owner. */
+    configASSERT( xSemaphoreGive( priorityInheritanceReady ) == pdPASS );
+    inheritedMutexPriority = ( uint32_t ) uxTaskPriorityGet( NULL );
+    configASSERT( inheritedMutexPriority == MUTEX_HIGH_TASK_PRIORITY );
+
+    mutexLowTaskDone = 1U;
+    configASSERT( xSemaphoreGive( priorityInheritanceMutex ) == pdPASS );
+    vTaskDelete( NULL );
+}
 #endif
 
 static void monitor_task( void * context )
@@ -132,6 +172,12 @@ static void monitor_task( void * context )
     }
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    configASSERT(
+        xSemaphoreTake( priorityInheritanceDone, portMAX_DELAY ) == pdPASS );
+    configASSERT( mutexLowTaskDone == 1U );
+    configASSERT( mutexHighTaskDone == 1U );
+    configASSERT( inheritedMutexPriority == MUTEX_HIGH_TASK_PRIORITY );
+
     /* Blocking on a counting semaphore leaves every application task asleep,
      * so the idle task can enter Tickless WFI before the simulator injects one
      * UART byte. The ISR must wake three independent kernel object paths. */
@@ -170,6 +216,7 @@ static void monitor_task( void * context )
     configASSERT( aetherUartRxNotifications == 1U );
     configASSERT( aetherUartRxYields >= 1U );
     configASSERT( aetherTicklessEarlyWakeups >= 1U );
+    aether_uart_write( "FREERTOS MUTEX PASS inherited=4\n" );
     aether_uart_write(
         "FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1\n" );
 #endif
@@ -193,9 +240,15 @@ int main( void )
     uartRxSignalSemaphore = xSemaphoreCreateBinary();
     uartRxDoneSemaphore =
         xSemaphoreCreateCounting( UART_ISR_COMPLETION_COUNT, 0U );
+    priorityInheritanceMutex = xSemaphoreCreateMutex();
+    priorityInheritanceReady = xSemaphoreCreateBinary();
+    priorityInheritanceDone = xSemaphoreCreateBinary();
     configASSERT( uartRxQueue != NULL );
     configASSERT( uartRxSignalSemaphore != NULL );
     configASSERT( uartRxDoneSemaphore != NULL );
+    configASSERT( priorityInheritanceMutex != NULL );
+    configASSERT( priorityInheritanceReady != NULL );
+    configASSERT( priorityInheritanceDone != NULL );
 
     configASSERT(
         xTaskCreate( uart_rx_queue_task,
@@ -219,6 +272,20 @@ int main( void )
                      UART_ISR_TASK_PRIORITY,
                      &uartRxNotificationTaskHandle ) == pdPASS );
     configASSERT( uartRxNotificationTaskHandle != NULL );
+    configASSERT(
+        xTaskCreate( mutex_high_task,
+                     "mutex-high",
+                     256,
+                     NULL,
+                     MUTEX_HIGH_TASK_PRIORITY,
+                     NULL ) == pdPASS );
+    configASSERT(
+        xTaskCreate( mutex_low_task,
+                     "mutex-low",
+                     256,
+                     NULL,
+                     MUTEX_LOW_TASK_PRIORITY,
+                     NULL ) == pdPASS );
 
     aether_uart_rx_start( uartRxQueue,
                           uartRxSignalSemaphore,
