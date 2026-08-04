@@ -125,7 +125,7 @@ fi
 
 test -f "$WORKSPACE_ROOT/zephyr/SDK_VERSION"
 grep -Fxq '0.16.9' "$WORKSPACE_ROOT/zephyr/SDK_VERSION"
-"$VENV_DIR/bin/python" -m pip install -r "$WORKSPACE_ROOT/zephyr/scripts/requirements.txt"
+"$VENV_DIR/bin/python" -m pip install -r "$WORKSPACE_ROOT/zephyr/scripts/requirements-base.txt"
 
 phase zephyr-sdk
 if [[ ! -x "$SDK_DIR/setup.sh" ]]; then
