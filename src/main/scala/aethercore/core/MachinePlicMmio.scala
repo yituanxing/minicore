@@ -20,6 +20,10 @@ object MachinePlicMmioMap {
   * is at 0x1000, the context enable word is at 0x2000, and context threshold
   * plus claim/complete are at 0x200000/0x200004.
   *
+  * Priority source zero is architecturally reserved. Upstream PLIC software
+  * commonly clears priority entries starting at index zero, so address 0x0 is
+  * implemented as a read-zero/write-ignored register instead of a bus fault.
+  *
   * This first platform profile intentionally supports at most 32 interrupt
   * sources so pending and enable state fit in one 32-bit register. Every access
   * completes in one cycle. Unknown or misaligned addresses raise a bus fault
@@ -85,6 +89,7 @@ class MachinePlicMmio(
   plic.io.completeWrite := false.B
   plic.io.completeId := 0.U
 
+  val priorityZeroHit = io.address === MachinePlicMmioMap.PriorityBase.U(addressBits.W)
   val priorityHit = WireDefault(false.B)
   val priorityId = WireDefault(0.U(sourceIdBits.W))
   val priorityReadData = WireDefault(0.U(32.W))
@@ -101,7 +106,7 @@ class MachinePlicMmio(
   val enableHit = io.address === MachinePlicMmioMap.Enable.U(addressBits.W)
   val thresholdHit = io.address === MachinePlicMmioMap.Threshold.U(addressBits.W)
   val claimCompleteHit = io.address === MachinePlicMmioMap.ClaimComplete.U(addressBits.W)
-  val implemented = priorityHit || pendingHit || enableHit || thresholdHit || claimCompleteHit
+  val implemented = priorityZeroHit || priorityHit || pendingHit || enableHit || thresholdHit || claimCompleteHit
   val aligned = io.address(1, 0) === 0.U
   val accepted = io.request && aligned && implemented
 
