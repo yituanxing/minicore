@@ -1,0 +1,4 @@
+family:
+  - name: aethercore
+    socs:
+      - name: aethercore32
