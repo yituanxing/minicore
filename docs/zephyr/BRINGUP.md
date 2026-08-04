@@ -15,9 +15,23 @@ The first application is deliberately small and deterministic:
 3. create one preemptible worker thread;
 4. exchange four semaphore hand-offs between `main` and the worker;
 5. exercise the system timer through `k_sleep()`;
-6. print `AETHERCORE ZEPHYR PASS handoffs=4` and exit through the simulator contract.
+6. print `AETHERCORE ZEPHYR PASS handoffs=4`;
+7. call the semantic `aethercore_exit(0)` platform API, which writes the simulator exit register at `0x10000008`.
 
-This workload separates architecture failures from Zephyr subsystem complexity. Networking, filesystems, userspace, SMP and power management are not enabled in the first milestone.
+The application never embeds the exit MMIO address directly. Networking, filesystems, userspace, SMP and power management are not enabled in the first milestone.
+
+## Frozen PLIC software ABI
+
+The internal PLIC state stays compact, but its MMIO interface follows the conventional one-based software layout:
+
+- source ID zero is reserved;
+- priority source zero reads as zero and ignores writes without a bus fault;
+- pending and enable bit zero are permanently reserved;
+- UART RX source ID one is represented by pending/enable bit one;
+- the first single-word profile supports at most 31 real sources;
+- `riscv,ndev = <2>` describes table entries zero and one, while only source one is connected.
+
+This layout is shared by Zephyr and the permanent FreeRTOS regression. FreeRTOS now enables UART RX with `1 << source_id`, not `1 << (source_id - 1)`.
 
 ## Milestones
 
@@ -31,15 +45,17 @@ This workload separates architecture failures from Zephyr subsystem complexity. 
 ### Z1 — board and SoC build
 
 - add out-of-tree AetherCore board and SoC definitions;
-- describe RAM, UART, timer and PLIC in Devicetree;
+- describe RAM, UART, exit, timer and PLIC in Devicetree;
 - compile `zephyr.elf` and `zephyr.bin` reproducibly;
-- inspect ISA attributes and linker layout without running RTL.
+- inspect ISA attributes and linker layout without running RTL;
+- prove that `aethercore_exit` is present in the linked map.
 
 ### Z2 — boot and console
 
 - load the Zephyr binary in `AetherCoreSimTop`;
 - reach `main()` and emit the boot signature;
-- validate startup, BSS, stack, `gp`, `mtvec` and UART output.
+- validate startup, BSS, stack, `gp`, `mtvec` and UART output;
+- require `exitValid` with `exitCode=0` after the final PASS signature.
 
 ### Z3 — timer and scheduling
 
@@ -64,7 +80,7 @@ This workload separates architecture failures from Zephyr subsystem complexity. 
 
 The self-hosted `minicore-wsl` runner must never be the development scheduler.
 
-1. **Host gate:** branch pushes run static contracts and a real `west build` on `ubuntu-latest`. The job has a 20-minute hard timeout, uses only SDK 0.16.9 `riscv64-zephyr-elf`, caches ccache/SDK state and cancels obsolete runs.
+1. **Host gate:** branch pushes run static contracts, a Chisel compile and a real `west build` on `ubuntu-latest`. The job has a 20-minute hard timeout, uses only SDK 0.16.9 `riscv64-zephyr-elf`, caches ccache/SDK state and cancels obsolete runs.
 2. **No automatic self-hosted PR gate during exploration:** the Zephyr branch stays without a PR until Z1 has a reproducible build contract. This prevents the repository-wide Fast Gate from consuming the runner for every metadata edit.
 3. **Stage gate:** RTL execution is requested only for a coherent milestone. It uses one cached toolchain, one cached Zephyr workspace, incremental simulator outputs and `cancel-in-progress` concurrency.
 4. **Failure locality:** a stage gate stops at the first failed layer and emits the exact command, output signature and artifact hashes. It does not continue into unrelated CPU regressions.
@@ -85,7 +101,7 @@ build/zephyr-host/evidence/result.txt
 build/zephyr-host/evidence/artifacts.sha256
 ```
 
-The build fails closed if Zephyr enables unsupported RISC-V A or C extensions, loses RV32IM/Zicsr/Zifencei, changes the board/SoC selection, or no longer emits the frozen RAM/UART/PLIC/timer nodes.
+The build fails closed if Zephyr enables unsupported RISC-V A or C extensions, loses RV32IM/Zicsr/Zifencei, changes the board/SoC selection, drops the exit service, or no longer emits the frozen RAM/UART/exit/PLIC/timer nodes. Hidden files are explicitly retained so `.config` remains part of the evidence artifact.
 
 ## Persistent cache layout
 
