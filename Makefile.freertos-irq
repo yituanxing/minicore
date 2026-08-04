@@ -29,30 +29,59 @@ $(OBJ_DIR)/buffer_qualification.o: \
 	$(APP_DIR)/buffer_qualification.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-IRQ_LOG := $(BUILD_DIR)/logs/irq-local.log
+IRQ_LOG_DIR := $(BUILD_DIR)/logs
+IRQ_STALL_PERIODS := 0 1 3 5 7
 
 .PHONY: run-irq-local
 
 run-irq-local: qualification image sim
-	mkdir -p $(BUILD_DIR)/logs
+	@set -eu; \
+	mkdir -p $(IRQ_LOG_DIR); \
+	for stall in $(IRQ_STALL_PERIODS); do \
+		log="$(IRQ_LOG_DIR)/irq-stall-$$stall.log"; \
+		status=0; \
+		$(SIM_BINARY) $(BIN) \
+			--max-cycles 3000000 --self-check-exit --stall-period $$stall \
+			--inject-uart-rx 0x5a >"$$log" 2>&1 || status=$$?; \
+		cat "$$log"; \
+		test "$$status" -eq 0; \
+		test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS RUNNER RX INJECT cycle=[0-9][0-9]*$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS RUNNER EXTERNAL ASSERT cycle=[0-9][0-9]*$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS IRQ ENTER$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS EVENT GROUP PASS all=3 clear=1$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS SOFTWARE TIMER PASS one-shot=1 daemon=1$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS STREAM BUFFER PASS bytes=8 handoff=1$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS MESSAGE BUFFER PASS bytes=7 handoff=1$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS MUTEX PASS inherited=4$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' "$$log")" -eq 1; \
+		test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=48$$' "$$log")" -eq 1; \
+		grep -Eq 'masked-wfi-commits=[1-9][0-9]*' "$$log"; \
+		grep -Fq 'uart-rx-injected=1' "$$log"; \
+		grep -Fq 'external-seen=1' "$$log"; \
+		grep -Fq "stall-period=$$stall" "$$log"; \
+		grep -Fq 'PASS: self-check exit=0' "$$log"; \
+		! grep -Fq 'FAIL:' "$$log"; \
+	done; \
+	wrong_log="$(IRQ_LOG_DIR)/irq-negative-wrong-byte.log"; \
+	wrong_status=0; \
 	$(SIM_BINARY) $(BIN) \
-		--max-cycles 2500000 --self-check-exit --stall-period 5 \
-		--inject-uart-rx 0x5a \
-		2>&1 | tee $(IRQ_LOG)
-	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS RUNNER RX INJECT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS RUNNER EXTERNAL ASSERT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS IRQ ENTER$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS EVENT GROUP PASS all=3 clear=1$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS SOFTWARE TIMER PASS one-shot=1 daemon=1$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS STREAM BUFFER PASS bytes=8 handoff=1$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS MESSAGE BUFFER PASS bytes=7 handoff=1$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS MUTEX PASS inherited=4$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=48$$' $(IRQ_LOG))" -eq 1
-	grep -Eq 'masked-wfi-commits=[1-9][0-9]*' $(IRQ_LOG)
-	grep -Fq 'uart-rx-injected=1' $(IRQ_LOG)
-	grep -Fq 'external-seen=1' $(IRQ_LOG)
-	grep -Fq 'PASS: self-check exit=0' $(IRQ_LOG)
-	! grep -Fq 'FAIL:' $(IRQ_LOG)
+		--max-cycles 1000000 --self-check-exit --stall-period 5 \
+		--inject-uart-rx 0x5b >"$$wrong_log" 2>&1 || wrong_status=$$?; \
+	cat "$$wrong_log"; \
+	test "$$wrong_status" -ne 0; \
+	grep -Fq 'FREERTOS_ASSERT' "$$wrong_log"; \
+	grep -Fq 'FAIL: self-check program returned code' "$$wrong_log"; \
+	! grep -Fq 'PASS: self-check exit=0' "$$wrong_log"; \
+	missing_log="$(IRQ_LOG_DIR)/irq-negative-missing-event.log"; \
+	missing_status=0; \
+	$(SIM_BINARY) $(BIN) \
+		--max-cycles 600000 --self-check-exit --stall-period 5 \
+		>"$$missing_log" 2>&1 || missing_status=$$?; \
+	cat "$$missing_log"; \
+	test "$$missing_status" -ne 0; \
+	grep -Fq 'FAIL: timeout after 600000 cycles' "$$missing_log"; \
+	grep -Fq 'uart-rx-injected=0' "$$missing_log"; \
+	grep -Fq 'external=0' "$$missing_log"; \
+	! grep -Fq 'PASS: self-check exit=0' "$$missing_log"
