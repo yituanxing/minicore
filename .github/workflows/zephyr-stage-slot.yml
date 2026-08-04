@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: zephyr-stage-slot-${{ github.event.pull_request.number }}
+  group: zephyr-stage-slot-global
   cancel-in-progress: true
 
 jobs:
