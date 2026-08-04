@@ -1,5 +1,5 @@
 contract=zephyr-v3.7.2-aethercore-z1-host-build-v1
-mode=one-time-resumable-sdk-warmup-and-build
+mode=cached-sdk-layout-normalization-and-build
 runner=minicore-wsl
 timeout_minutes=90
 cache=persistent
@@ -9,4 +9,5 @@ python_bootstrap=ensurepip,get-pip-fallback
 west_init=workspace-root-local-manifest
 host_tools=zephyr-sdk-dtc,user-cached-gperf
 sdk_download=resumable-split-assets-sha256-verified
-request=5
+sdk_layout=auto-discovered-and-normalized
+request=6
