@@ -27,7 +27,14 @@ void vPortSuppressTicksAndSleep( uint32_t expectedIdleTicks );
 #define configUSE_COUNTING_SEMAPHORES           1
 #define configUSE_QUEUE_SETS                    0
 #define configQUEUE_REGISTRY_SIZE               0
-#define configUSE_TIMERS                        0
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    #define configUSE_TIMERS                    1
+    #define configTIMER_TASK_PRIORITY           4
+    #define configTIMER_QUEUE_LENGTH            8
+    #define configTIMER_TASK_STACK_DEPTH        256
+#else
+    #define configUSE_TIMERS                    0
+#endif
 #define configUSE_CO_ROUTINES                   0
 #define configUSE_TRACE_FACILITY                0
 #define configUSE_STATS_FORMATTING_FUNCTIONS    0
@@ -36,7 +43,11 @@ void vPortSuppressTicksAndSleep( uint32_t expectedIdleTicks );
 #define configUSE_MALLOC_FAILED_HOOK            1
 #define configUSE_IDLE_HOOK                     0
 #define configUSE_TICK_HOOK                     0
-#define configUSE_DAEMON_TASK_STARTUP_HOOK      0
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    #define configUSE_DAEMON_TASK_STARTUP_HOOK  1
+#else
+    #define configUSE_DAEMON_TASK_STARTUP_HOOK  0
+#endif
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
 #define configAPPLICATION_ALLOCATED_HEAP        0

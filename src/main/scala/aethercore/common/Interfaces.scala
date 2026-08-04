@@ -55,6 +55,7 @@ object MachineExceptionCode {
 
 object MachineInterruptCode {
   val MachineTimer: Int = 7
+  val MachineExternal: Int = 11
 }
 
 class TrapInfo(val xlen: Int) extends Bundle {

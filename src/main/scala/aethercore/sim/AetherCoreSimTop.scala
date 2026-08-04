@@ -8,12 +8,22 @@ import aethercore.core.AetherCore
 
 class AetherCoreSimTop(
     val config: CoreConfig = CoreProfiles.rv64imCurrent,
-    val stopOnTrap: Boolean = true
+    val stopOnTrap: Boolean = true,
+    val withMachineInterruptPlatform: Boolean = false
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val plicBase = BigInt("0c000000", 16)
+  private val plicLimit = plicBase + BigInt("00400000", 16)
+  private val uartRxBase = config.platform.uartAddress + BigInt(0x100)
+  private val uartRxLimit = uartRxBase + BigInt(0x10)
+
+  if (withMachineInterruptPlatform) {
+    require(busDataBits == 32,
+      s"the first Machine interrupt platform requires a 32-bit data bus, got $busDataBits")
+  }
 
   val io = IO(new Bundle {
     val imemAddr = Output(UInt(paddrBits.W))
@@ -32,6 +42,11 @@ class AetherCoreSimTop(
 
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
+    val rxValid = if (withMachineInterruptPlatform) Some(Input(Bool())) else None
+    val rxByte = if (withMachineInterruptPlatform) Some(Input(UInt(8.W))) else None
+    val rxReady = if (withMachineInterruptPlatform) Some(Output(Bool())) else None
+    val externalInterrupt =
+      if (withMachineInterruptPlatform) Some(Output(Bool())) else None
     val exitValid = Output(Bool())
     val exitCode = Output(UInt(xlen.W))
 
@@ -51,7 +66,12 @@ class AetherCoreSimTop(
     })
   }
 
-  val core = Module(new AetherCore(config))
+  val core = Module(new AetherCore(config, withMachineExternalInterrupt = withMachineInterruptPlatform))
+  val interruptPlatform =
+    if (withMachineInterruptPlatform) {
+      Some(Module(new MachineInterruptPlatform(addressBits = paddrBits, uartBase = uartRxBase)))
+    } else None
+
   val uartAddress = config.platform.uartAddress.U(paddrBits.W)
   val exitAddress = config.platform.exitAddress.U(paddrBits.W)
   val mtimeAddress = config.platform.mtimeAddress.U(paddrBits.W)
@@ -65,8 +85,34 @@ class AetherCoreSimTop(
   io.imemAddr := core.io.imem.addr
 
   val isWrite = core.io.dmem.valid && core.io.dmem.write
-  val isUart = isWrite && core.io.dmem.addr === uartAddress
+  val isUartTx = isWrite && core.io.dmem.addr === uartAddress
   val isExit = isWrite && core.io.dmem.addr === exitAddress
+
+  val isPlicAddress = if (withMachineInterruptPlatform) {
+    core.io.dmem.valid && core.io.dmem.addr >= plicBase.U(paddrBits.W) &&
+      core.io.dmem.addr < plicLimit.U(paddrBits.W)
+  } else false.B
+  val isUartRxAddress = if (withMachineInterruptPlatform) {
+    core.io.dmem.valid && core.io.dmem.addr >= uartRxBase.U(paddrBits.W) &&
+      core.io.dmem.addr < uartRxLimit.U(paddrBits.W)
+  } else false.B
+  val isInterruptMmio = isPlicAddress || isUartRxAddress
+
+  if (withMachineInterruptPlatform) {
+    val platform = interruptPlatform.get
+    platform.io.rxValid := io.rxValid.get
+    platform.io.rxByte := io.rxByte.get
+    io.rxReady.get := platform.io.rxReady
+
+    platform.io.request := isInterruptMmio
+    platform.io.write := core.io.dmem.write
+    platform.io.address := core.io.dmem.addr
+    platform.io.wdata := core.io.dmem.wdata(31, 0)
+    platform.io.wmask := core.io.dmem.wmask(3, 0)
+
+    core.io.externalInterrupt.get := platform.io.externalInterrupt
+    io.externalInterrupt.get := platform.io.externalInterrupt
+  }
 
   val isMtimeLow = core.io.dmem.addr === mtimeAddress
   val isMtimeHigh = core.io.dmem.addr === (config.platform.mtimeAddress + 4).U(paddrBits.W)
@@ -78,7 +124,7 @@ class AetherCoreSimTop(
     isMtimeLow || isMtimecmpLow
   }
   val isTimer = core.io.dmem.valid && isTimerAddress
-  val isMmio = isUart || isExit || isTimer
+  val isMmio = isUartTx || isExit || isTimer || isInterruptMmio
 
   val timerReadData = WireDefault(0.U(busDataBits.W))
   if (busDataBits == 32) {
@@ -129,11 +175,30 @@ class AetherCoreSimTop(
   io.memWmask := core.io.dmem.wmask
   io.memSize := core.io.dmem.size
 
-  core.io.dmem.ready := Mux(isMmio, true.B, io.memReady)
-  core.io.dmem.rdata := Mux(isTimer, timerReadData, io.memRdata)
-  core.io.dmem.fault := Mux(isMmio, false.B, io.memFault)
+  val interruptReady =
+    if (withMachineInterruptPlatform) interruptPlatform.get.io.ready else false.B
+  val interruptReadData =
+    if (withMachineInterruptPlatform) interruptPlatform.get.io.rdata else 0.U(32.W)
+  val interruptFault =
+    if (withMachineInterruptPlatform) interruptPlatform.get.io.fault else false.B
 
-  io.uartValid := isUart
+  core.io.dmem.ready := Mux(
+    isInterruptMmio,
+    interruptReady,
+    Mux(isMmio, true.B, io.memReady)
+  )
+  core.io.dmem.rdata := Mux(
+    isInterruptMmio,
+    interruptReadData.pad(busDataBits),
+    Mux(isTimer, timerReadData, io.memRdata)
+  )
+  core.io.dmem.fault := Mux(
+    isInterruptMmio,
+    interruptFault,
+    Mux(isMmio, false.B, io.memFault)
+  )
+
+  io.uartValid := isUartTx
   io.uartByte := core.io.dmem.wdata(7, 0)
   io.exitValid := isExit
   io.exitCode := core.io.dmem.wdata
