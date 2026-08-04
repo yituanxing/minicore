@@ -159,6 +159,7 @@ jobs:
 
       - name: Upload consolidated evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: aethercore-full-gate-${{ github.run_id }}
