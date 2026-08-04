@@ -47,6 +47,12 @@ class FreeRtosIrqPlatformTest(unittest.TestCase):
         self.assertIn("FAIL: timeout after 600000 cycles", text)
         self.assertIn("if [ \"$$stall\" -eq 0 ]", text)
 
+    def test_freertos_uses_architectural_one_based_plic_enable_bit(self) -> None:
+        text = (APP / "platform.c").read_text(encoding="utf-8")
+        self.assertIn("1UL << AETHERCORE_UART_RX_SOURCE_ID", text)
+        self.assertNotIn("AETHERCORE_UART_RX_SOURCE_ID - 1UL", text)
+        self.assertIn("claim == ( uint32_t ) AETHERCORE_UART_RX_SOURCE_ID", text)
+
     def test_kernel_object_sources_require_priority_handoffs(self) -> None:
         buffers = (APP / "buffer_qualification.c").read_text(encoding="utf-8")
         events = (APP / "event_group_qualification.c").read_text(encoding="utf-8")
