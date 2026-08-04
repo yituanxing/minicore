@@ -7,6 +7,7 @@ MANIFEST = ROOT / "software" / "zephyr" / "west.yml"
 APP_ROOT = ROOT / "software" / "zephyr" / "apps" / "kernel_smoke"
 BRINGUP = ROOT / "docs" / "zephyr" / "BRINGUP.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "zephyr-host-gate.yml"
+BUILD_SCRIPT = ROOT / "tools" / "ci" / "zephyr_host_build.sh"
 
 
 class ZephyrStageContractTest(unittest.TestCase):
@@ -42,13 +43,27 @@ class ZephyrStageContractTest(unittest.TestCase):
         self.assertIn("Full gate", text)
         self.assertIn("cancel-in-progress", text)
 
-    def test_host_gate_never_uses_the_minicore_runner(self) -> None:
+    def test_host_gate_builds_without_the_minicore_runner(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-latest", text)
-        self.assertIn("timeout-minutes: 5", text)
+        self.assertIn("timeout-minutes: 20", text)
         self.assertIn("cancel-in-progress: true", text)
+        self.assertIn("zephyrproject-rtos/action-zephyr-setup@v1", text)
+        self.assertIn("sdk-version: 0.16.9", text)
+        self.assertIn("toolchains: riscv64-zephyr-elf", text)
+        self.assertIn("bash tools/ci/zephyr_host_build.sh", text)
         self.assertNotIn("self-hosted", text)
         self.assertNotIn("pull_request:", text)
+
+    def test_host_build_freezes_outputs_and_unsupported_isa_extensions(self) -> None:
+        text = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("west build -p always", text)
+        self.assertIn("-b aethercore_sim", text)
+        self.assertIn("zephyr/zephyr.elf", text)
+        self.assertIn("zephyr/zephyr.bin", text)
+        self.assertIn("CONFIG_RISCV_ISA_EXT_M=y", text)
+        self.assertIn("CONFIG_RISCV_ISA_EXT_(A|C)=y", text)
+        self.assertIn("contract=zephyr-v3.7.2-aethercore-z1-host-build-v1", text)
 
 
 if __name__ == "__main__":
