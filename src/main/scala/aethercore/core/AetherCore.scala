@@ -64,13 +64,18 @@ class MemWb(
   val trap = new TrapInfo(xlen)
 }
 
-class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
+class AetherCore(
+    val config: CoreConfig = CoreProfiles.rv64imCurrent,
+    val withMachineExternalInterrupt: Boolean = false
+) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
   private val machineTimerCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineTimer)
+  private val machineExternalCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineExternal)
 
   require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
@@ -79,6 +84,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     val imem = new InstructionBusIO(paddrBits)
     val dmem = new DataBusIO(paddrBits, busDataBits)
     val timerInterrupt = Input(Bool())
+    val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -92,7 +98,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
-  val csrFile = Module(new MachineCsrFile(config.isa))
+  val csrFile = Module(new MachineCsrFile(config.isa, withMachineExternalInterrupt))
   val instructionPmp = Module(new PmpChecker(xlen))
   val dataPmp = Module(new PmpChecker(xlen))
 
@@ -124,30 +130,39 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
   csrFile.io.timerInterrupt := io.timerInterrupt
+  val rawExternalInterrupt =
+    if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
+  if (withMachineExternalInterrupt) {
+    csrFile.io.externalInterrupt.get := rawExternalInterrupt
+  }
   csrFile.io.trapReturn := takingMret
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
-  val waitingForInterrupt = wfiRetiring && !io.timerInterrupt
+  val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt
+  val waitingForInterrupt = wfiRetiring && !rawInterruptPending
 
-  // A raw pending timer is sufficient to resume WFI even while mstatus.MIE is
-  // clear. Trap entry remains gated by csrFile.io.machineTimerInterrupt, so a
-  // masked WFI resumes at PC+4 and software can restore MIE without a lost-wake
-  // window. An enabled interrupt is still accepted at the precise WB boundary.
+  // A raw pending interrupt is sufficient to resume WFI even while mstatus.MIE
+  // is clear. Trap entry remains gated by the corresponding qualified CSR
+  // output, so a masked WFI resumes at PC+4 without a lost-wake window.
   val interruptPc = Mux(
     wfiRetiring,
     memWb.pc + 4.U,
     Mux(exMem.valid, exMem.pc, Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc)))
   )
-  val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret &&
-    csrFile.io.machineTimerInterrupt
+  val takingExternalInterrupt =
+    if (withMachineExternalInterrupt) csrFile.io.machineExternalInterrupt.get else false.B
+  val takingTimerInterrupt = csrFile.io.machineTimerInterrupt
+  val qualifiedInterrupt = takingExternalInterrupt || takingTimerInterrupt
+  val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret && qualifiedInterrupt
+  val interruptCause = Mux(
+    takingExternalInterrupt,
+    machineExternalCause.U(xlen.W),
+    machineTimerCause.U(xlen.W)
+  )
 
   csrFile.io.trapEnter := takingTrap || takingInterrupt
   csrFile.io.trapPc := Mux(takingInterrupt, interruptPc, memWb.pc)
-  csrFile.io.trapCause := Mux(
-    takingInterrupt,
-    machineTimerCause.U(xlen.W),
-    memWb.trap.cause
-  )
+  csrFile.io.trapCause := Mux(takingInterrupt, interruptCause, memWb.trap.cause)
   csrFile.io.trapValue := Mux(takingInterrupt, 0.U, memWb.trap.value)
 
   val decodedImm = WireDefault(0.U(xlen.W))
@@ -360,7 +375,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   io.commit.exceptionCause := memWb.trap.cause
   io.commit.exceptionValue := memWb.trap.value
   io.commit.interrupt := takingInterrupt
-  io.commit.interruptCause := machineTimerCause.U(xlen.W)
+  io.commit.interruptCause := interruptCause
   io.commit.interruptPc := interruptPc
   io.halted := waitingForInterrupt
 
