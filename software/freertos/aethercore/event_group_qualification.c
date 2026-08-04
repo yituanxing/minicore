@@ -50,8 +50,15 @@ static void event_group_producer_task( void * context )
     taskYIELD();
 
     eventGroupProducerDone = 1U;
-    result = xEventGroupSetBits( qualificationEventGroup, EVENT_BIT_SECOND );
-    configASSERT( ( result & EVENT_BITS_ALL ) == EVENT_BITS_ALL );
+
+    /*
+     * Setting the second bit releases the higher-priority waiter. Because that
+     * waiter requested clear-on-exit, it may run and clear both bits before
+     * xEventGroupSetBits() returns to this producer. The waiter-side checks are
+     * therefore the architectural proof; the returned bit mask is not stable
+     * across the required priority handoff.
+     */
+    ( void ) xEventGroupSetBits( qualificationEventGroup, EVENT_BIT_SECOND );
 
     vTaskDelete( NULL );
 }
