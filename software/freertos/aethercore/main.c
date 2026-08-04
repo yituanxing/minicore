@@ -23,6 +23,7 @@ static volatile uint32_t consumerDone;
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     static QueueHandle_t uartRxQueue;
+    static SemaphoreHandle_t uartRxDoneSemaphore;
     static volatile uint32_t uartRxTaskDone;
     static volatile uint32_t uartRxObservedByte;
 #endif
@@ -90,6 +91,7 @@ static void uart_rx_task( void * context )
     aether_uart_write( "FREERTOS IRQ TASK\n" );
     uartRxObservedByte = byte;
     uartRxTaskDone = 1U;
+    configASSERT( xSemaphoreGive( uartRxDoneSemaphore ) == pdPASS );
     vTaskDelete( NULL );
 }
 #endif
@@ -98,14 +100,19 @@ static void monitor_task( void * context )
 {
     ( void ) context;
 
-    while( ( producerDone == 0U ) || ( consumerDone == 0U )
-#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
-           || ( uartRxTaskDone == 0U )
-#endif
-         )
+    while( ( producerDone == 0U ) || ( consumerDone == 0U ) )
     {
         vTaskDelay( 1 );
     }
+
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    /* Do not poll the UART result once the deterministic producer/consumer
+     * phase is complete. Blocking here leaves every application task asleep,
+     * allowing the idle task to enter Tickless WFI. The simulator injects the
+     * byte only at that architectural sleep boundary. */
+    configASSERT( xSemaphoreTake( uartRxDoneSemaphore, portMAX_DELAY ) == pdPASS );
+    configASSERT( uartRxTaskDone == 1U );
+#endif
 
     /* With every application task blocked for a long interval, the idle task
      * must suppress periodic ticks, execute WFI with MIE masked, wake from the
@@ -147,7 +154,9 @@ int main( void )
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     uartRxQueue = xQueueCreate( 4, sizeof( uint8_t ) );
+    uartRxDoneSemaphore = xSemaphoreCreateBinary();
     configASSERT( uartRxQueue != NULL );
+    configASSERT( uartRxDoneSemaphore != NULL );
     aether_uart_rx_start( uartRxQueue );
     aether_uart_write( "FREERTOS IRQ ARMED\n" );
     configASSERT(
