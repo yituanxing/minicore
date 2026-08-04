@@ -80,12 +80,13 @@ This layout is shared by Zephyr and the permanent FreeRTOS regression. FreeRTOS 
 
 The self-hosted `minicore-wsl` runner must never be the development scheduler.
 
-1. **Host gate:** branch pushes run static contracts, a Chisel compile and a real `west build` on `ubuntu-latest`. The job has a 20-minute hard timeout, uses only SDK 0.16.9 `riscv64-zephyr-elf`, caches ccache/SDK state and cancels obsolete runs.
-2. **No automatic self-hosted PR gate during exploration:** the Zephyr branch stays without a PR until Z1 has a reproducible build contract. This prevents the repository-wide Fast Gate from consuming the runner for every metadata edit.
-3. **Stage gate:** RTL execution is requested only for a coherent milestone. It uses one cached toolchain, one cached Zephyr workspace, incremental simulator outputs and `cancel-in-progress` concurrency.
-4. **Failure locality:** a stage gate stops at the first failed layer and emits the exact command, output signature and artifact hashes. It does not continue into unrelated CPU regressions.
-5. **Full gate:** the historical FreeRTOS/RV32/RV64/CoreMark/Embench/littlefs gate runs only at a milestone freeze, never for ordinary Zephyr iteration.
-6. **Front-end progress continues:** while a stage run executes, repository analysis, Devicetree/Kconfig work and the next small patch continue independently; no workflow is used as a substitute for design work.
+1. **Host gate:** branch pushes run static contracts, a Chisel compile and a real `west build` on `ubuntu-latest`. The job has a 30-minute cold-start hard timeout, uses only SDK 0.16.9 `riscv64-zephyr-elf`, caches ccache/SDK state and cancels obsolete runs.
+2. **Observable push workflow:** the hosted job writes a standard commit status named `zephyr/host-gate`. The status is `pending` while the job runs and becomes `success`, `failure` or `error` at completion. Its target URL is the exact Actions run, allowing logs to be fetched without opening a PR.
+3. **No automatic self-hosted PR gate during exploration:** the Zephyr branch stays without a PR until Z1 has a reproducible build contract. This prevents the repository-wide Fast Gate from consuming the runner for every metadata edit.
+4. **Stage gate:** RTL execution is requested only for a coherent milestone. It uses one cached toolchain, one cached Zephyr workspace, incremental simulator outputs and `cancel-in-progress` concurrency.
+5. **Failure locality:** a stage gate stops at the first failed layer and emits the exact command, output signature and artifact hashes. It does not continue into unrelated CPU regressions.
+6. **Full gate:** the historical FreeRTOS/RV32/RV64/CoreMark/Embench/littlefs gate runs only at a milestone freeze, never for ordinary Zephyr iteration.
+7. **Front-end progress continues:** while a stage run executes, repository analysis, Devicetree/Kconfig work and the next small patch continue independently; no workflow is used as a substitute for design work.
 
 ## Hosted Z1 evidence
 
@@ -101,7 +102,7 @@ build/zephyr-host/evidence/result.txt
 build/zephyr-host/evidence/artifacts.sha256
 ```
 
-The build fails closed if Zephyr enables unsupported RISC-V A or C extensions, loses RV32IM/Zicsr/Zifencei, changes the board/SoC selection, drops the exit service, or no longer emits the frozen RAM/UART/exit/PLIC/timer nodes. Hidden files are explicitly retained so `.config` remains part of the evidence artifact.
+The build fails closed if Zephyr enables unsupported RISC-V A or C extensions, loses RV32IM/Zicsr/Zifencei, changes the board/SoC selection, drops the generic RISC-V linker script or exit service, or no longer emits the frozen RAM/UART/exit/PLIC/timer nodes. Hidden files are explicitly retained so `.config` remains part of the evidence artifact.
 
 ## Persistent cache layout
 
