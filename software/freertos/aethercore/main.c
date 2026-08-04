@@ -87,6 +87,7 @@ static void uart_rx_task( void * context )
     configASSERT( xQueueReceive( uartRxQueue, &byte, portMAX_DELAY ) == pdPASS );
     configASSERT( byte == EXPECTED_UART_RX_BYTE );
 
+    aether_uart_write( "FREERTOS IRQ TASK\n" );
     uartRxObservedByte = byte;
     uartRxTaskDone = 1U;
     vTaskDelete( NULL );
@@ -148,6 +149,7 @@ int main( void )
     uartRxQueue = xQueueCreate( 4, sizeof( uint8_t ) );
     configASSERT( uartRxQueue != NULL );
     aether_uart_rx_start( uartRxQueue );
+    aether_uart_write( "FREERTOS IRQ ARMED\n" );
     configASSERT(
         xTaskCreate( uart_rx_task, "uart-rx", 256, NULL, 4, NULL ) == pdPASS );
 #endif
