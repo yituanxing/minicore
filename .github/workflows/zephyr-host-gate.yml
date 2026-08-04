@@ -1,0 +1,32 @@
+name: Zephyr Host Gate
+
+on:
+  push:
+    branches:
+      - agent/zephyr-**
+    paths:
+      - software/zephyr/**
+      - docs/zephyr/**
+      - tests_py/test_zephyr_stage_contract.py
+      - .github/workflows/zephyr-host-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zephyr-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Zephyr manifest and workload contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Zephyr stage-zero contract
+        run: python3 -m unittest tests_py.test_zephyr_stage_contract -v
