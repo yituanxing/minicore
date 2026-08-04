@@ -133,7 +133,7 @@ void aether_uart_rx_start( void * queue,
 
     *( ( volatile uint32_t * ) AETHERCORE_PLIC_SOURCE1_PRIORITY ) = 1U;
     *( ( volatile uint32_t * ) AETHERCORE_PLIC_ENABLE ) =
-        ( uint32_t ) ( 1UL << ( AETHERCORE_UART_RX_SOURCE_ID - 1UL ) );
+        ( uint32_t ) ( 1UL << AETHERCORE_UART_RX_SOURCE_ID );
     *( ( volatile uint32_t * ) AETHERCORE_PLIC_THRESHOLD ) = 0U;
     *( ( volatile uint32_t * ) AETHERCORE_UART_RX_CONTROL ) = 1U;
 
