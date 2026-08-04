@@ -71,6 +71,8 @@ def adapt(source: str, trace: bool) -> str:
         "    std::uint64_t wfiCommits = 0;\n"
         "    std::uint64_t maskedWfiCommits = 0;\n"
         "    std::uint64_t wfiSleepCycles = 0;\n"
+        "    std::uint64_t uartRxReadySleepCycles = 0;\n"
+        "    std::uint64_t externalInterruptCycles = 0;\n"
         "    std::uint64_t exceptions = 0;\n",
         "WFI counters",
     )
@@ -80,6 +82,7 @@ def adapt(source: str, trace: bool) -> str:
         "    bool forbiddenWriteSeen = false;\n",
         "    bool exitRequested = false;\n"
         "    bool uartRxInjected = false;\n"
+        "    bool externalInterruptSeen = false;\n"
         "    bool forbiddenWriteSeen = false;\n",
         "UART RX injection state",
     )
@@ -110,6 +113,7 @@ def adapt(source: str, trace: bool) -> str:
         "        top.io_rxByte = *options.uartRxByte;\n"
         "        top.io_rxValid = 1;\n"
         "        uartRxInjected = true;\n"
+        "        std::cout << \"FREERTOS RUNNER RX INJECT cycle=\" << cycles << '\\n';\n"
         "      }\n\n"
         "      top.clock = 0;\n"
         "      driveInputs(top, memory, memoryReady);\n",
@@ -122,14 +126,22 @@ def adapt(source: str, trace: bool) -> str:
         "      if (!top.reset) {\n"
         "        if (options.selfCheckExit && top.io_halted) {\n"
         "          ++wfiSleepCycles;\n"
+        "          if (top.io_rxReady) ++uartRxReadySleepCycles;\n"
         "          if (top.io_commit_valid) {\n"
         "            std::cerr << \"FAIL: instruction retired while WFI sleep was asserted at cycle \"\n"
         "                      << cycles << '\\n';\n"
         "            return 27;\n"
         "          }\n"
+        "        }\n"
+        "        if (top.io_externalInterrupt) {\n"
+        "          ++externalInterruptCycles;\n"
+        "          if (!externalInterruptSeen) {\n"
+        "            externalInterruptSeen = true;\n"
+        "            std::cout << \"FREERTOS RUNNER EXTERNAL ASSERT cycle=\" << cycles << '\\n';\n"
+        "          }\n"
         "        }\n\n"
         "        if (top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault) {\n",
-        "WFI quiescence assertion",
+        "WFI and external observation",
     )
     text = replace_once(
         text,
@@ -147,9 +159,21 @@ def adapt(source: str, trace: bool) -> str:
     )
     text = replace_once(
         text,
-        "    if (!top.io_halted && cycles >= options.maxCycles) {\n",
-        "    if (cycles >= options.maxCycles && !exitRequested) {\n",
-        "simulation timeout",
+        "    if (!top.io_halted && cycles >= options.maxCycles) {\n"
+        "      std::cerr << \"FAIL: timeout after \" << cycles << \" cycles\\n\";\n"
+        "      return 2;\n"
+        "    }",
+        "    if (cycles >= options.maxCycles && !exitRequested) {\n"
+        "      std::cerr << \"FAIL: timeout after \" << cycles << \" cycles\"\n"
+        "                << \", uart-rx-injected=\" << (uartRxInjected ? 1 : 0)\n"
+        "                << \", halted=\" << static_cast<unsigned>(top.io_halted)\n"
+        "                << \", rx-ready=\" << static_cast<unsigned>(top.io_rxReady)\n"
+        "                << \", external=\" << static_cast<unsigned>(top.io_externalInterrupt)\n"
+        "                << \", rx-ready-sleep-cycles=\" << uartRxReadySleepCycles\n"
+        "                << \", external-cycles=\" << externalInterruptCycles << '\\n';\n"
+        "      return 2;\n"
+        "    }",
+        "simulation timeout diagnostics",
     )
     text = replace_once(
         text,
@@ -184,7 +208,8 @@ def adapt(source: str, trace: bool) -> str:
         "                << \", wfi-commits=\" << wfiCommits\n"
         "                << \", masked-wfi-commits=\" << maskedWfiCommits\n"
         "                << \", wfi-sleep-cycles=\" << wfiSleepCycles\n"
-        "                << \", uart-rx-injected=\" << (uartRxInjected ? 1 : 0);\n",
+        "                << \", uart-rx-injected=\" << (uartRxInjected ? 1 : 0)\n"
+        "                << \", external-seen=\" << (externalInterruptSeen ? 1 : 0);\n",
         "self-check WFI and UART summary",
     )
 
