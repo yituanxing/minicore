@@ -43,7 +43,7 @@ grep -q '<xStreamBufferReceive>:' "$disassembly"
 grep -q '\bmret\b' "$disassembly"
 grep -q '\bwfi\b' "$disassembly"
 
-for stall in 0 1 3 5 7; do
+for stall in 0 2 3 5 7; do
   log="$BUILD_DIR/logs/irq-stall-$stall.log"
   test -s "$log"
   grep -Fq 'FREERTOS EVENT GROUP PASS all=3 clear=1' "$log"
@@ -53,7 +53,11 @@ for stall in 0 1 3 5 7; do
   grep -Fq 'FREERTOS MUTEX PASS inherited=4' "$log"
   grep -Fq 'FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1' "$log"
   grep -Fq 'FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2' "$log"
-  grep -Fq "stall-period=$stall" "$log"
+  if [[ "$stall" == "0" ]]; then
+    ! grep -Fq 'stall-period=' "$log"
+  else
+    grep -Fq "stall-period=$stall" "$log"
+  fi
   grep -Fq 'PASS: self-check exit=0' "$log"
   ! grep -Fq 'FAIL:' "$log"
 done
@@ -88,7 +92,7 @@ software_timers=true
 stream_buffers=true
 message_buffers=true
 tickless_external_early_wake=true
-stall_periods=0,1,3,5,7
+stall_periods=0,2,3,5,7
 negative_wrong_byte=true
 negative_missing_external_event=true
 parallel_jobs=$JOBS
