@@ -107,7 +107,7 @@ fi
 (
   cd "$WORKSPACE_ROOT"
   "$WEST" config manifest.group-filter -- "-hal,-tools,-bootloader,-babblesim"
-  "$WEST" update -o=--depth=1 -n
+  "$WEST" update -o=--depth=1 -n zephyr
 )
 
 test -f "$WORKSPACE_ROOT/zephyr/SDK_VERSION"
