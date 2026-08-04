@@ -18,7 +18,7 @@ class ZephyrStageContractTest(unittest.TestCase):
         self.assertIn("path: minicore", text)
         self.assertFalse((ROOT / "software" / "zephyr" / "west.yml").exists())
 
-    def test_kernel_smoke_exercises_threads_semaphores_and_timer(self) -> None:
+    def test_kernel_smoke_exercises_threads_semaphores_timer_and_exit(self) -> None:
         source = (APP_ROOT / "src" / "main.c").read_text(encoding="utf-8")
         config = (APP_ROOT / "prj.conf").read_text(encoding="utf-8")
         cmake = (APP_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -30,9 +30,12 @@ class ZephyrStageContractTest(unittest.TestCase):
             "k_sleep(K_MSEC(1))",
             "AETHERCORE ZEPHYR BOOT",
             "AETHERCORE ZEPHYR PASS handoffs=%d",
+            "aethercore_exit(0U)",
         ):
             self.assertIn(token, source)
 
+        self.assertIn("#include <aethercore/exit.h>", source)
+        self.assertNotIn("0x10000008", source)
         self.assertIn("CONFIG_MULTITHREADING=y", config)
         self.assertIn("CONFIG_UART_CONSOLE=y", config)
         self.assertIn("target_sources(app PRIVATE src/main.c)", cmake)
@@ -66,7 +69,7 @@ class ZephyrStageContractTest(unittest.TestCase):
         self.assertNotIn("self-hosted", text)
         self.assertNotIn("pull_request:", text)
 
-    def test_host_build_freezes_outputs_and_unsupported_isa_extensions(self) -> None:
+    def test_host_build_freezes_outputs_isa_and_exit_contract(self) -> None:
         text = BUILD_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("west build -p always", text)
         self.assertIn("-b aethercore_sim", text)
@@ -74,6 +77,10 @@ class ZephyrStageContractTest(unittest.TestCase):
         self.assertIn("zephyr/zephyr.bin", text)
         self.assertIn("CONFIG_RISCV_ISA_EXT_M=y", text)
         self.assertIn("CONFIG_RISCV_ISA_EXT_(A|C)=y", text)
+        self.assertIn("CONFIG_AETHERCORE_SIM_EXIT=y", text)
+        self.assertIn("test-exit@10000008", text)
+        self.assertIn("grep -Fq 'aethercore_exit'", text)
+        self.assertIn("exit_address=0x10000008", text)
         self.assertIn("contract=zephyr-v3.7.2-aethercore-z1-host-build-v1", text)
 
 
