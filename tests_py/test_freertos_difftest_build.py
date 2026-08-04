@@ -110,7 +110,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
             text,
         )
         self.assertIn(
-            'EXPECTED_RUNNER_SHA256="36e0da5570e4fa47ec152b55631e7fc9e596581ba1548179724c4e2bd0628c78"',
+            'EXPECTED_RUNNER_SHA256="91f8831718240acdc6541f0b749ba3983d4627487fbebe0d056e5f19c0794ab9"',
             text,
         )
         self.assertIn(
@@ -125,6 +125,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
             "wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199",
             text,
         )
+        self.assertIn("uart-rx-injected=0, external-seen=0", text)
         self.assertIn("difftest=168046", text)
         self.assertIn("fence-shadow=1", text)
         self.assertIn(
