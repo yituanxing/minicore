@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  z1-build:
-    name: Cached Zephyr Z1 build
+  z1-z2-stage:
+    name: Cached Zephyr Z1 build and Z2 boot
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
     env:
@@ -36,7 +36,7 @@ jobs:
               sha: context.sha,
               state: 'pending',
               context: 'zephyr/cached-stage',
-              description: 'Cached Zephyr Z1 stage is running',
+              description: 'Cached Zephyr Z1/Z2 stage is running',
               target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
             });
 
@@ -90,7 +90,6 @@ jobs:
           fi
           if [[ -z "$dtc_path" ]]; then
             echo "ERROR: cached Zephyr SDK dtc not found after hosttools installer" >&2
-            find "$sdk" -maxdepth 5 \( -type f -name '*dtc*' -o -type f -name 'environment-setup-*' \) -print | sort >&2
             exit 1
           fi
 
@@ -99,12 +98,20 @@ jobs:
           "$expected_root/bin/riscv64-zephyr-elf-gcc" --version | head -n 1
           "$dtc_path" --version
 
-      - name: Run cached fail-closed Zephyr stage
+      - name: Run cached fail-closed Zephyr Z1 build
         working-directory: minicore
         shell: bash
         run: |
           chmod +x tools/ci/zephyr_self_hosted_stage.sh
           bash tools/ci/zephyr_self_hosted_stage.sh
+
+      - name: Run bounded Zephyr Z2 boot and console qualification
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_z2_boot.sh
+          AETHERCORE_ZEPHYR_BUILD_DIR="$PWD/build/zephyr-stage/host-build" \
+            bash tools/ci/zephyr_z2_boot.sh
 
       - name: Upload bounded stage evidence
         if: always()
@@ -124,6 +131,7 @@ jobs:
             minicore/build/zephyr-stage/host-build/zephyr/zephyr.dts
             minicore/build/zephyr-stage/host-build/zephyr/.config
             minicore/build/zephyr-stage/host-build/evidence/
+            minicore/build/zephyr-z2/evidence/
 
       - name: Publish final Zephyr stage status
         if: always()
@@ -134,8 +142,8 @@ jobs:
             const result = '${{ job.status }}';
             const state = result === 'success' ? 'success' : (result === 'cancelled' ? 'error' : 'failure');
             const description = state === 'success'
-              ? 'Cached Zephyr Z1 stage passed'
-              : `Cached Zephyr Z1 stage ${result}`;
+              ? 'Cached Zephyr Z1/Z2 stage passed'
+              : `Cached Zephyr Z1/Z2 stage ${result}`;
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
