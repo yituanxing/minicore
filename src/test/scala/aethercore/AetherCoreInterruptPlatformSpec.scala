@@ -47,7 +47,10 @@ class AetherCoreInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chi
       (base + 0x04) -> iType(0x100, 1, 0, 1, 0x13),
       (base + 0x08) -> csr(0x305, 1, 1, 0),
       (base + 0x0c) -> uType(0x10000, 10),
-      (base + 0x10) -> iType(1, 0, 0, 5, 0x13),
+      // The shared value 3 enables UART control bit 0, programs nonzero
+      // priority, and sets architectural PLIC source-one bit 1. Reserved PLIC
+      // bit zero is ignored by the MMIO contract.
+      (base + 0x10) -> iType(3, 0, 0, 5, 0x13),
       // UART RX control is intentionally placed at 0x10000108 so the legacy
       // self-check exit register remains exclusively mapped at 0x10000008.
       (base + 0x14) -> sType(0x108, 5, 10, 2),
