@@ -1,6 +1,7 @@
 #include "FreeRTOS.h"
 #include "event_groups.h"
 #include "task.h"
+#include "timers.h"
 #include "platform.h"
 
 #include <stdint.h>
@@ -12,10 +13,23 @@
 #define EVENT_BITS_ALL    ( EVENT_BIT_FIRST | EVENT_BIT_SECOND )
 #define EVENT_TASK_PRIORITY 3U
 #define EVENT_WAITER_PRIORITY 4U
+#define SOFTWARE_TIMER_PERIOD_TICKS 7U
 
 static EventGroupHandle_t qualificationEventGroup;
+static TimerHandle_t qualificationSoftwareTimer;
 static volatile uint32_t eventGroupProducerDone;
 static volatile uint32_t eventGroupWaiterDone;
+volatile uint32_t aetherSoftwareTimerDone;
+
+static void software_timer_callback( TimerHandle_t timer )
+{
+    configASSERT( timer == qualificationSoftwareTimer );
+    configASSERT( xTimerIsTimerActive( timer ) == pdFALSE );
+    configASSERT( aetherSoftwareTimerDone == 0U );
+
+    aetherSoftwareTimerDone = 1U;
+    aether_uart_write( "FREERTOS SOFTWARE TIMER PASS one-shot=1 daemon=1\n" );
+}
 
 static void event_group_waiter_task( void * context )
 {
@@ -67,6 +81,15 @@ void vApplicationDaemonTaskStartupHook( void )
 {
     qualificationEventGroup = xEventGroupCreate();
     configASSERT( qualificationEventGroup != NULL );
+
+    qualificationSoftwareTimer =
+        xTimerCreate( "one-shot",
+                      SOFTWARE_TIMER_PERIOD_TICKS,
+                      pdFALSE,
+                      NULL,
+                      software_timer_callback );
+    configASSERT( qualificationSoftwareTimer != NULL );
+    configASSERT( xTimerStart( qualificationSoftwareTimer, 0U ) == pdPASS );
 
     configASSERT(
         xTaskCreate( event_group_waiter_task,
