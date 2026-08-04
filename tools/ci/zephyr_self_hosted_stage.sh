@@ -6,15 +6,19 @@ WORKSPACE_ROOT="${AETHERCORE_ZEPHYR_WORKSPACE_ROOT:-$(dirname "$ROOT")}"
 CACHE_ROOT="${AETHERCORE_ZEPHYR_CACHE_ROOT:-$HOME/.cache/aethercore/zephyr-v3.7.2}"
 VENV_DIR="$CACHE_ROOT/venv-west-1.3.0"
 SDK_DIR="$CACHE_ROOT/zephyr-sdk-0.16.9"
+HOST_TOOLS_PREFIX="$CACHE_ROOT/host-tools"
 DOWNLOAD_DIR="$CACHE_ROOT/downloads"
 LOG_DIR="$ROOT/build/zephyr-stage/logs"
 STATE_FILE="$ROOT/build/zephyr-stage/stage-state.txt"
 BUILD_DIR="$ROOT/build/zephyr-stage/host-build"
 SDK_ARCHIVE="$DOWNLOAD_DIR/zephyr-sdk-0.16.9_linux-x86_64_minimal.tar.xz"
 SDK_URL="https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.9/zephyr-sdk-0.16.9_linux-x86_64_minimal.tar.xz"
+GPERF_VERSION="3.1"
+GPERF_ARCHIVE="$DOWNLOAD_DIR/gperf-$GPERF_VERSION.tar.gz"
+GPERF_URL="https://ftp.gnu.org/gnu/gperf/gperf-$GPERF_VERSION.tar.gz"
 CURRENT_PHASE="initializing"
 
-mkdir -p "$CACHE_ROOT" "$DOWNLOAD_DIR" "$LOG_DIR" "$(dirname "$STATE_FILE")"
+mkdir -p "$CACHE_ROOT" "$DOWNLOAD_DIR" "$HOST_TOOLS_PREFIX" "$LOG_DIR" "$(dirname "$STATE_FILE")"
 exec > >(tee "$LOG_DIR/stage.log") 2>&1
 
 finish() {
@@ -47,26 +51,15 @@ printf 'root=%s\nworkspace=%s\ncache=%s\n' "$ROOT" "$WORKSPACE_ROOT" "$CACHE_ROO
 printf 'proxy http=%s https=%s\n' "${http_proxy:-unset}" "${https_proxy:-unset}"
 df -h "$ROOT" "$HOME"
 
-required_commands=(git cmake ninja python3 tar xz wget)
-missing_packages=()
+required_commands=(git cmake ninja python3 tar xz wget make gcc java realpath file)
+missing_commands=()
 for command in "${required_commands[@]}"; do
-  if ! command -v "$command" >/dev/null 2>&1; then
-    case "$command" in
-      ninja) missing_packages+=(ninja-build) ;;
-      xz) missing_packages+=(xz-utils) ;;
-      *) missing_packages+=("$command") ;;
-    esac
-  fi
+  command -v "$command" >/dev/null 2>&1 || missing_commands+=("$command")
 done
-command -v dtc >/dev/null 2>&1 || missing_packages+=(device-tree-compiler)
-command -v gperf >/dev/null 2>&1 || missing_packages+=(gperf)
-python3 -m venv --help >/dev/null 2>&1 || missing_packages+=(python3-venv)
-
-if (( ${#missing_packages[@]} != 0 )); then
-  echo "missing_packages=${missing_packages[*]}"
-  sudo -n true
-  sudo -n apt-get update -y
-  sudo -n apt-get install -y "${missing_packages[@]}"
+python3 -m venv --help >/dev/null 2>&1 || missing_commands+=(python3-venv)
+if (( ${#missing_commands[@]} != 0 )); then
+  echo "ERROR: missing non-provisioned host commands: ${missing_commands[*]}" >&2
+  exit 1
 fi
 
 cmake --version | head -n 1
@@ -137,8 +130,34 @@ fi
   ./setup.sh -c
 )
 
+dtc_binary="$(find "$SDK_DIR" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
+test -n "$dtc_binary"
+"$dtc_binary" --version
+
+phase user-host-tools
+export PATH="$HOST_TOOLS_PREFIX/bin:$VENV_DIR/bin:$(dirname "$dtc_binary"):$PATH"
+if ! command -v gperf >/dev/null 2>&1; then
+  if [[ ! -s "$GPERF_ARCHIVE" ]]; then
+    temp_gperf="$GPERF_ARCHIVE.part"
+    rm -f "$temp_gperf"
+    wget --tries=3 --timeout=30 --progress=dot:giga -O "$temp_gperf" "$GPERF_URL"
+    mv "$temp_gperf" "$GPERF_ARCHIVE"
+  fi
+  gperf_source="$CACHE_ROOT/gperf-$GPERF_VERSION-src"
+  gperf_build="$CACHE_ROOT/gperf-$GPERF_VERSION-build"
+  rm -rf "$gperf_source" "$gperf_build"
+  mkdir -p "$gperf_source" "$gperf_build"
+  tar -xzf "$GPERF_ARCHIVE" -C "$gperf_source" --strip-components=1
+  (
+    cd "$gperf_build"
+    "$gperf_source/configure" --prefix="$HOST_TOOLS_PREFIX"
+    make -j"$(nproc)"
+    make install
+  )
+fi
+gperf --version | head -n 1
+
 export ZEPHYR_SDK_INSTALL_DIR="$SDK_DIR"
-export PATH="$VENV_DIR/bin:$PATH"
 
 phase static-contracts
 cd "$ROOT"
