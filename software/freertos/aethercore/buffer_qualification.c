@@ -2,7 +2,6 @@
 #include "message_buffer.h"
 #include "stream_buffer.h"
 #include "task.h"
-#include "platform.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,7 +66,6 @@ static void stream_sender_task( void * context )
     /* The higher-priority receiver must run before this sender resumes. */
     configASSERT( streamReceiverDone == 1U );
     aetherStreamBufferDone = 1U;
-    aether_uart_write( "FREERTOS STREAM BUFFER PASS bytes=8 handoff=1\n" );
     vTaskDelete( NULL );
 }
 
@@ -106,7 +104,6 @@ static void message_sender_task( void * context )
     /* Message framing must unblock and run the higher-priority receiver. */
     configASSERT( messageReceiverDone == 1U );
     aetherMessageBufferDone = 1U;
-    aether_uart_write( "FREERTOS MESSAGE BUFFER PASS bytes=7 handoff=1\n" );
     vTaskDelete( NULL );
 }
 
