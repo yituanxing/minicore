@@ -61,30 +61,30 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.request.poke(false.B)
   }
 
-  it should "expose priority, pending, enable, threshold and claim-complete semantics" in {
+  it should "expose one-based priority, pending, enable, threshold and claim-complete semantics" in {
     simulate(new MachinePlicMmio(sourceCount = 4, priorityBits = 3)) { dut =>
       initialize(dut)
 
       write(dut, MachinePlicMmioMap.priority(1), 3)
       write(dut, MachinePlicMmioMap.priority(2), 3)
       write(dut, MachinePlicMmioMap.priority(3), 5)
-      write(dut, MachinePlicMmioMap.Enable, 0x7)
+      write(dut, MachinePlicMmioMap.Enable, 0x0e)
       write(dut, MachinePlicMmioMap.Threshold, 2)
 
       read(dut, MachinePlicMmioMap.priority(1)) shouldBe 3
       read(dut, MachinePlicMmioMap.priority(3)) shouldBe 5
-      read(dut, MachinePlicMmioMap.Enable) shouldBe 0x7
+      read(dut, MachinePlicMmioMap.Enable) shouldBe 0x0e
       read(dut, MachinePlicMmioMap.Threshold) shouldBe 2
 
       dut.io.sources.poke("b0111".U)
       dut.clock.step()
-      read(dut, MachinePlicMmioMap.Pending) shouldBe 0x7
+      read(dut, MachinePlicMmioMap.Pending) shouldBe 0x0e
       dut.io.interrupt.expect(true.B)
 
       // Source 3 wins on priority. Reading claim marks it in service.
       read(dut, MachinePlicMmioMap.ClaimComplete) shouldBe 3
       dut.io.inService.expect("b0100".U)
-      read(dut, MachinePlicMmioMap.Pending) shouldBe 0x3
+      read(dut, MachinePlicMmioMap.Pending) shouldBe 0x06
 
       // Sources 1 and 2 tie, so the lower source ID wins.
       read(dut, MachinePlicMmioMap.ClaimComplete) shouldBe 1
@@ -107,13 +107,15 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "honor byte masks, tolerate reserved source zero and reject unknown addresses" in {
+  it should "reserve register bit zero, honor byte masks and reject unknown addresses" in {
     simulate(new MachinePlicMmio(sourceCount = 4, priorityBits = 3)) { dut =>
       initialize(dut)
 
-      write(dut, MachinePlicMmioMap.Enable, 0x0a, mask = 0x1)
+      // Architectural bits 2 and 4 enable compact internal sources 2 and 4.
+      // Reserved bit zero is ignored and always reads back as zero.
+      write(dut, MachinePlicMmioMap.Enable, 0x15, mask = 0x1)
       dut.io.enabled.expect("b1010".U)
-      read(dut, MachinePlicMmioMap.Enable) shouldBe 0x0a
+      read(dut, MachinePlicMmioMap.Enable) shouldBe 0x14
 
       write(dut, MachinePlicMmioMap.priority(2), 7, mask = 0x1)
       read(dut, MachinePlicMmioMap.priority(2)) shouldBe 7
