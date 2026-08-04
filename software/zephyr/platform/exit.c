@@ -5,7 +5,7 @@
 #include <aethercore/exit.h>
 
 #include <zephyr/devicetree.h>
-#include <zephyr/sys/sys_io.h>
+#include <zephyr/arch/riscv/sys_io.h>
 #include <zephyr/sys/util.h>
 
 BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1,
