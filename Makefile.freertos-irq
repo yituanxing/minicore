@@ -6,7 +6,9 @@ CFLAGS += -DAETHERCORE_FREERTOS_EXTERNAL_IRQ=1
 IRQ_EXTRA_OBJECTS := \
 	$(OBJ_DIR)/event_groups.o \
 	$(OBJ_DIR)/timers.o \
-	$(OBJ_DIR)/event_group_qualification.o
+	$(OBJ_DIR)/stream_buffer.o \
+	$(OBJ_DIR)/event_group_qualification.o \
+	$(OBJ_DIR)/buffer_qualification.o
 OBJECTS += $(IRQ_EXTRA_OBJECTS)
 $(ELF): $(IRQ_EXTRA_OBJECTS)
 
@@ -16,8 +18,15 @@ $(OBJ_DIR)/event_groups.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 $(OBJ_DIR)/timers.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/timers.c -o $@
 
+$(OBJ_DIR)/stream_buffer.o: $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $(SOURCE_DIR)/stream_buffer.c -o $@
+
 $(OBJ_DIR)/event_group_qualification.o: \
 	$(APP_DIR)/event_group_qualification.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJ_DIR)/buffer_qualification.o: \
+	$(APP_DIR)/buffer_qualification.c $(FREERTOS_CONFIG_DEPS) | $(OBJ_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 IRQ_LOG := $(BUILD_DIR)/logs/irq-local.log
@@ -27,7 +36,7 @@ IRQ_LOG := $(BUILD_DIR)/logs/irq-local.log
 run-irq-local: qualification image sim
 	mkdir -p $(BUILD_DIR)/logs
 	$(SIM_BINARY) $(BIN) \
-		--max-cycles 2000000 --self-check-exit --stall-period 5 \
+		--max-cycles 2500000 --self-check-exit --stall-period 5 \
 		--inject-uart-rx 0x5a \
 		2>&1 | tee $(IRQ_LOG)
 	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(IRQ_LOG))" -eq 1
@@ -36,6 +45,8 @@ run-irq-local: qualification image sim
 	test "$$(grep -c '^FREERTOS IRQ ENTER$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS EVENT GROUP PASS all=3 clear=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS SOFTWARE TIMER PASS one-shot=1 daemon=1$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS STREAM BUFFER PASS bytes=8 handoff=1$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS MESSAGE BUFFER PASS bytes=7 handoff=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS MUTEX PASS inherited=4$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(IRQ_LOG))" -eq 1
