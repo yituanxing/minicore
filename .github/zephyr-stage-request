@@ -11,4 +11,4 @@ host_tools=zephyr-sdk-dtc,user-cached-gperf
 sdk_download=resumable-split-assets-sha256-verified
 sdk_layout=hosttools-installer-normalized
 trigger=pull-request-global-slot
-request=10
+request=11
