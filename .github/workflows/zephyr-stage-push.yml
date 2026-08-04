@@ -1,0 +1,104 @@
+name: Zephyr Cached Stage
+
+on:
+  push:
+    branches:
+      - agent/zephyr-bringup
+    paths:
+      - .github/zephyr-stage-request
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zephyr-stage-slot-global
+  cancel-in-progress: true
+
+jobs:
+  z1-build:
+    name: Cached Zephyr Z1 build
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout without deleting persistent workspace siblings
+        uses: actions/checkout@v4
+        with:
+          path: minicore
+          clean: false
+          fetch-depth: 2
+
+      - name: Normalize cached Zephyr SDK bundle layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache="$HOME/.cache/aethercore/zephyr-v3.7.2"
+          sdk="$cache/zephyr-sdk-0.16.9"
+          downloads="$cache/downloads"
+          toolchain_archive="$downloads/toolchain_linux-x86_64_riscv64-zephyr-elf.tar.xz"
+          hosttools_archive="$downloads/hosttools_linux-x86_64.tar.xz"
+
+          mkdir -p "$sdk"
+
+          gcc_path="$(find "$sdk" -type f -name 'riscv64-zephyr-elf-gcc' -perm -u+x -print -quit)"
+          if [[ -z "$gcc_path" && -s "$toolchain_archive" ]]; then
+            tar -xJf "$toolchain_archive" -C "$sdk"
+            gcc_path="$(find "$sdk" -type f -name 'riscv64-zephyr-elf-gcc' -perm -u+x -print -quit)"
+          fi
+          if [[ -z "$gcc_path" ]]; then
+            echo "ERROR: cached RISC-V Zephyr GCC not found" >&2
+            find "$sdk" -maxdepth 5 -type d -print | sort | sed -n '1,160p' >&2
+            exit 1
+          fi
+
+          toolchain_root="$(dirname "$(dirname "$gcc_path")")"
+          expected_root="$sdk/riscv64-zephyr-elf"
+          if [[ "$toolchain_root" != "$expected_root" ]]; then
+            rm -rf "$expected_root"
+            ln -s "$toolchain_root" "$expected_root"
+          fi
+
+          dtc_path="$(find "$sdk" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
+          if [[ -z "$dtc_path" && -s "$hosttools_archive" ]]; then
+            tar -xJf "$hosttools_archive" -C "$sdk"
+            dtc_path="$(find "$sdk" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
+          fi
+          if [[ -z "$dtc_path" ]]; then
+            echo "ERROR: cached Zephyr SDK dtc not found" >&2
+            find "$sdk" -maxdepth 7 -type f -perm -u+x -print | sort | sed -n '1,200p' >&2
+            exit 1
+          fi
+
+          echo "normalized_gcc=$expected_root/bin/riscv64-zephyr-elf-gcc"
+          echo "normalized_dtc=$dtc_path"
+          "$expected_root/bin/riscv64-zephyr-elf-gcc" --version | head -n 1
+          "$dtc_path" --version
+
+      - name: Run cached fail-closed Zephyr stage
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_self_hosted_stage.sh
+          bash tools/ci/zephyr_self_hosted_stage.sh
+
+      - name: Upload bounded stage evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-zephyr-stage-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            minicore/build/zephyr-stage/stage-state.txt
+            minicore/build/zephyr-stage/logs/
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.elf
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.bin
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.map
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.dts
+            minicore/build/zephyr-stage/host-build/zephyr/.config
+            minicore/build/zephyr-stage/host-build/evidence/
