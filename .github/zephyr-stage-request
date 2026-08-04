@@ -1,0 +1,7 @@
+contract=zephyr-v3.7.2-aethercore-z1-host-build-v1
+mode=bounded-self-hosted-stage
+runner=minicore-wsl
+timeout_minutes=25
+cache=persistent
+fail_closed=true
+request=1
