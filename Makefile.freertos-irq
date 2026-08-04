@@ -14,10 +14,14 @@ run-irq-local: qualification image sim
 		--inject-uart-rx 0x5a \
 		2>&1 | tee $(IRQ_LOG)
 	test "$$(grep -c '^FREERTOS BOOT V11.3.0 RV32IM$$' $(IRQ_LOG))" -eq 1
-	test "$$(grep -c '^FREERTOS IRQ PASS rx=1 claim=1 yield>=1 early>=1$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS RUNNER RX INJECT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS RUNNER EXTERNAL ASSERT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS IRQ ENTER$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS PASS queue=64 semaphore=8 ticks>=48$$' $(IRQ_LOG))" -eq 1
 	grep -Eq 'masked-wfi-commits=[1-9][0-9]*' $(IRQ_LOG)
 	grep -Fq 'uart-rx-injected=1' $(IRQ_LOG)
+	grep -Fq 'external-seen=1' $(IRQ_LOG)
 	grep -Fq 'PASS: self-check exit=0' $(IRQ_LOG)
 	! grep -Fq 'FAIL:' $(IRQ_LOG)
