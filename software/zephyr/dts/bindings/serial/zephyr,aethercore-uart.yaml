@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: AetherCore simulation UART
+
+compatible: "zephyr,aethercore-uart"
+
+include: uart-controller.yaml
+
+properties:
+  reg:
+    required: true
+
+  reg-names:
+    required: true
