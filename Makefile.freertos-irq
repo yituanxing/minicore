@@ -35,6 +35,7 @@ run-irq-local: qualification image sim
 	test "$$(grep -c '^FREERTOS RUNNER EXTERNAL ASSERT cycle=[0-9][0-9]*$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS IRQ ENTER$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS EVENT GROUP PASS all=3 clear=1$$' $(IRQ_LOG))" -eq 1
+	test "$$(grep -c '^FREERTOS SOFTWARE TIMER PASS one-shot=1 daemon=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS MUTEX PASS inherited=4$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1$$' $(IRQ_LOG))" -eq 1
 	test "$$(grep -c '^FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2$$' $(IRQ_LOG))" -eq 1
