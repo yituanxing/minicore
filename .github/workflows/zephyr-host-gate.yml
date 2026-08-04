@@ -86,6 +86,7 @@ jobs:
           name: aethercore-zephyr-host-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
+          include-hidden-files: true
           path: |
             minicore/build/zephyr-host/zephyr/zephyr.elf
             minicore/build/zephyr-host/zephyr/zephyr.bin
