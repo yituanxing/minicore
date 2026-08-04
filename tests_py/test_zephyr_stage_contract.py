@@ -12,7 +12,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "zephyr-host-gate.yml"
 class ZephyrStageContractTest(unittest.TestCase):
     def test_manifest_pins_the_lts_revision(self) -> None:
         text = MANIFEST.read_text(encoding="utf-8")
-        self.assertIn("revision: v3.7.0", text)
+        self.assertIn("revision: v3.7.2", text)
         self.assertIn("import: true", text)
         self.assertIn("path: minicore", text)
 
