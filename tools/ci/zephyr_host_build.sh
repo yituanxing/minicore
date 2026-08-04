@@ -46,7 +46,8 @@ for config in \
   CONFIG_RISCV_ISA_EXT_ZIFENCEI=y \
   CONFIG_SERIAL=y \
   CONFIG_UART_CONSOLE=y \
-  CONFIG_MULTITHREADING=y; do
+  CONFIG_MULTITHREADING=y \
+  CONFIG_AETHERCORE_SIM_EXIT=y; do
   grep -Fxq "$config" "$CONFIG" || {
     echo "ERROR: missing frozen Zephyr config: $config" >&2
     exit 1
@@ -60,9 +61,11 @@ fi
 
 grep -Fq 'riscv,isa = "rv32im_zicsr_zifencei"' "$DTS"
 grep -Fq 'serial@10000000' "$DTS"
+grep -Fq 'test-exit@10000008' "$DTS"
 grep -Fq 'interrupt-controller@c000000' "$DTS"
 grep -Fq 'timer@2000000' "$DTS"
 grep -Fq 'memory@80000000' "$DTS"
+grep -Fq 'aethercore_exit' "$MAP"
 
 file "$ELF" | tee "$BUILD_DIR/elf-file.txt"
 grep -Eq 'ELF 32-bit.*RISC-V' "$BUILD_DIR/elf-file.txt"
@@ -81,6 +84,7 @@ ram_base=0x80000000
 ram_size=0x04000000
 uart_tx=0x10000000
 uart_rx=0x10000100
+exit_address=0x10000008
 plic_base=0x0c000000
 mtime=0x0200bff8
 mtimecmp=0x02004000
