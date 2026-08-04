@@ -46,6 +46,12 @@
 		status = "disabled";
 	};
 
+	exit0: test-exit@10000008 {
+		compatible = "zephyr,aethercore-exit";
+		reg = <0x10000008 0x4>;
+		status = "okay";
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
