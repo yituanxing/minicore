@@ -26,6 +26,9 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
             "0x80000000 0x04000000",
             "0x10000000 0x4",
             "0x10000100 0x10",
+            "test-exit@10000008",
+            'compatible = "zephyr,aethercore-exit"',
+            "0x10000008 0x4",
             "0x0c000000 0x00400000",
             "0x02000000 0x00010000",
             "riscv,ndev = <2>",
@@ -93,6 +96,27 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
             self.assertIn(token, source)
         self.assertNotIn("CONFIG_UART_INTERRUPT_DRIVEN", source)
         self.assertNotIn("irq_connect_dynamic", source)
+
+    def test_exit_service_hides_mmio_address_from_the_application(self) -> None:
+        source = (ZEPHYR / "platform" / "exit.c").read_text(encoding="utf-8")
+        header = (ZEPHYR / "include" / "aethercore" / "exit.h").read_text(
+            encoding="utf-8"
+        )
+        kconfig = (ZEPHYR / "platform" / "Kconfig").read_text(encoding="utf-8")
+        cmake = (ZEPHYR / "CMakeLists.txt").read_text(encoding="utf-8")
+        app = (
+            ZEPHYR / "apps" / "kernel_smoke" / "src" / "main.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("DT_INST_REG_ADDR(0)", source)
+        self.assertIn("sys_write32(code", source)
+        self.assertIn('volatile ("wfi"', source)
+        self.assertIn("void aethercore_exit(uint32_t code)", header)
+        self.assertIn("config AETHERCORE_SIM_EXIT", kconfig)
+        self.assertIn("add_subdirectory(platform)", cmake)
+        self.assertIn("zephyr_include_directories(include)", cmake)
+        self.assertIn("aethercore_exit(0U)", app)
+        self.assertNotIn("0x10000008", app)
 
     def test_board_selects_console_without_self_hosted_runner_hook(self) -> None:
         board = (
