@@ -78,11 +78,12 @@ jobs:
         shell: bash
         run: python3 -m unittest discover -s tests_py -v
 
-      - name: Focused PLIC and WFI Chisel tests
+      - name: Focused PLIC, machine interrupt and WFI Chisel tests
         if: steps.changes.outputs.run_chisel == 'true'
         shell: bash
         run: |
           ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
+          ./mill aethercore.test.testOnly aethercore.MachineInterruptArbiterSpec
           ./mill aethercore.test.testOnly aethercore.WaitForInterruptCoreSpec
 
       - name: Incremental FreeRTOS WFI workload
@@ -128,7 +129,7 @@ jobs:
             echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- focused PLIC arbitration and WFI suites run for interrupt/core changes'
+            echo '- focused PLIC arbitration, machine interrupt and WFI suites run for interrupt/core changes'
             echo '- cached Verilator identity is checked without a disposable build probe'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- FreeRTOS exact WFI DiffTest runs incrementally at stall=0 and stall=5'
