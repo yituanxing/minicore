@@ -1,5 +1,6 @@
 #include "FreeRTOS.h"
 #include "queue.h"
+#include "semphr.h"
 #include "task.h"
 #include "platform.h"
 
@@ -19,9 +20,13 @@ volatile uint32_t aetherTicklessAborts;
 volatile uint32_t aetherUartRxInterrupts;
 volatile uint32_t aetherUartRxBytes;
 volatile uint32_t aetherUartRxYields;
+volatile uint32_t aetherUartRxSemaphoreSignals;
+volatile uint32_t aetherUartRxNotifications;
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     static QueueHandle_t aetherUartRxQueue;
+    static SemaphoreHandle_t aetherUartRxSemaphore;
+    static TaskHandle_t aetherUartRxNotificationTask;
 #endif
 
 static uint64_t aether_read_mtime( void )
@@ -112,13 +117,19 @@ void aether_uart_write( const char * text )
     }
 }
 
-void aether_uart_rx_start( void * queue )
+void aether_uart_rx_start( void * queue,
+                           void * semaphore,
+                           void * notificationTask )
 {
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     const uint32_t meie = AETHERCORE_MIE_MEIE;
 
     configASSERT( queue != NULL );
+    configASSERT( semaphore != NULL );
+    configASSERT( notificationTask != NULL );
     aetherUartRxQueue = ( QueueHandle_t ) queue;
+    aetherUartRxSemaphore = ( SemaphoreHandle_t ) semaphore;
+    aetherUartRxNotificationTask = ( TaskHandle_t ) notificationTask;
 
     *( ( volatile uint32_t * ) AETHERCORE_PLIC_SOURCE1_PRIORITY ) = 1U;
     *( ( volatile uint32_t * ) AETHERCORE_PLIC_ENABLE ) =
@@ -130,6 +141,8 @@ void aether_uart_rx_start( void * queue )
     __asm volatile ( "csrs mie, %0" :: "r" ( meie ) : "memory" );
 #else
     ( void ) queue;
+    ( void ) semaphore;
+    ( void ) notificationTask;
 #endif
 }
 
@@ -148,6 +161,8 @@ void freertos_risc_v_application_interrupt_handler( void )
     claim = *( ( volatile uint32_t * ) AETHERCORE_PLIC_CLAIM_COMPLETE );
     configASSERT( claim == ( uint32_t ) AETHERCORE_UART_RX_SOURCE_ID );
     configASSERT( aetherUartRxQueue != NULL );
+    configASSERT( aetherUartRxSemaphore != NULL );
+    configASSERT( aetherUartRxNotificationTask != NULL );
 
     byte = ( uint8_t )
            *( ( volatile uint32_t * ) AETHERCORE_UART_RX_DATA );
@@ -155,9 +170,16 @@ void freertos_risc_v_application_interrupt_handler( void )
         xQueueSendFromISR( aetherUartRxQueue,
                            &byte,
                            &higherPriorityTaskWoken ) == pdPASS );
+    configASSERT(
+        xSemaphoreGiveFromISR( aetherUartRxSemaphore,
+                               &higherPriorityTaskWoken ) == pdTRUE );
+    vTaskNotifyGiveFromISR( aetherUartRxNotificationTask,
+                            &higherPriorityTaskWoken );
 
     aetherUartRxInterrupts++;
     aetherUartRxBytes++;
+    aetherUartRxSemaphoreSignals++;
+    aetherUartRxNotifications++;
 
     /* Drain the level source before completion. The PLIC may immediately
      * re-pend a completed source if the UART FIFO still contains data. */
