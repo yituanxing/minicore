@@ -12,6 +12,7 @@
 #define MINIMUM_SUPPRESSED_TICKS    2U
 #define EXPECTED_UART_RX_BYTE       0x5aU
 #define UART_ISR_COMPLETION_COUNT   3U
+#define UART_ISR_TASK_PRIORITY      4U
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -201,21 +202,21 @@ int main( void )
                      "uart-q",
                      256,
                      NULL,
-                     4,
+                     UART_ISR_TASK_PRIORITY,
                      NULL ) == pdPASS );
     configASSERT(
         xTaskCreate( uart_rx_semaphore_task,
                      "uart-sem",
                      256,
                      NULL,
-                     5,
+                     UART_ISR_TASK_PRIORITY,
                      NULL ) == pdPASS );
     configASSERT(
         xTaskCreate( uart_rx_notification_task,
                      "uart-notify",
                      256,
                      NULL,
-                     6,
+                     UART_ISR_TASK_PRIORITY,
                      &uartRxNotificationTaskHandle ) == pdPASS );
     configASSERT( uartRxNotificationTaskHandle != NULL );
 
