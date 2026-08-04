@@ -4,7 +4,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
-#include <zephyr/sys/sys_io.h>
+#include <zephyr/arch/riscv/sys_io.h>
 #include <zephyr/sys/util.h>
 
 #define AETHERCORE_UART_RX_DATA_OFFSET    0x0U
