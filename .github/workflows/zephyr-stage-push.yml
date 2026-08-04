@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: zephyr-stage-slot-global
@@ -24,6 +25,21 @@ jobs:
       AETHERCORE_MILL_NO_DAEMON: "1"
 
     steps:
+      - name: Publish pending Zephyr stage status
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'pending',
+              context: 'zephyr/cached-stage',
+              description: 'Cached Zephyr Z1 stage is running',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            });
+
       - name: Checkout without deleting persistent workspace siblings
         uses: actions/checkout@v4
         with:
@@ -40,6 +56,7 @@ jobs:
           downloads="$cache/downloads"
           toolchain_archive="$downloads/toolchain_linux-x86_64_riscv64-zephyr-elf.tar.xz"
           hosttools_archive="$downloads/hosttools_linux-x86_64.tar.xz"
+          hosttools_root="$sdk/hosttools"
 
           mkdir -p "$sdk"
 
@@ -50,7 +67,6 @@ jobs:
           fi
           if [[ -z "$gcc_path" ]]; then
             echo "ERROR: cached RISC-V Zephyr GCC not found" >&2
-            find "$sdk" -maxdepth 5 -type d -print | sort | sed -n '1,160p' >&2
             exit 1
           fi
 
@@ -61,14 +77,20 @@ jobs:
             ln -s "$toolchain_root" "$expected_root"
           fi
 
-          dtc_path="$(find "$sdk" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
+          dtc_path="$(find "$sdk" "$hosttools_root" -type f -path '*/bin/dtc' -perm -u+x -print -quit 2>/dev/null)"
           if [[ -z "$dtc_path" && -s "$hosttools_archive" ]]; then
             tar -xJf "$hosttools_archive" -C "$sdk"
-            dtc_path="$(find "$sdk" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
+            installer="$(find "$sdk" -maxdepth 2 -type f -name 'zephyr-sdk-*-hosttools-standalone-*.sh' -perm -u+x -print -quit)"
+            if [[ -n "$installer" ]]; then
+              rm -rf "$hosttools_root"
+              mkdir -p "$hosttools_root"
+              "$installer" -S -D -y -d "$hosttools_root"
+            fi
+            dtc_path="$(find "$sdk" "$hosttools_root" -type f -path '*/bin/dtc' -perm -u+x -print -quit 2>/dev/null)"
           fi
           if [[ -z "$dtc_path" ]]; then
-            echo "ERROR: cached Zephyr SDK dtc not found" >&2
-            find "$sdk" -maxdepth 7 -type f -perm -u+x -print | sort | sed -n '1,200p' >&2
+            echo "ERROR: cached Zephyr SDK dtc not found after hosttools installer" >&2
+            find "$sdk" -maxdepth 5 \( -type f -name '*dtc*' -o -type f -name 'environment-setup-*' \) -print | sort >&2
             exit 1
           fi
 
@@ -102,3 +124,24 @@ jobs:
             minicore/build/zephyr-stage/host-build/zephyr/zephyr.dts
             minicore/build/zephyr-stage/host-build/zephyr/.config
             minicore/build/zephyr-stage/host-build/evidence/
+
+      - name: Publish final Zephyr stage status
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ job.status }}';
+            const state = result === 'success' ? 'success' : (result === 'cancelled' ? 'error' : 'failure');
+            const description = state === 'success'
+              ? 'Cached Zephyr Z1 stage passed'
+              : `Cached Zephyr Z1 stage ${result}`;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: 'zephyr/cached-stage',
+              description,
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            });
