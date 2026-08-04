@@ -104,6 +104,19 @@ else
     "$WEST" config manifest.path "$manifest_rel"
   )
 fi
+
+# A cancelled shallow fetch can leave Git lock files after its process has been
+# terminated. This workflow has a single concurrency slot, so no other west/git
+# update can be active when the replacement run reaches this point.
+if [[ -d "$WORKSPACE_ROOT/zephyr/.git" ]]; then
+  for lock in shallow.lock index.lock config.lock HEAD.lock; do
+    if [[ -e "$WORKSPACE_ROOT/zephyr/.git/$lock" ]]; then
+      echo "removing_stale_git_lock=$WORKSPACE_ROOT/zephyr/.git/$lock"
+      rm -f "$WORKSPACE_ROOT/zephyr/.git/$lock"
+    fi
+  done
+fi
+
 (
   cd "$WORKSPACE_ROOT"
   "$WEST" config manifest.group-filter -- "-hal,-tools,-bootloader,-babblesim"
