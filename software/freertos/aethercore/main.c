@@ -10,6 +10,7 @@
 #define EXPECTED_SUM               ( ( MESSAGE_COUNT * ( MESSAGE_COUNT + 1U ) ) / 2U )
 #define TICKLESS_PROOF_DELAY_TICKS 32U
 #define MINIMUM_SUPPRESSED_TICKS    2U
+#define EXPECTED_UART_RX_BYTE       0x5aU
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -19,6 +20,12 @@ static volatile uint32_t consumedCount;
 static volatile uint32_t consumedSum;
 static volatile uint32_t producerDone;
 static volatile uint32_t consumerDone;
+
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    static QueueHandle_t uartRxQueue;
+    static volatile uint32_t uartRxTaskDone;
+    static volatile uint32_t uartRxObservedByte;
+#endif
 
 static void producer_task( void * context )
 {
@@ -71,19 +78,38 @@ static void consumer_task( void * context )
     vTaskDelete( NULL );
 }
 
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+static void uart_rx_task( void * context )
+{
+    uint8_t byte = 0U;
+
+    ( void ) context;
+    configASSERT( xQueueReceive( uartRxQueue, &byte, portMAX_DELAY ) == pdPASS );
+    configASSERT( byte == EXPECTED_UART_RX_BYTE );
+
+    uartRxObservedByte = byte;
+    uartRxTaskDone = 1U;
+    vTaskDelete( NULL );
+}
+#endif
+
 static void monitor_task( void * context )
 {
     ( void ) context;
 
-    while( ( producerDone == 0U ) || ( consumerDone == 0U ) )
+    while( ( producerDone == 0U ) || ( consumerDone == 0U )
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+           || ( uartRxTaskDone == 0U )
+#endif
+         )
     {
         vTaskDelay( 1 );
     }
 
     /* With every application task blocked for a long interval, the idle task
      * must suppress periodic ticks, execute WFI with MIE masked, wake from the
-     * raw Machine timer request, compensate the skipped kernel ticks, and then
-     * release this task at its original deadline. */
+     * raw interrupt request, compensate skipped kernel ticks, and then release
+     * this task at its original deadline. */
     vTaskDelay( TICKLESS_PROOF_DELAY_TICKS );
 
     const TickType_t ticks = xTaskGetTickCount();
@@ -94,6 +120,15 @@ static void monitor_task( void * context )
     configASSERT( aetherTicklessEntries >= 1U );
     configASSERT( aetherTicklessWakeups >= 1U );
     configASSERT( aetherTicklessSuppressedTicks >= MINIMUM_SUPPRESSED_TICKS );
+
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    configASSERT( uartRxObservedByte == EXPECTED_UART_RX_BYTE );
+    configASSERT( aetherUartRxInterrupts == 1U );
+    configASSERT( aetherUartRxBytes == 1U );
+    configASSERT( aetherUartRxYields >= 1U );
+    configASSERT( aetherTicklessEarlyWakeups >= 1U );
+    aether_uart_write( "FREERTOS IRQ PASS rx=1 claim=1 yield>=1 early>=1\n" );
+#endif
 
     aether_uart_write( "FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2\n" );
     aether_uart_write( "FREERTOS PASS queue=64 semaphore=8 ticks>=48\n" );
@@ -108,6 +143,14 @@ int main( void )
     batchSemaphore = xSemaphoreCreateBinary();
     configASSERT( messageQueue != NULL );
     configASSERT( batchSemaphore != NULL );
+
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    uartRxQueue = xQueueCreate( 4, sizeof( uint8_t ) );
+    configASSERT( uartRxQueue != NULL );
+    aether_uart_rx_start( uartRxQueue );
+    configASSERT(
+        xTaskCreate( uart_rx_task, "uart-rx", 256, NULL, 4, NULL ) == pdPASS );
+#endif
 
     configASSERT(
         xTaskCreate( consumer_task, "consumer", 256, NULL, 3, NULL ) == pdPASS );
