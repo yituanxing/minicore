@@ -10,9 +10,9 @@ import chisel3.util._
   * service so it cannot be claimed again until completion. If the source level
   * remains asserted after completion, it immediately becomes pending again.
   *
-  * This module deliberately separates arbitration/state from the eventual MMIO
-  * register map. The next integration slice can place the same state machine
-  * behind the AetherCore data bus without changing claim/complete semantics.
+  * Arbitration/state is kept independent from the MMIO register map so direct
+  * module tests and bus-facing integration share exactly the same claim and
+  * completion semantics.
   */
 class MachinePlic(
     val sourceCount: Int = 8,
@@ -44,6 +44,7 @@ class MachinePlic(
 
     val interrupt = Output(Bool())
     val pending = Output(UInt(sourceCount.W))
+    val priorities = Output(Vec(sourceCount, UInt(priorityBits.W)))
     val enabled = Output(UInt(sourceCount.W))
     val threshold = Output(UInt(priorityBits.W))
     val inService = Output(UInt(sourceCount.W))
@@ -73,6 +74,7 @@ class MachinePlic(
   io.claim := selectedId
   io.interrupt := selectedId =/= 0.U
   io.pending := pending
+  io.priorities := priorities
   io.enabled := enabled
   io.threshold := threshold
   io.inService := inService
