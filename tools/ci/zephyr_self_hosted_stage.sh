@@ -94,7 +94,10 @@ phase west-workspace
 mkdir -p "$WORKSPACE_ROOT"
 manifest_rel="$(realpath --relative-to="$WORKSPACE_ROOT" "$ROOT")"
 if [[ ! -d "$WORKSPACE_ROOT/.west" ]]; then
-  "$WEST" init -l "$ROOT" "$WORKSPACE_ROOT"
+  (
+    cd "$WORKSPACE_ROOT"
+    "$WEST" init -l "$manifest_rel"
+  )
 else
   (
     cd "$WORKSPACE_ROOT"
