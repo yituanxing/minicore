@@ -3,7 +3,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "software" / "zephyr" / "west.yml"
+MANIFEST = ROOT / "west.yml"
 APP_ROOT = ROOT / "software" / "zephyr" / "apps" / "kernel_smoke"
 BRINGUP = ROOT / "docs" / "zephyr" / "BRINGUP.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "zephyr-host-gate.yml"
@@ -16,6 +16,7 @@ class ZephyrStageContractTest(unittest.TestCase):
         self.assertIn("revision: v3.7.2", text)
         self.assertIn("import: true", text)
         self.assertIn("path: minicore", text)
+        self.assertFalse((ROOT / "software" / "zephyr" / "west.yml").exists())
 
     def test_kernel_smoke_exercises_threads_semaphores_and_timer(self) -> None:
         source = (APP_ROOT / "src" / "main.c").read_text(encoding="utf-8")
@@ -48,6 +49,8 @@ class ZephyrStageContractTest(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-latest", text)
         self.assertIn("timeout-minutes: 20", text)
         self.assertIn("cancel-in-progress: true", text)
+        self.assertIn("path: minicore", text)
+        self.assertIn("app-path: minicore", text)
         self.assertIn("zephyrproject-rtos/action-zephyr-setup@v1", text)
         self.assertIn("sdk-version: 0.16.9", text)
         self.assertIn("toolchains: riscv64-zephyr-elf", text)
