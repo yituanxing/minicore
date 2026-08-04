@@ -24,7 +24,7 @@ class FreeRtosIrqPlatformTest(unittest.TestCase):
 
         text = IRQ_CI_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("contract=freertos-rv32-machine-external-unified-v1", text)
-        self.assertIn("stall_periods=0,1,3,5,7", text)
+        self.assertIn("stall_periods=0,2,3,5,7", text)
         self.assertIn("negative_wrong_byte=true", text)
         self.assertIn("negative_missing_external_event=true", text)
         self.assertIn("event_groups=true", text)
@@ -35,7 +35,7 @@ class FreeRtosIrqPlatformTest(unittest.TestCase):
 
     def test_irq_makefile_runs_positive_matrix_and_fail_closed_probes(self) -> None:
         text = IRQ_MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("IRQ_STALL_PERIODS := 0 1 3 5 7", text)
+        self.assertIn("IRQ_STALL_PERIODS := 0 2 3 5 7", text)
         self.assertIn("stream_buffer.c", text)
         self.assertIn("buffer_qualification.c", text)
         self.assertIn("--inject-uart-rx 0x5a", text)
@@ -45,6 +45,7 @@ class FreeRtosIrqPlatformTest(unittest.TestCase):
         self.assertIn("FREERTOS STREAM BUFFER PASS bytes=8 handoff=1", text)
         self.assertIn("FREERTOS MESSAGE BUFFER PASS bytes=7 handoff=1", text)
         self.assertIn("FAIL: timeout after 600000 cycles", text)
+        self.assertIn("if [ \"$$stall\" -eq 0 ]", text)
 
     def test_kernel_object_sources_require_priority_handoffs(self) -> None:
         buffers = (APP / "buffer_qualification.c").read_text(encoding="utf-8")
@@ -60,6 +61,9 @@ class FreeRtosIrqPlatformTest(unittest.TestCase):
         self.assertIn("xEventGroupWaitBits", events)
         self.assertIn("xTimerCreate", events)
         self.assertIn("aether_start_buffer_qualification", events)
+        self.assertIn("kernel_object_report_task", events)
+        self.assertIn("aetherStreamBufferDone == 1U", events)
+        self.assertIn("aetherMessageBufferDone == 1U", events)
 
     def test_full_gate_places_irq_matrix_before_reference_difftest(self) -> None:
         text = FULL_WORKFLOW.read_text(encoding="utf-8")
