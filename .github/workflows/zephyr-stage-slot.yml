@@ -18,7 +18,10 @@ jobs:
   z1-build:
     name: Cached bounded Zephyr Z1 build
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 25
+    # One cold-cache warm-up is allowed to finish the resumable SDK downloads.
+    # After Z1 is built, this temporary validation base is removed and normal
+    # source-only stage slots return to the shorter bounded policy.
+    timeout-minutes: 90
     env:
       AETHERCORE_MILL_NO_DAEMON: "1"
 
