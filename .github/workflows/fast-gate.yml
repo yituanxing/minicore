@@ -89,6 +89,7 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.MachineInterruptArbiterSpec
           ./mill aethercore.test.testOnly aethercore.MachineExternalCsrSpec
           ./mill aethercore.test.testOnly aethercore.MachineExternalInterruptCoreSpec
+          ./mill aethercore.test.testOnly aethercore.AetherCoreInterruptPlatformSpec
           ./mill aethercore.test.testOnly aethercore.WaitForInterruptCoreSpec
 
       - name: Incremental FreeRTOS WFI workload
@@ -134,7 +135,7 @@ jobs:
             echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry and WFI suites run for interrupt/core changes'
+            echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- cached Verilator identity is checked without a disposable build probe'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- FreeRTOS exact WFI DiffTest runs incrementally at stall=0 and stall=5'
