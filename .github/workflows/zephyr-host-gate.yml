@@ -8,9 +8,14 @@ on:
       - west.yml
       - zephyr/module.yml
       - software/zephyr/**
+      - software/freertos/aethercore/platform.c
       - docs/zephyr/**
       - tests_py/test_zephyr_*.py
       - tools/ci/zephyr_host_build.sh
+      - src/main/scala/aethercore/core/MachinePlicMmio.scala
+      - src/main/scala/aethercore/sim/MachineInterruptPlatform.scala
+      - src/test/scala/aethercore/MachinePlicMmioSpec.scala
+      - src/test/scala/aethercore/MachineInterruptPlatformSpec.scala
       - .github/workflows/zephyr-host-gate.yml
   workflow_dispatch:
 
@@ -38,9 +43,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Java for Chisel compile
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Validate Zephyr stage contracts
         working-directory: minicore
         run: python3 -m unittest discover -s tests_py -p 'test_zephyr_*.py' -v
+
+      - name: Compile Zephyr-facing Chisel sources
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x mill
+          ./mill aethercore.compile
 
       - name: Set up pinned Zephyr workspace and RISC-V SDK
         uses: zephyrproject-rtos/action-zephyr-setup@v1
