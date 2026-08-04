@@ -118,7 +118,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
             text,
         )
         self.assertIn(
-            'EXPECTED_BINARY_SHA256="b7c29d7da5bc29cb98bb747e2bb34251f27801810003b108db9e7417f3ae2cc3"',
+            'EXPECTED_BINARY_SHA256="eb98b161627a9226bd3fe94077d714aedbb116f85bca875dcd5c43e5613468df"',
             text,
         )
         self.assertIn(
