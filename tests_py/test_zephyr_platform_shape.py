@@ -4,6 +4,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 ZEPHYR = ROOT / "software" / "zephyr"
+PLIC_MMIO = ROOT / "src" / "main" / "scala" / "aethercore" / "core" / "MachinePlicMmio.scala"
+PLIC_SPEC = ROOT / "src" / "test" / "scala" / "aethercore" / "MachinePlicMmioSpec.scala"
+PLATFORM_SPEC = ROOT / "src" / "test" / "scala" / "aethercore" / "MachineInterruptPlatformSpec.scala"
+FREERTOS_PLATFORM = ROOT / "software" / "freertos" / "aethercore" / "platform.c"
 
 
 class ZephyrPlatformShapeTest(unittest.TestCase):
@@ -51,6 +55,29 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
         self.assertIn("config NUM_IRQS\n\tdefault 13", defaults)
         self.assertNotIn("RISCV_ISA_EXT_A", family + profile)
         self.assertNotIn("RISCV_ISA_EXT_C", family + profile)
+
+    def test_plic_mmio_uses_architectural_one_based_register_bits(self) -> None:
+        mmio = PLIC_MMIO.read_text(encoding="utf-8")
+        mmio_spec = PLIC_SPEC.read_text(encoding="utf-8")
+        platform_spec = PLATFORM_SPEC.read_text(encoding="utf-8")
+        freertos = FREERTOS_PLATFORM.read_text(encoding="utf-8")
+
+        for token in (
+            "val priorityZeroHit",
+            "priorityZeroHit || priorityHit",
+            "val shifted = Cat(value, 0.U(1.W))",
+            "plic.io.enableWriteData := enableMerged(sourceCount, 1)",
+            "sourceCount <= 31",
+        ):
+            self.assertIn(token, mmio)
+
+        self.assertIn("read(dut, MachinePlicMmioMap.Enable) shouldBe 0x0e", mmio_spec)
+        self.assertIn("read(dut, MachinePlicMmioMap.Pending) shouldBe 0x0e", mmio_spec)
+        self.assertIn("read(dut, MachinePlicMmioMap.Enable) shouldBe 0x14", mmio_spec)
+        self.assertIn("MachinePlicMmioMap.Enable, 2", platform_spec)
+        self.assertIn("MachinePlicMmioMap.Pending) shouldBe 2", platform_spec)
+        self.assertIn("1UL << AETHERCORE_UART_RX_SOURCE_ID", freertos)
+        self.assertNotIn("AETHERCORE_UART_RX_SOURCE_ID - 1UL", freertos)
 
     def test_uart_driver_stays_polling_only_for_boot_milestone(self) -> None:
         source = (
