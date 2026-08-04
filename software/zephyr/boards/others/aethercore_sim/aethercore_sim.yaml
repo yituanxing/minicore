@@ -1,0 +1,10 @@
+identifier: aethercore_sim
+name: AetherCore Verilator Simulation
+arch: riscv
+toolchain:
+  - zephyr
+  - xtools
+supported:
+  - serial
+testing:
+  default: false
