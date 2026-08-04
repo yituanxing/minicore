@@ -18,9 +18,6 @@ jobs:
   z1-build:
     name: Cached bounded Zephyr Z1 build
     runs-on: [self-hosted, Linux, X64, minicore]
-    # One cold-cache warm-up is allowed to finish the resumable SDK downloads.
-    # After Z1 is built, this temporary validation base is removed and normal
-    # source-only stage slots return to the shorter bounded policy.
     timeout-minutes: 90
     env:
       AETHERCORE_MILL_NO_DAEMON: "1"
@@ -42,6 +39,7 @@ jobs:
           downloads="$cache/downloads"
           toolchain_archive="$downloads/toolchain_linux-x86_64_riscv64-zephyr-elf.tar.xz"
           hosttools_archive="$downloads/hosttools_linux-x86_64.tar.xz"
+          hosttools_root="$sdk/hosttools"
 
           mkdir -p "$sdk"
 
@@ -52,7 +50,6 @@ jobs:
           fi
           if [[ -z "$gcc_path" ]]; then
             echo "ERROR: cached RISC-V Zephyr GCC not found" >&2
-            find "$sdk" -maxdepth 5 -type d -print | sort | sed -n '1,160p' >&2
             exit 1
           fi
 
@@ -66,11 +63,17 @@ jobs:
           dtc_path="$(find "$sdk" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
           if [[ -z "$dtc_path" && -s "$hosttools_archive" ]]; then
             tar -xJf "$hosttools_archive" -C "$sdk"
-            dtc_path="$(find "$sdk" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
+            installer="$(find "$sdk" -maxdepth 2 -type f -name 'zephyr-sdk-*-hosttools-standalone-*.sh' -perm -u+x -print -quit)"
+            if [[ -n "$installer" ]]; then
+              rm -rf "$hosttools_root"
+              mkdir -p "$hosttools_root"
+              "$installer" -S -D -y -d "$hosttools_root"
+            fi
+            dtc_path="$(find "$sdk" "$hosttools_root" -type f -path '*/bin/dtc' -perm -u+x -print -quit)"
           fi
           if [[ -z "$dtc_path" ]]; then
-            echo "ERROR: cached Zephyr SDK dtc not found" >&2
-            find "$sdk" -maxdepth 7 -type f -perm -u+x -print | sort | sed -n '1,200p' >&2
+            echo "ERROR: cached Zephyr SDK dtc not found after hosttools installer" >&2
+            find "$sdk" -maxdepth 5 -type f -name '*dtc*' -o -name 'environment-setup-*' | sort >&2
             exit 1
           fi
 
