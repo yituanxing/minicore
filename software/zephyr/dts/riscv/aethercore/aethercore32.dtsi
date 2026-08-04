@@ -1,0 +1,72 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "zephyr,aethercore-sim";
+	model = "AetherCore RV32IM simulation platform";
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <1000000>;
+
+		cpu0: cpu@0 {
+			compatible = "riscv";
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			clock-frequency = <1000000>;
+			riscv,isa = "rv32im_zicsr_zifencei";
+			mmu-type = "riscv,none";
+
+			cpu_intc: interrupt-controller {
+				compatible = "riscv,cpu-intc";
+				#address-cells = <0>;
+				#interrupt-cells = <1>;
+				interrupt-controller;
+			};
+		};
+	};
+
+	ram0: memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x04000000>;
+	};
+
+	uart0: serial@10000000 {
+		compatible = "zephyr,aethercore-uart";
+		reg = <0x10000000 0x4>, <0x10000100 0x10>;
+		reg-names = "tx", "rx";
+		current-speed = <115200>;
+		interrupt-parent = <&plic>;
+		interrupts = <1 1>;
+		status = "disabled";
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		plic: interrupt-controller@c000000 {
+			compatible = "sifive,plic-1.0.0";
+			reg = <0x0c000000 0x00400000>;
+			#address-cells = <0>;
+			#interrupt-cells = <2>;
+			interrupt-controller;
+			interrupts-extended = <&cpu_intc 11>;
+			riscv,max-priority = <7>;
+			riscv,ndev = <1>;
+		};
+
+		clint: timer@2000000 {
+			compatible = "sifive,clint0";
+			reg = <0x02000000 0x00010000>;
+			interrupts-extended = <&cpu_intc 3 &cpu_intc 7>;
+		};
+	};
+};
