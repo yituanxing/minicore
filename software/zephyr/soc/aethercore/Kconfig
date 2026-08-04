@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FAMILY_AETHERCORE
+	select ATOMIC_OPERATIONS_C
+	select INCLUDE_RESET_VECTOR
+	select RISCV
+	select RISCV_PRIVILEGED
+	select RISCV_HAS_PLIC
+
+if SOC_FAMILY_AETHERCORE
+
+rsource "*/Kconfig"
+
+endif # SOC_FAMILY_AETHERCORE
