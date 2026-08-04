@@ -32,10 +32,14 @@ extern volatile uint32_t aetherTicklessAborts;
 extern volatile uint32_t aetherUartRxInterrupts;
 extern volatile uint32_t aetherUartRxBytes;
 extern volatile uint32_t aetherUartRxYields;
+extern volatile uint32_t aetherUartRxSemaphoreSignals;
+extern volatile uint32_t aetherUartRxNotifications;
 
 void aether_uart_putc( char value );
 void aether_uart_write( const char * text );
-void aether_uart_rx_start( void * queue );
+void aether_uart_rx_start( void * queue,
+                           void * semaphore,
+                           void * notificationTask );
 void aether_exit( uint32_t code ) __attribute__( ( noreturn ) );
 void aether_assert_fail( const char * file, int line ) __attribute__( ( noreturn ) );
 
