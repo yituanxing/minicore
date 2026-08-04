@@ -5,9 +5,10 @@ on:
     branches:
       - agent/zephyr-**
     paths:
+      - zephyr/module.yml
       - software/zephyr/**
       - docs/zephyr/**
-      - tests_py/test_zephyr_stage_contract.py
+      - tests_py/test_zephyr_*.py
       - .github/workflows/zephyr-host-gate.yml
   workflow_dispatch:
 
@@ -20,7 +21,7 @@ concurrency:
 
 jobs:
   contract:
-    name: Zephyr manifest and workload contract
+    name: Zephyr platform contract
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -28,5 +29,5 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate Zephyr stage-zero contract
-        run: python3 -m unittest tests_py.test_zephyr_stage_contract -v
+      - name: Validate Zephyr stage contracts
+        run: python3 -m unittest discover -s tests_py -p 'test_zephyr_*.py' -v
