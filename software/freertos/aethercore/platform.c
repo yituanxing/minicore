@@ -1,4 +1,5 @@
 #include "FreeRTOS.h"
+#include "queue.h"
 #include "task.h"
 #include "platform.h"
 
@@ -15,6 +16,13 @@ volatile uint32_t aetherTicklessWakeups;
 volatile uint32_t aetherTicklessSuppressedTicks;
 volatile uint32_t aetherTicklessEarlyWakeups;
 volatile uint32_t aetherTicklessAborts;
+volatile uint32_t aetherUartRxInterrupts;
+volatile uint32_t aetherUartRxBytes;
+volatile uint32_t aetherUartRxYields;
+
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    static QueueHandle_t aetherUartRxQueue;
+#endif
 
 static uint64_t aether_read_mtime( void )
 {
@@ -103,6 +111,65 @@ void aether_uart_write( const char * text )
         aether_uart_putc( *text++ );
     }
 }
+
+void aether_uart_rx_start( void * queue )
+{
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+    const uint32_t meie = AETHERCORE_MIE_MEIE;
+
+    configASSERT( queue != NULL );
+    aetherUartRxQueue = ( QueueHandle_t ) queue;
+
+    *( ( volatile uint32_t * ) AETHERCORE_PLIC_SOURCE1_PRIORITY ) = 1U;
+    *( ( volatile uint32_t * ) AETHERCORE_PLIC_ENABLE ) =
+        ( uint32_t ) ( 1UL << ( AETHERCORE_UART_RX_SOURCE_ID - 1UL ) );
+    *( ( volatile uint32_t * ) AETHERCORE_PLIC_THRESHOLD ) = 0U;
+    *( ( volatile uint32_t * ) AETHERCORE_UART_RX_CONTROL ) = 1U;
+
+    __asm volatile ( "fence iorw, iorw" ::: "memory" );
+    __asm volatile ( "csrs mie, %0" :: "r" ( meie ) : "memory" );
+#else
+    ( void ) queue;
+#endif
+}
+
+#if AETHERCORE_FREERTOS_EXTERNAL_IRQ
+void freertos_risc_v_application_interrupt_handler( void )
+{
+    BaseType_t higherPriorityTaskWoken = pdFALSE;
+    uint32_t cause;
+    uint32_t claim;
+    uint8_t byte;
+
+    __asm volatile ( "csrr %0, mcause" : "=r" ( cause ) );
+    configASSERT( cause == 0x8000000bUL );
+
+    claim = *( ( volatile uint32_t * ) AETHERCORE_PLIC_CLAIM_COMPLETE );
+    configASSERT( claim == ( uint32_t ) AETHERCORE_UART_RX_SOURCE_ID );
+    configASSERT( aetherUartRxQueue != NULL );
+
+    byte = ( uint8_t )
+           *( ( volatile uint32_t * ) AETHERCORE_UART_RX_DATA );
+    configASSERT(
+        xQueueSendFromISR( aetherUartRxQueue,
+                           &byte,
+                           &higherPriorityTaskWoken ) == pdPASS );
+
+    aetherUartRxInterrupts++;
+    aetherUartRxBytes++;
+
+    /* Drain the level source before completion. The PLIC may immediately
+     * re-pend a completed source if the UART FIFO still contains data. */
+    *( ( volatile uint32_t * ) AETHERCORE_PLIC_CLAIM_COMPLETE ) = claim;
+    __asm volatile ( "fence iorw, iorw" ::: "memory" );
+
+    if( higherPriorityTaskWoken != pdFALSE )
+    {
+        aetherUartRxYields++;
+    }
+    portYIELD_FROM_ISR( higherPriorityTaskWoken );
+}
+#endif
 
 void aether_exit( uint32_t code )
 {
@@ -221,9 +288,9 @@ void vPortSuppressTicksAndSleep( TickType_t expectedIdleTicks )
     }
     else
     {
-        /* Future external-interrupt support can wake WFI before the timer
-         * deadline. Restore the first periodic boundary after 'now' and account
-         * only for complete tick periods that elapsed before that early wake. */
+        /* An external interrupt can wake WFI before the timer deadline. Restore
+         * the first periodic boundary after 'now' and account only for complete
+         * tick periods that elapsed before that early wake. */
         uint64_t elapsedTicks = 0U;
         uint64_t restoredDeadline;
 
