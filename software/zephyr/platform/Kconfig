@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config AETHERCORE_SIM_EXIT
+	bool "AetherCore simulation exit service"
+	default y
+	depends on DT_HAS_ZEPHYR_AETHERCORE_EXIT_ENABLED
+	help
+	  Provide a deterministic write to the AetherCoreSimTop exit register after
+	  the Zephyr qualification workload reaches a terminal result.
