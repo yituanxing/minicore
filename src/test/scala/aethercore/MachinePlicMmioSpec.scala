@@ -107,7 +107,7 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "honor byte masks and reject unknown or misaligned addresses" in {
+  it should "honor byte masks, tolerate reserved source zero and reject unknown addresses" in {
     simulate(new MachinePlicMmio(sourceCount = 4, priorityBits = 3)) { dut =>
       initialize(dut)
 
@@ -122,7 +122,13 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
       write(dut, MachinePlicMmioMap.priority(2), 0xff00, mask = 0x2)
       read(dut, MachinePlicMmioMap.priority(2)) shouldBe 7
 
-      expectReadFault(dut, MachinePlicMmioMap.PriorityBase)
+      // Source zero is reserved, but conventional PLIC software clears it.
+      // Reads return zero and writes are ignored without changing real sources.
+      read(dut, MachinePlicMmioMap.PriorityBase) shouldBe 0
+      write(dut, MachinePlicMmioMap.PriorityBase, 7)
+      read(dut, MachinePlicMmioMap.PriorityBase) shouldBe 0
+      read(dut, MachinePlicMmioMap.priority(2)) shouldBe 7
+
       expectReadFault(dut, MachinePlicMmioMap.priority(1) + 2)
       expectReadFault(dut, 0x003000)
 
