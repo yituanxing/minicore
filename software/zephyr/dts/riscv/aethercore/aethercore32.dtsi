@@ -60,7 +60,8 @@
 			interrupt-controller;
 			interrupts-extended = <&cpu_intc 11>;
 			riscv,max-priority = <7>;
-			riscv,ndev = <1>;
+			/* Source zero is reserved; source one is UART RX. */
+			riscv,ndev = <2>;
 		};
 
 		clint: timer@2000000 {
