@@ -1,5 +1,5 @@
 contract=zephyr-v3.7.2-aethercore-z1-host-build-v1
-mode=cached-sdk-layout-normalization-and-build
+mode=direct-cached-sdk-layout-normalization-and-build
 runner=minicore-wsl
 timeout_minutes=90
 cache=persistent
@@ -10,4 +10,5 @@ west_init=workspace-root-local-manifest
 host_tools=zephyr-sdk-dtc,user-cached-gperf
 sdk_download=resumable-split-assets-sha256-verified
 sdk_layout=auto-discovered-and-normalized
-request=8
+trigger=push-only-global-slot
+request=9
