@@ -1,0 +1,22 @@
+name: GitHub Hosted Runner Probe
+
+on:
+  pull_request:
+    branches:
+      - agent/zephyr-host-ci-base
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Hosted runner allocation probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm hosted runner allocation
+        run: |
+          echo "runner=${RUNNER_NAME}"
+          echo "os=${RUNNER_OS}"
+          echo "arch=${RUNNER_ARCH}"
+          uname -a
