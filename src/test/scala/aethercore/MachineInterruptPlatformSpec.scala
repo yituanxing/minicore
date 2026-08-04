@@ -63,12 +63,12 @@ class MachineInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chisel
     dut.io.rxValid.poke(false.B)
   }
 
-  it should "route UART RX level interrupts through PLIC source one" in {
+  it should "route UART RX level interrupts through architectural PLIC source one" in {
     simulate(new MachineInterruptPlatform()) { dut =>
       initialize(dut)
 
       write(dut, plicBase + MachinePlicMmioMap.priority(1), 3)
-      write(dut, plicBase + MachinePlicMmioMap.Enable, 1)
+      write(dut, plicBase + MachinePlicMmioMap.Enable, 2)
       write(dut, plicBase + MachinePlicMmioMap.Threshold, 0)
       write(dut, uartBase + MachineUartRxMap.Control, 1)
 
@@ -76,7 +76,7 @@ class MachineInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chisel
       push(dut, 0x5a)
       dut.io.uartInterrupt.expect(true.B)
       dut.io.externalInterrupt.expect(true.B)
-      read(dut, plicBase + MachinePlicMmioMap.Pending) shouldBe 1
+      read(dut, plicBase + MachinePlicMmioMap.Pending) shouldBe 2
 
       // Claiming source one suppresses repeated delivery while it is in service.
       read(dut, plicBase + MachinePlicMmioMap.ClaimComplete) shouldBe 1
