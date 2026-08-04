@@ -17,7 +17,8 @@ class AetherCoreSimTop(
   private val busBytes = config.platform.busBytes
   private val plicBase = BigInt("0c000000", 16)
   private val plicLimit = plicBase + BigInt("00400000", 16)
-  private val uartRxLimit = config.platform.uartAddress + BigInt(0x10)
+  private val uartRxBase = config.platform.uartAddress + BigInt(0x100)
+  private val uartRxLimit = uartRxBase + BigInt(0x10)
 
   if (withMachineInterruptPlatform) {
     require(busDataBits == 32,
@@ -67,8 +68,9 @@ class AetherCoreSimTop(
 
   val core = Module(new AetherCore(config, withMachineExternalInterrupt = withMachineInterruptPlatform))
   val interruptPlatform =
-    if (withMachineInterruptPlatform) Some(Module(new MachineInterruptPlatform(addressBits = paddrBits)))
-    else None
+    if (withMachineInterruptPlatform) {
+      Some(Module(new MachineInterruptPlatform(addressBits = paddrBits, uartBase = uartRxBase)))
+    } else None
 
   val uartAddress = config.platform.uartAddress.U(paddrBits.W)
   val exitAddress = config.platform.exitAddress.U(paddrBits.W)
@@ -91,8 +93,8 @@ class AetherCoreSimTop(
       core.io.dmem.addr < plicLimit.U(paddrBits.W)
   } else false.B
   val isUartRxAddress = if (withMachineInterruptPlatform) {
-    core.io.dmem.valid && core.io.dmem.addr >= uartAddress &&
-      core.io.dmem.addr < uartRxLimit.U(paddrBits.W) && !isUartTx
+    core.io.dmem.valid && core.io.dmem.addr >= uartRxBase.U(paddrBits.W) &&
+      core.io.dmem.addr < uartRxLimit.U(paddrBits.W)
   } else false.B
   val isInterruptMmio = isPlicAddress || isUartRxAddress
 
