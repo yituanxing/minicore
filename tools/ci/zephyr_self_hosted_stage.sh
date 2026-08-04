@@ -13,6 +13,8 @@ STATE_FILE="$ROOT/build/zephyr-stage/stage-state.txt"
 BUILD_DIR="$ROOT/build/zephyr-stage/host-build"
 SDK_ARCHIVE="$DOWNLOAD_DIR/zephyr-sdk-0.16.9_linux-x86_64_minimal.tar.xz"
 SDK_URL="https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.9/zephyr-sdk-0.16.9_linux-x86_64_minimal.tar.xz"
+GET_PIP="$DOWNLOAD_DIR/get-pip.py"
+GET_PIP_URL="https://bootstrap.pypa.io/get-pip.py"
 GPERF_VERSION="3.1"
 GPERF_ARCHIVE="$DOWNLOAD_DIR/gperf-$GPERF_VERSION.tar.gz"
 GPERF_URL="https://ftp.gnu.org/gnu/gperf/gperf-$GPERF_VERSION.tar.gz"
@@ -56,7 +58,6 @@ missing_commands=()
 for command in "${required_commands[@]}"; do
   command -v "$command" >/dev/null 2>&1 || missing_commands+=("$command")
 done
-python3 -m venv --help >/dev/null 2>&1 || missing_commands+=(python3-venv)
 if (( ${#missing_commands[@]} != 0 )); then
   echo "ERROR: missing non-provisioned host commands: ${missing_commands[*]}" >&2
   exit 1
@@ -69,8 +70,21 @@ java -version
 
 phase python-environment
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  python3 -m venv "$VENV_DIR"
+  rm -rf "$VENV_DIR"
+  python3 -m venv --without-pip "$VENV_DIR"
 fi
+if ! "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+  if ! "$VENV_DIR/bin/python" -m ensurepip --upgrade; then
+    if [[ ! -s "$GET_PIP" ]]; then
+      temp_get_pip="$GET_PIP.part"
+      rm -f "$temp_get_pip"
+      wget --tries=3 --timeout=30 --progress=dot:giga -O "$temp_get_pip" "$GET_PIP_URL"
+      mv "$temp_get_pip" "$GET_PIP"
+    fi
+    "$VENV_DIR/bin/python" "$GET_PIP"
+  fi
+fi
+"$VENV_DIR/bin/python" -m pip --version
 "$VENV_DIR/bin/python" -m pip install --upgrade pip wheel
 "$VENV_DIR/bin/python" -m pip install "west==1.3.0"
 WEST="$VENV_DIR/bin/west"
