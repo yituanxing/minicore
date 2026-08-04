@@ -11,6 +11,7 @@
 #define TICKLESS_PROOF_DELAY_TICKS 32U
 #define MINIMUM_SUPPRESSED_TICKS    2U
 #define EXPECTED_UART_RX_BYTE       0x5aU
+#define UART_ISR_COMPLETION_COUNT   3U
 
 static QueueHandle_t messageQueue;
 static SemaphoreHandle_t batchSemaphore;
@@ -23,8 +24,12 @@ static volatile uint32_t consumerDone;
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     static QueueHandle_t uartRxQueue;
+    static SemaphoreHandle_t uartRxSignalSemaphore;
     static SemaphoreHandle_t uartRxDoneSemaphore;
-    static volatile uint32_t uartRxTaskDone;
+    static TaskHandle_t uartRxNotificationTaskHandle;
+    static volatile uint32_t uartRxQueueTaskDone;
+    static volatile uint32_t uartRxSemaphoreTaskDone;
+    static volatile uint32_t uartRxNotificationTaskDone;
     static volatile uint32_t uartRxObservedByte;
 #endif
 
@@ -80,7 +85,7 @@ static void consumer_task( void * context )
 }
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
-static void uart_rx_task( void * context )
+static void uart_rx_queue_task( void * context )
 {
     uint8_t byte = 0U;
 
@@ -88,9 +93,29 @@ static void uart_rx_task( void * context )
     configASSERT( xQueueReceive( uartRxQueue, &byte, portMAX_DELAY ) == pdPASS );
     configASSERT( byte == EXPECTED_UART_RX_BYTE );
 
-    aether_uart_write( "FREERTOS IRQ TASK\n" );
     uartRxObservedByte = byte;
-    uartRxTaskDone = 1U;
+    uartRxQueueTaskDone = 1U;
+    configASSERT( xSemaphoreGive( uartRxDoneSemaphore ) == pdPASS );
+    vTaskDelete( NULL );
+}
+
+static void uart_rx_semaphore_task( void * context )
+{
+    ( void ) context;
+    configASSERT(
+        xSemaphoreTake( uartRxSignalSemaphore, portMAX_DELAY ) == pdPASS );
+
+    uartRxSemaphoreTaskDone = 1U;
+    configASSERT( xSemaphoreGive( uartRxDoneSemaphore ) == pdPASS );
+    vTaskDelete( NULL );
+}
+
+static void uart_rx_notification_task( void * context )
+{
+    ( void ) context;
+    configASSERT( ulTaskNotifyTake( pdTRUE, portMAX_DELAY ) == 1U );
+
+    uartRxNotificationTaskDone = 1U;
     configASSERT( xSemaphoreGive( uartRxDoneSemaphore ) == pdPASS );
     vTaskDelete( NULL );
 }
@@ -106,12 +131,16 @@ static void monitor_task( void * context )
     }
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
-    /* Do not poll the UART result once the deterministic producer/consumer
-     * phase is complete. Blocking here leaves every application task asleep,
-     * allowing the idle task to enter Tickless WFI. The simulator injects the
-     * byte only at that architectural sleep boundary. */
-    configASSERT( xSemaphoreTake( uartRxDoneSemaphore, portMAX_DELAY ) == pdPASS );
-    configASSERT( uartRxTaskDone == 1U );
+    /* Blocking on a counting semaphore leaves every application task asleep,
+     * so the idle task can enter Tickless WFI before the simulator injects one
+     * UART byte. The ISR must wake three independent kernel object paths. */
+    for( uint32_t completion = 0U;
+         completion < UART_ISR_COMPLETION_COUNT;
+         completion++ )
+    {
+        configASSERT(
+            xSemaphoreTake( uartRxDoneSemaphore, portMAX_DELAY ) == pdPASS );
+    }
 #endif
 
     /* With every application task blocked for a long interval, the idle task
@@ -131,11 +160,17 @@ static void monitor_task( void * context )
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     configASSERT( uartRxObservedByte == EXPECTED_UART_RX_BYTE );
+    configASSERT( uartRxQueueTaskDone == 1U );
+    configASSERT( uartRxSemaphoreTaskDone == 1U );
+    configASSERT( uartRxNotificationTaskDone == 1U );
     configASSERT( aetherUartRxInterrupts == 1U );
     configASSERT( aetherUartRxBytes == 1U );
+    configASSERT( aetherUartRxSemaphoreSignals == 1U );
+    configASSERT( aetherUartRxNotifications == 1U );
     configASSERT( aetherUartRxYields >= 1U );
     configASSERT( aetherTicklessEarlyWakeups >= 1U );
-    aether_uart_write( "FREERTOS IRQ PASS rx=1 claim=1 yield>=1 early>=1\n" );
+    aether_uart_write(
+        "FREERTOS IRQ PASS queue=1 semaphore=1 notify=1 claim=1 yield>=1 early>=1\n" );
 #endif
 
     aether_uart_write( "FREERTOS TICKLESS PASS sleep>=1 wake>=1 suppressed>=2\n" );
@@ -154,13 +189,40 @@ int main( void )
 
 #if AETHERCORE_FREERTOS_EXTERNAL_IRQ
     uartRxQueue = xQueueCreate( 4, sizeof( uint8_t ) );
-    uartRxDoneSemaphore = xSemaphoreCreateBinary();
+    uartRxSignalSemaphore = xSemaphoreCreateBinary();
+    uartRxDoneSemaphore =
+        xSemaphoreCreateCounting( UART_ISR_COMPLETION_COUNT, 0U );
     configASSERT( uartRxQueue != NULL );
+    configASSERT( uartRxSignalSemaphore != NULL );
     configASSERT( uartRxDoneSemaphore != NULL );
-    aether_uart_rx_start( uartRxQueue );
-    aether_uart_write( "FREERTOS IRQ ARMED\n" );
+
     configASSERT(
-        xTaskCreate( uart_rx_task, "uart-rx", 256, NULL, 4, NULL ) == pdPASS );
+        xTaskCreate( uart_rx_queue_task,
+                     "uart-q",
+                     256,
+                     NULL,
+                     4,
+                     NULL ) == pdPASS );
+    configASSERT(
+        xTaskCreate( uart_rx_semaphore_task,
+                     "uart-sem",
+                     256,
+                     NULL,
+                     5,
+                     NULL ) == pdPASS );
+    configASSERT(
+        xTaskCreate( uart_rx_notification_task,
+                     "uart-notify",
+                     256,
+                     NULL,
+                     6,
+                     &uartRxNotificationTaskHandle ) == pdPASS );
+    configASSERT( uartRxNotificationTaskHandle != NULL );
+
+    aether_uart_rx_start( uartRxQueue,
+                          uartRxSignalSemaphore,
+                          uartRxNotificationTaskHandle );
+    aether_uart_write( "FREERTOS IRQ ARMED\n" );
 #endif
 
     configASSERT(
