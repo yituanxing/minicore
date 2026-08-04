@@ -16,6 +16,7 @@ on:
       - src/main/scala/aethercore/sim/MachineInterruptPlatform.scala
       - src/test/scala/aethercore/MachinePlicMmioSpec.scala
       - src/test/scala/aethercore/MachineInterruptPlatformSpec.scala
+      - src/test/scala/aethercore/AetherCoreInterruptPlatformSpec.scala
       - .github/workflows/zephyr-host-gate.yml
   workflow_dispatch:
 
