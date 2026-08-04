@@ -141,6 +141,7 @@ void freertos_risc_v_application_interrupt_handler( void )
     uint32_t claim;
     uint8_t byte;
 
+    aether_uart_write( "FREERTOS IRQ ENTER\n" );
     __asm volatile ( "csrr %0, mcause" : "=r" ( cause ) );
     configASSERT( cause == 0x8000000bUL );
 
