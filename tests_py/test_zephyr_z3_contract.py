@@ -33,7 +33,7 @@ class ZephyrZ3ContractTest(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
 
         for token in (
-            'group: zephyr-stage-slot-global',
+            'group: zephyr-freeze-slot-global',
             'cancel-in-progress: true',
             'runs-on: [self-hosted, Linux, X64, minicore]',
             'Run Zephyr Z3 timer and scheduling stall matrix',
