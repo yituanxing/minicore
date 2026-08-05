@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  z1-z3-stage:
-    name: Cached Zephyr Z1 build, Z2 boot and Z3 scheduling
+  z1-z4-stage:
+    name: Cached Zephyr Z1 build through Z4 external interrupts
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
     env:
@@ -104,6 +104,13 @@ jobs:
           AETHERCORE_ZEPHYR_BUILD_DIR="$PWD/build/zephyr-stage/host-build" \
             bash tools/ci/zephyr_z3_timer_schedule.sh
 
+      - name: Run Zephyr Z4 external interrupt qualification
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_z4_external_irq.sh
+          bash tools/ci/zephyr_z4_external_irq.sh
+
       - name: Upload bounded stage evidence
         if: always()
         continue-on-error: true
@@ -124,3 +131,9 @@ jobs:
             minicore/build/zephyr-stage/host-build/evidence/
             minicore/build/zephyr-z2/evidence/
             minicore/build/zephyr-z3/evidence/
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.elf
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.bin
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.map
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.dts
+            minicore/build/zephyr-z4/host-build/zephyr/.config
+            minicore/build/zephyr-z4/evidence/
