@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_AETHERCORE_SIM
+
+config BUILD_OUTPUT_BIN
+	default y
+
+endif # BOARD_AETHERCORE_SIM

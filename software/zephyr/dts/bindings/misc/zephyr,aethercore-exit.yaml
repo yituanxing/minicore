@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: AetherCore simulation exit register
+
+compatible: "zephyr,aethercore-exit"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true

@@ -9,7 +9,8 @@ import aethercore.core.AetherCore
 class AetherCoreSimTop(
     val config: CoreConfig = CoreProfiles.rv64imCurrent,
     val stopOnTrap: Boolean = true,
-    val withMachineInterruptPlatform: Boolean = false
+    val withMachineInterruptPlatform: Boolean = false,
+    val stopOnWfi: Boolean = true
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
@@ -212,6 +213,7 @@ class AetherCoreSimTop(
     observedTrap := true.B
   }
 
+  val wfiHalted = if (stopOnWfi) core.io.halted else false.B
   io.commit := core.io.commit
-  io.halted := core.io.halted || (if (stopOnTrap) observedTrap else false.B)
+  io.halted := wfiHalted || (if (stopOnTrap) observedTrap else false.B)
 }

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config UART_AETHERCORE
+	bool "AetherCore simulation UART"
+	default y
+	depends on DT_HAS_ZEPHYR_AETHERCORE_UART_ENABLED
+	select SERIAL_HAS_DRIVER
+	select SERIAL_SUPPORT_INTERRUPT
+	help
+	  Enable the AetherCore simulation UART. The driver provides polling TX/RX
+	  and, when CONFIG_UART_INTERRUPT_DRIVEN is enabled, level-sensitive RX
+	  interrupts through the platform PLIC.

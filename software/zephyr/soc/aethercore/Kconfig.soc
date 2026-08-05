@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FAMILY_AETHERCORE
+	bool
+
+config SOC_FAMILY
+	default "aethercore" if SOC_FAMILY_AETHERCORE
+
+rsource "*/Kconfig.soc"

@@ -22,6 +22,7 @@ class MachinePlic(
   require(priorityBits > 0, s"PLIC priority width must be positive, got $priorityBits")
 
   private val sourceIdBits = log2Ceil(sourceCount + 1)
+  private val sourceIndexBits = math.max(1, log2Ceil(sourceCount))
 
   val io = IO(new Bundle {
     val sources = Input(UInt(sourceCount.W))
@@ -81,8 +82,9 @@ class MachinePlic(
 
   val priorityWriteIdValid = io.priorityWriteId > 0.U &&
     io.priorityWriteId <= sourceCount.U
+  val priorityWriteIndex = (io.priorityWriteId - 1.U)(sourceIndexBits - 1, 0)
   when(io.priorityWriteEnable && priorityWriteIdValid) {
-    priorities(io.priorityWriteId - 1.U) := io.priorityWriteData
+    priorities(priorityWriteIndex) := io.priorityWriteData
   }
 
   when(io.enableWrite) {

@@ -1,0 +1,185 @@
+name: Zephyr Cached Stage
+
+on:
+  push:
+    branches:
+      - agent/zephyr-bringup
+    paths:
+      - .github/zephyr-stage-request
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: zephyr-freeze-slot-global
+  cancel-in-progress: true
+
+jobs:
+  z1-z4-stage:
+    name: Cached Zephyr Z1 through regression freeze
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Publish pending Zephyr stage status
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'pending',
+              context: 'zephyr/cached-stage',
+              description: 'Cached Zephyr Z1-Z4 regression freeze is running',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            });
+
+      - name: Checkout without deleting persistent workspace siblings
+        uses: actions/checkout@v4
+        with:
+          path: minicore
+          clean: false
+          fetch-depth: 2
+
+      - name: Normalize cached Zephyr SDK bundle layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache="$HOME/.cache/aethercore/zephyr-v3.7.2"
+          sdk="$cache/zephyr-sdk-0.16.9"
+          downloads="$cache/downloads"
+          toolchain_archive="$downloads/toolchain_linux-x86_64_riscv64-zephyr-elf.tar.xz"
+          hosttools_archive="$downloads/hosttools_linux-x86_64.tar.xz"
+          hosttools_root="$sdk/hosttools"
+
+          mkdir -p "$sdk"
+
+          gcc_path="$(find "$sdk" -type f -name 'riscv64-zephyr-elf-gcc' -perm -u+x -print -quit)"
+          if [[ -z "$gcc_path" && -s "$toolchain_archive" ]]; then
+            tar -xJf "$toolchain_archive" -C "$sdk"
+            gcc_path="$(find "$sdk" -type f -name 'riscv64-zephyr-elf-gcc' -perm -u+x -print -quit)"
+          fi
+          if [[ -z "$gcc_path" ]]; then
+            echo "ERROR: cached RISC-V Zephyr GCC not found" >&2
+            exit 1
+          fi
+
+          toolchain_root="$(dirname "$(dirname "$gcc_path")")"
+          expected_root="$sdk/riscv64-zephyr-elf"
+          if [[ "$toolchain_root" != "$expected_root" ]]; then
+            rm -rf "$expected_root"
+            ln -s "$toolchain_root" "$expected_root"
+          fi
+
+          dtc_path="$(find "$sdk" "$hosttools_root" -type f -path '*/bin/dtc' -perm -u+x -print -quit 2>/dev/null)"
+          if [[ -z "$dtc_path" && -s "$hosttools_archive" ]]; then
+            tar -xJf "$hosttools_archive" -C "$sdk"
+            installer="$(find "$sdk" -maxdepth 2 -type f -name 'zephyr-sdk-*-hosttools-standalone-*.sh' -perm -u+x -print -quit)"
+            if [[ -n "$installer" ]]; then
+              rm -rf "$hosttools_root"
+              mkdir -p "$hosttools_root"
+              "$installer" -S -D -y -d "$hosttools_root"
+            fi
+            dtc_path="$(find "$sdk" "$hosttools_root" -type f -path '*/bin/dtc' -perm -u+x -print -quit 2>/dev/null)"
+          fi
+          if [[ -z "$dtc_path" ]]; then
+            echo "ERROR: cached Zephyr SDK dtc not found after hosttools installer" >&2
+            exit 1
+          fi
+
+          echo "normalized_gcc=$expected_root/bin/riscv64-zephyr-elf-gcc"
+          echo "normalized_dtc=$dtc_path"
+          "$expected_root/bin/riscv64-zephyr-elf-gcc" --version | head -n 1
+          "$dtc_path" --version
+
+      - name: Run cached fail-closed Zephyr Z1 build
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_self_hosted_stage.sh
+          bash tools/ci/zephyr_self_hosted_stage.sh
+
+      - name: Run bounded Zephyr Z2 boot and console qualification
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_z2_boot.sh
+          AETHERCORE_ZEPHYR_BUILD_DIR="$PWD/build/zephyr-stage/host-build" \
+            bash tools/ci/zephyr_z2_boot.sh
+
+      - name: Run Zephyr Z3 timer and scheduling stall matrix
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_z3_timer_schedule.sh
+          AETHERCORE_ZEPHYR_BUILD_DIR="$PWD/build/zephyr-stage/host-build" \
+            bash tools/ci/zephyr_z3_timer_schedule.sh
+
+      - name: Run Zephyr Z4 external interrupt qualification
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_z4_external_irq.sh
+          bash tools/ci/zephyr_z4_external_irq.sh
+
+      - name: Freeze Zephyr regression semantics across a replay
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_regression_freeze.sh
+          bash tools/ci/zephyr_regression_freeze.sh
+
+      - name: Upload bounded stage evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-zephyr-stage-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            minicore/build/zephyr-stage/stage-state.txt
+            minicore/build/zephyr-stage/logs/
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.elf
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.bin
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.map
+            minicore/build/zephyr-stage/host-build/zephyr/zephyr.dts
+            minicore/build/zephyr-stage/host-build/zephyr/.config
+            minicore/build/zephyr-stage/host-build/evidence/
+            minicore/build/zephyr-z2/evidence/
+            minicore/build/zephyr-z3/evidence/
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.elf
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.bin
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.map
+            minicore/build/zephyr-z4/host-build/zephyr/zephyr.dts
+            minicore/build/zephyr-z4/host-build/zephyr/.config
+            minicore/build/zephyr-z4/evidence/
+            minicore/build/zephyr-freeze/evidence/
+
+      - name: Publish final Zephyr stage status
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ job.status }}';
+            const state = result === 'success' ? 'success' : (result === 'cancelled' ? 'error' : 'failure');
+            const description = state === 'success'
+              ? 'Cached Zephyr Z1-Z4 regression freeze passed'
+              : `Cached Zephyr Z1-Z4 regression freeze ${result}`;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: 'zephyr/cached-stage',
+              description,
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            });

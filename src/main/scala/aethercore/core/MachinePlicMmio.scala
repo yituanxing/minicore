@@ -20,18 +20,24 @@ object MachinePlicMmioMap {
   * is at 0x1000, the context enable word is at 0x2000, and context threshold
   * plus claim/complete are at 0x200000/0x200004.
   *
-  * This first platform profile intentionally supports at most 32 interrupt
-  * sources so pending and enable state fit in one 32-bit register. Every access
-  * completes in one cycle. Unknown or misaligned addresses raise a bus fault
-  * and have no side effects.
+  * Priority source zero is architecturally reserved. Upstream PLIC software
+  * commonly clears priority entries starting at index zero, so address 0x0 is
+  * implemented as a read-zero/write-ignored register instead of a bus fault.
+  * Pending and enable registers also reserve bit zero: internal compact source
+  * index zero is exposed at architectural bit one for source ID one.
+  *
+  * This first platform profile supports at most 31 real interrupt sources so
+  * reserved source zero plus all real sources fit in one 32-bit pending/enable
+  * word. Every access completes in one cycle. Unknown or misaligned addresses
+  * raise a bus fault and have no side effects.
   */
 class MachinePlicMmio(
     val sourceCount: Int = 8,
     val priorityBits: Int = 3,
     val addressBits: Int = 24
 ) extends Module {
-  require(sourceCount > 0 && sourceCount <= 32,
-    s"single-word PLIC profile supports 1..32 sources, got $sourceCount")
+  require(sourceCount > 0 && sourceCount <= 31,
+    s"single-word one-based PLIC profile supports 1..31 real sources, got $sourceCount")
   require(priorityBits > 0 && priorityBits <= 32,
     s"PLIC priority width must be 1..32, got $priorityBits")
   require(addressBits >= 22,
@@ -63,6 +69,11 @@ class MachinePlicMmio(
     if (width == 32) value else Cat(0.U((32 - width).W), value)
   }
 
+  private def oneBasedRegister(value: UInt): UInt = {
+    val shifted = Cat(value, 0.U(1.W))
+    extendTo32(shifted, sourceCount + 1)
+  }
+
   private def mergeBytes(oldValue: UInt, newValue: UInt, mask: UInt): UInt = {
     Cat((0 until 4).reverse.map { byte =>
       val high = byte * 8 + 7
@@ -85,6 +96,7 @@ class MachinePlicMmio(
   plic.io.completeWrite := false.B
   plic.io.completeId := 0.U
 
+  val priorityZeroHit = io.address === MachinePlicMmioMap.PriorityBase.U(addressBits.W)
   val priorityHit = WireDefault(false.B)
   val priorityId = WireDefault(0.U(sourceIdBits.W))
   val priorityReadData = WireDefault(0.U(32.W))
@@ -101,20 +113,21 @@ class MachinePlicMmio(
   val enableHit = io.address === MachinePlicMmioMap.Enable.U(addressBits.W)
   val thresholdHit = io.address === MachinePlicMmioMap.Threshold.U(addressBits.W)
   val claimCompleteHit = io.address === MachinePlicMmioMap.ClaimComplete.U(addressBits.W)
-  val implemented = priorityHit || pendingHit || enableHit || thresholdHit || claimCompleteHit
+  val implemented = priorityZeroHit || priorityHit || pendingHit || enableHit || thresholdHit || claimCompleteHit
   val aligned = io.address(1, 0) === 0.U
   val accepted = io.request && aligned && implemented
 
   io.ready := io.request
   io.fault := io.request && (!aligned || !implemented)
 
-  val enabledReadData = extendTo32(plic.io.enabled, sourceCount)
+  val pendingReadData = oneBasedRegister(plic.io.pending)
+  val enabledReadData = oneBasedRegister(plic.io.enabled)
   val thresholdReadData = extendTo32(plic.io.threshold, priorityBits)
   val claimReadData = extendTo32(plic.io.claim, sourceIdBits)
 
   val readData = WireDefault(0.U(32.W))
   when(priorityHit) { readData := priorityReadData }
-  when(pendingHit) { readData := extendTo32(plic.io.pending, sourceCount) }
+  when(pendingHit) { readData := pendingReadData }
   when(enableHit) { readData := enabledReadData }
   when(thresholdHit) { readData := thresholdReadData }
   when(claimCompleteHit) { readData := claimReadData }
@@ -133,7 +146,7 @@ class MachinePlicMmio(
 
   when(accepted && io.write && enableHit) {
     plic.io.enableWrite := true.B
-    plic.io.enableWriteData := enableMerged(sourceCount - 1, 0)
+    plic.io.enableWriteData := enableMerged(sourceCount, 1)
   }
 
   when(accepted && io.write && thresholdHit) {

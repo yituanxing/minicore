@@ -35,6 +35,9 @@ struct Options {
   bool trace = false;
   bool commitTrace = false;
   bool selfCheckExit = false;
+  std::vector<std::uint8_t> rxBytes;
+  std::uint64_t rxStartCycle = 0;
+  std::uint64_t rxGapCycles = 1;
   std::optional<std::string> difftestSharedObject;
   std::optional<std::uint64_t> expectedExceptionPc;
   std::optional<std::uint32_t> expectedExceptionInst;
@@ -50,7 +53,8 @@ Options parseOptions(int argc, char** argv) {
   if (argc < 2) {
     throw std::runtime_error(
         "usage: VAetherCoreSimTop <image.bin> [--max-cycles N] [--stall-period N] "
-        "[--trace] [--commit-trace] [--self-check-exit] [--difftest NEMU_SO] "
+        "[--trace] [--commit-trace] [--self-check-exit] "
+        "[--rx-byte N ... --rx-start-cycle N --rx-gap-cycles N] [--difftest NEMU_SO] "
         "[--expect-exception-pc N --expect-exception-inst N --expected-commits N] "
         "[--forbid-rd N] [--expect-memory64 ADDRESS VALUE]");
   }
@@ -72,6 +76,17 @@ Options parseOptions(int argc, char** argv) {
       options.commitTrace = true;
     } else if (arg == "--self-check-exit") {
       options.selfCheckExit = true;
+    } else if (arg == "--rx-byte" && i + 1 < argc) {
+      const auto byte = parseInteger(argv[++i]);
+      if (byte > 0xffU) throw std::runtime_error("--rx-byte must be in the range 0..255");
+      options.rxBytes.push_back(static_cast<std::uint8_t>(byte));
+    } else if (arg == "--rx-start-cycle" && i + 1 < argc) {
+      options.rxStartCycle = parseInteger(argv[++i]);
+    } else if (arg == "--rx-gap-cycles" && i + 1 < argc) {
+      options.rxGapCycles = parseInteger(argv[++i]);
+      if (options.rxGapCycles == 0) {
+        throw std::runtime_error("--rx-gap-cycles must be non-zero");
+      }
     } else if (arg == "--difftest" && i + 1 < argc) {
       options.difftestSharedObject = argv[++i];
     } else if (arg == "--expect-exception-pc" && i + 1 < argc) {
@@ -168,6 +183,33 @@ void driveInputs(VAetherCoreSimTop& top, const Memory& memory, bool memoryReady)
   top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read64(daddr);
 }
 
+template <typename Top>
+constexpr bool hasUartRxPort() {
+  return requires(Top& top) {
+    top.io_rxValid;
+    top.io_rxByte;
+    top.io_rxReady;
+  };
+}
+
+template <typename Top>
+void driveUartRx(Top& top, bool valid, std::uint8_t byte) {
+  if constexpr (hasUartRxPort<Top>()) {
+    top.io_rxValid = valid;
+    top.io_rxByte = byte;
+  } else if (valid) {
+    throw std::runtime_error("UART RX injection requested for a top without RX ports");
+  }
+}
+
+template <typename Top>
+bool uartRxReady(const Top& top) {
+  if constexpr (hasUartRxPort<Top>()) {
+    return top.io_rxReady;
+  }
+  return false;
+}
+
 void dumpCommit(const VAetherCoreSimTop& top) {
   std::cout << "commit pc=0x" << std::hex << static_cast<std::uint64_t>(top.io_commit_pc)
             << " inst=0x" << static_cast<std::uint32_t>(top.io_commit_inst)
@@ -201,6 +243,10 @@ int main(int argc, char** argv) {
     context.commandArgs(argc, argv);
 
     VAetherCoreSimTop top{&context};
+    if (!options.rxBytes.empty() && !hasUartRxPort<VAetherCoreSimTop>()) {
+      throw std::runtime_error("UART RX injection requested for a top without RX ports");
+    }
+
     Memory memory;
     memory.load(options.image);
 
@@ -224,6 +270,8 @@ int main(int argc, char** argv) {
     std::uint64_t exitCode = 0;
     std::uint64_t exceptionPc = 0;
     std::uint32_t exceptionInst = 0;
+    std::size_t rxIndex = 0;
+    std::uint64_t nextRxCycle = options.rxStartCycle;
     bool sawX3 = false;
     bool exitRequested = false;
     bool forbiddenWriteSeen = false;
@@ -232,17 +280,24 @@ int main(int argc, char** argv) {
     top.reset = 1;
     top.clock = 0;
     driveInputs(top, memory, true);
+    driveUartRx(top, false, 0);
     top.eval();
 
     for (; cycles < options.maxCycles && !top.io_halted && !exitRequested; ++cycles) {
       const bool memoryReady =
           options.stallPeriod == 0 || (cycles % options.stallPeriod) != 0;
+      const bool rxValid = !top.reset && rxIndex < options.rxBytes.size() &&
+                           cycles >= nextRxCycle;
+      const std::uint8_t rxByte = rxValid ? options.rxBytes[rxIndex] : 0;
 
       top.clock = 0;
       driveInputs(top, memory, memoryReady);
+      driveUartRx(top, rxValid, rxByte);
       top.eval();
       driveInputs(top, memory, memoryReady);
+      driveUartRx(top, rxValid, rxByte);
       top.eval();
+      const bool rxAccepted = rxValid && uartRxReady(top);
 
       if (wave) wave->dump(context.time());
       context.timeInc(1);
@@ -295,10 +350,15 @@ int main(int argc, char** argv) {
 
       top.clock = 1;
       driveInputs(top, memory, memoryReady);
+      driveUartRx(top, rxValid, rxByte);
       top.eval();
       if (wave) wave->dump(context.time());
       context.timeInc(1);
 
+      if (rxAccepted) {
+        ++rxIndex;
+        nextRxCycle = cycles + options.rxGapCycles;
+      }
       if (cycles == 4) top.reset = 0;
     }
 
@@ -371,9 +431,15 @@ int main(int argc, char** argv) {
         std::cerr << "FAIL: self-check program returned code " << exitCode << '\n';
         return static_cast<int>(exitCode > 125 ? 125 : exitCode);
       }
+      if (rxIndex != options.rxBytes.size()) {
+        std::cerr << "FAIL: accepted " << rxIndex << " of " << options.rxBytes.size()
+                  << " requested UART RX bytes\n";
+        return 10;
+      }
       std::cout << "PASS: self-check exit=0 after " << cycles << " cycles, " << committed
                 << " committed instructions";
       if (options.stallPeriod != 0) std::cout << ", stall-period=" << options.stallPeriod;
+      if (!options.rxBytes.empty()) std::cout << ", rx-bytes=" << rxIndex;
       if (difftest) std::cout << ", difftest=" << difftest->checkedCommits();
       std::cout << '\n';
       return 0;

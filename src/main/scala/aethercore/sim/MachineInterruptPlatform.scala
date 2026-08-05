@@ -17,8 +17,8 @@ class MachineInterruptPlatform(
     val sourceCount: Int = 8
 ) extends Module {
   require(addressBits >= 32, s"platform MMIO map requires at least 32 address bits")
-  require(sourceCount > 0 && sourceCount <= 32,
-    s"platform PLIC supports 1..32 sources, got $sourceCount")
+  require(sourceCount > 0 && sourceCount <= 31,
+    s"single-word one-based platform PLIC supports 1..31 real sources, got $sourceCount")
 
   private val plicSpan = BigInt("00400000", 16)
   private val uartSpan = BigInt(0x10)

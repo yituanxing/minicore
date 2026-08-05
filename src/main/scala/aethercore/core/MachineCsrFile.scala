@@ -257,6 +257,9 @@ class MachineCsrFile(
     is(MachineCsrAddress.Mip.U) {
       io.readData := mipValue
       io.readImplemented := true.B
+      // mip is a writable CSR address even when all implemented pending bits are
+      // driven by hardware. Software writes are accepted and ignored.
+      io.readWritable := true.B
     }
     is(MachineCsrAddress.Mhartid.U) {
       io.readData := 0.U

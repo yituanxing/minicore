@@ -1,0 +1,5 @@
+board:
+  name: aethercore_sim
+  vendor: others
+  socs:
+    - name: aethercore32
