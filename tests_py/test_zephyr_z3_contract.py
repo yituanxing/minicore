@@ -29,19 +29,24 @@ class ZephyrZ3ContractTest(unittest.TestCase):
         self.assertIn('AETHERCORE ZEPHYR PASS handoffs=4', text)
         self.assertIn('PASS: self-check exit=0', text)
 
-    def test_single_cached_slot_runs_and_archives_z3(self) -> None:
+    def test_single_cached_slot_retains_z3_before_z4(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
 
         for token in (
             'group: zephyr-stage-slot-global',
             'cancel-in-progress: true',
             'runs-on: [self-hosted, Linux, X64, minicore]',
+            'Run Zephyr Z3 timer and scheduling stall matrix',
             'bash tools/ci/zephyr_z3_timer_schedule.sh',
             'minicore/build/zephyr-z3/evidence/',
-            'Cached Zephyr Z1/Z2/Z3 stage passed',
+            'Cached Zephyr Z1/Z2/Z3/Z4 stage passed',
         ):
             self.assertIn(token, text)
 
+        self.assertLess(
+            text.index('Run Zephyr Z3 timer and scheduling stall matrix'),
+            text.index('Run Zephyr Z4 external interrupt qualification'),
+        )
         self.assertEqual(text.count('runs-on: [self-hosted, Linux, X64, minicore]'), 1)
         self.assertNotIn('.github/full-gate-request', text)
         self.assertNotIn('Fast Gate', text)
