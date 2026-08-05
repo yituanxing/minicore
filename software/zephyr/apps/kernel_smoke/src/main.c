@@ -23,9 +23,8 @@ static void worker(void *arg1, void *arg2, void *arg3)
 	for (int i = 0; i < HANDOFF_COUNT; ++i) {
 		k_sem_take(&step_sem, K_FOREVER);
 		printk("AETHERCORE ZEPHYR WORKER step=%d\n", i);
+		k_sem_give(&done_sem);
 	}
-
-	k_sem_give(&done_sem);
 }
 
 int main(void)
@@ -47,9 +46,9 @@ int main(void)
 		printk("AETHERCORE ZEPHYR MAIN give=%d\n", i);
 		k_sem_give(&step_sem);
 		k_sleep(K_MSEC(1));
+		k_sem_take(&done_sem, K_FOREVER);
 	}
 
-	k_sem_take(&done_sem, K_FOREVER);
 	printk("AETHERCORE ZEPHYR PASS handoffs=%d\n", HANDOFF_COUNT);
 	aethercore_exit(0U);
 }
