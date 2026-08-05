@@ -29,7 +29,7 @@ class ZephyrZ3ContractTest(unittest.TestCase):
         self.assertIn('AETHERCORE ZEPHYR PASS handoffs=4', text)
         self.assertIn('PASS: self-check exit=0', text)
 
-    def test_single_cached_slot_retains_z3_before_z4(self) -> None:
+    def test_single_cached_slot_retains_z3_before_z4_and_freeze(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
 
         for token in (
@@ -38,15 +38,20 @@ class ZephyrZ3ContractTest(unittest.TestCase):
             'runs-on: [self-hosted, Linux, X64, minicore]',
             'Run Zephyr Z3 timer and scheduling stall matrix',
             'bash tools/ci/zephyr_z3_timer_schedule.sh',
+            'Run Zephyr Z4 external interrupt qualification',
+            'Freeze Zephyr regression semantics across a replay',
+            'bash tools/ci/zephyr_regression_freeze.sh',
             'minicore/build/zephyr-z3/evidence/',
-            'Cached Zephyr Z1/Z2/Z3/Z4 stage passed',
+            'minicore/build/zephyr-freeze/evidence/',
+            'Cached Zephyr Z1-Z4 regression freeze passed',
         ):
             self.assertIn(token, text)
 
-        self.assertLess(
-            text.index('Run Zephyr Z3 timer and scheduling stall matrix'),
-            text.index('Run Zephyr Z4 external interrupt qualification'),
-        )
+        z3 = text.index('Run Zephyr Z3 timer and scheduling stall matrix')
+        z4 = text.index('Run Zephyr Z4 external interrupt qualification')
+        freeze = text.index('Freeze Zephyr regression semantics across a replay')
+        self.assertLess(z3, z4)
+        self.assertLess(z4, freeze)
         self.assertEqual(text.count('runs-on: [self-hosted, Linux, X64, minicore]'), 1)
         self.assertNotIn('.github/full-gate-request', text)
         self.assertNotIn('Fast Gate', text)
