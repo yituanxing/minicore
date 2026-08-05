@@ -9,6 +9,8 @@ BRINGUP = ROOT / "docs" / "zephyr" / "BRINGUP.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "zephyr-host-gate.yml"
 BUILD_SCRIPT = ROOT / "tools" / "ci" / "zephyr_host_build.sh"
 SOC_CMAKE = ROOT / "software" / "zephyr" / "soc" / "aethercore" / "CMakeLists.txt"
+SIM_TOP = ROOT / "src" / "main" / "scala" / "aethercore" / "sim" / "AetherCoreSimTop.scala"
+ZEPHYR_ELABORATE = ROOT / "src" / "main" / "scala" / "aethercore" / "ElaborateZephyr.scala"
 
 
 class ZephyrStageContractTest(unittest.TestCase):
@@ -52,6 +54,13 @@ class ZephyrStageContractTest(unittest.TestCase):
             "set(SOC_LINKER_SCRIPT ${ZEPHYR_BASE}/include/zephyr/arch/riscv/common/linker.ld CACHE INTERNAL \"\")",
             text,
         )
+
+    def test_zephyr_runtime_keeps_clocking_across_resumable_wfi(self) -> None:
+        sim_top = SIM_TOP.read_text(encoding="utf-8")
+        elaborate = ZEPHYR_ELABORATE.read_text(encoding="utf-8")
+        self.assertIn("val stopOnWfi: Boolean = true", sim_top)
+        self.assertIn("if (stopOnWfi) core.io.halted else false.B", sim_top)
+        self.assertIn("stopOnWfi = false", elaborate)
 
     def test_runner_policy_keeps_exploration_off_self_hosted(self) -> None:
         text = BRINGUP.read_text(encoding="utf-8")
