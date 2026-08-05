@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   z1-z4-stage:
-    name: Cached Zephyr Z1 build through Z4 external interrupts
+    name: Cached Zephyr Z1 through regression freeze
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
     env:
@@ -36,7 +36,7 @@ jobs:
               sha: context.sha,
               state: 'pending',
               context: 'zephyr/cached-stage',
-              description: 'Cached Zephyr Z1/Z2/Z3/Z4 stage is running',
+              description: 'Cached Zephyr Z1-Z4 regression freeze is running',
               target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
             });
 
@@ -128,6 +128,13 @@ jobs:
           chmod +x tools/ci/zephyr_z4_external_irq.sh
           bash tools/ci/zephyr_z4_external_irq.sh
 
+      - name: Freeze Zephyr regression semantics across a replay
+        working-directory: minicore
+        shell: bash
+        run: |
+          chmod +x tools/ci/zephyr_regression_freeze.sh
+          bash tools/ci/zephyr_regression_freeze.sh
+
       - name: Upload bounded stage evidence
         if: always()
         continue-on-error: true
@@ -154,6 +161,7 @@ jobs:
             minicore/build/zephyr-z4/host-build/zephyr/zephyr.dts
             minicore/build/zephyr-z4/host-build/zephyr/.config
             minicore/build/zephyr-z4/evidence/
+            minicore/build/zephyr-freeze/evidence/
 
       - name: Publish final Zephyr stage status
         if: always()
@@ -164,8 +172,8 @@ jobs:
             const result = '${{ job.status }}';
             const state = result === 'success' ? 'success' : (result === 'cancelled' ? 'error' : 'failure');
             const description = state === 'success'
-              ? 'Cached Zephyr Z1/Z2/Z3/Z4 stage passed'
-              : `Cached Zephyr Z1/Z2/Z3/Z4 stage ${result}`;
+              ? 'Cached Zephyr Z1-Z4 regression freeze passed'
+              : `Cached Zephyr Z1-Z4 regression freeze ${result}`;
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
