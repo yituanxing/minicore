@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "ci" / "zephyr_z4_external_irq.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "zephyr-stage-push.yml"
 SIM = ROOT / "sim" / "sim_main.cpp"
+UART_KCONFIG = ROOT / "software" / "zephyr" / "drivers" / "serial" / "Kconfig"
 APP = ROOT / "software" / "zephyr" / "apps" / "uart_irq_smoke" / "src" / "main.c"
 
 
@@ -14,6 +15,7 @@ class ZephyrZ4ContractTest(unittest.TestCase):
         script = SCRIPT.read_text(encoding="utf-8")
         app = APP.read_text(encoding="utf-8")
         sim = SIM.read_text(encoding="utf-8")
+        uart_kconfig = UART_KCONFIG.read_text(encoding="utf-8")
 
         for token in (
             "--rx-byte 0x5a",
@@ -27,6 +29,9 @@ class ZephyrZ4ContractTest(unittest.TestCase):
             "contract=zephyr-v3.7.2-aethercore-z4-external-interrupt-v1",
         ):
             self.assertIn(token, script)
+
+        self.assertIn("select SERIAL_HAS_DRIVER", uart_kconfig)
+        self.assertIn("select SERIAL_SUPPORT_INTERRUPT", uart_kconfig)
 
         for token in (
             "uart_irq_callback_user_data_set",
