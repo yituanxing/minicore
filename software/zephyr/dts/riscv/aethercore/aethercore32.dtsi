@@ -31,9 +31,17 @@
 		};
 	};
 
+	/*
+	 * Keep the Zephyr-visible region one 64-bit simulation beat below the
+	 * physical RAM limit. The shared simulation memory port currently checks
+	 * a complete 8-byte beat even for an RV32 masked store; without this guard,
+	 * Zephyr's heap-end metadata store at RAM_END - 4 is reported as a false
+	 * access fault. The physical model remains 64 MiB and the guard can be
+	 * removed once the shared harness derives the checked span from byte enables.
+	 */
 	ram0: memory@80000000 {
 		device_type = "memory";
-		reg = <0x80000000 0x04000000>;
+		reg = <0x80000000 0x03fffff8>;
 	};
 
 	uart0: serial@10000000 {
