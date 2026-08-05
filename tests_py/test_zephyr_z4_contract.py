@@ -55,13 +55,15 @@ class ZephyrZ4ContractTest(unittest.TestCase):
 
     def test_single_cached_slot_runs_and_archives_z4(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("group: zephyr-stage-slot-global", workflow)
+        self.assertIn("group: zephyr-freeze-slot-global", workflow)
         self.assertIn("cancel-in-progress: true", workflow)
         self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", workflow)
         self.assertEqual(workflow.count("runs-on: [self-hosted, Linux, X64, minicore]"), 1)
         self.assertIn("Run Zephyr Z4 external interrupt qualification", workflow)
         self.assertIn("bash tools/ci/zephyr_z4_external_irq.sh", workflow)
         self.assertIn("minicore/build/zephyr-z4/evidence/", workflow)
+        self.assertIn("Freeze Zephyr regression semantics across a replay", workflow)
+        self.assertIn("minicore/build/zephyr-freeze/evidence/", workflow)
         self.assertNotIn(".github/full-gate-request", workflow)
 
 
