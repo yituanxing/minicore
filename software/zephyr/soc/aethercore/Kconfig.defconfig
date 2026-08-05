@@ -20,7 +20,10 @@ config 2ND_LVL_INTR_00_OFFSET
 config MAX_IRQ_PER_AGGREGATOR
 	default 2
 
+# The first-level table occupies entries 0..11. The compact PLIC table starts
+# at 12 and contains source IDs zero and one, so the final valid ISR table index
+# is 13 and NUM_IRQS must describe fourteen total entries.
 config NUM_IRQS
-	default 13
+	default 14
 
 endif # SOC_FAMILY_AETHERCORE
