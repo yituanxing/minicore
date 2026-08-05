@@ -11,6 +11,7 @@ LOG_DIR="$SIM_BUILD/evidence"
 LOG_FILE="$LOG_DIR/boot.log"
 MAX_CYCLES="${AETHERCORE_ZEPHYR_MAX_CYCLES:-8000000}"
 STALL_PERIOD="${AETHERCORE_ZEPHYR_STALL_PERIOD:-0}"
+COMMIT_TRACE="${AETHERCORE_ZEPHYR_COMMIT_TRACE:-0}"
 
 mkdir -p "$RTL_DIR" "$OBJ_DIR" "$LOG_DIR"
 test -s "$IMAGE"
@@ -33,7 +34,14 @@ verilator --cc --exe --build --trace -Wall -Wno-fatal \
 runner="$OBJ_DIR/VAetherCoreSimTop"
 test -x "$runner"
 
-args=("$IMAGE" --max-cycles "$MAX_CYCLES" --self-check-exit --commit-trace)
+# Keep the normal qualification log as a clean UART stream.  Commit tracing is
+# still available for focused diagnosis, but enabling it interleaves trace
+# records with individual UART bytes and makes whole-line signature checks
+# unreliable even when the guest has completed successfully.
+args=("$IMAGE" --max-cycles "$MAX_CYCLES" --self-check-exit)
+if [[ "$COMMIT_TRACE" == "1" ]]; then
+  args+=(--commit-trace)
+fi
 if [[ "$STALL_PERIOD" != "0" ]]; then
   args+=(--stall-period "$STALL_PERIOD")
 fi
@@ -60,6 +68,7 @@ image=$IMAGE
 runner=$runner
 max_cycles=$MAX_CYCLES
 stall_period=$STALL_PERIOD
+commit_trace=$COMMIT_TRACE
 profile=rv32im_zicsr
 stop_on_trap=false
 boot_signature=AETHERCORE ZEPHYR BOOT
