@@ -23,7 +23,7 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for token in (
             'riscv,isa = "rv32im_zicsr_zifencei"',
-            "0x80000000 0x04000000",
+            "0x80000000 0x03fffff8",
             "0x10000000 0x4",
             "0x10000100 0x10",
             "test-exit@10000008",
