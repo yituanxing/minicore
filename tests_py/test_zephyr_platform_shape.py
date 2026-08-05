@@ -82,19 +82,45 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
         self.assertIn("1UL << AETHERCORE_UART_RX_SOURCE_ID", freertos)
         self.assertNotIn("AETHERCORE_UART_RX_SOURCE_ID - 1UL", freertos)
 
-    def test_uart_driver_stays_polling_only_for_boot_milestone(self) -> None:
+    def test_uart_driver_preserves_polling_boot_and_adds_bounded_z4_irq(self) -> None:
         source = (
             ZEPHYR / "drivers" / "serial" / "uart_aethercore.c"
         ).read_text(encoding="utf-8")
+        z2_config = (
+            ZEPHYR / "apps" / "kernel_smoke" / "prj.conf"
+        ).read_text(encoding="utf-8")
+        z4_config = (
+            ZEPHYR / "apps" / "uart_irq_smoke" / "prj.conf"
+        ).read_text(encoding="utf-8")
+        z4_app = (
+            ZEPHYR / "apps" / "uart_irq_smoke" / "src" / "main.c"
+        ).read_text(encoding="utf-8")
+
         for token in (
             "aethercore_uart_poll_in",
             "aethercore_uart_poll_out",
             "UART_ERROR_OVERRUN",
             "DT_INST_REG_ADDR_BY_IDX(inst, 0)",
             "DT_INST_REG_ADDR_BY_IDX(inst, 1)",
+            "CONFIG_UART_INTERRUPT_DRIVEN",
+            "aethercore_uart_fifo_read",
+            "aethercore_uart_irq_rx_enable",
+            "aethercore_uart_irq_callback_set",
+            "IRQ_CONNECT",
         ):
             self.assertIn(token, source)
-        self.assertNotIn("CONFIG_UART_INTERRUPT_DRIVEN", source)
+
+        self.assertNotIn("CONFIG_UART_INTERRUPT_DRIVEN=y", z2_config)
+        self.assertIn("CONFIG_UART_INTERRUPT_DRIVEN=y", z4_config)
+        for token in (
+            "uart_irq_callback_user_data_set",
+            "uart_irq_rx_enable",
+            "uart_fifo_read",
+            "k_is_in_isr",
+            "k_work_submit",
+            "AETHERCORE ZEPHYR IRQ PASS",
+        ):
+            self.assertIn(token, z4_app)
         self.assertNotIn("irq_connect_dynamic", source)
 
     def test_exit_service_hides_mmio_address_from_the_application(self) -> None:
