@@ -155,8 +155,36 @@ fi
 (
   cd "$WORKSPACE_ROOT"
   "$WEST" config manifest.group-filter -- "-hal,-tools,-bootloader,-babblesim"
-  "$WEST" update -o=--depth=1 -n zephyr
 )
+
+zephyr_cache_valid=false
+if [[ -d "$WORKSPACE_ROOT/zephyr/.git" ]] \
+  && git -C "$WORKSPACE_ROOT/zephyr" cat-file -e HEAD^{commit} \
+  && [[ -f "$WORKSPACE_ROOT/zephyr/SDK_VERSION" ]] \
+  && grep -Fxq '0.16.9' "$WORKSPACE_ROOT/zephyr/SDK_VERSION"; then
+  zephyr_cache_valid=true
+  echo "west_cache_hit=$WORKSPACE_ROOT/zephyr"
+  echo "west_cached_head=$(git -C "$WORKSPACE_ROOT/zephyr" rev-parse HEAD)"
+fi
+
+if [[ "$zephyr_cache_valid" != true ]]; then
+  update_ok=false
+  for attempt in 1 2 3; do
+    echo "west_update_attempt=$attempt"
+    if (
+      cd "$WORKSPACE_ROOT"
+      "$WEST" update -o=--depth=1 -n zephyr
+    ); then
+      update_ok=true
+      break
+    fi
+    sleep $((attempt * 5))
+  done
+  if [[ "$update_ok" != true ]]; then
+    echo "ERROR: Zephyr source cache is absent or invalid and west update failed" >&2
+    exit 1
+  fi
+fi
 
 test -f "$WORKSPACE_ROOT/zephyr/SDK_VERSION"
 grep -Fxq '0.16.9' "$WORKSPACE_ROOT/zephyr/SDK_VERSION"
