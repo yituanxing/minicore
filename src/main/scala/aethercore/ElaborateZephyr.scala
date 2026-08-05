@@ -9,7 +9,7 @@ object ElaborateZephyr extends App {
     new AetherCoreSimTop(
       config = CoreProfiles.rv32imSoftware,
       stopOnTrap = false,
-      withMachineInterruptPlatform = false
+      withMachineInterruptPlatform = true
     ),
     args,
     Array(
