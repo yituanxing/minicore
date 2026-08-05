@@ -13,7 +13,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: zephyr-stage-slot-global
+  group: zephyr-freeze-slot-global
   cancel-in-progress: true
 
 jobs:
