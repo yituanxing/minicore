@@ -12,5 +12,5 @@ sdk_download=resumable-split-assets-sha256-verified
 sdk_layout=hosttools-installer-normalized
 rtl_runner=AetherCoreSimTop
 positive_signatures=boot,worker-ready,pass,exit-zero
-trigger=push-global-slot
-request=14
+trigger=pull-request-global-slot
+request=15
