@@ -5,24 +5,35 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_ROOT="${AETHERCORE_ZEPHYR_BUILD_DIR:-$ROOT/build/zephyr-stage/host-build}"
 IMAGE="$BUILD_ROOT/zephyr/zephyr.bin"
 SIM_BUILD="${AETHERCORE_ZEPHYR_SIM_BUILD_DIR:-$ROOT/build/zephyr-z2}"
+RTL_DIR="$SIM_BUILD/rtl"
+OBJ_DIR="$SIM_BUILD/obj"
 LOG_DIR="$SIM_BUILD/evidence"
 LOG_FILE="$LOG_DIR/boot.log"
 MAX_CYCLES="${AETHERCORE_ZEPHYR_MAX_CYCLES:-8000000}"
 STALL_PERIOD="${AETHERCORE_ZEPHYR_STALL_PERIOD:-0}"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$RTL_DIR" "$OBJ_DIR" "$LOG_DIR"
 test -s "$IMAGE"
 
-# Reuse the ordinary AetherCoreSimTop harness: it already models RAM, UART TX,
-# semantic simulator exit, bounded execution and optional memory backpressure.
-make -C "$ROOT" \
-  BUILD_DIR="$SIM_BUILD" \
-  sim
+# Zephyr must run on the actual RV32IM+Zicsr profile. Unlike the short smoke
+# harness, an OS must also continue across synchronous traps and timer
+# interrupts instead of treating the first observed trap as terminal.
+"$ROOT/mill" aethercore.runMain aethercore.ElaborateZephyr --target-dir "$RTL_DIR"
+mapfile -t rtl_sources < <(find "$RTL_DIR" -maxdepth 1 -type f -name '*.sv' -print | sort)
+if (( ${#rtl_sources[@]} == 0 )); then
+  echo "ERROR: no generated Zephyr SystemVerilog sources" >&2
+  exit 1
+fi
 
-runner="$SIM_BUILD/obj/VAetherCoreSimTop"
+verilator --cc --exe --build --trace -Wall -Wno-fatal \
+  --top-module AetherCoreSimTop -Mdir "$OBJ_DIR" \
+  -CFLAGS "-std=c++20 -O2" -LDFLAGS "-ldl" \
+  "${rtl_sources[@]}" "$ROOT/sim/sim_main.cpp" "$ROOT/sim/nemu_difftest.cpp"
+
+runner="$OBJ_DIR/VAetherCoreSimTop"
 test -x "$runner"
 
-args=("$IMAGE" --max-cycles "$MAX_CYCLES" --self-check-exit)
+args=("$IMAGE" --max-cycles "$MAX_CYCLES" --self-check-exit --commit-trace)
 if [[ "$STALL_PERIOD" != "0" ]]; then
   args+=(--stall-period "$STALL_PERIOD")
 fi
@@ -40,7 +51,7 @@ fi
 grep -Fq 'AETHERCORE ZEPHYR BOOT' "$LOG_FILE"
 grep -Fq 'AETHERCORE ZEPHYR WORKER READY' "$LOG_FILE"
 grep -Fq 'AETHERCORE ZEPHYR PASS handoffs=4' "$LOG_FILE"
-grep -Fq 'PASS: self-check exit code 0' "$LOG_FILE"
+grep -Fq 'PASS: self-check exit=0' "$LOG_FILE"
 
 cat > "$LOG_DIR/result.txt" <<EOF
 status=PASS
@@ -49,6 +60,8 @@ image=$IMAGE
 runner=$runner
 max_cycles=$MAX_CYCLES
 stall_period=$STALL_PERIOD
+profile=rv32im_zicsr
+stop_on_trap=false
 boot_signature=AETHERCORE ZEPHYR BOOT
 pass_signature=AETHERCORE ZEPHYR PASS handoffs=4
 exit_code=0
