@@ -5,10 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST="${ROOT_DIR}/software/nuttx/manifest.env"
 OUT_DIR="${ROOT_DIR}/build/nuttx-n1"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+ARCHIVE_DIR="${CACHE_ROOT}/archives"
+SOURCE_DIR="${CACHE_ROOT}/sources"
 
 source "${MANIFEST}"
 
-for command in git make python3 riscv64-unknown-elf-gcc \
+for command in curl tar make python3 riscv64-unknown-elf-gcc \
   riscv64-unknown-elf-readelf riscv64-unknown-elf-size sha256sum; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "N1 FAIL: required command not found: ${command}" >&2
@@ -16,31 +18,66 @@ for command in git make python3 riscv64-unknown-elf-gcc \
   }
 done
 
-mkdir -p "${CACHE_ROOT}" "${OUT_DIR}/evidence"
-rm -rf "${OUT_DIR:?}"/*
-mkdir -p "${OUT_DIR}/evidence"
+rm -rf "${OUT_DIR}"
+mkdir -p "${OUT_DIR}/evidence" "${ARCHIVE_DIR}" "${SOURCE_DIR}"
 
-prepare_repository() {
-  local directory="$1"
-  local repository="$2"
+{
+  echo "NUTTX_VERSION=${NUTTX_VERSION}"
+  echo "NUTTX_TAG=${NUTTX_TAG}"
+  echo "NUTTX_COMMIT=${NUTTX_COMMIT}"
+  echo "NUTTX_APPS_COMMIT=${NUTTX_APPS_COMMIT}"
+  echo "NUTTX_BASE_CONFIG=${NUTTX_BASE_CONFIG}"
+  echo "NUTTX_PROFILE=${NUTTX_PROFILE}"
+  echo "CROSSDEV=riscv64-unknown-elf-"
+  riscv64-unknown-elf-gcc --version | head -n 1
+} | tee "${OUT_DIR}/evidence/manifest.txt"
+
+prepare_source_archive() {
+  local name="$1"
+  local slug="$2"
   local commit="$3"
+  local destination="$4"
+  local archive="${ARCHIVE_DIR}/${name}-${commit}.tar.gz"
+  local temporary="${archive}.tmp"
+  local url="https://codeload.github.com/${slug}/tar.gz/${commit}"
 
-  if [[ ! -d "${directory}/.git" ]]; then
-    rm -rf "${directory}"
-    git clone --filter=blob:none --no-checkout "${repository}" "${directory}"
+  if [[ -f "${archive}" ]] && ! tar -tzf "${archive}" >/dev/null 2>&1; then
+    echo "N1: dropping corrupt cached archive ${archive}" | tee -a "${OUT_DIR}/evidence/source-fetch.log"
+    rm -f "${archive}"
   fi
 
-  git -C "${directory}" fetch --depth 1 origin "${commit}"
-  git -C "${directory}" checkout --detach --force "${commit}"
-  git -C "${directory}" reset --hard "${commit}"
-  git -C "${directory}" clean -ffdx
-
-  local observed
-  observed="$(git -C "${directory}" rev-parse HEAD)"
-  if [[ "${observed}" != "${commit}" ]]; then
-    echo "N1 FAIL: ${directory} resolved to ${observed}, expected ${commit}" >&2
-    exit 3
+  if [[ ! -f "${archive}" ]]; then
+    local fetched=0
+    for attempt in 1 2 3 4 5; do
+      echo "N1: fetch ${name} attempt ${attempt}/5 from ${url}" \
+        | tee -a "${OUT_DIR}/evidence/source-fetch.log"
+      rm -f "${temporary}"
+      if curl --fail --location --show-error --silent \
+          --connect-timeout 20 --max-time 900 \
+          --retry 2 --retry-delay 2 --retry-all-errors \
+          --output "${temporary}" "${url}" \
+          && tar -tzf "${temporary}" >/dev/null 2>&1; then
+        mv "${temporary}" "${archive}"
+        fetched=1
+        break
+      fi
+      rm -f "${temporary}"
+      sleep $((attempt * 2))
+    done
+    if [[ "${fetched}" -ne 1 ]]; then
+      echo "N1 FAIL: unable to fetch valid ${name} archive after 5 attempts" >&2
+      exit 3
+    fi
+  else
+    echo "N1: reuse cached ${archive}" | tee -a "${OUT_DIR}/evidence/source-fetch.log"
   fi
+
+  local staging="${destination}.extract.$$"
+  rm -rf "${staging}" "${destination}"
+  mkdir -p "${staging}"
+  tar -xzf "${archive}" --strip-components=1 -C "${staging}"
+  mv "${staging}" "${destination}"
+  sha256sum "${archive}" >> "${OUT_DIR}/evidence/source-archives.sha256"
 }
 
 set_bool_config() {
@@ -65,21 +102,10 @@ path.write_text("\n".join(filtered) + "\n")
 PY
 }
 
-NUTTX_DIR="${CACHE_ROOT}/nuttx-${NUTTX_VERSION}"
-APPS_DIR="${CACHE_ROOT}/apps-${NUTTX_VERSION}"
-prepare_repository "${NUTTX_DIR}" "${NUTTX_REPOSITORY}" "${NUTTX_COMMIT}"
-prepare_repository "${APPS_DIR}" "${NUTTX_APPS_REPOSITORY}" "${NUTTX_APPS_COMMIT}"
-
-{
-  echo "NUTTX_VERSION=${NUTTX_VERSION}"
-  echo "NUTTX_TAG=${NUTTX_TAG}"
-  echo "NUTTX_COMMIT=$(git -C "${NUTTX_DIR}" rev-parse HEAD)"
-  echo "NUTTX_APPS_COMMIT=$(git -C "${APPS_DIR}" rev-parse HEAD)"
-  echo "NUTTX_BASE_CONFIG=${NUTTX_BASE_CONFIG}"
-  echo "NUTTX_PROFILE=${NUTTX_PROFILE}"
-  echo "CROSSDEV=riscv64-unknown-elf-"
-  riscv64-unknown-elf-gcc --version | head -n 1
-} | tee "${OUT_DIR}/evidence/manifest.txt"
+NUTTX_DIR="${SOURCE_DIR}/nuttx-${NUTTX_VERSION}"
+APPS_DIR="${SOURCE_DIR}/apps-${NUTTX_VERSION}"
+prepare_source_archive nuttx apache/nuttx "${NUTTX_COMMIT}" "${NUTTX_DIR}"
+prepare_source_archive nuttx-apps apache/nuttx-apps "${NUTTX_APPS_COMMIT}" "${APPS_DIR}"
 
 pushd "${NUTTX_DIR}" >/dev/null
 ./tools/configure.sh -E -l -a "${APPS_DIR}" "${NUTTX_BASE_CONFIG}"
