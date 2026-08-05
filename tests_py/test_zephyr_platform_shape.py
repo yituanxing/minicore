@@ -55,7 +55,8 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
         self.assertIn("select RISCV_ISA_EXT_ZICSR", profile)
         self.assertIn("select RISCV_ISA_EXT_ZIFENCEI", profile)
         self.assertIn("config MAX_IRQ_PER_AGGREGATOR\n\tdefault 2", defaults)
-        self.assertIn("config NUM_IRQS\n\tdefault 13", defaults)
+        self.assertIn("config NUM_IRQS\n\tdefault 14", defaults)
+        self.assertIn("final valid ISR table index\n# is 13", defaults)
         self.assertNotIn("RISCV_ISA_EXT_A", family + profile)
         self.assertNotIn("RISCV_ISA_EXT_C", family + profile)
 
