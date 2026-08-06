@@ -34,6 +34,38 @@ Zephyr regression.
 - simulation exit: `0x10000008`.
 - CLINT-compatible timer: `mtimecmp=0x02004000`, `mtime=0x0200bff8`.
 - PLIC base: `0x0c000000`; source 1 is UART RX.
+- The PLIC profile has one M-mode 32-bit enable word at offset `0x2000`.
+  Software must not access the wider QEMU enable word at offset `0x2004`.
+
+## N1-N4 frozen qualification
+
+The NuttX 13.0.0 bring-up is frozen as `nuttx-13.0.0-aethercore-n4-uart-rx-plic-nsh-v1`.
+Its qualification basis is commit
+`6326c621c9307a5785a58597dd382ae5ca506d60`, workflow run `31113948586`, and
+artifact `aethercore-nuttx-n4-31113948586-1` with archive digest
+`sha256:7cca849c1086195332c57986130607708d3a08b61b8f0ff2542dd46f4c9e1216`.
+
+The single bounded self-hosted stage passed N1, N2, N3, and N4 in order.  N4
+injected `echo N4-IRQ-PASS` through UART RX at cycle 8,000,000 with 1,000-cycle
+byte gaps.  Both deterministic memory profiles (`stall-period=0` and `3`)
+produced the command output and returned to a second `nsh>` prompt before the
+12,000,000-cycle bound.  This proves the UART RX device interrupt, PLIC
+claim/dispatch/complete path, ISR return, serial receive buffering, and NSH
+file-descriptor console path together.
+
+Frozen evidence hashes:
+
+- NuttX ELF: `a8d1d39d57b280673878fd09bf3b74d20445b4e36573503aa6583ec837b736e1`
+- flat image: `21c186e81d94147e1dd30ac96760caee8481e8b54a94d3133b2fdc5a67bf7502`
+- resolved config: `e666ecaae055d2d373cf42a1685ef88c252c17c23f6679afd1bccf25d44e0677`
+- each N4 boot log: `a805d3ca2152f52e85282f22d048023cb17eb0c300f2a5f01e299f250e256baa`
+- cached AetherCore simulator: `c7f322338910104bf12914db875dc9a56853fe5e45a70d1996561e9aef8ba9d6`
+
+The ordinary NuttX workflow intentionally remains one bounded self-hosted job
+with persistent source, host-tool, and simulator caches.  Fast and Full gates
+remain outside ordinary NuttX iterations.  Any change to the pinned sources,
+NuttX overlays, IRQ/timer/UART contracts, simulator, or relevant RTL requires a
+new N1-N4 qualification before the freeze reference may move.
 
 Every stage is fail-closed and stores configuration, build logs, ELF metadata,
 image hashes, and the exact upstream commit IDs used for the result.
