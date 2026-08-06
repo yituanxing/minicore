@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "software" / "nuttx" / "manifest.env"
 README = ROOT / "software" / "nuttx" / "README.md"
 BUILD_SCRIPT = ROOT / "tools" / "ci" / "nuttx_n1_build.sh"
+RANGE_FETCHER = ROOT / "tools" / "fetch_range_archive.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-stage.yml"
 
 
@@ -45,22 +46,27 @@ class NuttxN1ContractTest(unittest.TestCase):
         self.assertIn('[[ -s nuttx ]]', text)
         self.assertIn("sha256sum", text)
 
-    def test_workflow_bootstraps_sources_without_expanding_stage_slots(self) -> None:
+    def test_range_fetcher_is_fail_closed_and_resumable(self) -> None:
+        text = RANGE_FETCHER.read_text()
+        self.assertIn("Content-Range", text)
+        self.assertIn("SHA-512 mismatch", text)
+        self.assertIn("ThreadPoolExecutor", text)
+        self.assertIn("destination.exists()", text)
+        self.assertIn("os.replace", text)
+
+    def test_workflow_uses_one_bounded_persistent_stage_slot(self) -> None:
         text = WORKFLOW.read_text()
         runner = "runs-on: [self-hosted, Linux, X64, minicore]"
         self.assertEqual(text.count(runner), 1)
-        self.assertEqual(text.count("runs-on: ubuntu-latest"), 1)
+        self.assertNotIn("ubuntu-latest", text)
         self.assertNotIn("needs: source", text)
-        self.assertIn("actions: read", text)
-        self.assertIn("actions/artifacts/", text)
-        self.assertIn("repository: apache/nuttx", text)
-        self.assertIn("repository: apache/nuttx-apps", text)
-        self.assertIn("273c77128b6698f0c95f0d7cde1d0bb803782021", text)
-        self.assertIn("20ffb1a3a3b590d52890ee865a28442390e5d16c", text)
+        self.assertIn("tools/fetch_range_archive.py", text)
+        self.assertIn("archive.apache.org/dist/nuttx", text)
+        self.assertIn("downloads.apache.org/nuttx", text)
+        self.assertIn("--jobs 6", text)
         self.assertIn("${HOME}/.cache/aethercore", text)
         self.assertIn("group: nuttx-stage-${{ github.ref }}", text)
         self.assertIn("cancel-in-progress: true", text)
-        self.assertIn("timeout-minutes: 15", text)
         self.assertIn("timeout-minutes: 45", text)
         self.assertNotIn("full-validation", text)
         self.assertNotIn("Fast Gate", text)
