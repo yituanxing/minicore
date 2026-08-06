@@ -11,7 +11,7 @@ on:
       - tools/ci/nuttx_*.sh
       - tools/ci/ensure_genromfs.sh
       - tools/ci/kconfig-tweak
-      - tools/make_aethercore_nuttx_overlay.py
+      - tools/make_aethercore_nuttx_*_overlay.py
       - tools/fetch_range_archive.py
       - tests_py/test_range_archive_fetcher.py
       - src/main/scala/aethercore/**
@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   staged:
-    name: N1 build and N2 polling-UART NSH boot
+    name: N1 build, N2 NSH boot, and N3 timer ostest
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
 
@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          payload=$(printf '%s' '{"state":"pending","context":"nuttx/stage","description":"NuttX N1/N2 staged qualification is running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
+          payload=$(printf '%s' '{"state":"pending","context":"nuttx/stage","description":"NuttX N1/N2/N3 staged qualification is running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
           curl --fail --show-error --silent --http1.1 \
             --connect-timeout 15 --max-time 60 \
             --retry 5 --retry-delay 2 --retry-all-errors \
@@ -64,6 +64,7 @@ jobs:
           python3 -m unittest \
             tests_py.test_nuttx_n1_contract \
             tests_py.test_nuttx_n2_contract \
+            tests_py.test_nuttx_n3_contract \
             tests_py.test_aethercore_nuttx_overlay \
             tests_py.test_range_archive_fetcher -v
 
@@ -154,6 +155,32 @@ jobs:
             build/nuttx-n2/build.log
             build/nuttx-n2/evidence/
 
+      - name: Run bounded NuttX N3 timer ostest
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+          AETHERCORE_NUTTX_N3_MAX_CYCLES: "12000000"
+        run: |
+          chmod +x tools/ci/nuttx_n3_timer.sh
+          bash tools/ci/nuttx_n3_timer.sh
+
+      - name: Upload NuttX N3 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-n3-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-n3/nuttx.elf
+            build/nuttx-n3/nuttx.bin
+            build/nuttx-n3/nuttx.map
+            build/nuttx-n3/nuttx.config
+            build/nuttx-n3/build.log
+            build/nuttx-n3/evidence/
+
       - name: Publish final NuttX stage status
         if: always()
         continue-on-error: true
@@ -166,15 +193,15 @@ jobs:
           case "${JOB_STATUS}" in
             success)
               state=success
-              description='NuttX N1 build and N2 NSH boot passed'
+              description='NuttX N1, N2, and N3 passed'
               ;;
             cancelled)
               state=error
-              description='NuttX N1/N2 staged qualification cancelled'
+              description='NuttX N1/N2/N3 staged qualification cancelled'
               ;;
             *)
               state=failure
-              description="NuttX N1/N2 staged qualification ${JOB_STATUS}"
+              description="NuttX N1/N2/N3 staged qualification ${JOB_STATUS}"
               ;;
           esac
           payload=$(printf '{"state":"%s","context":"nuttx/stage","description":"%s","target_url":"%s"}' \
