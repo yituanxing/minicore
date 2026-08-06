@@ -84,6 +84,9 @@ settings: dict[str, str | bool] = {
     "CONFIG_BUILD_PROTECTED": True,
     "CONFIG_ARCH_USE_MPU": True,
     "CONFIG_LIB_SYSCALL": True,
+    "CONFIG_RISCV_PERCPU_SCRATCH": True,
+    "CONFIG_ARCH_KERNEL_STACK": True,
+    "CONFIG_ARCH_KERNEL_STACKSIZE": "2048",
     "CONFIG_BUILTIN": True,
     "CONFIG_SYSTEM_NSH": True,
     "CONFIG_NSH_BUILTIN_APPS": True,
@@ -121,6 +124,8 @@ required_enabled=(
   CONFIG_BUILD_PROTECTED
   CONFIG_ARCH_USE_MPU
   CONFIG_LIB_SYSCALL
+  CONFIG_RISCV_PERCPU_SCRATCH
+  CONFIG_ARCH_KERNEL_STACK
   CONFIG_BUILTIN
   CONFIG_SYSTEM_NSH
   CONFIG_NSH_BUILTIN_APPS
@@ -163,6 +168,10 @@ grep -Fqx 'CONFIG_NUTTX_USERSPACE=0x80040000' .config || {
   echo "P1 FAIL: userspace link address is not 0x80040000" >&2
   exit 3
 }
+grep -Fqx 'CONFIG_ARCH_KERNEL_STACKSIZE=2048' .config || {
+  echo "P1 FAIL: protected kernel stack is not 2048 bytes" >&2
+  exit 3
+}
 
 cp .config "${OUT_DIR}/nuttx.config"
 make -j"${JOBS}" CROSSDEV=riscv64-unknown-elf- \
@@ -195,7 +204,14 @@ riscv64-unknown-elf-readelf -SW nuttx_user > "${OUT_DIR}/evidence/user-elf-secti
 riscv64-unknown-elf-nm -n nuttx > "${OUT_DIR}/evidence/kernel-symbols.txt"
 riscv64-unknown-elf-nm -n nuttx_user > "${OUT_DIR}/evidence/user-symbols.txt"
 
-for symbol in qemu_rv_userspace qemu_rv_configure_mpu riscv_config_pmp_region riscv_swint; do
+for symbol in \
+  qemu_rv_userspace \
+  qemu_rv_configure_mpu \
+  riscv_config_pmp_region \
+  riscv_jump_to_user \
+  exception_common \
+  dispatch_syscall \
+  riscv_swint; do
   grep -Eq "[[:space:]]${symbol}$" "${OUT_DIR}/evidence/kernel-symbols.txt" || {
     echo "P1 FAIL: kernel image is missing ${symbol}" >&2
     exit 4
@@ -305,7 +321,10 @@ pmp_mode=NAPOT
 pmp_entries_implemented=4
 pmp_entries_used=0,1
 pmp_free_scan=disabled-in-platform-init
-syscall_boundary=riscv_swint
+syscall_boundary=ecall-riscv_swint-dispatch_syscall
+user_transition=riscv_jump_to_user-mret
+kernel_exception_stack=2048
+user_stack_trap_frames=forbidden
 user_programs=nsh,hello
 runtime=not-yet-qualified
 profile=rv32im_zicsr_zifencei
