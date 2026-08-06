@@ -5,8 +5,8 @@ The shared simulator is intentionally generic.  This adapter selects the
 RV32IMU/PMP/interrupt top and adds fail-closed evidence that execution really
 entered U-mode: retired instructions from the protected user text region and
 at least one architecturally classified ECALL-from-U trap (mcause=8).
-It also supports prompt-armed UART injection so OS boot-time variation is not
-encoded as a fragile fixed cycle number.
+It also supports prompt-armed UART injection and terminates successfully as
+soon as the command has completed and NSH has returned to its second prompt.
 """
 
 from __future__ import annotations
@@ -41,7 +41,9 @@ def main() -> None:
         "constexpr std::uint32_t kMret = 0x30200073U;\n"
         "constexpr std::uint64_t kUserTextBase = 0x80040000ULL;\n"
         "constexpr std::uint64_t kUserTextLimit = 0x80080000ULL;\n"
-        "constexpr std::uint64_t kEnvironmentCallFromU = 8ULL;\n",
+        "constexpr std::uint64_t kEnvironmentCallFromU = 8ULL;\n"
+        "constexpr char kProtectedPrompt[] = \"nsh>\";\n"
+        "constexpr std::size_t kProtectedPromptLength = sizeof(kProtectedPrompt) - 1;\n",
         "protected-userspace constants",
     )
 
@@ -115,8 +117,17 @@ def main() -> None:
         "    std::uint64_t exceptions = 0;\n"
         "    std::uint64_t userCommits = 0;\n"
         "    std::uint64_t userEnvironmentCalls = 0;\n"
-        "    std::uint64_t mretCommits = 0;\n",
+        "    std::uint64_t mretCommits = 0;\n"
+        "    bool protectedComplete = false;\n",
         "U-mode counters",
+    )
+
+    text = replace_once(
+        text,
+        "    for (; cycles < options.maxCycles && !top.io_halted && !exitRequested; ++cycles) {\n",
+        "    for (; cycles < options.maxCycles && !top.io_halted && !exitRequested &&\n"
+        "           !protectedComplete; ++cycles) {\n",
+        "protected completion loop condition",
     )
 
     text = replace_once(
@@ -129,6 +140,31 @@ def main() -> None:
         "                           rxIndex < options.rxBytes.size() &&\n"
         "                           cycles >= nextRxCycle;\n",
         "prompt-armed RX scheduling",
+    )
+
+    text = replace_once(
+        text,
+        "        if (top.io_uartValid) {\n"
+        "          const char byte = static_cast<char>(top.io_uartByte);\n"
+        "          uart.push_back(byte);\n"
+        "          std::cout << byte << std::flush;\n"
+        "        }\n",
+        "        if (top.io_uartValid) {\n"
+        "          const char byte = static_cast<char>(top.io_uartByte);\n"
+        "          uart.push_back(byte);\n"
+        "          std::cout << byte << std::flush;\n"
+        "\n"
+        "          std::size_t promptCount = 0;\n"
+        "          for (std::size_t pos = 0;\n"
+        "               (pos = uart.find(kProtectedPrompt, pos)) != std::string::npos;\n"
+        "               pos += kProtectedPromptLength) {\n"
+        "            ++promptCount;\n"
+        "          }\n"
+        "          if (promptCount >= 2 && rxIndex == options.rxBytes.size()) {\n"
+        "            protectedComplete = true;\n"
+        "          }\n"
+        "        }\n",
+        "second NSH prompt completion",
     )
 
     text = replace_once(
@@ -197,6 +233,16 @@ def main() -> None:
         "    if (mretCommits == 0) {\n"
         "      std::cerr << \"FAIL: no MRET user transition was observed\\n\";\n"
         "      return 13;\n"
+        "    }\n"
+        "    if (protectedComplete) {\n"
+        "      std::cout << \"PASS: protected NSH returned after U-mode hello at \"\n"
+        "                << cycles << \" cycles, \" << committed\n"
+        "                << \" committed instructions\";\n"
+        "      if (options.stallPeriod != 0) {\n"
+        "        std::cout << \", stall-period=\" << options.stallPeriod;\n"
+        "      }\n"
+        "      std::cout << '\\n';\n"
+        "      return 0;\n"
         "    }\n\n"
         "    if (!top.io_halted && cycles >= options.maxCycles) {\n"
         "      std::cerr << \"FAIL: timeout after \" << cycles << \" cycles\\n\";\n"
