@@ -83,6 +83,7 @@ settings: dict[str, str | bool] = {
     "CONFIG_RISCV_TOOLCHAIN_CLANG": False,
     "CONFIG_BUILD_PROTECTED": True,
     "CONFIG_ARCH_USE_MPU": True,
+    "CONFIG_LIB_SYSCALL": True,
     "CONFIG_BUILTIN": True,
     "CONFIG_SYSTEM_NSH": True,
     "CONFIG_NSH_BUILTIN_APPS": True,
@@ -110,6 +111,8 @@ python3 "${ROOT_DIR}/tools/make_aethercore_nuttx_n3_overlay.py" "${NUTTX_DIR}" \
   2>&1 | tee "${OUT_DIR}/evidence/n3-overlay.log"
 python3 "${ROOT_DIR}/tools/make_aethercore_nuttx_n4_overlay.py" "${NUTTX_DIR}" \
   2>&1 | tee "${OUT_DIR}/evidence/n4-overlay.log"
+python3 "${ROOT_DIR}/tools/make_aethercore_nuttx_protected_overlay.py" "${NUTTX_DIR}" \
+  2>&1 | tee "${OUT_DIR}/evidence/protected-overlay.log"
 
 make olddefconfig CROSSDEV=riscv64-unknown-elf- \
   2>&1 | tee "${OUT_DIR}/evidence/olddefconfig.log"
@@ -117,6 +120,7 @@ make olddefconfig CROSSDEV=riscv64-unknown-elf- \
 required_enabled=(
   CONFIG_BUILD_PROTECTED
   CONFIG_ARCH_USE_MPU
+  CONFIG_LIB_SYSCALL
   CONFIG_BUILTIN
   CONFIG_SYSTEM_NSH
   CONFIG_NSH_BUILTIN_APPS
@@ -191,7 +195,7 @@ riscv64-unknown-elf-readelf -SW nuttx_user > "${OUT_DIR}/evidence/user-elf-secti
 riscv64-unknown-elf-nm -n nuttx > "${OUT_DIR}/evidence/kernel-symbols.txt"
 riscv64-unknown-elf-nm -n nuttx_user > "${OUT_DIR}/evidence/user-symbols.txt"
 
-for symbol in qemu_rv_userspace qemu_rv_configure_mpu riscv_append_pmp_region riscv_swint; do
+for symbol in qemu_rv_userspace qemu_rv_configure_mpu riscv_config_pmp_region riscv_swint; do
   grep -Eq "[[:space:]]${symbol}$" "${OUT_DIR}/evidence/kernel-symbols.txt" || {
     echo "P1 FAIL: kernel image is missing ${symbol}" >&2
     exit 4
@@ -298,7 +302,9 @@ userspace_link=0x80040000
 user_flash=0x80040000-0x80080000:rx
 user_ram=0x80200000-0x80300000:rw
 pmp_mode=NAPOT
-pmp_entries_required=2
+pmp_entries_implemented=4
+pmp_entries_used=0,1
+pmp_free_scan=disabled-in-platform-init
 syscall_boundary=riscv_swint
 user_programs=nsh,hello
 runtime=not-yet-qualified
