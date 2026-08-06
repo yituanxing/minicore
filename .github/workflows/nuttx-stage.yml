@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/nuttx-**
+      - agent/umode-**
     paths:
       - software/nuttx/**
       - tests_py/test_nuttx_*.py
@@ -33,19 +34,19 @@ concurrency:
 
 jobs:
   staged:
-    name: N1 build, N2 NSH, N3 timer, and N4 UART RX IRQ
+    name: N1-N4 regression and P1 protected userspace build
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
-      - name: Publish pending NuttX stage status
+      - name: Publish pending protected-userspace status
         continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          payload=$(printf '%s' '{"state":"pending","context":"nuttx/stage","description":"NuttX N1/N2/N3/N4 staged qualification is running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
+          payload=$(printf '%s' '{"state":"pending","context":"umode/nuttx-protected","description":"NuttX N1-N4 regression and P1 protected build are running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
           curl --fail --show-error --silent --http1.1 \
             --connect-timeout 15 --max-time 60 \
             --retry 5 --retry-delay 2 --retry-all-errors \
@@ -59,13 +60,14 @@ jobs:
       - name: Checkout AetherCore
         uses: actions/checkout@v4
 
-      - name: Validate NuttX stage contracts
+      - name: Validate NuttX and protected-userspace contracts
         run: |
           python3 -m unittest \
             tests_py.test_nuttx_n1_contract \
             tests_py.test_nuttx_n2_contract \
             tests_py.test_nuttx_n3_contract \
             tests_py.test_nuttx_n4_contract \
+            tests_py.test_nuttx_p1_protected_contract \
             tests_py.test_aethercore_nuttx_overlay \
             tests_py.test_range_archive_fetcher -v
 
@@ -210,7 +212,36 @@ jobs:
             build/nuttx-n4/build.log
             build/nuttx-n4/evidence/
 
-      - name: Publish final NuttX stage status
+      - name: Build NuttX P1 protected kernel and U-mode applications
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_p1_protected_build.sh
+          bash tools/ci/nuttx_p1_protected_build.sh
+
+      - name: Upload NuttX P1 protected evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-p1-protected-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-p1/nuttx.elf
+            build/nuttx-p1/nuttx_user.elf
+            build/nuttx-p1/nuttx.bin
+            build/nuttx-p1/nuttx_user.bin
+            build/nuttx-p1/aethercore-protected.bin
+            build/nuttx-p1/nuttx.map
+            build/nuttx-p1/nuttx_user.map
+            build/nuttx-p1/nuttx.config
+            build/nuttx-p1/build.log
+            build/nuttx-p1/evidence/
+
+      - name: Publish final protected-userspace status
         if: always()
         continue-on-error: true
         shell: bash
@@ -222,18 +253,18 @@ jobs:
           case "${JOB_STATUS}" in
             success)
               state=success
-              description='NuttX N1, N2, N3, and N4 passed'
+              description='NuttX N1-N4 regression and P1 protected build passed'
               ;;
             cancelled)
               state=error
-              description='NuttX N1/N2/N3/N4 staged qualification cancelled'
+              description='NuttX protected-userspace qualification cancelled'
               ;;
             *)
               state=failure
-              description="NuttX N1/N2/N3/N4 staged qualification ${JOB_STATUS}"
+              description="NuttX protected-userspace qualification ${JOB_STATUS}"
               ;;
           esac
-          payload=$(printf '{"state":"%s","context":"nuttx/stage","description":"%s","target_url":"%s"}' \
+          payload=$(printf '{"state":"%s","context":"umode/nuttx-protected","description":"%s","target_url":"%s"}' \
             "${state}" "${description}" \
             "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
           curl --fail --show-error --silent --http1.1 \
