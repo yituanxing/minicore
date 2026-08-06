@@ -10,6 +10,8 @@ RTL_DIR="${SIM_ROOT}/rtl"
 OBJ_DIR="${SIM_ROOT}/obj"
 GENERATED_MAIN="${SIM_ROOT}/sim_main_nuttx_protected.cpp"
 RUNNER="${OBJ_DIR}/VAetherCoreNuttXProtectedSimTop"
+SIM_FINGERPRINT_FILE="${SIM_ROOT}/source.sha256"
+SIM_ABI_VERSION="nuttx-protected-sim-v2"
 IMAGE="${P1_DIR}/aethercore-protected.bin"
 MAX_CYCLES="${AETHERCORE_NUTTX_P2_MAX_CYCLES:-30000000}"
 RX_GAP_CYCLES="${AETHERCORE_NUTTX_P2_RX_GAP_CYCLES:-1000}"
@@ -35,8 +37,8 @@ done
 }
 
 chmod +x "${ROOT_DIR}/mill"
-rm -rf "${OUT_DIR}" "${RTL_DIR}" "${OBJ_DIR}"
-mkdir -p "${OUT_DIR}/evidence" "${RTL_DIR}" "${OBJ_DIR}" "${SIM_ROOT}"
+rm -rf "${OUT_DIR}"
+mkdir -p "${OUT_DIR}/evidence" "${SIM_ROOT}"
 
 python3 - \
   "${P1_DIR}/nuttx.bin" "${P1_DIR}/nuttx_user.bin" "${IMAGE}" <<'PY' \
@@ -77,32 +79,75 @@ print(
 )
 PY
 
-"${ROOT_DIR}/mill" aethercore.runMain aethercore.ElaborateNuttXProtected \
-  --target-dir "${RTL_DIR}" \
-  2>&1 | tee "${OUT_DIR}/evidence/elaboration.log"
+sim_fingerprint="$({
+  printf 'sim-abi=%s\n' "${SIM_ABI_VERSION}"
+  verilator --version
+  find "${ROOT_DIR}/src/main/scala" -type f \
+    \( -name '*.scala' -o -name '*.sc' \) -print | sort | \
+    while IFS= read -r source; do
+      sha256sum "${source}"
+    done
+  sha256sum \
+    "${ROOT_DIR}/build.sc" \
+    "${ROOT_DIR}/mill" \
+    "${ROOT_DIR}/sim/sim_main.cpp" \
+    "${ROOT_DIR}/sim/nemu_difftest.cpp" \
+    "${ROOT_DIR}/sim/nemu_difftest.h" \
+    "${ROOT_DIR}/tools/make_nuttx_protected_runner.py"
+} | sha256sum | awk '{print $1}')"
 
-mapfile -t rtl_sources < <(find "${RTL_DIR}" -maxdepth 1 -type f -name '*.sv' -print | sort)
-if (( ${#rtl_sources[@]} == 0 )); then
-  echo "P2 FAIL: protected elaboration produced no SystemVerilog" >&2
-  exit 3
+sim_cache=miss
+if [[ -x "${RUNNER}" && -s "${SIM_FINGERPRINT_FILE}" && \
+      "$(cat "${SIM_FINGERPRINT_FILE}")" == "${sim_fingerprint}" ]]; then
+  sim_cache=hit
+  echo "P2: reuse protected simulator ${sim_fingerprint}"
+else
+  echo "P2: rebuild protected simulator ${sim_fingerprint}"
+  rm -rf "${RTL_DIR}" "${OBJ_DIR}" "${GENERATED_MAIN}"
+  rm -f "${SIM_FINGERPRINT_FILE}"
+  mkdir -p "${RTL_DIR}" "${OBJ_DIR}"
+
+  "${ROOT_DIR}/mill" aethercore.runMain aethercore.ElaborateNuttXProtected \
+    --target-dir "${RTL_DIR}" \
+    2>&1 | tee "${OUT_DIR}/evidence/elaboration.log"
+
+  mapfile -t rtl_sources < <(find "${RTL_DIR}" -maxdepth 1 -type f -name '*.sv' -print | sort)
+  if (( ${#rtl_sources[@]} == 0 )); then
+    echo "P2 FAIL: protected elaboration produced no SystemVerilog" >&2
+    exit 3
+  fi
+
+  python3 "${ROOT_DIR}/tools/make_nuttx_protected_runner.py" \
+    "${ROOT_DIR}/sim/sim_main.cpp" "${GENERATED_MAIN}" \
+    2>&1 | tee "${OUT_DIR}/evidence/runner-generation.log"
+
+  verilator --cc --exe --build --trace -Wall -Wno-fatal \
+    --top-module AetherCoreNuttXProtectedSimTop \
+    -Mdir "${OBJ_DIR}" \
+    -CFLAGS "-I${ROOT_DIR}/sim -std=c++20 -O2" -LDFLAGS "-ldl" \
+    "${rtl_sources[@]}" "${GENERATED_MAIN}" \
+    "${ROOT_DIR}/sim/nemu_difftest.cpp" \
+    2>&1 | tee "${OUT_DIR}/evidence/simulator-build.log"
+
+  [[ -x "${RUNNER}" ]] || {
+    echo "P2 FAIL: protected AetherCore runner was not produced" >&2
+    exit 3
+  }
+  printf '%s\n' "${sim_fingerprint}" > "${SIM_FINGERPRINT_FILE}"
 fi
 
-python3 "${ROOT_DIR}/tools/make_nuttx_protected_runner.py" \
-  "${ROOT_DIR}/sim/sim_main.cpp" "${GENERATED_MAIN}" \
-  2>&1 | tee "${OUT_DIR}/evidence/runner-generation.log"
-
-verilator --cc --exe --build --trace -Wall -Wno-fatal \
-  --top-module AetherCoreNuttXProtectedSimTop \
-  -Mdir "${OBJ_DIR}" \
-  -CFLAGS "-I${ROOT_DIR}/sim -std=c++20 -O2" -LDFLAGS "-ldl" \
-  "${rtl_sources[@]}" "${GENERATED_MAIN}" \
-  "${ROOT_DIR}/sim/nemu_difftest.cpp" \
-  2>&1 | tee "${OUT_DIR}/evidence/simulator-build.log"
-
 [[ -x "${RUNNER}" ]] || {
-  echo "P2 FAIL: protected AetherCore runner was not produced" >&2
+  echo "P2 FAIL: protected AetherCore runner is unavailable after cache preparation" >&2
   exit 3
 }
+cat > "${OUT_DIR}/evidence/simulator-cache.txt" <<EOF
+status=${sim_cache}
+fingerprint=${sim_fingerprint}
+abi=${SIM_ABI_VERSION}
+runner=${RUNNER}
+verilator=$(verilator --version)
+EOF
+cat "${OUT_DIR}/evidence/simulator-cache.txt"
 
 rx_args=(
   --rx-after-uart "nsh> "
@@ -181,6 +226,8 @@ status=PASS
 contract=nuttx-13.0.0-aethercore-p2-protected-umode-hello-v1
 image=${IMAGE}
 runner=${RUNNER}
+simulator_cache=${sim_cache}
+simulator_fingerprint=${sim_fingerprint}
 kernel_privilege=M
 userspace_privilege=U
 user_program=hello
