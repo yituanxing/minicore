@@ -50,8 +50,9 @@ class NuttxN1ContractTest(unittest.TestCase):
         runner = "runs-on: [self-hosted, Linux, X64, minicore]"
         self.assertEqual(text.count(runner), 1)
         self.assertEqual(text.count("runs-on: ubuntu-latest"), 1)
-        self.assertIn("needs: source", text)
-        self.assertIn("actions/download-artifact@v4", text)
+        self.assertNotIn("needs: source", text)
+        self.assertIn("actions: read", text)
+        self.assertIn("actions/artifacts/", text)
         self.assertIn("repository: apache/nuttx", text)
         self.assertIn("repository: apache/nuttx-apps", text)
         self.assertIn("273c77128b6698f0c95f0d7cde1d0bb803782021", text)
