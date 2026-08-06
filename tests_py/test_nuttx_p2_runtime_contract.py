@@ -9,6 +9,7 @@ TOP = ROOT / "src" / "main" / "scala" / "aethercore" / "sim" / "AetherCoreNuttXP
 ELABORATOR = ROOT / "src" / "main" / "scala" / "aethercore" / "ElaborateNuttXProtected.scala"
 GENERATOR = ROOT / "tools" / "make_nuttx_protected_runner.py"
 SHARED_RUNNER = ROOT / "sim" / "sim_main.cpp"
+P2_SCRIPT = ROOT / "tools" / "ci" / "nuttx_p2_protected_boot.sh"
 
 
 class NuttxP2RuntimeContractTest(unittest.TestCase):
@@ -75,6 +76,20 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         self.assertIn("mretCommits == 0", text)
         self.assertIn("protectedCommitPc >= kUserTextBase", text)
         self.assertIn("exceptionCause == kEnvironmentCallFromU", text)
+
+    def test_p2_script_builds_one_bounded_runner_and_two_profiles(self) -> None:
+        text = P2_SCRIPT.read_text()
+        for fragment in (
+            "-I${ROOT_DIR}/sim -std=c++20 -O2",
+            "--top-module AetherCoreNuttXProtectedSimTop",
+            '--rx-after-uart "nsh> "',
+            "STALL_PERIODS=(0 3)",
+            "Hello, World!!",
+            "ECALL-from-U",
+            "bounded timeout after hello",
+        ):
+            self.assertIn(fragment, text)
+        self.assertEqual(text.count("verilator --cc --exe --build"), 1)
 
 
 if __name__ == "__main__":
