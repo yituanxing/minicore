@@ -19,7 +19,8 @@ NUTTX_DIR="${SOURCE_DIR}/nuttx-${NUTTX_VERSION}"
 APPS_DIR="${SOURCE_DIR}/apps-${NUTTX_VERSION}"
 
 for command in make python3 verilator riscv64-unknown-elf-gcc \
-  riscv64-unknown-elf-readelf riscv64-unknown-elf-nm sha256sum; do
+  riscv64-unknown-elf-objcopy riscv64-unknown-elf-readelf \
+  riscv64-unknown-elf-nm sha256sum; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "N2 FAIL: required command not found: ${command}" >&2
     exit 2
@@ -93,10 +94,20 @@ cp .config "${OUT_DIR}/nuttx.config"
 make -j"${JOBS}" CROSSDEV=riscv64-unknown-elf- \
   2>&1 | tee "${OUT_DIR}/build.log"
 
-[[ -s nuttx && -s nuttx.bin ]] || {
-  echo "N2 FAIL: NuttX ELF or flat image was not produced" >&2
+[[ -s nuttx ]] || {
+  echo "N2 FAIL: NuttX ELF was not produced" >&2
   exit 4
 }
+
+# The pinned rv-virt build does not guarantee a flat image side effect after a
+# custom linker script.  Generate the simulator image explicitly from the
+# verified ELF instead of relying on an optional board Makefile artifact.
+riscv64-unknown-elf-objcopy -O binary nuttx nuttx.bin
+[[ -s nuttx.bin ]] || {
+  echo "N2 FAIL: objcopy did not produce a non-empty flat image" >&2
+  exit 4
+}
+
 cp nuttx "${OUT_DIR}/nuttx.elf"
 cp nuttx.bin "${OUT_DIR}/nuttx.bin"
 [[ -f nuttx.map ]] && cp nuttx.map "${OUT_DIR}/nuttx.map"
