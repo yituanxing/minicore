@@ -240,8 +240,8 @@ IRQ_INIT_NEW = r'''  up_irq_save();
    */
 
 #if defined(CONFIG_STACK_COLORATION) && CONFIG_ARCH_INTERRUPTSTACK > 15
-  size_t intstack_size = (CONFIG_ARCH_INTERRUPTSTACK & ~15);
-  riscv_stack_color(g_intstackalloc, intstack_size);
+  size_t n2_intstack_size = (CONFIG_ARCH_INTERRUPTSTACK & ~15);
+  riscv_stack_color(g_intstackalloc, n2_intstack_size);
 #endif
 
   riscv_exception_attach();
