@@ -16,12 +16,14 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
     def test_sim_top_combines_umode_pmp_timer_and_external_interrupts(self) -> None:
         text = TOP.read_text()
         for fragment in (
-            "CoreProfiles.rv32imuPmpSoftware",
+            "CoreProfiles.rv32imuPmpOsSoftware",
+            "RV32IM + Zicsr + Zifencei",
             "stopOnTrap = false",
             "withMachineInterruptPlatform = true",
             "stopOnWfi = false",
         ):
             self.assertIn(fragment, text)
+        self.assertNotIn("CoreProfiles.rv32imuPmpSoftware,", text)
         self.assertIn("AetherCoreNuttXProtectedSimTop", ELABORATOR.read_text())
 
     def test_runner_requires_architectural_user_mode_evidence(self) -> None:
