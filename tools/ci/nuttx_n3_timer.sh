@@ -6,6 +6,8 @@ MANIFEST="${ROOT_DIR}/software/nuttx/manifest.env"
 OUT_DIR="${ROOT_DIR}/build/nuttx-n3"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
 SOURCE_DIR="${CACHE_ROOT}/sources"
+KCONFIGLIB_VERSION="14.1.0"
+KCONFIGLIB_DIR="${CACHE_ROOT}/host-tools/kconfiglib-${KCONFIGLIB_VERSION}"
 SIM_ROOT="${CACHE_ROOT}/sim/n2-rv32im"
 RUNNER="${SIM_ROOT}/obj/VAetherCoreSimTop"
 MAX_CYCLES="${AETHERCORE_NUTTX_N3_MAX_CYCLES:-12000000}"
@@ -21,10 +23,19 @@ for command in make python3 riscv64-unknown-elf-objcopy \
     exit 2
   }
 done
+[[ -x "${KCONFIGLIB_DIR}/bin/olddefconfig" ]] || {
+  echo "N3 FAIL: cached kconfiglib ${KCONFIGLIB_VERSION} is missing" >&2
+  exit 2
+}
 [[ -x "${RUNNER}" ]] || {
   echo "N3 FAIL: cached N2 AetherCore runner is missing" >&2
   exit 2
 }
+
+chmod +x "${ROOT_DIR}/tools/ci/kconfig-tweak"
+GENROMFS_BIN="$(bash "${ROOT_DIR}/tools/ci/ensure_genromfs.sh" "${CACHE_ROOT}")"
+export PATH="$(dirname "${GENROMFS_BIN}"):${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
+export PYTHONPATH="${KCONFIGLIB_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/evidence"
@@ -32,7 +43,8 @@ python3 "${ROOT_DIR}/tools/make_aethercore_nuttx_n3_overlay.py" "${NUTTX_DIR}" \
   2>&1 | tee "${OUT_DIR}/evidence/overlay.log"
 
 pushd "${NUTTX_DIR}" >/dev/null
-make olddefconfig CROSSDEV=riscv64-unknown-elf-
+make olddefconfig CROSSDEV=riscv64-unknown-elf- \
+  2>&1 | tee "${OUT_DIR}/evidence/olddefconfig.log"
 
 required_enabled=(
   CONFIG_AETHERCORE_UART
