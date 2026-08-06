@@ -33,7 +33,7 @@ def run_curl(
         "--silent",
         "--http1.1",
         "--connect-timeout",
-        "20",
+        "15",
         *arguments,
     ]
     return subprocess.run(
@@ -48,9 +48,9 @@ def fetch_checksum(url: str) -> str:
     result = run_curl(
         [
             "--max-time",
-            "120",
+            "45",
             "--retry",
-            "5",
+            "2",
             "--retry-delay",
             "2",
             "--retry-all-errors",
@@ -69,6 +69,17 @@ def fetch_checksum(url: str) -> str:
     return match.group(1).lower()
 
 
+def sha512_file(path: Path) -> str:
+    digest = hashlib.sha512()
+    with path.open("rb") as source:
+        while True:
+            block = source.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def probe_range(url: str, directory: Path) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     header_path = directory / "probe.headers"
@@ -78,12 +89,14 @@ def probe_range(url: str, directory: Path) -> int:
     result = run_curl(
         [
             "--max-time",
-            "120",
+            "45",
             "--retry",
-            "2",
+            "1",
             "--retry-delay",
             "2",
             "--retry-all-errors",
+            "--max-filesize",
+            "1048576",
             "--header",
             "Accept-Encoding: identity",
             "--range",
@@ -161,7 +174,7 @@ def download_part(
                 "--max-time",
                 str(max_time),
                 "--speed-time",
-                "60",
+                "45",
                 "--speed-limit",
                 "1024",
                 "--header",
@@ -241,6 +254,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     expected_sha512 = fetch_checksum(args.sha512_url)
+    if args.output.is_file():
+        observed = sha512_file(args.output)
+        if observed == expected_sha512:
+            print(
+                f"range cache PASS: {args.output} sha512={expected_sha512}",
+                flush=True,
+            )
+            return 0
+        args.output.unlink()
+
     parts = Path(str(args.output) + ".parts")
     url, total_size = select_url(args.url, parts)
     count = (total_size + args.chunk_size - 1) // args.chunk_size
