@@ -46,6 +46,7 @@ else
 fi
 
 export PATH="${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
+export PYTHONPATH="${KCONFIGLIB_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/evidence" "${ARCHIVE_DIR}" "${SOURCE_DIR}"
