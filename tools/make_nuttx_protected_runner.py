@@ -5,6 +5,8 @@ The shared simulator is intentionally generic.  This adapter selects the
 RV32IMU/PMP/interrupt top and adds fail-closed evidence that execution really
 entered U-mode: retired instructions from the protected user text region and
 at least one architecturally classified ECALL-from-U trap (mcause=8).
+It also supports prompt-armed UART injection so OS boot-time variation is not
+encoded as a fragile fixed cycle number.
 """
 
 from __future__ import annotations
@@ -45,6 +47,60 @@ def main() -> None:
 
     text = replace_once(
         text,
+        "  std::uint64_t rxGapCycles = 1;\n",
+        "  std::uint64_t rxGapCycles = 1;\n"
+        "  std::optional<std::string> rxAfterUart;\n",
+        "prompt-armed RX option",
+    )
+
+    text = replace_once(
+        text,
+        '        "[--rx-byte N ... --rx-start-cycle N --rx-gap-cycles N] [--difftest NEMU_SO] "\n',
+        '        "[--rx-byte N ... --rx-start-cycle N --rx-gap-cycles N] "\n'
+        '        "[--rx-after-uart TEXT] [--difftest NEMU_SO] "\n',
+        "prompt-armed RX usage",
+    )
+
+    text = replace_once(
+        text,
+        "    } else if (arg == \"--rx-gap-cycles\" && i + 1 < argc) {\n"
+        "      options.rxGapCycles = parseInteger(argv[++i]);\n"
+        "      if (options.rxGapCycles == 0) {\n"
+        "        throw std::runtime_error(\"--rx-gap-cycles must be non-zero\");\n"
+        "      }\n"
+        "    } else if (arg == \"--difftest\" && i + 1 < argc) {\n",
+        "    } else if (arg == \"--rx-gap-cycles\" && i + 1 < argc) {\n"
+        "      options.rxGapCycles = parseInteger(argv[++i]);\n"
+        "      if (options.rxGapCycles == 0) {\n"
+        "        throw std::runtime_error(\"--rx-gap-cycles must be non-zero\");\n"
+        "      }\n"
+        "    } else if (arg == \"--rx-after-uart\" && i + 1 < argc) {\n"
+        "      options.rxAfterUart = argv[++i];\n"
+        "      if (options.rxAfterUart->empty()) {\n"
+        "        throw std::runtime_error(\"--rx-after-uart must not be empty\");\n"
+        "      }\n"
+        "    } else if (arg == \"--difftest\" && i + 1 < argc) {\n",
+        "prompt-armed RX parser",
+    )
+
+    text = replace_once(
+        text,
+        "  if (options.expectedMemoryAddress.has_value() != options.expectedMemoryValue.has_value()) {\n"
+        "    throw std::runtime_error(\"--expect-memory64 requires both address and value\");\n"
+        "  }\n"
+        "  return options;\n",
+        "  if (options.expectedMemoryAddress.has_value() != options.expectedMemoryValue.has_value()) {\n"
+        "    throw std::runtime_error(\"--expect-memory64 requires both address and value\");\n"
+        "  }\n"
+        "  if (options.rxAfterUart && options.rxBytes.empty()) {\n"
+        "    throw std::runtime_error(\"--rx-after-uart requires at least one --rx-byte\");\n"
+        "  }\n"
+        "  return options;\n",
+        "prompt-armed RX validation",
+    )
+
+    text = replace_once(
+        text,
         "  commit.exception = top.io_commit_exception;\n  return commit;",
         "  commit.exception = top.io_commit_exception;\n"
         "  commit.exceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);\n"
@@ -61,6 +117,18 @@ def main() -> None:
         "    std::uint64_t userEnvironmentCalls = 0;\n"
         "    std::uint64_t mretCommits = 0;\n",
         "U-mode counters",
+    )
+
+    text = replace_once(
+        text,
+        "      const bool rxValid = !top.reset && rxIndex < options.rxBytes.size() &&\n"
+        "                           cycles >= nextRxCycle;\n",
+        "      const bool rxArmed =\n"
+        "          !options.rxAfterUart || uart.find(*options.rxAfterUart) != std::string::npos;\n"
+        "      const bool rxValid = !top.reset && rxArmed &&\n"
+        "                           rxIndex < options.rxBytes.size() &&\n"
+        "                           cycles >= nextRxCycle;\n",
+        "prompt-armed RX scheduling",
     )
 
     text = replace_once(
