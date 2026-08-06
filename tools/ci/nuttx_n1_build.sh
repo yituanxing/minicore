@@ -113,7 +113,7 @@ prepare_source_archive nuttx apache/nuttx "${NUTTX_COMMIT}" "${NUTTX_DIR}"
 prepare_source_archive nuttx-apps apache/nuttx-apps "${NUTTX_APPS_COMMIT}" "${APPS_DIR}"
 
 pushd "${NUTTX_DIR}" >/dev/null
-./tools/configure.sh -E -l -a "${APPS_DIR}" "${NUTTX_BASE_CONFIG}"
+./tools/configure.sh -E -l -a "../$(basename "${APPS_DIR}")" "${NUTTX_BASE_CONFIG}"
 
 set_bool_config .config CONFIG_ARCH_CHIP_QEMU_RV_ISA_M y
 set_bool_config .config CONFIG_ARCH_CHIP_QEMU_RV_ISA_A n
