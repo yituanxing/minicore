@@ -23,6 +23,16 @@ void riscv_serialinit(void)
 }
 """
 
+IRQ_INITIALIZER = """void up_irqinitialize(void)
+{
+  up_irq_save();
+
+  /* Disable all global interrupts */
+
+  putreg32(0x0, QEMU_RV_PLIC_ENABLE1);
+}
+"""
+
 
 class AetherCoreNuttxOverlayTest(unittest.TestCase):
     def make_fixture(self, directory: str) -> Path:
@@ -36,6 +46,7 @@ class AetherCoreNuttxOverlayTest(unittest.TestCase):
         (chip / "qemu_rv_start.c").write_text(
             "/* start */\n" + START_WRAPPERS
         )
+        (chip / "qemu_rv_irq.c").write_text(IRQ_INITIALIZER)
         (root / ".config").write_text(
             "CONFIG_16550_UART=y\n"
             "CONFIG_16550_UART0=y\n"
@@ -75,10 +86,20 @@ class AetherCoreNuttxOverlayTest(unittest.TestCase):
             kconfig = (chip / "Kconfig").read_text()
             make_defs = (chip / "Make.defs").read_text()
             start = (chip / "qemu_rv_start.c").read_text()
+            irq = (chip / "qemu_rv_irq.c").read_text()
             self.assertEqual(kconfig.count("config AETHERCORE_UART"), 1)
             self.assertEqual(make_defs.count("CONFIG_AETHERCORE_UART"), 1)
             self.assertEqual(start.count("aethercore_earlyserialinit();"), 1)
             self.assertEqual(start.count("aethercore_serialinit();"), 1)
+            self.assertEqual(
+                irq.count(
+                    "defined(CONFIG_AETHERCORE_UART) && "
+                    "defined(CONFIG_SUPPRESS_INTERRUPTS)"
+                ),
+                1,
+            )
+            self.assertIn("riscv_exception_attach();", irq)
+            self.assertIn("return;", irq)
 
             config = (root / ".config").read_text().splitlines()
             self.assertIn("CONFIG_AETHERCORE_UART=y", config)
