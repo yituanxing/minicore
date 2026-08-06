@@ -58,7 +58,7 @@ install_root="${TOOL_ROOT}.install.$$"
 rm -rf "${work}" "${install_root}"
 mkdir -p "${work}" "${install_root}/bin"
 tar -xzf "${ARCHIVE}" --strip-components=1 -C "${work}"
-make -C "${work}" -j2
+make -C "${work}" -j2 >&2
 install -m 0755 "${work}/genromfs" "${install_root}/bin/genromfs"
 
 [[ -x "${install_root}/bin/genromfs" ]] || {
