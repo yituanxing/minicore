@@ -9,6 +9,8 @@ ARCHIVE_DIR="${CACHE_ROOT}/archives"
 SOURCE_DIR="${CACHE_ROOT}/sources"
 
 source "${MANIFEST}"
+chmod +x "${ROOT_DIR}/tools/ci/kconfig-tweak"
+export PATH="${ROOT_DIR}/tools/ci:${PATH}"
 
 for command in curl tar make python3 riscv64-unknown-elf-gcc \
   riscv64-unknown-elf-readelf riscv64-unknown-elf-size sha256sum; do
