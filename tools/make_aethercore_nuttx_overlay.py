@@ -225,6 +225,32 @@ void riscv_serialinit(void)
 }
 '''
 
+IRQ_INIT_OLD = r'''  up_irq_save();
+
+  /* Disable all global interrupts */
+'''
+
+IRQ_INIT_NEW = r'''  up_irq_save();
+
+#if defined(CONFIG_AETHERCORE_UART) && defined(CONFIG_SUPPRESS_INTERRUPTS)
+  /* N2 has no accepted PLIC contract yet.  Install the architectural trap
+   * vector, but do not touch the wider QEMU PLIC register window.  N3 removes
+   * interrupt suppression for the machine timer and N4 adds the bounded PLIC
+   * UART RX path.
+   */
+
+#if defined(CONFIG_STACK_COLORATION) && CONFIG_ARCH_INTERRUPTSTACK > 15
+  size_t intstack_size = (CONFIG_ARCH_INTERRUPTSTACK & ~15);
+  riscv_stack_color(g_intstackalloc, intstack_size);
+#endif
+
+  riscv_exception_attach();
+  return;
+#endif
+
+  /* Disable all global interrupts */
+'''
+
 BOOL_SETTINGS = {
     "CONFIG_AETHERCORE_UART": True,
     "CONFIG_16550_UART": False,
@@ -285,6 +311,7 @@ def install(root: Path) -> None:
         root / "arch/risc-v/src/qemu-rv/Kconfig",
         root / "arch/risc-v/src/qemu-rv/Make.defs",
         root / "arch/risc-v/src/qemu-rv/qemu_rv_start.c",
+        root / "arch/risc-v/src/qemu-rv/qemu_rv_irq.c",
         root / ".config",
     ]
     missing = [str(path) for path in required if not path.is_file()]
@@ -296,8 +323,9 @@ def install(root: Path) -> None:
     append_once(required[0], "config AETHERCORE_UART", KCONFIG_BLOCK)
     append_once(required[1], "CONFIG_AETHERCORE_UART", MAKE_BLOCK)
     replace_once(required[2], START_OLD, START_NEW)
+    replace_once(required[3], IRQ_INIT_OLD, IRQ_INIT_NEW)
 
-    config = required[3]
+    config = required[4]
     for symbol, value in BOOL_SETTINGS.items():
         set_config(config, symbol, value)
     for symbol, value in VALUE_SETTINGS.items():
@@ -307,6 +335,9 @@ def install(root: Path) -> None:
     generated = serial.read_text()
     if "0x10000000u" not in generated or "putreg8" not in generated:
         raise OverlayError("generated UART does not implement byte-wide TX MMIO")
+    irq_text = required[3].read_text()
+    if IRQ_INIT_NEW not in irq_text:
+        raise OverlayError("generated N2 IRQ boundary still reaches QEMU PLIC MMIO")
     config_text = config.read_text()
     required_config = (
         "CONFIG_AETHERCORE_UART=y",
