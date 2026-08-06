@@ -29,12 +29,36 @@ concurrency:
 jobs:
   protected:
     name: NuttX protected kernel plus U-mode NSH and hello
-    runs-on: [self-hosted, Linux, X64, minicore]
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
       - name: Checkout AetherCore
         uses: actions/checkout@v4
+
+      - name: Install RV32 NuttX build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-unknown-elf \
+            binutils-riscv64-unknown-elf \
+            build-essential \
+            bison \
+            flex \
+            gettext \
+            gperf \
+            libncurses-dev \
+            python3-pip \
+            curl \
+            xz-utils
+
+      - name: Restore pinned NuttX host-tool cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/aethercore/nuttx
+          key: nuttx-protected-${{ runner.os }}-${{ hashFiles('software/nuttx/manifest.env', 'tools/ci/ensure_genromfs.sh') }}
 
       - name: Validate protected-userspace contracts
         run: |
