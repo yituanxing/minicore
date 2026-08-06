@@ -35,8 +35,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${PR_BASE_SHA:-}" ]]; then
-            changed="$(git diff --name-only "${PR_BASE_SHA}" "${GITHUB_SHA}")"
+            classified_base="${PR_BASE_SHA}"
+            changed="$(git diff --name-only "${classified_base}" "${GITHUB_SHA}")"
           else
+            classified_base="HEAD^1"
             changed="$(git diff --name-only HEAD^1 HEAD || git show --pretty='' --name-only HEAD)"
           fi
           printf '%s\n' "$changed"
@@ -53,6 +55,7 @@ jobs:
             run_freertos=true
           fi
 
+          echo "CLASSIFIED_BASE_SHA=${classified_base}" >> "$GITHUB_ENV"
           echo "run_chisel=$run_chisel" >> "$GITHUB_OUTPUT"
           echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
 
@@ -85,10 +88,11 @@ jobs:
         shell: bash
         run: python3 -m unittest discover -s tests_py -v
 
-      - name: Focused PLIC, UART, machine interrupt and WFI Chisel tests
+      - name: Focused configuration, PLIC, UART, machine interrupt and WFI Chisel tests
         if: steps.changes.outputs.run_chisel == 'true'
         shell: bash
         run: |
+          ./mill aethercore.test.testOnly aethercore.CoreConfigSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicMmioSpec
           ./mill aethercore.test.testOnly aethercore.MachineUartRxSpec
@@ -149,10 +153,11 @@ jobs:
             echo '## AetherCore fast gate'
             echo
             echo "- head: \`${GITHUB_SHA}\`"
-            echo "- classified range: \`${PR_BASE_SHA:-HEAD^1}..${GITHUB_SHA}\`"
+            echo "- classified range: \`${CLASSIFIED_BASE_SHA:-HEAD^1}..${GITHUB_SHA}\`"
             echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
+            echo '- CoreConfigSpec freezes the exact NuttX RV32IMU + PMP4 + Zicsr/Zifencei profile'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
             echo '- cached Verilator identity is checked without a disposable build probe'
