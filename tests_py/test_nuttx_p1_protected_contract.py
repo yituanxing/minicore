@@ -4,6 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "ci" / "nuttx_p1_protected_build.sh"
+OVERLAY = ROOT / "tools" / "make_aethercore_nuttx_protected_overlay.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-stage.yml"
 
 
@@ -14,6 +15,7 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "rv-virt:pnsh",
             "CONFIG_BUILD_PROTECTED",
             "CONFIG_ARCH_USE_MPU",
+            "CONFIG_LIB_SYSCALL",
             "CONFIG_NUTTX_USERSPACE=0x80040000",
             "nuttx_user",
             "aethercore-protected.bin",
@@ -29,25 +31,40 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "make_aethercore_nuttx_overlay.py",
             "make_aethercore_nuttx_n3_overlay.py",
             "make_aethercore_nuttx_n4_overlay.py",
+            "make_aethercore_nuttx_protected_overlay.py",
             "CONFIG_AETHERCORE_UART",
             "CONFIG_AETHERCORE_TIMER",
             "CONFIG_AETHERCORE_UART_RX_IRQ",
         ):
             self.assertIn(fragment, text)
 
+    def test_platform_binds_userspace_to_implemented_pmp_entries(self) -> None:
+        text = OVERLAY.read_text()
+        for fragment in (
+            "riscv_config_pmp_region(0, UFLASH_F",
+            "riscv_config_pmp_region(1, USRAM_F",
+            '"CONFIG_LIB_SYSCALL": True',
+            "AetherCore exposes four PMP entries",
+        ):
+            self.assertIn(fragment, text)
+        self.assertIn('if "riscv_append_pmp_region(" in generated', text)
+
     def test_p1_is_fail_closed_on_isolation_and_isa(self) -> None:
         text = SCRIPT.read_text()
         for fragment in (
             "qemu_rv_configure_mpu",
-            "riscv_append_pmp_region",
+            "riscv_config_pmp_region",
             "riscv_swint",
-            "pmp_entries_required=2",
+            "pmp_entries_implemented=4",
+            "pmp_entries_used=0,1",
+            "pmp_free_scan=disabled-in-platform-init",
             "pmp_mode=NAPOT",
             "forbidden extension",
             "kernel load image",
             "runtime=not-yet-qualified",
         ):
             self.assertIn(fragment, text)
+        self.assertNotIn("riscv_append_pmp_region riscv_swint", text)
         self.assertIn("CONFIG_ARCH_USE_S_MODE", text)
         self.assertIn("CONFIG_ARCH_CHIP_QEMU_RV_ISA_A", text)
         self.assertIn("CONFIG_ARCH_CHIP_QEMU_RV_ISA_C", text)
