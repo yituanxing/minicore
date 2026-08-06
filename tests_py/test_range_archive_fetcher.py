@@ -18,8 +18,7 @@ CHUNK_SIZE = 256 * 1024
 class RangeHandler(BaseHTTPRequestHandler):
     payload = b""
     checksum = ""
-    fail_once = {2}
-    requests: dict[int, int] = {}
+    requests: dict[tuple[str, int], int] = {}
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -32,7 +31,7 @@ class RangeHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path != "/archive.bin":
+        if self.path not in ("/archive-primary.bin", "/archive-secondary.bin"):
             self.send_error(404)
             return
 
@@ -48,10 +47,13 @@ class RangeHandler(BaseHTTPRequestHandler):
         start = int(lower)
         end = int(upper)
         index = start // CHUNK_SIZE
-        count = self.requests.get(index, 0)
-        self.requests[index] = count + 1
+        key = (self.path, index)
+        self.requests[key] = self.requests.get(key, 0) + 1
 
-        if index in self.fail_once and count == 0 and start != 0:
+        # The primary mirror always truncates chunk 2.  The fetcher must
+        # rotate that chunk to the secondary mirror without discarding other
+        # completed chunks.
+        if self.path == "/archive-primary.bin" and index == 2 and start != 0:
             body = self.payload[start : min(end + 1, start + 100)]
             self.send_response(206)
             self.send_header(
@@ -72,7 +74,7 @@ class RangeHandler(BaseHTTPRequestHandler):
 
 
 class FetchRangeArchiveTest(unittest.TestCase):
-    def test_parallel_retry_resume_and_checksum(self) -> None:
+    def test_parallel_retry_resume_checksum_and_mirror_fallback(self) -> None:
         payload = bytes(
             (index * 17 + 3) % 256 for index in range(3 * 1024 * 1024 + 123)
         )
@@ -91,7 +93,9 @@ class FetchRangeArchiveTest(unittest.TestCase):
                         sys.executable,
                         str(SCRIPT),
                         "--url",
-                        f"{base}/archive.bin",
+                        f"{base}/archive-primary.bin",
+                        "--url",
+                        f"{base}/archive-secondary.bin",
                         "--sha512-url",
                         f"{base}/archive.sha512",
                         "--output",
@@ -112,7 +116,13 @@ class FetchRangeArchiveTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(output.read_bytes(), payload)
                 self.assertIn(b"range PASS", result.stdout)
-                self.assertGreaterEqual(RangeHandler.requests.get(2, 0), 2)
+                self.assertIn(b"range sources=2", result.stdout)
+                self.assertGreaterEqual(
+                    RangeHandler.requests.get(("/archive-primary.bin", 2), 0), 1
+                )
+                self.assertGreaterEqual(
+                    RangeHandler.requests.get(("/archive-secondary.bin", 2), 0), 1
+                )
         finally:
             server.shutdown()
             server.server_close()
