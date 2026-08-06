@@ -22,12 +22,14 @@ class NuttxN2ContractTest(unittest.TestCase):
             "AETHERCORE_NUTTX_N2_MAX_CYCLES",
             "grep -Fq 'nsh>'",
             "bounded-timeout-after-nsh-prompt",
-            "interrupts=suppressed-until-n3",
+            "machine_interrupt_sources=disabled-until-n3",
+            "ecall_context_switch=enabled",
         )
         for fragment in required:
             self.assertIn(fragment, text)
         self.assertIn('[[ "${rc}" -eq 2 ]]', text)
         self.assertIn('[[ -s nuttx.bin ]]', text)
+        self.assertIn("forbidden_enabled=(\n  CONFIG_SUPPRESS_INTERRUPTS", text)
         self.assertNotIn("--rx-byte", text)
 
     def test_n1_and_n2_share_one_bounded_self_hosted_job(self) -> None:
