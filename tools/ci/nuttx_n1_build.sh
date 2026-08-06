@@ -21,6 +21,8 @@ for command in curl tar make python3 riscv64-unknown-elf-gcc \
   }
 done
 
+GENROMFS_BIN="$(bash "${ROOT_DIR}/tools/ci/ensure_genromfs.sh" "${CACHE_ROOT}")"
+
 if [[ ! -x "${KCONFIGLIB_DIR}/bin/menuconfig" || \
       ! -x "${KCONFIGLIB_DIR}/bin/olddefconfig" ]]; then
   temporary="${KCONFIGLIB_DIR}.tmp.$$"
@@ -45,7 +47,7 @@ else
   echo "N1: reuse cached kconfiglib ${KCONFIGLIB_VERSION}"
 fi
 
-export PATH="${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
+export PATH="$(dirname "${GENROMFS_BIN}"):${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
 export PYTHONPATH="${KCONFIGLIB_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 rm -rf "${OUT_DIR}"
@@ -59,6 +61,7 @@ mkdir -p "${OUT_DIR}/evidence" "${ARCHIVE_DIR}" "${SOURCE_DIR}"
   echo "NUTTX_BASE_CONFIG=${NUTTX_BASE_CONFIG}"
   echo "NUTTX_PROFILE=${NUTTX_PROFILE}"
   echo "KCONFIGLIB_VERSION=${KCONFIGLIB_VERSION}"
+  echo "GENROMFS_BIN=${GENROMFS_BIN}"
   echo "CROSSDEV=riscv64-unknown-elf-"
   riscv64-unknown-elf-gcc --version | head -n 1
 } | tee "${OUT_DIR}/evidence/manifest.txt"
