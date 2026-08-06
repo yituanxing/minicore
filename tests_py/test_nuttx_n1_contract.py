@@ -45,21 +45,21 @@ class NuttxN1ContractTest(unittest.TestCase):
         self.assertIn('[[ -s nuttx ]]', text)
         self.assertIn("sha256sum", text)
 
-    def test_workflow_uses_one_bounded_persistent_runner_slot(self) -> None:
+    def test_workflow_bootstraps_sources_without_expanding_stage_slots(self) -> None:
         text = WORKFLOW.read_text()
         runner = "runs-on: [self-hosted, Linux, X64, minicore]"
         self.assertEqual(text.count(runner), 1)
-        self.assertNotIn("ubuntu-latest", text)
-        self.assertNotIn("needs: source", text)
-        self.assertNotIn("actions/download-artifact@v4", text)
+        self.assertEqual(text.count("runs-on: ubuntu-latest"), 1)
+        self.assertIn("needs: source", text)
+        self.assertIn("actions/download-artifact@v4", text)
         self.assertIn("repository: apache/nuttx", text)
         self.assertIn("repository: apache/nuttx-apps", text)
         self.assertIn("273c77128b6698f0c95f0d7cde1d0bb803782021", text)
         self.assertIn("20ffb1a3a3b590d52890ee865a28442390e5d16c", text)
-        self.assertIn("steps.source_cache.outputs.hit != 'true'", text)
         self.assertIn("${HOME}/.cache/aethercore", text)
         self.assertIn("group: nuttx-stage-${{ github.ref }}", text)
         self.assertIn("cancel-in-progress: true", text)
+        self.assertIn("timeout-minutes: 15", text)
         self.assertIn("timeout-minutes: 45", text)
         self.assertNotIn("full-validation", text)
         self.assertNotIn("Fast Gate", text)
