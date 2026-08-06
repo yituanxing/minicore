@@ -13,6 +13,7 @@ on:
       - tools/ci/ensure_genromfs.sh
       - tools/ci/kconfig-tweak
       - tools/make_aethercore_nuttx_*_overlay.py
+      - tools/make_nuttx_protected_runner.py
       - tools/fetch_range_archive.py
       - tests_py/test_range_archive_fetcher.py
       - src/main/scala/aethercore/**
@@ -34,9 +35,9 @@ concurrency:
 
 jobs:
   staged:
-    name: N1-N4 regression and P1 protected userspace build
+    name: N1-N4 regression, P1 build, and P2 U-mode hello
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Publish pending protected-userspace status
@@ -46,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          payload=$(printf '%s' '{"state":"pending","context":"umode/nuttx-protected","description":"NuttX N1-N4 regression and P1 protected build are running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
+          payload=$(printf '%s' '{"state":"pending","context":"umode/nuttx-protected","description":"NuttX N1-N4, P1 build, and P2 U-mode hello are running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
           curl --fail --show-error --silent --http1.1 \
             --connect-timeout 15 --max-time 60 \
             --retry 5 --retry-delay 2 --retry-all-errors \
@@ -68,6 +69,7 @@ jobs:
             tests_py.test_nuttx_n3_contract \
             tests_py.test_nuttx_n4_contract \
             tests_py.test_nuttx_p1_protected_contract \
+            tests_py.test_nuttx_p2_runtime_contract \
             tests_py.test_aethercore_nuttx_overlay \
             tests_py.test_range_archive_fetcher -v
 
@@ -241,6 +243,27 @@ jobs:
             build/nuttx-p1/build.log
             build/nuttx-p1/evidence/
 
+      - name: Boot NuttX P2 protected NSH and hello in U-mode
+        shell: bash
+        env:
+          AETHERCORE_NUTTX_P2_MAX_CYCLES: "30000000"
+          AETHERCORE_NUTTX_P2_RX_GAP_CYCLES: "1000"
+        run: |
+          chmod +x tools/ci/nuttx_p2_protected_boot.sh
+          bash tools/ci/nuttx_p2_protected_boot.sh
+
+      - name: Upload NuttX P2 U-mode runtime evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-p2-umode-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-p2/evidence/
+
       - name: Publish final protected-userspace status
         if: always()
         continue-on-error: true
@@ -253,7 +276,7 @@ jobs:
           case "${JOB_STATUS}" in
             success)
               state=success
-              description='NuttX N1-N4 regression and P1 protected build passed'
+              description='NuttX N1-N4, P1 build, and P2 U-mode hello passed'
               ;;
             cancelled)
               state=error
