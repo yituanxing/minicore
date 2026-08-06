@@ -15,7 +15,7 @@ MAX_CYCLES="${AETHERCORE_NUTTX_P2_MAX_CYCLES:-30000000}"
 RX_GAP_CYCLES="${AETHERCORE_NUTTX_P2_RX_GAP_CYCLES:-1000}"
 STALL_PERIODS=(0 3)
 
-for command in python3 verilator sha256sum grep awk; do
+for command in python3 verilator sha256sum grep awk find sort wc tee; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "P2 FAIL: required command not found: ${command}" >&2
     exit 2
@@ -51,7 +51,7 @@ python3 "${ROOT_DIR}/tools/make_nuttx_protected_runner.py" \
 verilator --cc --exe --build --trace -Wall -Wno-fatal \
   --top-module AetherCoreNuttXProtectedSimTop \
   -Mdir "${OBJ_DIR}" \
-  -CFLAGS "-std=c++20 -O2" -LDFLAGS "-ldl" \
+  -CFLAGS "-I${ROOT_DIR}/sim -std=c++20 -O2" -LDFLAGS "-ldl" \
   "${rtl_sources[@]}" "${GENERATED_MAIN}" \
   "${ROOT_DIR}/sim/nemu_difftest.cpp" \
   2>&1 | tee "${OUT_DIR}/evidence/simulator-build.log"
@@ -116,7 +116,7 @@ run_positive() {
     echo "P2 FAIL: simulation did not terminate at the configured bound" >&2
     exit 4
   }
-  if grep -Eq 'PANIC|irq_unexpected_isr|FAIL: no instruction retired|FAIL: no ECALL-from-U|FAIL: no MRET' \
+  if grep -Eq 'PANIC|EXCEPTION:|irq_unexpected_isr|FAIL: no instruction retired|FAIL: no ECALL-from-U|FAIL: no MRET' \
     "${log_file}"; then
     echo "P2 FAIL: protected runtime panic or missing architecture evidence" >&2
     exit 4
