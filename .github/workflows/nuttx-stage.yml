@@ -52,6 +52,8 @@ jobs:
         env:
           NUTTX_JOBS: "6"
         run: |
+          cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+          rm -f "${cache_root}/archives/"*.tmp
           chmod +x tools/ci/nuttx_n1_build.sh
           bash tools/ci/nuttx_n1_build.sh
 
