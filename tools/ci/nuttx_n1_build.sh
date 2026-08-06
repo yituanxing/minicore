@@ -7,10 +7,11 @@ OUT_DIR="${ROOT_DIR}/build/nuttx-n1"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
 ARCHIVE_DIR="${CACHE_ROOT}/archives"
 SOURCE_DIR="${CACHE_ROOT}/sources"
+KCONFIGLIB_VERSION="14.1.0"
+KCONFIGLIB_DIR="${CACHE_ROOT}/host-tools/kconfiglib-${KCONFIGLIB_VERSION}"
 
 source "${MANIFEST}"
 chmod +x "${ROOT_DIR}/tools/ci/kconfig-tweak"
-export PATH="${ROOT_DIR}/tools/ci:${PATH}"
 
 for command in curl tar make python3 riscv64-unknown-elf-gcc \
   riscv64-unknown-elf-readelf riscv64-unknown-elf-size sha256sum; do
@@ -19,6 +20,32 @@ for command in curl tar make python3 riscv64-unknown-elf-gcc \
     exit 2
   }
 done
+
+if [[ ! -x "${KCONFIGLIB_DIR}/bin/menuconfig" || \
+      ! -x "${KCONFIGLIB_DIR}/bin/olddefconfig" ]]; then
+  temporary="${KCONFIGLIB_DIR}.tmp.$$"
+  mkdir -p "$(dirname "${KCONFIGLIB_DIR}")"
+  rm -rf "${temporary}"
+  echo "N1: install pinned kconfiglib ${KCONFIGLIB_VERSION} into persistent cache"
+  python3 -m pip install \
+    --disable-pip-version-check \
+    --no-input \
+    --no-deps \
+    --target "${temporary}" \
+    "kconfiglib==${KCONFIGLIB_VERSION}"
+  [[ -x "${temporary}/bin/menuconfig" && \
+     -x "${temporary}/bin/olddefconfig" ]] || {
+    echo "N1 FAIL: pinned kconfiglib did not provide required frontends" >&2
+    rm -rf "${temporary}"
+    exit 2
+  }
+  rm -rf "${KCONFIGLIB_DIR}"
+  mv "${temporary}" "${KCONFIGLIB_DIR}"
+else
+  echo "N1: reuse cached kconfiglib ${KCONFIGLIB_VERSION}"
+fi
+
+export PATH="${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
 
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/evidence" "${ARCHIVE_DIR}" "${SOURCE_DIR}"
@@ -30,6 +57,7 @@ mkdir -p "${OUT_DIR}/evidence" "${ARCHIVE_DIR}" "${SOURCE_DIR}"
   echo "NUTTX_APPS_COMMIT=${NUTTX_APPS_COMMIT}"
   echo "NUTTX_BASE_CONFIG=${NUTTX_BASE_CONFIG}"
   echo "NUTTX_PROFILE=${NUTTX_PROFILE}"
+  echo "KCONFIGLIB_VERSION=${KCONFIGLIB_VERSION}"
   echo "CROSSDEV=riscv64-unknown-elf-"
   riscv64-unknown-elf-gcc --version | head -n 1
 } | tee "${OUT_DIR}/evidence/manifest.txt"
