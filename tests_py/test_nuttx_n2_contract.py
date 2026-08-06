@@ -14,6 +14,7 @@ class NuttxN2ContractTest(unittest.TestCase):
         required = (
             "make_aethercore_nuttx_overlay.py",
             "CONFIG_AETHERCORE_UART",
+            "CONFIG_SUPPRESS_INTERRUPTS",
             "CONFIG_RAM_START=0x80000000",
             "aethercore_serialinit",
             "riscv64-unknown-elf-objcopy -O binary nuttx nuttx.bin",
@@ -21,6 +22,7 @@ class NuttxN2ContractTest(unittest.TestCase):
             "AETHERCORE_NUTTX_N2_MAX_CYCLES",
             "grep -Fq 'nsh>'",
             "bounded-timeout-after-nsh-prompt",
+            "interrupts=suppressed-until-n3",
         )
         for fragment in required:
             self.assertIn(fragment, text)
