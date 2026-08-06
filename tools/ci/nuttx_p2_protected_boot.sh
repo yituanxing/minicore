@@ -133,8 +133,8 @@ run_positive() {
   local rc=${PIPESTATUS[0]}
   set -e
 
-  [[ "${rc}" -eq 2 ]] || {
-    echo "P2 FAIL: simulation returned ${rc}, expected bounded timeout after hello (stall=${stall_period})" >&2
+  [[ "${rc}" -eq 0 ]] || {
+    echo "P2 FAIL: simulation returned ${rc}, expected immediate success at the second NSH prompt (stall=${stall_period})" >&2
     exit 4
   }
   grep -Fq 'Hello, World!!' "${log_file}" || {
@@ -156,13 +156,13 @@ run_positive() {
     echo "P2 FAIL: no explicit ECALL-from-U exception record (stall=${stall_period})" >&2
     exit 4
   }
-  grep -Fq "FAIL: timeout after ${MAX_CYCLES} cycles" "${log_file}" || {
-    echo "P2 FAIL: simulation did not terminate at the configured bound" >&2
+  grep -Fq 'PASS: protected NSH returned after U-mode hello' "${log_file}" || {
+    echo "P2 FAIL: runner did not terminate on the returned NSH prompt (stall=${stall_period})" >&2
     exit 4
   }
-  if grep -Eq 'PANIC|EXCEPTION:|irq_unexpected_isr|FAIL: no instruction retired|FAIL: no ECALL-from-U|FAIL: no MRET' \
+  if grep -Eq 'PANIC|EXCEPTION:|irq_unexpected_isr|FAIL: timeout|FAIL: no instruction retired|FAIL: no ECALL-from-U|FAIL: no MRET' \
     "${log_file}"; then
-    echo "P2 FAIL: protected runtime panic or missing architecture evidence" >&2
+    echo "P2 FAIL: protected runtime panic, timeout, or missing architecture evidence" >&2
     exit 4
   fi
 }
@@ -190,7 +190,7 @@ pmp_entries=4
 interrupt_platform=clint,plic,uart-rx
 stall_periods=0,3
 max_cycles=${MAX_CYCLES}
-termination=bounded-timeout-after-second-nsh-prompt
+termination=immediate-success-after-second-nsh-prompt
 EOF
 sha256sum \
   "${IMAGE}" "${P1_DIR}/nuttx.elf" "${P1_DIR}/nuttx_user.elf" \
