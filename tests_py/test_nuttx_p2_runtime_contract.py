@@ -83,6 +83,8 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "-I${ROOT_DIR}/sim -std=c++20 -O2",
             "--top-module AetherCoreNuttXProtectedSimTop",
             '--rx-after-uart "nsh> "',
+            "--self-check-exit",
+            "shared_toy_assertions=disabled-via-self-check-exit",
             "STALL_PERIODS=(0 3)",
             "Hello, World!!",
             "ECALL-from-U",
@@ -90,6 +92,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
         self.assertEqual(text.count("verilator --cc --exe --build"), 1)
+        self.assertEqual(text.count("--self-check-exit"), 2)
 
 
 if __name__ == "__main__":
