@@ -16,6 +16,9 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "CONFIG_BUILD_PROTECTED",
             "CONFIG_ARCH_USE_MPU",
             "CONFIG_LIB_SYSCALL",
+            "CONFIG_RISCV_PERCPU_SCRATCH",
+            "CONFIG_ARCH_KERNEL_STACK",
+            "CONFIG_ARCH_KERNEL_STACKSIZE=2048",
             "CONFIG_NUTTX_USERSPACE=0x80040000",
             "nuttx_user",
             "aethercore-protected.bin",
@@ -44,10 +47,26 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "riscv_config_pmp_region(0, UFLASH_F",
             "riscv_config_pmp_region(1, USRAM_F",
             '"CONFIG_LIB_SYSCALL": True',
+            '"CONFIG_RISCV_PERCPU_SCRATCH": True',
+            '"CONFIG_ARCH_KERNEL_STACK": True',
+            '"CONFIG_ARCH_KERNEL_STACKSIZE": "2048"',
             "AetherCore exposes four PMP entries",
         ):
             self.assertIn(fragment, text)
         self.assertIn('if "riscv_append_pmp_region(" in generated', text)
+
+    def test_p1_requires_real_user_transition_and_syscall_dispatch(self) -> None:
+        text = SCRIPT.read_text()
+        for fragment in (
+            "riscv_jump_to_user",
+            "exception_common",
+            "dispatch_syscall",
+            "syscall_boundary=ecall-riscv_swint-dispatch_syscall",
+            "user_transition=riscv_jump_to_user-mret",
+            "kernel_exception_stack=2048",
+            "user_stack_trap_frames=forbidden",
+        ):
+            self.assertIn(fragment, text)
 
     def test_p1_is_fail_closed_on_isolation_and_isa(self) -> None:
         text = SCRIPT.read_text()
