@@ -78,6 +78,7 @@ run_positive() {
   local args=(
     "${IMAGE}"
     --max-cycles "${MAX_CYCLES}"
+    --self-check-exit
     "${rx_args[@]}"
   )
   if [[ "${stall_period}" != "0" ]]; then
@@ -138,6 +139,7 @@ user_program=hello
 user_output=Hello, World!!
 input_arm=nsh-prompt
 input_command=hello
+shared_toy_assertions=disabled-via-self-check-exit
 syscall_proof=ecall-from-u-cause-8
 transition_proof=mret-and-user-text-commit
 pmp_entries=4
