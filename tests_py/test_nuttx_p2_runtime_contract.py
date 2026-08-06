@@ -122,6 +122,29 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
 
+    def test_p2_cache_is_keyed_by_every_simulator_input(self) -> None:
+        text = P2_SCRIPT.read_text()
+        for fragment in (
+            'SIM_ABI_VERSION="nuttx-protected-sim-v2"',
+            'SIM_FINGERPRINT_FILE="${SIM_ROOT}/source.sha256"',
+            'find "${ROOT_DIR}/src/main/scala"',
+            '"${ROOT_DIR}/build.sc"',
+            '"${ROOT_DIR}/mill"',
+            '"${ROOT_DIR}/sim/sim_main.cpp"',
+            '"${ROOT_DIR}/sim/nemu_difftest.cpp"',
+            '"${ROOT_DIR}/sim/nemu_difftest.h"',
+            '"${ROOT_DIR}/tools/make_nuttx_protected_runner.py"',
+            "verilator --version",
+            '"$(cat "${SIM_FINGERPRINT_FILE}")" == "${sim_fingerprint}"',
+            "P2: reuse protected simulator",
+            "P2: rebuild protected simulator",
+            "simulator-cache.txt",
+            "simulator_fingerprint=${sim_fingerprint}",
+        ):
+            self.assertIn(fragment, text)
+        self.assertIn('rm -f "${SIM_FINGERPRINT_FILE}"', text)
+        self.assertIn('printf \'%s\\n\' "${sim_fingerprint}"', text)
+
     def test_p2_script_builds_one_bounded_runner_and_two_profiles(self) -> None:
         text = P2_SCRIPT.read_text()
         for fragment in (
