@@ -4,8 +4,8 @@
 The N1 image intentionally uses the upstream qemu-rv board only as a build
 qualification target.  N2 keeps the proven RISC-V start implementation, but
 replaces the 16550 console boundary with the native AetherCore byte-wide MMIO
-UART at 0x10000000, constrains RAM to the frozen SoC map, and deliberately
-suppresses interrupts until the N3 timer/scheduler stage.
+UART at 0x10000000, constrains RAM to the frozen SoC map, and leaves machine
+interrupt sources disabled until the N3 timer/scheduler stage.
 """
 
 from __future__ import annotations
@@ -232,11 +232,12 @@ IRQ_INIT_OLD = r'''  up_irq_save();
 
 IRQ_INIT_NEW = r'''  up_irq_save();
 
-#if defined(CONFIG_AETHERCORE_UART) && defined(CONFIG_SUPPRESS_INTERRUPTS)
+#ifdef CONFIG_AETHERCORE_UART
   /* N2 has no accepted PLIC contract yet.  Install the architectural trap
-   * vector, but do not touch the wider QEMU PLIC register window.  N3 removes
-   * interrupt suppression for the machine timer and N4 adds the bounded PLIC
-   * UART RX path.
+   * vector, but do not touch the wider QEMU PLIC register window and do not
+   * enable any machine interrupt source.  Exceptions and ECALL context
+   * switches remain functional; N3 enables the machine timer and N4 adds the
+   * bounded PLIC UART RX path.
    */
 
 #if defined(CONFIG_STACK_COLORATION) && CONFIG_ARCH_INTERRUPTSTACK > 15
@@ -260,7 +261,7 @@ BOOL_SETTINGS = {
     "CONFIG_RISCV_SEMIHOSTING_HOSTFS": False,
     "CONFIG_SERIAL": True,
     "CONFIG_DEV_CONSOLE": True,
-    "CONFIG_SUPPRESS_INTERRUPTS": True,
+    "CONFIG_SUPPRESS_INTERRUPTS": False,
 }
 
 VALUE_SETTINGS = {
@@ -342,7 +343,7 @@ def install(root: Path) -> None:
     required_config = (
         "CONFIG_AETHERCORE_UART=y",
         "# CONFIG_16550_UART is not set",
-        "CONFIG_SUPPRESS_INTERRUPTS=y",
+        "# CONFIG_SUPPRESS_INTERRUPTS is not set",
         "CONFIG_RAM_START=0x80000000",
         "CONFIG_RAM_SIZE=67108856",
     )
