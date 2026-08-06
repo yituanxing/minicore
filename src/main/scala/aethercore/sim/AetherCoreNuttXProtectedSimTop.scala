@@ -6,7 +6,7 @@ import aethercore.config.CoreProfiles
   *
   * This deliberately combines every boundary needed by the OS-backed U-mode
   * path in one profile:
-  *   - RV32IM + Zicsr with M/U privilege modes;
+  *   - RV32IM + Zicsr + Zifencei with M/U privilege modes;
   *   - four PMP entries;
   *   - CLINT-compatible machine timer;
   *   - PLIC plus UART RX machine external interrupt;
@@ -14,7 +14,7 @@ import aethercore.config.CoreProfiles
   */
 class AetherCoreNuttXProtectedSimTop
     extends AetherCoreSimTop(
-      config = CoreProfiles.rv32imuPmpSoftware,
+      config = CoreProfiles.rv32imuPmpOsSoftware,
       stopOnTrap = false,
       withMachineInterruptPlatform = true,
       stopOnWfi = false
