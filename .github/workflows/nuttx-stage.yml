@@ -20,8 +20,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source:
+    name: N1 verified source prefetch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source manifest
+        uses: actions/checkout@v4
+
+      - name: Restore verified NuttX source cache
+        uses: actions/cache@v4
+        with:
+          path: build/nuttx-source
+          key: nuttx-source-${{ hashFiles('software/nuttx/manifest.env') }}
+
+      - name: Fetch and verify Apache release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/nuttx/manifest.env
+          source_dir="$PWD/build/nuttx-source"
+          mkdir -p "$source_dir"
+
+          fetch_release() {
+            local release_name="$1"
+            local archive="$source_dir/$release_name"
+            local checksum="$source_dir/$release_name.sha512"
+            local temporary="$archive.tmp"
+            local checksum_url="https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512"
+            local expected
+            local observed
+
+            expected="$(curl --fail --location --show-error --silent --http1.1 \
+              --connect-timeout 20 --max-time 120 --retry 5 --retry-delay 2 \
+              --retry-all-errors "$checksum_url" | awk 'NR == 1 {print $1}')"
+            [[ "$expected" =~ ^[0-9a-fA-F]{128}$ ]] || {
+              echo "N1 FAIL: invalid SHA-512 metadata for $release_name" >&2
+              exit 3
+            }
+            printf '%s  %s\n' "$expected" "$release_name" > "$checksum"
+
+            if [[ -f "$archive" ]] && tar -tzf "$archive" >/dev/null 2>&1; then
+              observed="$(sha512sum "$archive" | awk '{print $1}')"
+              if [[ "$observed" == "$expected" ]]; then
+                echo "N1: reuse hosted cache $release_name"
+                return
+              fi
+            fi
+
+            rm -f "$archive" "$temporary"
+            local urls=(
+              "https://dlcdn.apache.org/nuttx/${NUTTX_VERSION}/${release_name}"
+              "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}"
+            )
+            local url
+            local attempt
+            for url in "${urls[@]}"; do
+              for attempt in 1 2; do
+                echo "N1: fetch $release_name from $url attempt $attempt/2"
+                if curl --fail --location --show-error --http1.1 \
+                    --connect-timeout 20 --max-time 600 \
+                    --retry 3 --retry-delay 2 --retry-all-errors \
+                    --output "$temporary" "$url"; then
+                  observed="$(sha512sum "$temporary" | awk '{print $1}')"
+                  if [[ "$observed" == "$expected" ]] \
+                      && tar -tzf "$temporary" >/dev/null 2>&1; then
+                    mv "$temporary" "$archive"
+                    echo "N1: verified $release_name"
+                    return
+                  fi
+                fi
+                rm -f "$temporary"
+              done
+            done
+
+            echo "N1 FAIL: unable to fetch verified $release_name" >&2
+            exit 3
+          }
+
+          fetch_release "apache-nuttx-${NUTTX_VERSION}.tar.gz"
+          fetch_release "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz"
+
+      - name: Upload verified NuttX sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-source-${{ github.run_id }}
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          path: build/nuttx-source/
+
   n1:
     name: N1 pinned RV32IM host build
+    needs: source
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
 
@@ -44,73 +136,60 @@ jobs:
       - name: Checkout AetherCore
         uses: actions/checkout@v4
 
-      - name: Validate NuttX stage contracts
-        run: python3 -m unittest tests_py.test_nuttx_n1_contract -v
+      - name: Download verified NuttX sources
+        uses: actions/download-artifact@v4
+        with:
+          name: aethercore-nuttx-source-${{ github.run_id }}
+          path: build/nuttx-source
 
-      - name: Seed verified Apache release archives
+      - name: Seed persistent self-hosted source cache
         shell: bash
         run: |
           set -euo pipefail
           source software/nuttx/manifest.env
+          source_dir="$PWD/build/nuttx-source"
           cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
-          archive_dir="${cache_root}/archives"
-          mkdir -p "${archive_dir}"
-          rm -f "${archive_dir}/"*.tmp
+          archive_dir="$cache_root/archives"
+          mkdir -p "$archive_dir"
 
-          seed_archive() {
+          install_archive() {
             local release_name="$1"
             local cache_name="$2"
-            local archive="${archive_dir}/${cache_name}"
-            local temporary="${archive}.tmp"
-            local base_url="https://dlcdn.apache.org/nuttx/${NUTTX_VERSION}"
-            local checksum_url="https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512"
+            local source_archive="$source_dir/$release_name"
+            local checksum="$source_dir/$release_name.sha512"
+            local destination="$archive_dir/$cache_name"
+            local temporary="$destination.tmp"
             local expected
             local observed
 
-            expected="$(curl --fail --location --show-error --silent --http1.1 \
-              --connect-timeout 20 --max-time 120 --retry 5 --retry-delay 2 \
-              --retry-all-errors "${checksum_url}" | awk 'NR == 1 {print $1}')"
-            [[ "${expected}" =~ ^[0-9a-fA-F]{128}$ ]] || {
-              echo "N1 FAIL: invalid SHA-512 metadata for ${release_name}" >&2
+            expected="$(awk 'NR == 1 {print $1}' "$checksum")"
+            observed="$(sha512sum "$source_archive" | awk '{print $1}')"
+            [[ "$observed" == "$expected" ]] || {
+              echo "N1 FAIL: artifact checksum mismatch for $release_name" >&2
               exit 3
             }
+            tar -tzf "$source_archive" >/dev/null
 
-            if [[ -f "${archive}" ]] && tar -tzf "${archive}" >/dev/null 2>&1; then
-              observed="$(sha512sum "${archive}" | awk '{print $1}')"
-              if [[ "${observed}" == "${expected}" ]]; then
-                echo "N1: reuse verified Apache release archive ${archive}"
+            if [[ -f "$destination" ]] && tar -tzf "$destination" >/dev/null 2>&1; then
+              observed="$(sha512sum "$destination" | awk '{print $1}')"
+              if [[ "$observed" == "$expected" ]]; then
+                echo "N1: persistent cache already verified $destination"
                 return
               fi
             fi
 
-            rm -f "${archive}" "${temporary}"
-            for attempt in 1 2 3; do
-              echo "N1: fetch verified Apache release ${release_name}, attempt ${attempt}/3"
-              if curl --fail --location --show-error --silent --http1.1 \
-                  --connect-timeout 20 --max-time 1200 \
-                  --speed-time 120 --speed-limit 1024 \
-                  --retry 5 --retry-delay 2 --retry-all-errors \
-                  --output "${temporary}" "${base_url}/${release_name}"; then
-                observed="$(sha512sum "${temporary}" | awk '{print $1}')"
-                if [[ "${observed}" == "${expected}" ]] \
-                    && tar -tzf "${temporary}" >/dev/null 2>&1; then
-                  mv "${temporary}" "${archive}"
-                  echo "N1: cached verified Apache release archive ${archive}"
-                  return
-                fi
-              fi
-              rm -f "${temporary}"
-              sleep $((attempt * 2))
-            done
-
-            echo "N1 FAIL: unable to cache verified Apache release ${release_name}" >&2
-            exit 3
+            cp "$source_archive" "$temporary"
+            mv "$temporary" "$destination"
+            echo "N1: seeded persistent cache $destination"
           }
 
-          seed_archive "apache-nuttx-${NUTTX_VERSION}.tar.gz" \
+          install_archive "apache-nuttx-${NUTTX_VERSION}.tar.gz" \
             "nuttx-${NUTTX_COMMIT}.tar.gz"
-          seed_archive "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" \
+          install_archive "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" \
             "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+
+      - name: Validate NuttX stage contracts
+        run: python3 -m unittest tests_py.test_nuttx_n1_contract -v
 
       - name: Build pinned NuttX N1 image
         shell: bash
