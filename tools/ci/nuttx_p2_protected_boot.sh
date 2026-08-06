@@ -29,10 +29,53 @@ done
   echo "P2 FAIL: P1 kernel/userspace ELF evidence is incomplete" >&2
   exit 2
 }
+[[ -s "${P1_DIR}/nuttx.bin" && -s "${P1_DIR}/nuttx_user.bin" ]] || {
+  echo "P2 FAIL: P1 kernel/userspace load images are incomplete" >&2
+  exit 2
+}
 
 chmod +x "${ROOT_DIR}/mill"
 rm -rf "${OUT_DIR}" "${RTL_DIR}" "${OBJ_DIR}"
 mkdir -p "${OUT_DIR}/evidence" "${RTL_DIR}" "${OBJ_DIR}" "${SIM_ROOT}"
+
+python3 - \
+  "${P1_DIR}/nuttx.bin" "${P1_DIR}/nuttx_user.bin" "${IMAGE}" <<'PY' \
+  2>&1 | tee "${OUT_DIR}/evidence/image-layout.log"
+from pathlib import Path
+import sys
+
+kernel_path, user_path, combined_path = map(Path, sys.argv[1:])
+kernel = kernel_path.read_bytes()
+user = user_path.read_bytes()
+combined = combined_path.read_bytes()
+user_offset = 0x40000
+partition_size = 0x40000
+
+if len(kernel) > partition_size:
+    raise SystemExit(
+        f"P2 FAIL: kernel load image is {len(kernel)} bytes, exceeds 256 KiB kflash"
+    )
+if len(user) > partition_size:
+    raise SystemExit(
+        f"P2 FAIL: user load image is {len(user)} bytes, exceeds 256 KiB uflash"
+    )
+expected_size = max(len(kernel), user_offset + len(user))
+if len(combined) != expected_size:
+    raise SystemExit(
+        f"P2 FAIL: combined image size is {len(combined)}, expected {expected_size}"
+    )
+if combined[:len(kernel)] != kernel:
+    raise SystemExit("P2 FAIL: combined image does not preserve the kernel load bytes")
+if any(combined[len(kernel):user_offset]):
+    raise SystemExit("P2 FAIL: non-zero bytes escaped into the kflash/uflash gap")
+if combined[user_offset:user_offset + len(user)] != user:
+    raise SystemExit("P2 FAIL: userspace load bytes are not placed at 0x80040000")
+print(
+    "P2 protected image layout PASS: "
+    f"kernel={len(kernel)} user={len(user)} combined={len(combined)} "
+    "user-offset=0x40000"
+)
+PY
 
 "${ROOT_DIR}/mill" aethercore.runMain aethercore.ElaborateNuttXProtected \
   --target-dir "${RTL_DIR}" \
@@ -139,6 +182,7 @@ user_program=hello
 user_output=Hello, World!!
 input_arm=nsh-prompt
 input_command=hello
+image_layout=kflash-0x80000000-0x80040000,uflash-0x80040000-0x80080000
 shared_toy_assertions=disabled-via-self-check-exit
 syscall_proof=ecall-from-u-cause-8
 transition_proof=mret-and-user-text-commit
