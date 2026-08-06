@@ -141,7 +141,7 @@ run_positive() {
     echo "N4 FAIL: simulation returned ${rc}, expected bounded timeout (stall=${stall_period})" >&2
     exit 5
   }
-  grep -Eq '^N4-IRQ-PASS\r?$' "${log_file}" || {
+  grep -Fqx $'N4-IRQ-PASS\r' "${log_file}" || {
     echo "N4 FAIL: injected NSH command did not produce its output (stall=${stall_period})" >&2
     exit 5
   }
