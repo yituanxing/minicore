@@ -1,0 +1,115 @@
+name: NuttX Protected Userspace PR
+
+on:
+  pull_request:
+    branches:
+      - agent/nuttx-bringup
+    paths:
+      - software/nuttx/**
+      - tests_py/test_nuttx_*.py
+      - tests_py/test_aethercore_nuttx_overlay.py
+      - tools/ci/nuttx_*.sh
+      - tools/ci/ensure_genromfs.sh
+      - tools/ci/kconfig-tweak
+      - tools/make_aethercore_nuttx_*_overlay.py
+      - tools/fetch_range_archive.py
+      - src/main/scala/aethercore/**
+      - sim/**
+      - build.sc
+      - mill
+      - .github/workflows/nuttx-protected-pr.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuttx-protected-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  protected:
+    name: NuttX protected kernel plus U-mode NSH and hello
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout AetherCore
+        uses: actions/checkout@v4
+
+      - name: Validate protected-userspace contracts
+        run: |
+          python3 -m unittest \
+            tests_py.test_nuttx_p1_protected_contract \
+            tests_py.test_aethercore_nuttx_overlay \
+            tests_py.test_range_archive_fetcher -v
+
+      - name: Fetch verified pinned NuttX sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/nuttx/manifest.env
+          cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+          archive_dir="${cache_root}/archives"
+          mkdir -p "${archive_dir}" build
+
+          fetch_release() {
+            local release_name="$1"
+            local output_name="$2"
+            python3 tools/fetch_range_archive.py \
+              --url "https://archive.apache.org/dist/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
+              --output "${archive_dir}/${output_name}" \
+              --chunk-size 1048576 \
+              --jobs 6 \
+              --retries 5 \
+              --max-time 180
+            tar -tzf "${archive_dir}/${output_name}" >/dev/null
+          }
+
+          {
+            fetch_release \
+              "apache-nuttx-${NUTTX_VERSION}.tar.gz" \
+              "nuttx-${NUTTX_COMMIT}.tar.gz"
+            fetch_release \
+              "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" \
+              "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+          } 2>&1 | tee build/nuttx-protected-source-fetch.log
+
+      - name: Prepare pinned host tools and preserve N1 build regression
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_n1_build.sh
+          bash tools/ci/nuttx_n1_build.sh
+
+      - name: Build protected kernel and U-mode applications
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_p1_protected_build.sh
+          bash tools/ci/nuttx_p1_protected_build.sh
+
+      - name: Upload protected-userspace evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-protected-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-protected-source-fetch.log
+            build/nuttx-p1/nuttx.elf
+            build/nuttx-p1/nuttx_user.elf
+            build/nuttx-p1/nuttx.bin
+            build/nuttx-p1/nuttx_user.bin
+            build/nuttx-p1/aethercore-protected.bin
+            build/nuttx-p1/nuttx.map
+            build/nuttx-p1/nuttx_user.map
+            build/nuttx-p1/nuttx.config
+            build/nuttx-p1/build.log
+            build/nuttx-p1/evidence/
