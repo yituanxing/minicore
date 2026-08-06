@@ -49,6 +49,25 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             self.assertIn(fragment, text)
         self.assertNotIn("VAetherCoreSimTop", text)
 
+    def test_uart_injection_arms_from_the_real_nsh_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "sim_main_nuttx_protected.cpp"
+            subprocess.run(
+                ["python3", str(GENERATOR), str(SHARED_RUNNER), str(output)],
+                check=True,
+                cwd=ROOT,
+            )
+            text = output.read_text()
+
+        for fragment in (
+            "--rx-after-uart",
+            "options.rxAfterUart = argv[++i]",
+            "--rx-after-uart requires at least one --rx-byte",
+            "uart.find(*options.rxAfterUart)",
+            "const bool rxArmed",
+        ):
+            self.assertIn(fragment, text)
+
     def test_runtime_evidence_is_not_uart_only(self) -> None:
         text = GENERATOR.read_text()
         self.assertIn("userCommits == 0", text)
