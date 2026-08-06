@@ -45,12 +45,16 @@ class NuttxN1ContractTest(unittest.TestCase):
         self.assertIn('[[ -s nuttx ]]', text)
         self.assertIn("sha256sum", text)
 
-    def test_workflow_uses_the_single_persistent_runner_slot(self) -> None:
+    def test_workflow_preserves_one_bounded_self_hosted_stage_slot(self) -> None:
         text = WORKFLOW.read_text()
-        self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
+        runner = "runs-on: [self-hosted, Linux, X64, minicore]"
+        self.assertEqual(text.count(runner), 1)
+        self.assertIn("runs-on: ubuntu-latest", text)
+        self.assertIn("needs: source", text)
+        self.assertIn("actions/cache@v4", text)
+        self.assertIn("actions/download-artifact@v4", text)
         self.assertIn("group: nuttx-stage-${{ github.ref }}", text)
         self.assertIn("cancel-in-progress: true", text)
-        self.assertNotIn("ubuntu-latest", text)
         self.assertNotIn("full-validation", text)
         self.assertNotIn("Fast Gate", text)
 
