@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "software" / "nuttx" / "manifest.env"
 README = ROOT / "software" / "nuttx" / "README.md"
 BUILD_SCRIPT = ROOT / "tools" / "ci" / "nuttx_n1_build.sh"
+GENROMFS_HELPER = ROOT / "tools" / "ci" / "ensure_genromfs.sh"
 RANGE_FETCHER = ROOT / "tools" / "fetch_range_archive.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-stage.yml"
 
@@ -45,6 +46,18 @@ class NuttxN1ContractTest(unittest.TestCase):
             self.assertIn(fragment, text)
         self.assertIn('[[ -s nuttx ]]', text)
         self.assertIn("sha256sum", text)
+
+    def test_genromfs_host_tool_is_pinned_and_persistent(self) -> None:
+        build = BUILD_SCRIPT.read_text()
+        helper = GENROMFS_HELPER.read_text()
+        self.assertIn("ensure_genromfs.sh", build)
+        self.assertIn(
+            "GENROMFS_COMMIT=\"e4225b49a7be0ae9d39e98f2175dd674c0d6b1ea\"",
+            helper,
+        )
+        self.assertIn("${CACHE_ROOT}/host-tools/genromfs-", helper)
+        self.assertIn("--continue-at -", helper)
+        self.assertIn("make -C \"${work}\" -j2 >&2", helper)
 
     def test_range_fetcher_is_fail_closed_and_resumable(self) -> None:
         text = RANGE_FETCHER.read_text()
