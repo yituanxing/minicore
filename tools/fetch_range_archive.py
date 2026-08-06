@@ -82,8 +82,9 @@ def sha512_file(path: Path) -> str:
 
 def probe_range(url: str, directory: Path) -> int:
     directory.mkdir(parents=True, exist_ok=True)
-    header_path = directory / "probe.headers"
-    body_path = directory / "probe.body"
+    safe_name = hashlib.sha256(url.encode()).hexdigest()[:12]
+    header_path = directory / f"probe-{safe_name}.headers"
+    body_path = directory / f"probe-{safe_name}.body"
     header_path.unlink(missing_ok=True)
     body_path.unlink(missing_ok=True)
     result = run_curl(
@@ -136,14 +137,30 @@ def probe_range(url: str, directory: Path) -> int:
     return size
 
 
-def select_url(urls: Iterable[str], directory: Path) -> tuple[str, int]:
+def select_urls(urls: Iterable[str], directory: Path) -> tuple[tuple[str, ...], int]:
+    available: list[str] = []
     failures: list[str] = []
+    expected_size: int | None = None
     for url in urls:
         try:
-            return url, probe_range(url, directory)
+            size = probe_range(url, directory)
         except FetchError as exc:
             failures.append(str(exc))
-    raise FetchError("no range-capable archive URL:\n" + "\n".join(failures))
+            continue
+        if expected_size is None:
+            expected_size = size
+        elif size != expected_size:
+            failures.append(
+                f"range mirror size mismatch for {url}: {size} != {expected_size}"
+            )
+            continue
+        available.append(url)
+
+    if not available or expected_size is None:
+        raise FetchError("no range-capable archive URL:\n" + "\n".join(failures))
+    for failure in failures:
+        print(f"range mirror skipped: {failure}", flush=True)
+    return tuple(available), expected_size
 
 
 def part_path(directory: Path, index: int) -> Path:
@@ -152,7 +169,7 @@ def part_path(directory: Path, index: int) -> Path:
 
 def download_part(
     *,
-    url: str,
+    urls: Sequence[str],
     directory: Path,
     index: int,
     start: int,
@@ -168,7 +185,13 @@ def download_part(
     temporary = destination.with_suffix(".tmp")
     temporary.unlink(missing_ok=True)
 
-    for attempt in range(1, retries + 1):
+    total_attempts = retries * len(urls)
+    result: subprocess.CompletedProcess[bytes] | None = None
+    status = ""
+    observed = -1
+    used_url = ""
+    for attempt in range(1, total_attempts + 1):
+        used_url = urls[(index + attempt - 1) % len(urls)]
         result = run_curl(
             [
                 "--max-time",
@@ -185,7 +208,7 @@ def download_part(
                 str(temporary),
                 "--write-out",
                 "%{http_code}",
-                url,
+                used_url,
             ],
             capture=True,
         )
@@ -194,14 +217,23 @@ def download_part(
         if result.returncode == 0 and status == "206" and observed == expected:
             os.replace(temporary, destination)
             return
+        detail = result.stderr.decode(errors="replace").strip()
         temporary.unlink(missing_ok=True)
-        if attempt != retries:
-            time.sleep(min(attempt * 2, 10))
+        if attempt != total_attempts:
+            print(
+                f"range retry chunk={index} attempt={attempt}/{total_attempts} "
+                f"mirror={used_url} curl={result.returncode} "
+                f"http={status or '?'} bytes={observed} {detail}",
+                flush=True,
+            )
+            time.sleep(min(((attempt - 1) // len(urls) + 1) * 2, 10))
 
+    assert result is not None
     detail = result.stderr.decode(errors="replace").strip()
     raise FetchError(
-        f"chunk {index} bytes {start}-{end} failed after {retries} attempts: "
-        f"curl={result.returncode} http={status or '?'} bytes={observed} {detail}"
+        f"chunk {index} bytes {start}-{end} failed after {total_attempts} "
+        f"cross-mirror attempts: mirror={used_url} curl={result.returncode} "
+        f"http={status or '?'} bytes={observed} {detail}"
     )
 
 
@@ -265,13 +297,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output.unlink()
 
     parts = Path(str(args.output) + ".parts")
-    url, total_size = select_url(args.url, parts)
+    urls, total_size = select_urls(args.url, parts)
     count = (total_size + args.chunk_size - 1) // args.chunk_size
     print(
-        f"range source={url} bytes={total_size} chunks={count} "
+        f"range sources={len(urls)} bytes={total_size} chunks={count} "
         f"chunk_size={args.chunk_size} jobs={args.jobs}",
         flush=True,
     )
+    for url in urls:
+        print(f"range source={url}", flush=True)
 
     work = []
     for index in range(count):
@@ -283,7 +317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         futures = [
             executor.submit(
                 download_part,
-                url=url,
+                urls=urls,
                 directory=parts,
                 index=index,
                 start=start,
