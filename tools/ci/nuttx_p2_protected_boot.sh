@@ -152,6 +152,11 @@ run_positive() {
     echo "P2 FAIL: architectural U-mode evidence is incomplete (stall=${stall_period})" >&2
     exit 4
   }
+  grep -Eq 'UMODE_COMMAND_EVIDENCE user-commits=[1-9][0-9]* u-ecalls=[1-9][0-9]* mrets=[1-9][0-9]*' \
+    "${log_file}" || {
+    echo "P2 FAIL: hello command phase did not add user commits, U-mode ECALLs, and MRET returns (stall=${stall_period})" >&2
+    exit 4
+  }
   grep -Eq 'PROTECTED_EXCEPTION .*cause=0x8([[:space:]]|$)' "${log_file}" || {
     echo "P2 FAIL: no explicit ECALL-from-U exception record (stall=${stall_period})" >&2
     exit 4
@@ -160,9 +165,9 @@ run_positive() {
     echo "P2 FAIL: runner did not terminate on the returned NSH prompt (stall=${stall_period})" >&2
     exit 4
   }
-  if grep -Eq 'PANIC|EXCEPTION:|irq_unexpected_isr|FAIL: timeout|FAIL: no instruction retired|FAIL: no ECALL-from-U|FAIL: no MRET' \
+  if grep -Eq 'PANIC|EXCEPTION:|irq_unexpected_isr|FAIL: timeout|FAIL: no instruction retired|FAIL: no ECALL-from-U|FAIL: no MRET|FAIL: protected command phase|FAIL: hello command' \
     "${log_file}"; then
-    echo "P2 FAIL: protected runtime panic, timeout, or missing architecture evidence" >&2
+    echo "P2 FAIL: protected runtime panic, timeout, or incomplete command-phase evidence" >&2
     exit 4
   fi
 }
@@ -186,6 +191,7 @@ image_layout=kflash-0x80000000-0x80040000,uflash-0x80040000-0x80080000
 shared_toy_assertions=disabled-via-self-check-exit
 syscall_proof=ecall-from-u-cause-8
 transition_proof=mret-and-user-text-commit
+command_phase_proof=post-first-prompt-user-commit-ecall-mret
 pmp_entries=4
 interrupt_platform=clint,plic,uart-rx
 stall_periods=0,3
