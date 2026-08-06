@@ -39,7 +39,7 @@ class NuttxN1ContractTest(unittest.TestCase):
             "CONFIG_FS_HOSTFS n",
             "CONFIG_RISCV_SEMIHOSTING_HOSTFS n",
             "Tag_RISCV_arch",
-            "forbidden A/C extension present",
+            "forbidden A/C/F/D/V extension present",
         )
         for fragment in required:
             self.assertIn(fragment, text)
