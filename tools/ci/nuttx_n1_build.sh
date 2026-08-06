@@ -162,21 +162,35 @@ set_bool_config .config CONFIG_RISCV_TOOLCHAIN_CLANG n
 
 make olddefconfig CROSSDEV=riscv64-unknown-elf-
 
-required_lines=(
-  'CONFIG_ARCH_CHIP_QEMU_RV_ISA_M=y'
-  '# CONFIG_ARCH_CHIP_QEMU_RV_ISA_A is not set'
-  '# CONFIG_ARCH_CHIP_QEMU_RV_ISA_C is not set'
-  'CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI=y'
-  '# CONFIG_ARCH_RV_ISA_V is not set'
-  '# CONFIG_FS_HOSTFS is not set'
-  '# CONFIG_RISCV_SEMIHOSTING_HOSTFS is not set'
-  'CONFIG_RISCV_TOOLCHAIN_GNU_RV64=y'
+required_enabled=(
+  CONFIG_ARCH_CHIP_QEMU_RV_ISA_M
+  CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI
+  CONFIG_RISCV_TOOLCHAIN_GNU_RV64
 )
-for line in "${required_lines[@]}"; do
-  grep -Fqx "${line}" .config || {
-    echo "N1 FAIL: resolved configuration is missing: ${line}" >&2
+for symbol in "${required_enabled[@]}"; do
+  grep -Fqx "${symbol}=y" .config || {
+    echo "N1 FAIL: resolved configuration did not enable ${symbol}" >&2
     exit 4
   }
+done
+
+forbidden_enabled=(
+  CONFIG_ARCH_CHIP_QEMU_RV_ISA_A
+  CONFIG_ARCH_CHIP_QEMU_RV_ISA_C
+  CONFIG_ARCH_RV_ISA_V
+  CONFIG_ARCH_FPU
+  CONFIG_ARCH_DPFPU
+  CONFIG_ARCH_QPFPU
+  CONFIG_FS_HOSTFS
+  CONFIG_RISCV_SEMIHOSTING_HOSTFS
+  CONFIG_RISCV_TOOLCHAIN_GNU_RV32
+  CONFIG_RISCV_TOOLCHAIN_CLANG
+)
+for symbol in "${forbidden_enabled[@]}"; do
+  if grep -Fqx "${symbol}=y" .config; then
+    echo "N1 FAIL: resolved configuration enabled forbidden ${symbol}" >&2
+    exit 4
+  fi
 done
 
 cp .config "${OUT_DIR}/nuttx.config"
@@ -210,13 +224,19 @@ match = re.search(r'tag_riscv_arch:\s*"([^"]+)"', text)
 if not match:
     raise SystemExit("N1 FAIL: ELF has no Tag_RISCV_arch attribute")
 arch = match.group(1)
-if not arch.startswith("rv32i") or "_zicsr" not in arch or "_zifencei" not in arch:
+normalized = re.sub(r"\d+p\d+", "", arch)
+tokens = normalized.split("_")
+base = tokens[0]
+if not base.startswith("rv32i") or "zicsr" not in tokens or "zifencei" not in tokens:
     raise SystemExit(f"N1 FAIL: unexpected ELF ISA attribute: {arch}")
-base = arch.split("_", 1)[0]
-if "m" not in base:
+base_extensions = base[len("rv32i"):]
+if "m" not in base_extensions and "m" not in tokens[1:]:
     raise SystemExit(f"N1 FAIL: M extension missing from ELF ISA attribute: {arch}")
-if "a" in base or "c" in base:
-    raise SystemExit(f"N1 FAIL: forbidden A/C extension present: {arch}")
+for forbidden in ("a", "c", "f", "d", "v"):
+    if forbidden in base_extensions or forbidden in tokens[1:]:
+        raise SystemExit(
+            f"N1 FAIL: forbidden A/C/F/D/V extension present: {arch}"
+        )
 print(f"N1 ISA PASS: {arch}")
 PY
 
