@@ -4,8 +4,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "ci" / "nuttx_p1_protected_build.sh"
+PREPARE = ROOT / "tools" / "ci" / "nuttx_prepare_host_tools.sh"
 OVERLAY = ROOT / "tools" / "make_aethercore_nuttx_protected_overlay.py"
-WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-stage.yml"
+PROTECTED_WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-protected-stage.yml"
+FROZEN_WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-stage.yml"
 
 
 class NuttxP1ProtectedContractTest(unittest.TestCase):
@@ -88,13 +90,49 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
         self.assertIn("CONFIG_ARCH_CHIP_QEMU_RV_ISA_A", text)
         self.assertIn("CONFIG_ARCH_CHIP_QEMU_RV_ISA_C", text)
 
-    def test_p1_stays_in_one_bounded_self_hosted_job(self) -> None:
-        text = WORKFLOW.read_text()
+    def test_protected_stage_prepares_tools_without_rebuilding_n1_to_n4(self) -> None:
+        prepare = PREPARE.read_text()
+        workflow = PROTECTED_WORKFLOW.read_text()
+        for fragment in (
+            'KCONFIGLIB_VERSION="14.1.0"',
+            '"kconfiglib==${KCONFIGLIB_VERSION}"',
+            "ensure_genromfs.sh",
+            "P0 PASS: protected NuttX host tools are ready",
+        ):
+            self.assertIn(fragment, prepare)
+        for fragment in (
+            "agent/umode-**",
+            "P1 build and P2 U-mode hello",
+            "nuttx_prepare_host_tools.sh",
+            "nuttx_p1_protected_build.sh",
+            "nuttx_p2_protected_boot.sh",
+            "context\":\"umode/nuttx-protected",
+        ):
+            self.assertIn(fragment, workflow)
+        for forbidden in (
+            "nuttx_n1_build.sh",
+            "nuttx_n2_boot.sh",
+            "nuttx_n3_timer.sh",
+            "nuttx_n4_uart_irq.sh",
+        ):
+            self.assertNotIn(forbidden, workflow)
+
+    def test_protected_stage_is_one_bounded_self_hosted_job(self) -> None:
+        text = PROTECTED_WORKFLOW.read_text()
         self.assertEqual(
             text.count("runs-on: [self-hosted, Linux, X64, minicore]"), 1
         )
+        self.assertIn("timeout-minutes: 60", text)
+        self.assertNotIn("ubuntu-latest", text)
         self.assertNotIn("full-validation", text)
-        self.assertNotIn("Fast Gate", text)
+
+    def test_frozen_n1_to_n4_stage_does_not_run_on_umode_branches(self) -> None:
+        text = FROZEN_WORKFLOW.read_text()
+        self.assertIn("agent/nuttx-**", text)
+        self.assertNotIn("agent/umode-**", text)
+        self.assertIn("N1 build, N2 NSH, N3 timer, and N4 UART RX IRQ", text)
+        self.assertNotIn("nuttx_p1_protected_build.sh", text)
+        self.assertNotIn("nuttx_p2_protected_boot.sh", text)
 
 
 if __name__ == "__main__":
