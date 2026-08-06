@@ -37,7 +37,7 @@ class UartSignatureRunnerTest(unittest.TestCase):
 
     def test_accepts_signature_split_across_writes(self) -> None:
         result, log = self.invoke(
-            "import sys,time; sys.stdout.write('nx'); sys.stdout.flush(); "
+            "import sys,time; sys.stdout.write('n'); sys.stdout.flush(); "
             "time.sleep(.05); sys.stdout.write('sh> '); sys.stdout.flush(); "
             "time.sleep(10)",
             "nsh> ",
