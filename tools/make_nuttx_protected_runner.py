@@ -4,9 +4,9 @@
 The shared simulator is intentionally generic.  This adapter selects the
 RV32IMU/PMP/interrupt top and adds fail-closed evidence that execution really
 entered U-mode: retired instructions from the protected user text region and
-at least one architecturally classified ECALL-from-U trap (mcause=8).
-It also supports prompt-armed UART injection and terminates successfully as
-soon as the command has completed and NSH has returned to its second prompt.
+architecturally classified ECALL-from-U traps (mcause=8).  It snapshots those
+counters at the first NSH prompt, so the hello command phase itself must add
+user commits, U-mode ECALLs, and MRET transitions before the second prompt.
 """
 
 from __future__ import annotations
@@ -118,6 +118,10 @@ def main() -> None:
         "    std::uint64_t userCommits = 0;\n"
         "    std::uint64_t userEnvironmentCalls = 0;\n"
         "    std::uint64_t mretCommits = 0;\n"
+        "    std::uint64_t commandStartUserCommits = 0;\n"
+        "    std::uint64_t commandStartUserEnvironmentCalls = 0;\n"
+        "    std::uint64_t commandStartMretCommits = 0;\n"
+        "    bool protectedCommandStarted = false;\n"
         "    bool protectedComplete = false;\n",
         "U-mode counters",
     )
@@ -136,6 +140,12 @@ def main() -> None:
         "                           cycles >= nextRxCycle;\n",
         "      const bool rxArmed =\n"
         "          !options.rxAfterUart || uart.find(*options.rxAfterUart) != std::string::npos;\n"
+        "      if (rxArmed && !protectedCommandStarted) {\n"
+        "        protectedCommandStarted = true;\n"
+        "        commandStartUserCommits = userCommits;\n"
+        "        commandStartUserEnvironmentCalls = userEnvironmentCalls;\n"
+        "        commandStartMretCommits = mretCommits;\n"
+        "      }\n"
         "      const bool rxValid = !top.reset && rxArmed &&\n"
         "                           rxIndex < options.rxBytes.size() &&\n"
         "                           cycles >= nextRxCycle;\n",
@@ -219,9 +229,19 @@ def main() -> None:
         "      std::cerr << \"FAIL: timeout after \" << cycles << \" cycles\\n\";\n"
         "      return 2;\n"
         "    }\n",
+        "    const auto commandUserCommits = protectedCommandStarted\n"
+        "        ? userCommits - commandStartUserCommits : 0;\n"
+        "    const auto commandUserEnvironmentCalls = protectedCommandStarted\n"
+        "        ? userEnvironmentCalls - commandStartUserEnvironmentCalls : 0;\n"
+        "    const auto commandMretCommits = protectedCommandStarted\n"
+        "        ? mretCommits - commandStartMretCommits : 0;\n"
         "    std::cerr << \"UMODE_EVIDENCE user-commits=\" << userCommits\n"
         "              << \" u-ecalls=\" << userEnvironmentCalls\n"
         "              << \" mrets=\" << mretCommits << '\\n';\n"
+        "    std::cerr << \"UMODE_COMMAND_EVIDENCE user-commits=\"\n"
+        "              << commandUserCommits << \" u-ecalls=\"\n"
+        "              << commandUserEnvironmentCalls << \" mrets=\"\n"
+        "              << commandMretCommits << '\\n';\n"
         "    if (userCommits == 0) {\n"
         "      std::cerr << \"FAIL: no instruction retired from protected user text\\n\";\n"
         "      return 11;\n"
@@ -233,6 +253,22 @@ def main() -> None:
         "    if (mretCommits == 0) {\n"
         "      std::cerr << \"FAIL: no MRET user transition was observed\\n\";\n"
         "      return 13;\n"
+        "    }\n"
+        "    if (!protectedCommandStarted) {\n"
+        "      std::cerr << \"FAIL: protected command phase never started\\n\";\n"
+        "      return 14;\n"
+        "    }\n"
+        "    if (commandUserCommits == 0) {\n"
+        "      std::cerr << \"FAIL: hello command retired no user instruction\\n\";\n"
+        "      return 15;\n"
+        "    }\n"
+        "    if (commandUserEnvironmentCalls == 0) {\n"
+        "      std::cerr << \"FAIL: hello command issued no ECALL-from-U\\n\";\n"
+        "      return 16;\n"
+        "    }\n"
+        "    if (commandMretCommits == 0) {\n"
+        "      std::cerr << \"FAIL: hello command observed no MRET return\\n\";\n"
+        "      return 17;\n"
         "    }\n"
         "    if (protectedComplete) {\n"
         "      std::cout << \"PASS: protected NSH returned after U-mode hello at \"\n"
