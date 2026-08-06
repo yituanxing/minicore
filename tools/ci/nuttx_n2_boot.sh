@@ -54,6 +54,7 @@ required_enabled=(
   CONFIG_AETHERCORE_UART
   CONFIG_SERIAL
   CONFIG_DEV_CONSOLE
+  CONFIG_SUPPRESS_INTERRUPTS
   CONFIG_ARCH_CHIP_QEMU_RV_ISA_M
   CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI
   CONFIG_RISCV_TOOLCHAIN_GNU_RV64
@@ -162,9 +163,9 @@ set +e
 rc=${PIPESTATUS[0]}
 set -e
 
-# N2 intentionally has polling TX only.  After NSH reaches its prompt there is
-# no RX byte to consume and no guest exit request, so the bounded simulator
-# timeout is the expected termination condition for this stage.
+# N2 intentionally has polling TX only and keeps all interrupts suppressed.
+# After NSH reaches its prompt there is no RX byte to consume and no guest exit
+# request, so the bounded simulator timeout is the expected termination.
 [[ "${rc}" -eq 2 ]] || {
   echo "N2 FAIL: simulation returned ${rc}, expected bounded timeout after NSH prompt" >&2
   exit 6
@@ -188,6 +189,7 @@ uart_tx=0x10000000
 max_cycles=${MAX_CYCLES}
 termination=bounded-timeout-after-nsh-prompt
 prompt=nsh>
+interrupts=suppressed-until-n3
 profile=rv32im_zicsr_zifencei
 stop_on_trap=false
 stop_on_wfi=false
