@@ -42,6 +42,7 @@ class AetherCoreNuttxOverlayTest(unittest.TestCase):
             "CONFIG_16550_UART0_SERIAL_CONSOLE=y\n"
             "CONFIG_FS_HOSTFS=y\n"
             "CONFIG_RISCV_SEMIHOSTING_HOSTFS=y\n"
+            "# CONFIG_SUPPRESS_INTERRUPTS is not set\n"
             "CONFIG_RAM_START=0x80000000\n"
             "CONFIG_RAM_SIZE=33554432\n"
         )
@@ -90,6 +91,7 @@ class AetherCoreNuttxOverlayTest(unittest.TestCase):
             self.assertIn("# CONFIG_RISCV_SEMIHOSTING_HOSTFS is not set", config)
             self.assertIn("CONFIG_SERIAL=y", config)
             self.assertIn("CONFIG_DEV_CONSOLE=y", config)
+            self.assertIn("CONFIG_SUPPRESS_INTERRUPTS=y", config)
             self.assertIn("CONFIG_RAM_START=0x80000000", config)
             self.assertIn("CONFIG_RAM_SIZE=67108856", config)
 
