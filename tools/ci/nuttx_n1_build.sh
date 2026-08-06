@@ -48,24 +48,29 @@ prepare_source_archive() {
 
   if [[ ! -f "${archive}" ]]; then
     local fetched=0
-    for attempt in 1 2 3 4 5; do
-      echo "N1: fetch ${name} attempt ${attempt}/5 from ${url}" \
+    for attempt in 1 2 3 4 5 6; do
+      local partial_bytes=0
+      [[ -f "${temporary}" ]] && partial_bytes="$(stat -c %s "${temporary}")"
+      echo "N1: fetch ${name} attempt ${attempt}/6 from byte ${partial_bytes} over HTTP/1.1" \
         | tee -a "${OUT_DIR}/evidence/source-fetch.log"
-      rm -f "${temporary}"
+
       if curl --fail --location --show-error --silent \
-          --connect-timeout 20 --max-time 900 \
-          --retry 2 --retry-delay 2 --retry-all-errors \
-          --output "${temporary}" "${url}" \
-          && tar -tzf "${temporary}" >/dev/null 2>&1; then
-        mv "${temporary}" "${archive}"
-        fetched=1
-        break
+          --http1.1 --continue-at - \
+          --connect-timeout 20 --max-time 360 \
+          --speed-time 60 --speed-limit 1024 \
+          --output "${temporary}" "${url}"; then
+        if tar -tzf "${temporary}" >/dev/null 2>&1; then
+          mv "${temporary}" "${archive}"
+          fetched=1
+          break
+        fi
+        echo "N1: ${name} transfer completed but archive is incomplete; retaining bytes for resume" \
+          | tee -a "${OUT_DIR}/evidence/source-fetch.log"
       fi
-      rm -f "${temporary}"
       sleep $((attempt * 2))
     done
     if [[ "${fetched}" -ne 1 ]]; then
-      echo "N1 FAIL: unable to fetch valid ${name} archive after 5 attempts" >&2
+      echo "N1 FAIL: unable to fetch valid ${name} archive after resumable HTTP/1.1 attempts" >&2
       exit 3
     fi
   else
