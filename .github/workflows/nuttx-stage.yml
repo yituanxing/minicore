@@ -8,11 +8,12 @@ on:
       - software/nuttx/**
       - tests_py/test_nuttx_*.py
       - tools/ci/nuttx_*.sh
+      - tools/fetch_range_archive.py
+      - tests_py/test_range_archive_fetcher.py
       - .github/workflows/nuttx-stage.yml
   workflow_dispatch:
 
 permissions:
-  actions: read
   contents: read
   statuses: write
 
@@ -21,97 +22,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source:
-    name: N1 pinned source bootstrap
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Publish pending source status
-        continue-on-error: true
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: 'pending',
-              context: 'nuttx/source',
-              description: 'Pinned NuttX source bootstrap is running',
-              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
-            });
-
-      - name: Checkout AetherCore manifest
-        uses: actions/checkout@v4
-        with:
-          path: aethercore
-
-      - name: Checkout pinned Apache NuttX
-        uses: actions/checkout@v4
-        with:
-          repository: apache/nuttx
-          ref: 273c77128b6698f0c95f0d7cde1d0bb803782021
-          fetch-depth: 1
-          persist-credentials: false
-          show-progress: false
-          path: upstream/nuttx
-
-      - name: Checkout pinned Apache NuttX Apps
-        uses: actions/checkout@v4
-        with:
-          repository: apache/nuttx-apps
-          ref: 20ffb1a3a3b590d52890ee865a28442390e5d16c
-          fetch-depth: 1
-          persist-credentials: false
-          show-progress: false
-          path: upstream/nuttx-apps
-
-      - name: Verify and package pinned sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          source aethercore/software/nuttx/manifest.env
-          test "$(git -C upstream/nuttx rev-parse HEAD)" = "${NUTTX_COMMIT}"
-          test "$(git -C upstream/nuttx-apps rev-parse HEAD)" = "${NUTTX_APPS_COMMIT}"
-
-          output="${PWD}/source-artifact"
-          mkdir -p "${output}"
-          tar --exclude=.git -czf "${output}/nuttx-${NUTTX_COMMIT}.tar.gz" \
-            -C upstream nuttx
-          tar --exclude=.git -czf "${output}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" \
-            -C upstream nuttx-apps
-          tar -tzf "${output}/nuttx-${NUTTX_COMMIT}.tar.gz" >/dev/null
-          tar -tzf "${output}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" >/dev/null
-          (cd "${output}" && sha256sum ./*.tar.gz > source-archives.sha256)
-
-      - name: Upload pinned source bootstrap
-        uses: actions/upload-artifact@v4
-        with:
-          name: aethercore-nuttx-source-${{ github.run_id }}
-          retention-days: 1
-          compression-level: 0
-          if-no-files-found: error
-          path: source-artifact/
-
-      - name: Publish final source status
-        if: always()
-        continue-on-error: true
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const result = '${{ job.status }}';
-            const state = result === 'success' ? 'success' : (result === 'cancelled' ? 'error' : 'failure');
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state,
-              context: 'nuttx/source',
-              description: state === 'success' ? 'Pinned NuttX source bootstrap passed' : `NuttX source bootstrap ${result}`,
-              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
-            });
-
   n1:
     name: N1 pinned RV32IM host build
     runs-on: [self-hosted, Linux, X64, minicore]
@@ -137,78 +47,43 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate NuttX stage contracts
-        run: python3 -m unittest tests_py.test_nuttx_n1_contract -v
-
-      - name: Wait for and download pinned source bootstrap
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          artifact_name="aethercore-nuttx-source-${GITHUB_RUN_ID}"
-          list_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100"
-          artifact_id=""
+          python3 -m unittest \
+            tests_py.test_nuttx_n1_contract \
+            tests_py.test_range_archive_fetcher -v
 
-          for attempt in $(seq 1 90); do
-            response="$(curl --fail --location --silent --show-error \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "${list_url}")"
-            artifact_id="$(python3 -c \
-              'import json, sys; payload=json.load(sys.stdin); name=sys.argv[1]; print(next((str(a["id"]) for a in payload.get("artifacts", []) if a.get("name") == name and not a.get("expired")), ""))' \
-              "${artifact_name}" <<<"${response}")"
-            if [[ -n "${artifact_id}" ]]; then
-              break
-            fi
-            echo "N1: waiting for pinned source artifact attempt ${attempt}/90"
-            sleep 10
-          done
-
-          [[ -n "${artifact_id}" ]] || {
-            echo "N1 FAIL: pinned source artifact was not published" >&2
-            exit 3
-          }
-
-          rm -rf build/nuttx-source build/nuttx-source.zip
-          mkdir -p build/nuttx-source
-          curl --fail --location --silent --show-error \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --output build/nuttx-source.zip \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip"
-          python3 -m zipfile -e build/nuttx-source.zip build/nuttx-source
-          rm -f build/nuttx-source.zip
-          test -f build/nuttx-source/source-archives.sha256
-
-      - name: Seed persistent self-hosted source cache
+      - name: Fetch verified pinned NuttX release sources
         shell: bash
         run: |
           set -euo pipefail
           source software/nuttx/manifest.env
-          source_dir="${PWD}/build/nuttx-source"
           cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
           archive_dir="${cache_root}/archives"
-          mkdir -p "${archive_dir}"
-          (cd "${source_dir}" && sha256sum -c source-archives.sha256)
+          mkdir -p "${archive_dir}" build
 
-          install_archive() {
-            local source_archive="$1"
-            local destination="$2"
-            local temporary="${destination}.tmp"
-            rm -f "${temporary}"
-            cp "${source_archive}" "${temporary}"
-            tar -tzf "${temporary}" >/dev/null
-            mv "${temporary}" "${destination}"
+          fetch_release() {
+            local release_name="$1"
+            local output_name="$2"
+            python3 tools/fetch_range_archive.py \
+              --url "https://archive.apache.org/dist/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
+              --output "${archive_dir}/${output_name}" \
+              --chunk-size 1048576 \
+              --jobs 6 \
+              --retries 5 \
+              --max-time 180
+            tar -tzf "${archive_dir}/${output_name}" >/dev/null
           }
 
-          install_archive \
-            "${source_dir}/nuttx-${NUTTX_COMMIT}.tar.gz" \
-            "${archive_dir}/nuttx-${NUTTX_COMMIT}.tar.gz"
-          install_archive \
-            "${source_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" \
-            "${archive_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+          {
+            fetch_release \
+              "apache-nuttx-${NUTTX_VERSION}.tar.gz" \
+              "nuttx-${NUTTX_COMMIT}.tar.gz"
+            fetch_release \
+              "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" \
+              "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+          } 2>&1 | tee build/nuttx-source-fetch.log
 
       - name: Build pinned NuttX N1 image
         shell: bash
@@ -217,6 +92,7 @@ jobs:
         run: |
           chmod +x tools/ci/nuttx_n1_build.sh
           bash tools/ci/nuttx_n1_build.sh
+          cp build/nuttx-source-fetch.log build/nuttx-n1/evidence/source-fetch-range.log
 
       - name: Upload NuttX N1 evidence
         if: always()
@@ -228,6 +104,7 @@ jobs:
           if-no-files-found: warn
           include-hidden-files: true
           path: |
+            build/nuttx-source-fetch.log
             build/nuttx-n1/nuttx.elf
             build/nuttx-n1/nuttx.bin
             build/nuttx-n1/nuttx.hex
