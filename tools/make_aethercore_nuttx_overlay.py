@@ -2,9 +2,10 @@
 """Install the bounded AetherCore NuttX N2 polling-UART overlay.
 
 The N1 image intentionally uses the upstream qemu-rv board only as a build
-qualification target.  N2 keeps the proven RISC-V start/timer implementation,
-but replaces the 16550 console boundary with the native AetherCore byte-wide
-MMIO UART at 0x10000000 and constrains RAM to the frozen SoC map.
+qualification target.  N2 keeps the proven RISC-V start implementation, but
+replaces the 16550 console boundary with the native AetherCore byte-wide MMIO
+UART at 0x10000000, constrains RAM to the frozen SoC map, and deliberately
+suppresses interrupts until the N3 timer/scheduler stage.
 """
 
 from __future__ import annotations
@@ -174,8 +175,8 @@ config AETHERCORE_UART
 	select DEV_CONSOLE
 	help
 	  Use the native AetherCore byte-wide simulation UART at 0x10000000.
-	  N2 deliberately supports polling TX only; UART RX and PLIC are added in
-	  the bounded N4 stage.
+	  N2 deliberately supports polling TX only; timer scheduling is enabled in
+	  N3 and UART RX plus PLIC are added in the bounded N4 stage.
 '''
 
 MAKE_BLOCK = r'''
@@ -233,6 +234,7 @@ BOOL_SETTINGS = {
     "CONFIG_RISCV_SEMIHOSTING_HOSTFS": False,
     "CONFIG_SERIAL": True,
     "CONFIG_DEV_CONSOLE": True,
+    "CONFIG_SUPPRESS_INTERRUPTS": True,
 }
 
 VALUE_SETTINGS = {
@@ -301,7 +303,7 @@ def install(root: Path) -> None:
     for symbol, value in VALUE_SETTINGS.items():
         set_config(config, symbol, value)
 
-    # Fail closed on the exact frozen N2 address contract.
+    # Fail closed on the exact frozen N2 address and interrupt contract.
     generated = serial.read_text()
     if "0x10000000u" not in generated or "putreg8" not in generated:
         raise OverlayError("generated UART does not implement byte-wide TX MMIO")
@@ -309,6 +311,7 @@ def install(root: Path) -> None:
     required_config = (
         "CONFIG_AETHERCORE_UART=y",
         "# CONFIG_16550_UART is not set",
+        "CONFIG_SUPPRESS_INTERRUPTS=y",
         "CONFIG_RAM_START=0x80000000",
         "CONFIG_RAM_SIZE=67108856",
     )
