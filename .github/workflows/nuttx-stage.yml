@@ -20,8 +20,100 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source:
+    name: N1 pinned source bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Publish pending source status
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'pending',
+              context: 'nuttx/source',
+              description: 'Pinned NuttX source bootstrap is running',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            });
+
+      - name: Checkout AetherCore manifest
+        uses: actions/checkout@v4
+        with:
+          path: aethercore
+
+      - name: Checkout pinned Apache NuttX
+        uses: actions/checkout@v4
+        with:
+          repository: apache/nuttx
+          ref: 273c77128b6698f0c95f0d7cde1d0bb803782021
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+          path: upstream/nuttx
+
+      - name: Checkout pinned Apache NuttX Apps
+        uses: actions/checkout@v4
+        with:
+          repository: apache/nuttx-apps
+          ref: 20ffb1a3a3b590d52890ee865a28442390e5d16c
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+          path: upstream/nuttx-apps
+
+      - name: Verify and package pinned sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          source aethercore/software/nuttx/manifest.env
+          test "$(git -C upstream/nuttx rev-parse HEAD)" = "${NUTTX_COMMIT}"
+          test "$(git -C upstream/nuttx-apps rev-parse HEAD)" = "${NUTTX_APPS_COMMIT}"
+
+          output="${PWD}/source-artifact"
+          mkdir -p "${output}"
+          tar --exclude=.git -czf "${output}/nuttx-${NUTTX_COMMIT}.tar.gz" \
+            -C upstream nuttx
+          tar --exclude=.git -czf "${output}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" \
+            -C upstream nuttx-apps
+          tar -tzf "${output}/nuttx-${NUTTX_COMMIT}.tar.gz" >/dev/null
+          tar -tzf "${output}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" >/dev/null
+          (cd "${output}" && sha256sum ./*.tar.gz > source-archives.sha256)
+
+      - name: Upload pinned source bootstrap
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-source-${{ github.run_id }}
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+          path: source-artifact/
+
+      - name: Publish final source status
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ job.status }}';
+            const state = result === 'success' ? 'success' : (result === 'cancelled' ? 'error' : 'failure');
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: 'nuttx/source',
+              description: state === 'success' ? 'Pinned NuttX source bootstrap passed' : `NuttX source bootstrap ${result}`,
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            });
+
   n1:
     name: N1 pinned RV32IM host build
+    needs: source
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 45
 
@@ -44,116 +136,42 @@ jobs:
       - name: Checkout AetherCore
         uses: actions/checkout@v4
 
-      - name: Validate NuttX stage contracts
-        run: python3 -m unittest tests_py.test_nuttx_n1_contract -v
+      - name: Download pinned source bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: aethercore-nuttx-source-${{ github.run_id }}
+          path: build/nuttx-source
 
-      - name: Inspect persistent pinned source cache
-        id: source_cache
+      - name: Seed persistent self-hosted source cache
         shell: bash
         run: |
           set -euo pipefail
           source software/nuttx/manifest.env
+          source_dir="${PWD}/build/nuttx-source"
           cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
           archive_dir="${cache_root}/archives"
-          nuttx_archive="${archive_dir}/nuttx-${NUTTX_COMMIT}.tar.gz"
-          apps_archive="${archive_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
           mkdir -p "${archive_dir}"
-          rm -f "${archive_dir}/"*.tmp
+          (cd "${source_dir}" && sha256sum -c source-archives.sha256)
 
-          validate_archive() {
-            local archive="$1"
-            if [[ -s "${archive}" ]] && tar -tzf "${archive}" >/dev/null 2>&1; then
-              printf true
-            else
-              rm -f "${archive}"
-              printf false
-            fi
+          install_archive() {
+            local source_archive="$1"
+            local destination="$2"
+            local temporary="${destination}.tmp"
+            rm -f "${temporary}"
+            cp "${source_archive}" "${temporary}"
+            tar -tzf "${temporary}" >/dev/null
+            mv "${temporary}" "${destination}"
           }
 
-          nuttx_hit="$(validate_archive "${nuttx_archive}")"
-          apps_hit="$(validate_archive "${apps_archive}")"
-          echo "nuttx_hit=${nuttx_hit}" >> "${GITHUB_OUTPUT}"
-          echo "apps_hit=${apps_hit}" >> "${GITHUB_OUTPUT}"
-          if [[ "${nuttx_hit}" == true && "${apps_hit}" == true ]]; then
-            echo "hit=true" >> "${GITHUB_OUTPUT}"
-            echo "N1: persistent pinned source cache hit"
-          else
-            echo "hit=false" >> "${GITHUB_OUTPUT}"
-            echo "N1: source cache miss nuttx=${nuttx_hit} apps=${apps_hit}"
-          fi
+          install_archive \
+            "${source_dir}/nuttx-${NUTTX_COMMIT}.tar.gz" \
+            "${archive_dir}/nuttx-${NUTTX_COMMIT}.tar.gz"
+          install_archive \
+            "${source_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" \
+            "${archive_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
 
-      - name: Configure reliable Git transport
-        if: steps.source_cache.outputs.hit != 'true'
-        shell: bash
-        run: |
-          git config --global http.version HTTP/1.1
-          git config --global http.lowSpeedLimit 0
-          git config --global http.lowSpeedTime 999999
-
-      - name: Checkout pinned Apache NuttX
-        if: steps.source_cache.outputs.nuttx_hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: apache/nuttx
-          ref: 273c77128b6698f0c95f0d7cde1d0bb803782021
-          fetch-depth: 1
-          persist-credentials: false
-          show-progress: false
-          path: build/upstream/nuttx
-
-      - name: Persist pinned Apache NuttX source
-        if: steps.source_cache.outputs.nuttx_hit != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          source software/nuttx/manifest.env
-          test "$(git -C build/upstream/nuttx rev-parse HEAD)" = "${NUTTX_COMMIT}"
-          archive_dir="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx/archives"
-          archive="${archive_dir}/nuttx-${NUTTX_COMMIT}.tar.gz"
-          temporary="${archive}.tmp"
-          mkdir -p "${archive_dir}"
-          rm -f "${temporary}"
-          tar --exclude=.git -czf "${temporary}" -C build/upstream nuttx
-          tar -tzf "${temporary}" >/dev/null
-          mv "${temporary}" "${archive}"
-          echo "N1: persisted ${archive}"
-
-      - name: Checkout pinned Apache NuttX Apps
-        if: steps.source_cache.outputs.apps_hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: apache/nuttx-apps
-          ref: 20ffb1a3a3b590d52890ee865a28442390e5d16c
-          fetch-depth: 1
-          persist-credentials: false
-          show-progress: false
-          path: build/upstream/nuttx-apps
-
-      - name: Persist pinned Apache NuttX Apps source
-        if: steps.source_cache.outputs.apps_hit != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          source software/nuttx/manifest.env
-          test "$(git -C build/upstream/nuttx-apps rev-parse HEAD)" = "${NUTTX_APPS_COMMIT}"
-          archive_dir="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx/archives"
-          archive="${archive_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
-          temporary="${archive}.tmp"
-          mkdir -p "${archive_dir}"
-          rm -f "${temporary}"
-          tar --exclude=.git -czf "${temporary}" -C build/upstream nuttx-apps
-          tar -tzf "${temporary}" >/dev/null
-          mv "${temporary}" "${archive}"
-          echo "N1: persisted ${archive}"
-
-      - name: Verify complete persistent source cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          source software/nuttx/manifest.env
-          archive_dir="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx/archives"
-          tar -tzf "${archive_dir}/nuttx-${NUTTX_COMMIT}.tar.gz" >/dev/null
-          tar -tzf "${archive_dir}/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" >/dev/null
+      - name: Validate NuttX stage contracts
+        run: python3 -m unittest tests_py.test_nuttx_n1_contract -v
 
       - name: Build pinned NuttX N1 image
         shell: bash
