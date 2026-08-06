@@ -12,6 +12,17 @@ SHARED_RUNNER = ROOT / "sim" / "sim_main.cpp"
 P2_SCRIPT = ROOT / "tools" / "ci" / "nuttx_p2_protected_boot.sh"
 
 
+def generate_runner() -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "sim_main_nuttx_protected.cpp"
+        subprocess.run(
+            ["python3", str(GENERATOR), str(SHARED_RUNNER), str(output)],
+            check=True,
+            cwd=ROOT,
+        )
+        return output.read_text()
+
+
 class NuttxP2RuntimeContractTest(unittest.TestCase):
     def test_sim_top_combines_umode_pmp_timer_and_external_interrupts(self) -> None:
         text = TOP.read_text()
@@ -27,15 +38,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         self.assertIn("AetherCoreNuttXProtectedSimTop", ELABORATOR.read_text())
 
     def test_runner_requires_architectural_user_mode_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "sim_main_nuttx_protected.cpp"
-            subprocess.run(
-                ["python3", str(GENERATOR), str(SHARED_RUNNER), str(output)],
-                check=True,
-                cwd=ROOT,
-            )
-            text = output.read_text()
-
+        text = generate_runner()
         for fragment in (
             '#include "VAetherCoreNuttXProtectedSimTop.h"',
             "VAetherCoreNuttXProtectedSimTop top",
@@ -54,15 +57,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         self.assertNotIn("VAetherCoreSimTop", text)
 
     def test_uart_injection_arms_from_the_real_nsh_prompt(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "sim_main_nuttx_protected.cpp"
-            subprocess.run(
-                ["python3", str(GENERATOR), str(SHARED_RUNNER), str(output)],
-                check=True,
-                cwd=ROOT,
-            )
-            text = output.read_text()
-
+        text = generate_runner()
         for fragment in (
             "--rx-after-uart",
             "options.rxAfterUart = argv[++i]",
@@ -72,16 +67,25 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
 
-    def test_runner_stops_at_the_returned_second_nsh_prompt(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "sim_main_nuttx_protected.cpp"
-            subprocess.run(
-                ["python3", str(GENERATOR), str(SHARED_RUNNER), str(output)],
-                check=True,
-                cwd=ROOT,
-            )
-            text = output.read_text()
+    def test_hello_command_must_add_post_prompt_umode_activity(self) -> None:
+        text = generate_runner()
+        for fragment in (
+            "bool protectedCommandStarted = false",
+            "commandStartUserCommits = userCommits",
+            "commandStartUserEnvironmentCalls = userEnvironmentCalls",
+            "commandStartMretCommits = mretCommits",
+            "UMODE_COMMAND_EVIDENCE user-commits=",
+            "commandUserCommits == 0",
+            "commandUserEnvironmentCalls == 0",
+            "commandMretCommits == 0",
+            "FAIL: hello command retired no user instruction",
+            "FAIL: hello command issued no ECALL-from-U",
+            "FAIL: hello command observed no MRET return",
+        ):
+            self.assertIn(fragment, text)
 
+    def test_runner_stops_at_the_returned_second_nsh_prompt(self) -> None:
+        text = generate_runner()
         for fragment in (
             "bool protectedComplete = false",
             "!protectedComplete; ++cycles",
@@ -98,6 +102,9 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         self.assertIn("userCommits == 0", text)
         self.assertIn("userEnvironmentCalls == 0", text)
         self.assertIn("mretCommits == 0", text)
+        self.assertIn("commandUserCommits == 0", text)
+        self.assertIn("commandUserEnvironmentCalls == 0", text)
+        self.assertIn("commandMretCommits == 0", text)
         self.assertIn("protectedCommitPc >= kUserTextBase", text)
         self.assertIn("exceptionCause == kEnvironmentCallFromU", text)
 
@@ -125,7 +132,9 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "shared_toy_assertions=disabled-via-self-check-exit",
             "STALL_PERIODS=(0 3)",
             "Hello, World!!",
-            "ECALL-from-U",
+            "UMODE_COMMAND_EVIDENCE",
+            "hello command phase did not add user commits",
+            "command_phase_proof=post-first-prompt-user-commit-ecall-mret",
             "expected immediate success at the second NSH prompt",
             "PASS: protected NSH returned after U-mode hello",
             "termination=immediate-success-after-second-nsh-prompt",
