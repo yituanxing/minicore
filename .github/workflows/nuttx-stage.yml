@@ -78,7 +78,7 @@ jobs:
             -C upstream nuttx-apps
           tar -tzf "$output/nuttx-${NUTTX_COMMIT}.tar.gz" >/dev/null
           tar -tzf "$output/nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz" >/dev/null
-          sha256sum "$output/"*.tar.gz > "$output/source-archives.sha256"
+          (cd "$output" && sha256sum ./*.tar.gz > source-archives.sha256)
 
       - name: Upload pinned NuttX sources
         uses: actions/upload-artifact@v4
@@ -147,7 +147,7 @@ jobs:
           cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
           archive_dir="$cache_root/archives"
           mkdir -p "$archive_dir"
-          sha256sum -c "$source_dir/source-archives.sha256"
+          (cd "$source_dir" && sha256sum -c source-archives.sha256)
 
           install -m 0644 \
             "$source_dir/nuttx-${NUTTX_COMMIT}.tar.gz" \
