@@ -25,6 +25,35 @@ Zephyr regression.
   validate claim/complete and ISR return, then exercise file-descriptor based
   console I/O.
 
+## Protected userspace stages
+
+The protected line is separate from the frozen N1-N4 flat build.  NSH here is
+NuttX's own **NuttShell**, not Linux `/bin/sh` or BusyBox `ash`.
+
+- **P1 — separated images:** start from the pinned upstream `rv-virt:pnsh`
+  configuration, build an M-mode `nuttx` kernel and a distinct U-mode
+  `nuttx_user` image containing NSH and `hello`, and combine their load images
+  without changing their ELF boundaries.  User flash is
+  `0x80040000..0x8007ffff` (RX) and user RAM is
+  `0x80200000..0x802fffff` (RW).  PMP entries 0 and 1 are configured directly;
+  the platform must never scan beyond AetherCore's four implemented entries.
+- **P2 — real OS-backed U-mode execution:** boot a dedicated
+  RV32IMU + PMP4 + timer + PLIC/UART simulation, wait for the first real
+  `nsh> ` prompt, inject `hello`, require `Hello, World!!`, and return to a
+  second prompt.  Qualification is not based on UART text alone: the runner
+  snapshots counters at the first prompt and requires the command phase itself
+  to add user-text retirements, ECALL-from-U traps (`mcause=8`), and MRET
+  transitions.  Both `stall-period=0` and `3` must pass.
+
+P1/P2 use the focused `NuttX Protected Userspace` self-hosted workflow.  The
+frozen N1-N4 workflow remains byte-identical and does not run on U-mode branch
+pushes.  The P2 cycle count is only an upper bound: a successful run terminates
+immediately after the second prompt and complete architectural evidence.
+
+**Qualification status:** P1/P2 are implemented but not yet frozen.  No success
+claim may be made until `umode/nuttx-protected` is green and the uploaded P1/P2
+artifacts have been audited.
+
 ## Frozen AetherCore platform contract
 
 - ISA: RV32IM + Zicsr + Zifencei; no A, C, F, D, or V.
