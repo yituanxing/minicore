@@ -42,6 +42,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "kUserTextBase = 0x80040000ULL",
             "kUserTextLimit = 0x80080000ULL",
             "kEnvironmentCallFromU = 8ULL",
+            'kProtectedPrompt[] = "nsh>"',
             "UMODE_EVIDENCE user-commits=",
             "FAIL: no instruction retired from protected user text",
             "FAIL: no ECALL-from-U trap was observed",
@@ -68,6 +69,27 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "--rx-after-uart requires at least one --rx-byte",
             "uart.find(*options.rxAfterUart)",
             "const bool rxArmed",
+        ):
+            self.assertIn(fragment, text)
+
+    def test_runner_stops_at_the_returned_second_nsh_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "sim_main_nuttx_protected.cpp"
+            subprocess.run(
+                ["python3", str(GENERATOR), str(SHARED_RUNNER), str(output)],
+                check=True,
+                cwd=ROOT,
+            )
+            text = output.read_text()
+
+        for fragment in (
+            "bool protectedComplete = false",
+            "!protectedComplete; ++cycles",
+            "uart.find(kProtectedPrompt, pos)",
+            "promptCount >= 2",
+            "rxIndex == options.rxBytes.size()",
+            "if (protectedComplete)",
+            "PASS: protected NSH returned after U-mode hello",
         ):
             self.assertIn(fragment, text)
 
@@ -104,7 +126,9 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "STALL_PERIODS=(0 3)",
             "Hello, World!!",
             "ECALL-from-U",
-            "bounded timeout after hello",
+            "expected immediate success at the second NSH prompt",
+            "PASS: protected NSH returned after U-mode hello",
+            "termination=immediate-success-after-second-nsh-prompt",
         ):
             self.assertIn(fragment, text)
         self.assertEqual(text.count("verilator --cc --exe --build"), 1)
