@@ -79,6 +79,20 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         self.assertIn("protectedCommitPc >= kUserTextBase", text)
         self.assertIn("exceptionCause == kEnvironmentCallFromU", text)
 
+    def test_p2_script_validates_the_protected_load_layout(self) -> None:
+        text = P2_SCRIPT.read_text()
+        for fragment in (
+            "partition_size = 0x40000",
+            "exceeds 256 KiB kflash",
+            "exceeds 256 KiB uflash",
+            "combined image does not preserve the kernel load bytes",
+            "non-zero bytes escaped into the kflash/uflash gap",
+            "userspace load bytes are not placed at 0x80040000",
+            "P2 protected image layout PASS",
+            "image-layout.log",
+        ):
+            self.assertIn(fragment, text)
+
     def test_p2_script_builds_one_bounded_runner_and_two_profiles(self) -> None:
         text = P2_SCRIPT.read_text()
         for fragment in (
