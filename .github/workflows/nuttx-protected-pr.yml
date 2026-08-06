@@ -12,6 +12,7 @@ on:
       - tools/ci/ensure_genromfs.sh
       - tools/ci/kconfig-tweak
       - tools/make_aethercore_nuttx_*_overlay.py
+      - tools/make_nuttx_protected_runner.py
       - tools/fetch_range_archive.py
       - src/main/scala/aethercore/**
       - sim/**
@@ -64,6 +65,7 @@ jobs:
         run: |
           python3 -m unittest \
             tests_py.test_nuttx_p1_protected_contract \
+            tests_py.test_nuttx_p2_runtime_contract \
             tests_py.test_aethercore_nuttx_overlay \
             tests_py.test_range_archive_fetcher -v
 
