@@ -17,6 +17,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasM shouldBe true
     config.isa.hasA shouldBe false
     config.isa.hasZicsr shouldBe true
+    config.isa.hasZifencei shouldBe false
     config.isa.hasWordOps shouldBe true
     config.isa.march shouldBe "rv64im_zicsr"
     config.isa.mabi shouldBe "lp64"
@@ -36,6 +37,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.shiftBits shouldBe 5
     config.isa.hasM shouldBe false
     config.isa.hasZicsr shouldBe false
+    config.isa.hasZifencei shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32i"
     config.isa.mabi shouldBe "ilp32"
@@ -56,8 +58,28 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.shiftBits shouldBe 5
     config.isa.hasM shouldBe true
     config.isa.hasZicsr shouldBe true
+    config.isa.hasZifencei shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
+    config.isa.mabi shouldBe "ilp32"
+    config.platform shouldBe CoreProfiles.rv32iMinimal.platform
+  }
+
+  it should "describe the exact NuttX protected OS profile" in {
+    val config = CoreProfiles.rv32imuPmpOsSoftware
+
+    config.name shouldBe "rv32imu-pmp-os-software"
+    config.isa.xlen shouldBe 32
+    config.isa.hasM shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasS shouldBe false
+    config.isa.hasPmp shouldBe true
+    config.isa.pmpEntries shouldBe 4
+    config.isa.hasZicsr shouldBe true
+    config.isa.hasZifencei shouldBe true
+    config.isa.hasA shouldBe false
+    config.isa.hasC shouldBe false
+    config.isa.march shouldBe "rv32im_zicsr_zifencei"
     config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
@@ -72,6 +94,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.xBytes shouldBe 4
     isa.shiftBits shouldBe 5
     isa.hasZicsr shouldBe false
+    isa.hasZifencei shouldBe false
     isa.hasWordOps shouldBe false
     isa.march shouldBe "rv32i"
     isa.mabi shouldBe "ilp32"
