@@ -69,7 +69,7 @@ jobs:
               --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
               --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
               --output "${archive_dir}/${output_name}" \
-              --chunk-size 524288 \
+              --chunk-size 1048576 \
               --jobs 6 \
               --retries 5 \
               --max-time 180
