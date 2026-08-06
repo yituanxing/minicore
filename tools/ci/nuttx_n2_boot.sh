@@ -54,7 +54,6 @@ required_enabled=(
   CONFIG_AETHERCORE_UART
   CONFIG_SERIAL
   CONFIG_DEV_CONSOLE
-  CONFIG_SUPPRESS_INTERRUPTS
   CONFIG_ARCH_CHIP_QEMU_RV_ISA_M
   CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI
   CONFIG_RISCV_TOOLCHAIN_GNU_RV64
@@ -67,6 +66,7 @@ for symbol in "${required_enabled[@]}"; do
 done
 
 forbidden_enabled=(
+  CONFIG_SUPPRESS_INTERRUPTS
   CONFIG_16550_UART
   CONFIG_16550_UART0
   CONFIG_16550_UART0_SERIAL_CONSOLE
@@ -163,7 +163,8 @@ set +e
 rc=${PIPESTATUS[0]}
 set -e
 
-# N2 intentionally has polling TX only and keeps all interrupts suppressed.
+# N2 keeps machine interrupt sources disabled in the AetherCore IRQ boundary,
+# while leaving synchronous exceptions and ECALL task switches operational.
 # After NSH reaches its prompt there is no RX byte to consume and no guest exit
 # request, so the bounded simulator timeout is the expected termination.
 [[ "${rc}" -eq 2 ]] || {
@@ -189,7 +190,8 @@ uart_tx=0x10000000
 max_cycles=${MAX_CYCLES}
 termination=bounded-timeout-after-nsh-prompt
 prompt=nsh>
-interrupts=suppressed-until-n3
+machine_interrupt_sources=disabled-until-n3
+ecall_context_switch=enabled
 profile=rv32im_zicsr_zifencei
 stop_on_trap=false
 stop_on_wfi=false
