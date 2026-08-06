@@ -1,0 +1,60 @@
+name: NuttX Protected Static Gate
+
+on:
+  pull_request:
+    branches:
+      - agent/nuttx-bringup
+    paths:
+      - .github/workflows/nuttx-protected-static.yml
+      - tests_py/test_nuttx_p1_protected_contract.py
+      - tests_py/test_nuttx_p2_runtime_contract.py
+      - tools/ci/nuttx_p1_protected_build.sh
+      - tools/ci/nuttx_p2_protected_boot.sh
+      - tools/make_aethercore_nuttx_protected_overlay.py
+      - tools/make_nuttx_protected_runner.py
+      - src/main/scala/aethercore/config/CoreConfig.scala
+      - src/main/scala/aethercore/sim/AetherCoreNuttXProtectedSimTop.scala
+      - src/main/scala/aethercore/ElaborateNuttXProtected.scala
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuttx-protected-static-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: P1/P2 contracts and script syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout AetherCore
+        uses: actions/checkout@v4
+
+      - name: Compile protected Python sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            tools/make_aethercore_nuttx_protected_overlay.py \
+            tools/make_nuttx_protected_runner.py \
+            tests_py/test_nuttx_p1_protected_contract.py \
+            tests_py/test_nuttx_p2_runtime_contract.py
+
+      - name: Validate protected shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/nuttx_p1_protected_build.sh
+          bash -n tools/ci/nuttx_p2_protected_boot.sh
+
+      - name: Run protected-userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests_py.test_nuttx_p1_protected_contract \
+            tests_py.test_nuttx_p2_runtime_contract -v
