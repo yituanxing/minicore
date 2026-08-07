@@ -39,16 +39,18 @@ def adapt(source: str, trace: bool) -> str:
     )
     text = replace_once(
         text,
-        '    } else if (arg == "--self-check-exit") {\n'
-        "      options.selfCheckExit = true;\n"
-        '    } else if (arg == "--difftest" && i + 1 < argc) {',
-        '    } else if (arg == "--self-check-exit") {\n'
-        "      options.selfCheckExit = true;\n"
+        '    } else if (arg == "--rx-byte" && i + 1 < argc) {\n'
+        "      const auto byte = parseInteger(argv[++i]);\n"
+        "      if (byte > 0xffU) throw std::runtime_error(\"--rx-byte must be in the range 0..255\");\n"
+        "      options.rxBytes.push_back(static_cast<std::uint8_t>(byte));\n",
         '    } else if (arg == "--inject-uart-rx" && i + 1 < argc) {\n'
         "      const auto byte = parseInteger(argv[++i]);\n"
         "      if (byte > 0xff) throw std::runtime_error(\"--inject-uart-rx must fit in one byte\");\n"
         "      options.uartRxByte = static_cast<std::uint32_t>(byte);\n"
-        '    } else if (arg == "--difftest" && i + 1 < argc) {',
+        '    } else if (arg == "--rx-byte" && i + 1 < argc) {\n'
+        "      const auto byte = parseInteger(argv[++i]);\n"
+        "      if (byte > 0xffU) throw std::runtime_error(\"--rx-byte must be in the range 0..255\");\n"
+        "      options.rxBytes.push_back(static_cast<std::uint8_t>(byte));\n",
         "UART RX option parser",
     )
     text = replace_once(
