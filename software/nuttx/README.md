@@ -30,20 +30,48 @@ Zephyr regression.
 The protected line is separate from the frozen N1-N4 flat build.  NSH here is
 NuttX's own **NuttShell**, not Linux `/bin/sh` or BusyBox `ash`.
 
-- **P1 — separated images:** start from the pinned upstream `rv-virt:pnsh`
-  configuration, build an M-mode `nuttx` kernel and a distinct U-mode
-  `nuttx_user` image containing NSH and `hello`, and combine their load images
-  without changing their ELF boundaries.  User flash is
+- **P1 — separated RV32IMA images:** start from the pinned upstream
+  `rv-virt:pnsh` configuration, build an M-mode `nuttx` kernel and a distinct
+  U-mode `nuttx_user` image containing NSH and `hello`, and combine their load
+  images without changing their ELF boundaries.  User flash is
   `0x80040000..0x8007ffff` (RX) and user RAM is
   `0x80200000..0x802fffff` (RW).  PMP entries 0 and 1 are configured directly;
   the platform must never scan beyond AetherCore's four implemented entries.
+  Both ELF files must advertise `rv32ima_zicsr_zifencei`, and the user-image
+  disassembly must contain real LR/SC/AMO word instructions.
 - **P2 — real OS-backed U-mode execution:** boot a dedicated
-  RV32IMU + PMP4 + timer + PLIC/UART simulation, wait for the first real
+  RV32IMAU + PMP4 + timer + PLIC/UART simulation, wait for the first real
   `nsh> ` prompt, inject `hello`, require `Hello, World!!`, and return to a
   second prompt.  Qualification is not based on UART text alone: the runner
   snapshots counters at the first prompt and requires the command phase itself
   to add user-text retirements, ECALL-from-U traps (`mcause=8`), and MRET
   transitions.  Both `stall-period=0` and `3` must pass.
+
+### Why protected NuttX added RV32A
+
+The protected line initially used RV32IMU.  It entered real U-mode and completed
+multiple U-mode ECALL/MRET round trips, then failed at `0x800410a0` inside
+`__atomic_compare_exchange_4`.  With A disabled, NuttX libc selected the generic
+atomic fallback in `arch_atomic.c`; that fallback calls
+`spin_lock_irqsave_notrace()` and ultimately tries to manipulate machine-level
+interrupt state through `mstatus`.  AetherCore correctly raised an illegal
+instruction when that code executed in U-mode.
+
+That failure is the reason A was added: it was demanded by a real protected OS
+workload rather than enabled speculatively.  AetherCore now implements the
+RV32A word family used by NuttX: `LR.W`, `SC.W`, and
+`AMOSWAP/ADD/XOR/AND/OR/MIN/MAX/MINU/MAXU.W`.  The current platform is a
+single-hart, single-master, in-order core with no cache hierarchy, so LR/SC
+reservation and AMO read-modify-write sequencing are implemented internally in
+MEM without adding an external atomic bus transaction.  `aq`/`rl` encodings are
+accepted; the current strongly ordered memory path does not require additional
+reordering machinery.  This is a qualification of the RV32A word path needed
+by the current platform, not a claim of every future multi-hart/coherent-cache
+atomic requirement.
+
+The pre-atomic `rv32imuPmpOsSoftware` profile remains available as a regression
+profile.  The active protected NuttX profile is
+`rv32imauPmpOsSoftware` (`rv32ima_zicsr_zifencei`, M+U, PMP4).
 
 P1/P2 deliberately follow the real NuttX 13.0.0 **pure protected/PMP** model.
 `CONFIG_LIB_SYSCALL` and `CONFIG_RISCV_PERCPU_SCRATCH` are enabled, while
@@ -56,22 +84,55 @@ P1/P2 system-call handling still uses the caller's user stack.  Forcing only
 security claim.  A dedicated kernel-stack / address-environment port is a later
 hardening milestone after the first genuine OS-backed U-mode path is qualified.
 
-This means P1/P2 are intended to prove the privilege transition, PMP user
-code/data access boundary, ECALL dispatch/return path, timer/interrupt
-coexistence, and real U-mode application execution.  They do **not** yet claim
-robust isolation from a malicious user that deliberately corrupts the syscall
-stack while the kernel is servicing that call.
+This means P1/P2 prove the privilege transition, PMP user code/data access
+boundary, ECALL dispatch/return path, timer/interrupt coexistence, RV32A atomics
+needed by the user libc, and real U-mode application execution.  They do **not**
+yet claim robust isolation from a malicious user that deliberately corrupts the
+syscall stack while the kernel is servicing that call.
 
 P1/P2 use the focused `NuttX Protected Userspace` self-hosted workflow.  The
 frozen N1-N4 workflow remains byte-identical and does not run on U-mode branch
 pushes.  The P2 cycle count is only an upper bound: a successful run terminates
 immediately after the second prompt and complete architectural evidence.
 
-**Qualification status:** P1/P2 are implemented but not yet frozen.  No success
-claim may be made until `umode/nuttx-protected` is green and the uploaded P1/P2
-artifacts have been audited.
+### P1/P2 qualification evidence
 
-## Frozen AetherCore platform contract
+The first fully green RV32IMA protected qualification is workflow run
+`31150611994` on commit `f2aacbb95f43e2fb70c42a6f60a3b0bff5803700`.
+
+P1 artifact `aethercore-nuttx-p1-protected-31150611994-1` has archive digest
+`sha256:547ca15a87c4c93f1faefe2e29e4110914e002cbf7ce1af389dad803e487f12f`.
+Its contract is
+`nuttx-13.0.0-aethercore-p1-protected-rv32ima-build-v2`.  The user ELF contains
+19 real A-extension instructions in the audited disassembly: 2 `amoadd.w`,
+3 `amoadd.w.aq`, 1 `amoor.w.aq`, 1 `amoswap.w`, 6 `lr.w`, 1 `sc.w`, and
+5 `sc.w.aq`.
+
+P2 artifact `aethercore-nuttx-p2-umode-31150611994-1` has archive digest
+`sha256:e937442bacacac39afb7ec9f59e0ce2c718a8ed8a26bdf76cbdddb8e0878f787`.
+Both memory timing profiles reached the real NuttShell prompt, executed
+`hello`, printed `Hello, World!!`, and returned to the second prompt:
+
+- `stall-period=0`: 9,337 user-text commits, 28 ECALL-from-U traps, 56 MRET
+  commits; the command phase itself added 5,589 user commits, 24 U-mode ECALLs,
+  and 40 MRETs.
+- `stall-period=3`: 9,337 user-text commits, 28 ECALL-from-U traps, 59 MRET
+  commits; the command phase itself added 5,589 user commits, 24 U-mode ECALLs,
+  and 41 MRETs.
+
+The companion Fast Gate run `31150614787` is also green: RV32A decode and core
+execution tests, PLIC/UART/WFI tests, ordinary FreeRTOS, the UART/PLIC Tickless
+workload, and exact RV32 NEMU WFI DiffTest all pass.  The original U-mode
+`mstatus` illegal-instruction failure is no longer present.
+
+**Qualification status:** P1/P2 are qualified and ready for freeze cleanup.
+The next protected milestone is fault isolation (P3); it must not be folded
+into the P1/P2 evidence retroactively.
+
+## Frozen AetherCore platform contract for N1-N4
+
+This contract is intentionally the **flat N1-N4** contract and therefore stays
+RV32IM even though the separate protected P1/P2 line now uses RV32IMA.
 
 - ISA: RV32IM + Zicsr + Zifencei; no A, C, F, D, or V.
 - RAM: `0x80000000 .. 0x83fffff7` (`0x03fffff8` bytes).
