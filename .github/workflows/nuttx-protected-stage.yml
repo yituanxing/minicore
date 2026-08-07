@@ -10,15 +10,18 @@ on:
       - tests_py/test_nuttx_p1_protected_contract.py
       - tests_py/test_nuttx_p2_runtime_contract.py
       - tests_py/test_nuttx_p3_kernel_stack_contract.py
+      - tests_py/test_nuttx_p3_fault_contract.py
       - tests_py/test_aethercore_nuttx_overlay.py
       - tests_py/test_range_archive_fetcher.py
       - tools/ci/nuttx_prepare_host_tools.sh
       - tools/ci/nuttx_p1_protected_build.sh
       - tools/ci/nuttx_p2_protected_boot.sh
       - tools/ci/nuttx_p3_kernel_stack_build.sh
+      - tools/ci/nuttx_p3_fault_isolation.sh
       - tools/ci/ensure_genromfs.sh
       - tools/ci/kconfig-tweak
       - tools/make_aethercore_nuttx_*_overlay.py
+      - tools/nuttx_p3_fault_probe.py
       - tools/make_nuttx_protected_runner.py
       - tools/fetch_range_archive.py
       - src/main/scala/aethercore/**
@@ -41,7 +44,7 @@ concurrency:
 
 jobs:
   protected:
-    name: P1 build and P2 U-mode hello; conditional P3-A kernel stack
+    name: P1/P2 protected U-mode; conditional P3 kernel stack and fault isolation
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 60
 
@@ -72,7 +75,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          payload=$(printf '%s' '{"state":"pending","context":"umode/nuttx-p3","description":"NuttX P3 independent kernel-stack probe is running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
+          payload=$(printf '%s' '{"state":"pending","context":"umode/nuttx-p3","description":"NuttX P3 kernel-stack and fault-isolation qualification is running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
           curl --fail --show-error --silent --http1.1 \
             --connect-timeout 15 --max-time 60 \
             --retry 5 --retry-delay 2 --retry-all-errors \
@@ -107,6 +110,11 @@ jobs:
             bash -n tools/ci/nuttx_p3_kernel_stack_build.sh
             python3 -m py_compile tools/make_aethercore_nuttx_p3_kernel_stack_overlay.py
             python3 -m unittest tests_py.test_nuttx_p3_kernel_stack_contract -v
+          fi
+          if [[ -f tools/ci/nuttx_p3_fault_isolation.sh ]]; then
+            bash -n tools/ci/nuttx_p3_fault_isolation.sh
+            python3 -m py_compile tools/nuttx_p3_fault_probe.py
+            python3 -m unittest tests_py.test_nuttx_p3_fault_contract -v
           fi
 
       - name: Fetch verified pinned NuttX release sources
@@ -232,6 +240,38 @@ jobs:
             build/nuttx-p3a/build.log
             build/nuttx-p3a/evidence/
 
+      - name: Run P3-B PMP fault isolation and NSH recovery
+        if: github.ref_name == 'agent/nuttx-protected-p3-fault-isolation'
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+          AETHERCORE_NUTTX_P3_MAX_CYCLES: "30000000"
+          AETHERCORE_NUTTX_P3_RX_GAP_CYCLES: "1000"
+        run: |
+          chmod +x tools/ci/nuttx_p3_fault_isolation.sh
+          bash tools/ci/nuttx_p3_fault_isolation.sh
+
+      - name: Upload P3-B fault-isolation evidence
+        if: always() && github.ref_name == 'agent/nuttx-protected-p3-fault-isolation'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-p3b-fault-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-p3b/nuttx.elf
+            build/nuttx-p3b/nuttx_user.elf
+            build/nuttx-p3b/nuttx.bin
+            build/nuttx-p3b/nuttx_user.bin
+            build/nuttx-p3b/aethercore-protected.bin
+            build/nuttx-p3b/nuttx.map
+            build/nuttx-p3b/nuttx_user.map
+            build/nuttx-p3b/resolved.config
+            build/nuttx-p3b/build.log
+            build/nuttx-p3b/evidence/
+
       - name: Publish final P3 status
         if: always() && github.ref_name == 'agent/nuttx-protected-p3-fault-isolation'
         continue-on-error: true
@@ -244,15 +284,15 @@ jobs:
           case "${JOB_STATUS}" in
             success)
               state=success
-              description='NuttX P3-A independent kernel-stack build passed'
+              description='NuttX P3 kernel-stack and PMP fault isolation passed'
               ;;
             cancelled)
               state=error
-              description='NuttX P3-A qualification cancelled'
+              description='NuttX P3 fault-isolation qualification cancelled'
               ;;
             *)
               state=failure
-              description="NuttX P3-A qualification ${JOB_STATUS}"
+              description="NuttX P3 fault-isolation qualification ${JOB_STATUS}"
               ;;
           esac
           payload=$(printf '{"state":"%s","context":"umode/nuttx-p3","description":"%s","target_url":"%s"}' \
