@@ -1,215 +1,150 @@
-# AetherCore preemptive scheduler checkpoint
+# AetherCore Supervisor Mode V1 checkpoint
 
-## Repository state
-
-Architecture and consolidated CI base:
+## Frozen state
 
 ```text
-main: c690bee17fa7563f74541c99f4a667d7b7e8d79e
+freeze branch: freeze/smode-v1-minimal-trap
+qualified commit: 9b80add28ef212cc9db2924926b2dc8f10f1a58f
+base freeze: freeze/nuttx-13.0.0-p1-p3-protected
+base commit: 5f3789a28f2b751a4b51fe9031a56ea07e129baa
 ```
 
-Current software-driven checkpoint:
+The executable qualification basis is the exact qualified commit above. Documentation-only commits on the freeze branch do not change that basis.
+
+## Architecture now qualified
+
+The processor has progressed beyond the earlier Machine-only and U-mode checkpoints. The frozen architecture ladder now covers:
+
+- RV32/RV64 five-stage in-order execution;
+- RV64I/RV64M and qualified RV32IM software profiles;
+- Zicsr Machine CSR behavior;
+- precise synchronous traps and MRET;
+- Machine timer interrupts, external interrupts, PLIC and WFI;
+- preemptive context switching;
+- U-mode execution and ECALL/syscall return;
+- PMP isolation and isolated U-mode scheduling;
+- RV32A word atomics driven by protected NuttX userspace;
+- NuttX protected U-mode with trusted per-task kernel exception stacks;
+- M/S/U privilege execution;
+- Supervisor CSR state, synchronous exception delegation and SRET.
+
+## Supervisor V1 boundary
+
+Implemented and qualified:
+
+- `sstatus`
+- `stvec`
+- `sscratch`
+- `sepc`
+- `scause`
+- `stval`
+- `sie`
+- `sip`
+- `medeleg`
+- `mideleg`
+- M -> S transition through MRET
+- delegated synchronous exception entry to S-mode
+- SIE/SPIE/SPP trap-state stacking
+- SRET from S-mode
+- legal SRET execution from M-mode using Supervisor-return semantics
+- precise fail-closed privilege faults
+
+Deliberately excluded from V1:
+
+- `satp`
+- Sv32 translation
+- page-table walker
+- TLB
+- `sfence.vma`
+- page faults
+- S-level timer/external interrupt sources
+- Supervisor WFI qualification
+
+Because the current interrupt sources are Machine timer/external interrupts, `mideleg` remains WARL-zero in V1 rather than falsely advertising S-level interrupt delivery.
+
+## Real executable qualification
+
+The real GCC-built RV32IM/Zicsr image performs:
 
 ```text
-PR:     #33
-branch: agent/rv32im-preemptive-scheduler-main
-state:  Draft until the exact-head Full Gate passes
+M -> S
+S ECALL -> delegated S trap -> SRET -> S
+SRET -> U
+U ECALL -> delegated S trap -> SRET -> U
 ```
 
-This checkpoint is a clean one-commit replay on `main`. It changes scheduler software, documentation and verification only. It changes no CPU RTL and adds no ISA feature.
+It validates exact Supervisor trap state and fails closed on unexpected paths.
 
-## Architecture used by the scheduler
-
-- RV32IM and RV64IM five-stage in-order pipeline.
-- Zicsr Machine CSR instructions.
-- `mstatus`, `misa`, `mie`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `mip`.
-- Precise synchronous traps and MRET at WB.
-- 64-bit memory-mapped `mtime` / `mtimecmp`.
-- Machine timer interrupt cause `interrupt-bit | 7`.
-- Current WB instruction retires before interrupt entry.
-- The oldest younger PC is stored in `mepc` and replayed after MRET.
-- Younger Store/MMIO effects are suppressed during trap, interrupt and MRET redirects.
-- Same-boundary CSR writes become architectural before interrupt entry.
-
-## Scheduler execution model
-
-Two independent Machine-mode tasks are preempted for eight timer ticks:
+Frozen image contract:
 
 ```text
-task A
-  -> timer interrupt
-  -> save x1..x31 + mepc to context A
-  -> restore context B
-  -> MRET to task B
-  -> repeat with A/B alternation
+contract=rv32im-supervisor-v1-executable
+march=rv32im_zicsr
+modes=M,S,U
+sv32=disabled
+mideleg=WARL-zero
+bytes=584
+words=146
+binary sha256=0c6dce9eb2f2c9fb0cdfe24e00335b47e215bfe4985d303c9d4c5195ab6e57e8
+ELF sha256=3bfcbd7fd469f846f0669ffc50d08abf826978db3a253e6ac8efacdae8ee6d81
 ```
 
-Memory layout:
+Runtime matrix:
 
 ```text
-context A: 0x80001000
-context B: 0x80001100
-stack A:   0x80002000
-stack B:   0x80003000
-shared:    0x80004000
+stall=0  PASS  142 cycles  97 committed instructions
+stall=3  PASS  143 cycles  97 committed instructions
 ```
 
-`mscratch` holds the running context pointer. Handler entry uses:
+## Privilege boundary coverage
+
+Permanent focused regressions prove:
+
+- M-origin exceptions are never delegated to S;
+- an undelegated S-origin exception enters M;
+- S-mode Machine-CSR access traps as illegal instruction;
+- U-mode SRET traps as illegal instruction;
+- that illegal SRET may itself be delegated to S when configured;
+- M-mode SRET is legal and follows Supervisor return state;
+- legacy profiles without S retain their old CSR exposure boundary.
+
+## Whole-project regression
+
+Final Full Gate:
 
 ```text
-csrrw t0, mscratch, t0
+run: 31197747822
+job: 92930051977
+conclusion: success
+artifact id: 9001953079
+artifact digest: sha256:713be9f8934bb19f1f90c5ec03b352d8b6280a84ff129ced893f7976b1adffbb
 ```
 
-This obtains the current frame pointer while preserving interrupted `t0`. The handler saves interrupted `t1`, recovers `t0`, stores x1..x31 and `mepc`, selects the other context, rearms `mtimecmp`, restores all state and executes MRET.
+It passed the Supervisor V1 executable stage and the complete historical regression ladder through FreeRTOS, RV32/RV64 NEMU tests, U-mode/PMP scheduling, CoreMark, Embench and littlefs.
 
-The selected-task log must be exactly:
+Final Fast Gate:
 
 ```text
-B A B A B A B A
-1 0 1 0 1 0 1 0
+run: 31197749504
+job: 92930057425
+conclusion: success
 ```
 
-## Frozen image
+It re-passed focused privilege tests, the real Supervisor V1 executable, FreeRTOS WFI/IRQ paths and exact RV32 NEMU DiffTest on the same source head.
 
-```text
-bytes:   1432
-words:   358
-SHA-256: d62b691fe2ae85770418b3292c14e41f4a5ff16f2c9814483287b7a0cefd3eab
+See [`docs/SMODE_V1_FREEZE.md`](docs/SMODE_V1_FREEZE.md) for the authoritative evidence record.
 
-task_a:       0x80000140
-task_b:       0x800001d0
-trap_handler: 0x80000254
-```
+## Next checkpoint
 
-## Frozen backpressure matrix
+The next bounded architecture milestone is **Sv32 virtual memory**, not more V1 widening.
 
-```text
-stall  cycles  retirements  Zicsr  MRET  IRQ
-0       1509       1345        53     8    8
-3       1671       1252        53     8    8
-4       1639       1263        53     8    8
-5       1578       1278        53     8    8
-7       1589       1326        53     8    8
-11      1553       1334        53     8    8
-```
+The intended order is:
 
-Every run must complete eight context switches and exit with code zero.
+1. add `satp` and a minimal Sv32 translation contract;
+2. add precise instruction/load/store page-fault behavior;
+3. add page-table walking and a small TLB;
+4. qualify `sfence.vma` and stale-translation invalidation;
+5. drive the implementation with a real S-mode OS workload;
+6. only then broaden toward OpenSBI/Linux-class software.
 
-## Dual-reference boundary
-
-### Independent local reference
-
-`sim/rv32_reference_shim.cpp` implements an independent NEMU-compatible RV32IM execution ABI. It computes ordinary instruction semantics separately from the DUT.
-
-`mtime` is an asynchronous platform input, so the local gate records and replays only timer-read values for each schedule. Register semantics, branches, RAM accesses and Store bytes remain independently computed.
-
-For `stall=5` the frozen boundary is:
-
-```text
-retirements / matched events: 1278 / 1278
-Zicsr shadow:                  53
-MRET shadow:                    8
-interrupt shadow:               8
-```
-
-### Final deterministic NEMU reference
-
-The consolidated Full Gate builds the shared RV32 reference once and reuses it for the scheduler:
-
-```text
-OpenXiangShan/NEMU revision:
-8601834e4889e6bf3b6113eb5f824ba7689126f5
-
-RV32 single-step reference SHA-256:
-e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e
-
-ABI:
-uint32_t gpr[32]; uint32_t pc
-```
-
-The local shim is a second fast reference, not a replacement for the deterministic NEMU authority.
-
-## Exact interrupt sequence
-
-For `stall=5`:
-
-```text
-IRQ  event  retiring PC  instruction  cause       resume PC
-0      152  0x80000140   0x800022b7   0x80000007  0x80000144
-1      288  0x80000250   0xf81ff06f   0x80000007  0x800001d0
-2      426  0x800001c8   0x24737663   0x80000007  0x800001cc
-3      562  0x80000250   0xf81ff06f   0x80000007  0x800001d0
-4      698  0x800001b8   0x00130313   0x80000007  0x800001bc
-5      834  0x80000250   0xf81ff06f   0x80000007  0x800001d0
-6      972  0x800001b0   0x00028293   0x80000007  0x800001b4
-7     1108  0x80000250   0xf81ff06f   0x80000007  0x800001d0
-```
-
-`tools/check_rv32im_scheduler_vcd.py` freezes the complete sequence.
-
-## Negative probes
-
-### Reference mismatch
-
-At zero-based event 152, the gate flips x31 and requires:
-
-```text
-RV32 timer DiffTest mismatch after 152 matched events
-```
-
-### Context corruption
-
-The restore instruction:
-
-```text
-word 234: lw x8, 32(x5) = 0x0202a403
-```
-
-is replaced with NOP. The workload must fail with:
-
-```text
-status 12
-FAIL: self-check program returned code 12
-```
-
-This proves register restoration is actively checked.
-
-## Consolidated validation path
-
-The scheduler no longer owns an independent GitHub workflow. `AetherCore Full Gate` performs, in order:
-
-1. fixed toolchain, Python and Chisel gates;
-2. RV64 RTL and NEMU matrices;
-3. one optimized and one single-step deterministic RV32 NEMU build;
-4. RV32 GCC, CSR, traps, MRET and timer gates;
-5. the complete scheduler image/reference/matrix/VCD/negative-probe phase;
-6. RV64 and RV32 real-program workloads;
-7. one consolidated evidence upload.
-
-This avoids rebuilding the same RV32 NEMU reference in a separate scheduler job and makes the current phase visible in one ordered pipeline.
-
-## Completion order
-
-1. Require the Full Gate to pass on the exact PR #33 head.
-2. Freeze the workflow run, artifact ID and artifact SHA-256 in the PR description.
-3. Confirm zero unresolved review threads and zero RTL changes.
-4. Mark PR #33 Ready and squash merge.
-5. Start the next architecture checkpoint only from the resulting `main`.
-
-## Next architecture choice
-
-The preferred next checkpoint is **U-mode plus ECALL/syscall return**. The scheduler already proves Machine-mode context switching; U-mode turns that mechanism into privilege isolation rather than merely adding another execution-unit feature.
-
-A later alternative is the A extension for broader RTOS/concurrency workloads.
-
-## Known limitations
-
-- Runtime privilege is Machine mode only.
-- No U-mode or S-mode execution.
-- No delegation.
-- No software or external interrupts.
-- No WFI.
-- Single hart.
-- No A extension.
-- No MMU, page tables or caches.
-- Timer is simulation-platform logic rather than a reusable production CLINT/ACLINT block.
+Supervisor V1 remains frozen as the physical-address M/S/U trap/delegation baseline.
