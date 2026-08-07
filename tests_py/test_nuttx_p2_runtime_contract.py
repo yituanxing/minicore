@@ -164,7 +164,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
         self.assertEqual(text.count("verilator --cc --exe --build"), 1)
-        self.assertEqual(text.count("--self-check-exit"), 2)
+        self.assertEqual(text.count("--self-check-exit"), 1)
 
 
 if __name__ == "__main__":
