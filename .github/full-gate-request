@@ -1,3 +1,4 @@
-qualification=freertos-rv32-machine-external-unified-v1
-requested_after=7b43e875ecc4162c52314fac4daf003bb776b683
-fast_gate_run=30884726310
+qualification=rv32im-supervisor-v1
+requested_after=c605ad44aa8cd985fd7ad79d1557b8a216ca2ecf
+pre_request_fast_gate_run=31195817621
+scope=M-S-U-delegated-sync-traps-SRET-no-Sv32
