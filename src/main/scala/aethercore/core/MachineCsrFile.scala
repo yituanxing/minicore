@@ -29,6 +29,7 @@ object SupervisorCsrAddress {
   val Scause: Int = 0x142
   val Stval: Int = 0x143
   val Sip: Int = 0x144
+  val Satp: Int = 0x180
 }
 
 object MachineCsrBit {
@@ -38,6 +39,8 @@ object MachineCsrBit {
   val MstatusMpie: Int = 7
   val SstatusSpp: Int = 8
   val MstatusMppLow: Int = 11
+  val SstatusSum: Int = 18
+  val SstatusMxr: Int = 19
   val MachineTimerInterrupt: Int = 7
   val MachineExternalInterrupt: Int = 11
 }
@@ -45,10 +48,17 @@ object MachineCsrBit {
 object MachineCsrWarl {
   private def supervisorStatusMask(isa: IsaConfig): BigInt = {
     if (!isa.hasS) BigInt(0)
-    else
-      (BigInt(1) << MachineCsrBit.SstatusSie) |
-        (BigInt(1) << MachineCsrBit.SstatusSpie) |
-        (BigInt(1) << MachineCsrBit.SstatusSpp)
+    else {
+      val v1Mask =
+        (BigInt(1) << MachineCsrBit.SstatusSie) |
+          (BigInt(1) << MachineCsrBit.SstatusSpie) |
+          (BigInt(1) << MachineCsrBit.SstatusSpp)
+      if (isa.hasSv32)
+        v1Mask |
+          (BigInt(1) << MachineCsrBit.SstatusSum) |
+          (BigInt(1) << MachineCsrBit.SstatusMxr)
+      else v1Mask
+    }
   }
 
   private def machineStatusMask(isa: IsaConfig): BigInt =
@@ -61,7 +71,8 @@ object MachineCsrWarl {
     if (!isa.hasS) BigInt(0)
     else {
       // V1 only delegates synchronous exception classes the core already
-      // implements. ECALL-from-M (11) is intentionally not delegable.
+      // implements. ECALL-from-M (11) is intentionally not delegable. Page
+      // faults are added only when the translation path itself is integrated.
       Seq(1, 2, 3, 5, 7, 8, 9).foldLeft(BigInt(0))((mask, bit) => mask | (BigInt(1) << bit))
     }
   }
@@ -113,7 +124,7 @@ object MachineCsrWarl {
         result := data & delegableExceptionMask(isa).U(xlen.W)
       }
       is(MachineCsrAddress.Mideleg.U) {
-        // No supervisor-level interrupt source is wired in V1. Keep mideleg
+        // No supervisor-level interrupt source is wired yet. Keep mideleg
         // architecturally present but WARL-zero rather than pretending that
         // MTIP/MEIP are supervisor interrupts.
         result := 0.U
@@ -153,9 +164,14 @@ class MachineCsrFile(
   private val sstatusSpie = BigInt(1) << MachineCsrBit.SstatusSpie
   private val mstatusMpie = BigInt(1) << MachineCsrBit.MstatusMpie
   private val sstatusSpp = BigInt(1) << MachineCsrBit.SstatusSpp
+  private val sstatusSum = BigInt(1) << MachineCsrBit.SstatusSum
+  private val sstatusMxr = BigInt(1) << MachineCsrBit.SstatusMxr
   private val mstatusMpp = BigInt(3) << MachineCsrBit.MstatusMppLow
   private val supervisorStatusMask =
-    if (isa.hasS) sstatusSie | sstatusSpie | sstatusSpp else BigInt(0)
+    if (isa.hasS) {
+      val v1Mask = sstatusSie | sstatusSpie | sstatusSpp
+      if (isa.hasSv32) v1Mask | sstatusSum | sstatusMxr else v1Mask
+    } else BigInt(0)
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val machineExternalMask = BigInt(1) << MachineCsrBit.MachineExternalInterrupt
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
@@ -191,6 +207,11 @@ class MachineCsrFile(
     val writeData = Input(UInt(xlen.W))
 
     val currentPrivilege = Output(UInt(2.W))
+    val supervisorSum = Output(Bool())
+    val supervisorMxr = Output(Bool())
+    val satpTranslationEnabled = Output(Bool())
+    val satpRootPpn = Output(UInt(Sv32Satp.PpnBits.W))
+    val satpAsid = Output(UInt(Sv32Satp.AsidBits.W))
     val pmpConfig = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
     val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt((xlen - 2).W)))
 
@@ -241,6 +262,21 @@ class MachineCsrFile(
 
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val ordinaryWrite = io.writeEnable
+
+  val satp = if (isa.hasSv32) Some(Module(new Sv32SatpRegister)) else None
+  if (isa.hasSv32) {
+    satp.get.io.writeEnable := ordinaryWrite && io.writeAddr === SupervisorCsrAddress.Satp.U
+    satp.get.io.writeData := io.writeData(31, 0)
+    io.satpTranslationEnabled := satp.get.io.translationEnabled
+    io.satpRootPpn := satp.get.io.rootPpn
+    io.satpAsid := satp.get.io.asid
+  } else {
+    io.satpTranslationEnabled := false.B
+    io.satpRootPpn := 0.U
+    io.satpAsid := 0.U
+  }
+  io.supervisorSum := if (isa.hasSv32) mstatus(MachineCsrBit.SstatusSum) else false.B
+  io.supervisorMxr := if (isa.hasSv32) mstatus(MachineCsrBit.SstatusMxr) else false.B
 
   val sstatusWriteValue =
     (mstatus & (~supervisorStatusMask & allBits).U(xlen.W)) |
@@ -414,6 +450,13 @@ class MachineCsrFile(
         io.readImplemented := true.B
         io.readWritable := true.B
       }
+      if (isa.hasSv32) {
+        is(SupervisorCsrAddress.Satp.U) {
+          io.readData := satp.get.io.readData
+          io.readImplemented := true.B
+          io.readWritable := true.B
+        }
+      }
     }
   }
 
@@ -492,8 +535,8 @@ class MachineCsrFile(
         is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
         is(SupervisorCsrAddress.Sstatus.U) { mstatus := sstatusWriteValue }
         is(SupervisorCsrAddress.Sie.U) {
-          // V1 has no delegated supervisor interrupt bits, so this is a
-          // writable WARL-zero alias and deliberately leaves mie unchanged.
+          // There are still no delegated supervisor interrupt bits, so this is
+          // a writable WARL-zero alias and deliberately leaves mie unchanged.
         }
         is(SupervisorCsrAddress.Stvec.U) { stvec := canonicalWriteData }
         is(SupervisorCsrAddress.Sscratch.U) { sscratch := canonicalWriteData }
