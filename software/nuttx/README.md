@@ -45,6 +45,23 @@ NuttX's own **NuttShell**, not Linux `/bin/sh` or BusyBox `ash`.
   to add user-text retirements, ECALL-from-U traps (`mcause=8`), and MRET
   transitions.  Both `stall-period=0` and `3` must pass.
 
+P1/P2 deliberately follow the real NuttX 13.0.0 **pure protected/PMP** model.
+`CONFIG_LIB_SYSCALL` and `CONFIG_RISCV_PERCPU_SCRATCH` are enabled, while
+`CONFIG_ARCH_ADDRENV`, S-mode, and MMU use remain disabled.  In this upstream
+configuration NuttX does **not** allocate a separate per-process kernel stack:
+`task_init()` only calls the RISC-V kernel-stack allocator when
+`CONFIG_ARCH_ADDRENV && CONFIG_ARCH_KERNEL_STACK` are both active.  Therefore
+P1/P2 system-call handling still uses the caller's user stack.  Forcing only
+`CONFIG_ARCH_KERNEL_STACK` would not create the stack and would be a false
+security claim.  A dedicated kernel-stack / address-environment port is a later
+hardening milestone after the first genuine OS-backed U-mode path is qualified.
+
+This means P1/P2 are intended to prove the privilege transition, PMP user
+code/data access boundary, ECALL dispatch/return path, timer/interrupt
+coexistence, and real U-mode application execution.  They do **not** yet claim
+robust isolation from a malicious user that deliberately corrupts the syscall
+stack while the kernel is servicing that call.
+
 P1/P2 use the focused `NuttX Protected Userspace` self-hosted workflow.  The
 frozen N1-N4 workflow remains byte-identical and does not run on U-mode branch
 pushes.  The P2 cycle count is only an upper bound: a successful run terminates
