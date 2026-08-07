@@ -18,6 +18,24 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
       (BigInt(rd & 0x1f) << 7) |
       BigInt(0x73)
 
+  private def amo(
+      funct5: Int,
+      rs2: Int,
+      rs1: Int = 1,
+      rd: Int = 3,
+      aq: Boolean = false,
+      rl: Boolean = false,
+      funct3: Int = 2
+  ): BigInt =
+    (BigInt(funct5 & 0x1f) << 27) |
+      (if (aq) BigInt(1) << 26 else BigInt(0)) |
+      (if (rl) BigInt(1) << 25 else BigInt(0)) |
+      (BigInt(rs2 & 0x1f) << 20) |
+      (BigInt(rs1 & 0x1f) << 15) |
+      (BigInt(funct3 & 0x7) << 12) |
+      (BigInt(rd & 0x1f) << 7) |
+      BigInt(0x2f)
+
   it should "decode representative RV64I instructions" in {
     simulate(new Decoder) { dut =>
       dut.io.inst.poke("h002081b3".U)
@@ -138,6 +156,78 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.ctrl.illegal.expect(false.B)
       dut.io.ctrl.aluOp.expect(AluOp.Mul)
       dut.io.ctrl.wordOp.expect(false.B)
+    }
+  }
+
+  it should "decode the complete RV32A word operation family only when A is configured" in {
+    val rv32ima = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'U')
+    )
+    val cases = Seq(
+      (0x02, 0, AtomicOp.Lr, true, false, false),
+      (0x03, 2, AtomicOp.Sc, false, true, true),
+      (0x01, 2, AtomicOp.Swap, true, true, true),
+      (0x00, 2, AtomicOp.Add, true, true, true),
+      (0x04, 2, AtomicOp.Xor, true, true, true),
+      (0x0c, 2, AtomicOp.And, true, true, true),
+      (0x08, 2, AtomicOp.Or, true, true, true),
+      (0x10, 2, AtomicOp.Min, true, true, true),
+      (0x14, 2, AtomicOp.Max, true, true, true),
+      (0x18, 2, AtomicOp.Minu, true, true, true),
+      (0x1c, 2, AtomicOp.Maxu, true, true, true)
+    )
+
+    simulate(new Decoder(rv32ima)) { dut =>
+      for (((funct5, rs2, operation, reads, writes, usesRs2), index) <- cases.zipWithIndex) {
+        dut.io.inst.poke(amo(funct5, rs2, aq = index == 3, rl = index == 3).U)
+        dut.io.ctrl.illegal.expect(false.B)
+        dut.io.ctrl.atomicOp.expect(operation)
+        dut.io.ctrl.regWrite.expect(true.B)
+        dut.io.ctrl.memRead.expect(reads.B)
+        dut.io.ctrl.memWrite.expect(writes.B)
+        dut.io.ctrl.memSize.expect(MemSize.Word)
+        dut.io.ctrl.usesRs1.expect(true.B)
+        dut.io.ctrl.usesRs2.expect(usesRs2.B)
+        dut.io.ctrl.opBSel.expect(OpBSel.Imm)
+        dut.io.ctrl.wbSel.expect(WbSel.Memory)
+      }
+
+      // LR.W reserves the rs1 word and therefore requires the architectural
+      // rs2 field to be zero.
+      dut.io.inst.poke(amo(0x02, rs2 = 2).U)
+      dut.io.ctrl.illegal.expect(true.B)
+      dut.io.ctrl.atomicOp.expect(AtomicOp.None)
+
+      // RV32A word atomics use funct3=010.
+      dut.io.inst.poke(amo(0x01, rs2 = 2, funct3 = 3).U)
+      dut.io.ctrl.illegal.expect(true.B)
+    }
+  }
+
+  it should "reject atomic encodings when A is absent or when the unimplemented RV64A profile is selected" in {
+    val rv32im = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M')
+    )
+    val rv64ima = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M')
+    )
+
+    simulate(new Decoder(rv32im)) { dut =>
+      dut.io.inst.poke(amo(0x01, rs2 = 2).U)
+      dut.io.ctrl.illegal.expect(true.B)
+      dut.io.ctrl.atomicOp.expect(AtomicOp.None)
+    }
+
+    simulate(new Decoder(rv64ima)) { dut =>
+      dut.io.inst.poke(amo(0x01, rs2 = 2).U)
+      dut.io.ctrl.illegal.expect(true.B)
+      dut.io.ctrl.atomicOp.expect(AtomicOp.None)
     }
   }
 }

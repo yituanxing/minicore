@@ -32,6 +32,10 @@ object BranchType extends ChiselEnum {
   val None, Eq, Ne, Lt, Ge, Ltu, Geu = Value
 }
 
+object AtomicOp extends ChiselEnum {
+  val None, Lr, Sc, Swap, Add, Xor, And, Or, Min, Max, Minu, Maxu = Value
+}
+
 object MemSize extends ChiselEnum {
   val Byte, Half, Word, DWord = Value
 }
@@ -116,7 +120,7 @@ class CommitTrace(
   val exceptionCause = UInt(xlen.W)
   val exceptionValue = UInt(xlen.W)
 
-  // An asynchronous interrupt is taken after this instruction retires. The
+  // An asynchronous interrupt is taken after this normal instruction retires. The
   // interrupted PC names the oldest younger instruction that must be replayed
   // after MRET, rather than the retiring instruction reported above.
   val interrupt = Bool()
@@ -132,6 +136,7 @@ class ControlSignals extends Bundle {
   val wbSel = WbSel()
   val csrOp = CsrOp()
   val branch = BranchType()
+  val atomicOp = AtomicOp()
   val memSize = MemSize()
 
   val regWrite = Bool()

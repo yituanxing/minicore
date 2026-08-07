@@ -79,6 +79,7 @@ class AetherCore(
 
   require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
+  require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
@@ -94,6 +95,15 @@ class AetherCore(
   val idEx = RegInit(0.U.asTypeOf(new IdEx(xlen)))
   val exMem = RegInit(0.U.asTypeOf(new ExMem(xlen)))
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
+
+  // RV32A is implemented inside the single-hart, single-master core.  LR/SC
+  // keeps one word reservation; AMOs retain the old word while MEM performs a
+  // read phase followed by a write phase.  No external bus lock is necessary
+  // until the platform grows another coherent master or a cache hierarchy.
+  val reservationValid = RegInit(false.B)
+  val reservationAddress = RegInit(0.U(xlen.W))
+  val atomicWritePhase = RegInit(false.B)
+  val atomicOldData = RegInit(0.U(xlen.W))
 
   val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
@@ -206,7 +216,7 @@ class AetherCore(
   }
 
   val exMemForward = exMem.valid && exMem.ctrl.regWrite && !exMem.ctrl.memRead &&
-    !exMem.trap.valid && exMem.rd =/= 0.U
+    exMem.ctrl.atomicOp === AtomicOp.None && !exMem.trap.valid && exMem.rd =/= 0.U
   val memWbForward = memWb.valid && memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
 
   val forwardedRs1 = Mux(
@@ -310,24 +320,61 @@ class AetherCore(
     }
   }
 
+  val atomicInstruction = exMem.ctrl.atomicOp =/= AtomicOp.None
+  val atomicLr = exMem.ctrl.atomicOp === AtomicOp.Lr
+  val atomicSc = exMem.ctrl.atomicOp === AtomicOp.Sc
+  val atomicRmw = atomicInstruction && !atomicLr && !atomicSc
+  val atomicReadPhase = atomicRmw && !atomicWritePhase
+  val atomicWriteRequest = atomicRmw && atomicWritePhase
+  val scReservationMatch = reservationValid && reservationAddress === exMem.result
+
+  val atomicWriteData = WireDefault(exMem.storeData)
+  switch(exMem.ctrl.atomicOp) {
+    is(AtomicOp.Swap) { atomicWriteData := exMem.storeData }
+    is(AtomicOp.Add) { atomicWriteData := atomicOldData + exMem.storeData }
+    is(AtomicOp.Xor) { atomicWriteData := atomicOldData ^ exMem.storeData }
+    is(AtomicOp.And) { atomicWriteData := atomicOldData & exMem.storeData }
+    is(AtomicOp.Or) { atomicWriteData := atomicOldData | exMem.storeData }
+    is(AtomicOp.Min) {
+      atomicWriteData := Mux(atomicOldData.asSInt < exMem.storeData.asSInt, atomicOldData, exMem.storeData)
+    }
+    is(AtomicOp.Max) {
+      atomicWriteData := Mux(atomicOldData.asSInt > exMem.storeData.asSInt, atomicOldData, exMem.storeData)
+    }
+    is(AtomicOp.Minu) {
+      atomicWriteData := Mux(atomicOldData < exMem.storeData, atomicOldData, exMem.storeData)
+    }
+    is(AtomicOp.Maxu) {
+      atomicWriteData := Mux(atomicOldData > exMem.storeData, atomicOldData, exMem.storeData)
+    }
+  }
+
+  val ordinaryDataAccess = !atomicInstruction && (exMem.ctrl.memRead || exMem.ctrl.memWrite)
+  val memoryBoundaryOpen = !exMem.trap.valid && !takingTrap && !takingInterrupt &&
+    !takingMret && !waitingForInterrupt
+  val candidateDataAccess = exMem.valid && (ordinaryDataAccess || atomicInstruction) && memoryBoundaryOpen
+  val atomicNeedsWritePermission = atomicSc || atomicRmw
+
   dataPmp.io.address := exMem.result
   dataPmp.io.bytes := dataAccessBytes
-  dataPmp.io.write := exMem.ctrl.memWrite
+  dataPmp.io.write := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
   dataPmp.io.execute := false.B
 
-  // A synchronous trap, asynchronous interrupt, return or waiting WFI can
-  // redirect/freeze from WB while a younger instruction occupies MEM. Suppress
-  // that request before the edge so no flushed Store/MMIO side effect escapes.
-  val candidateDataRequest = exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-    !exMem.trap.valid && !takingTrap && !takingInterrupt && !takingMret &&
-    !waitingForInterrupt
-  val dataPmpFault = candidateDataRequest &&
+  val dataPmpFault = candidateDataAccess &&
     (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+  val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest ||
+    (atomicSc && scReservationMatch)
+  val rawDataRequest = candidateDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
+  val dataBusWrite = Mux(
+    atomicInstruction,
+    atomicWriteRequest || (atomicSc && scReservationMatch),
+    exMem.ctrl.memWrite
+  )
 
-  io.dmem.valid := candidateDataRequest && !dataPmpFault
-  io.dmem.write := exMem.ctrl.memWrite
+  io.dmem.valid := rawDataRequest && !dataPmpFault
+  io.dmem.write := dataBusWrite
   io.dmem.addr := exMem.result
-  io.dmem.wdata := exMem.storeData
+  io.dmem.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
   io.dmem.wmask := storeMask
   io.dmem.size := exMem.ctrl.memSize
 
@@ -355,10 +402,42 @@ class AetherCore(
 
   val memoryStall = io.dmem.valid && !io.dmem.ready
   val memoryFault = dataPmpFault || (io.dmem.valid && io.dmem.fault)
-  val loadUseHazard = idEx.valid && idEx.ctrl.memRead && idEx.rd =/= 0.U && ifId.valid && (
+  val atomicReadHold = atomicReadPhase && io.dmem.valid && io.dmem.ready && !io.dmem.fault
+  val lateResultHazard = idEx.ctrl.memRead || idEx.ctrl.atomicOp =/= AtomicOp.None
+  val loadUseHazard = idEx.valid && lateResultHazard && idEx.rd =/= 0.U && ifId.valid && (
     (decoder.io.ctrl.usesRs1 && decoder.io.rs1 === idEx.rd) ||
       (decoder.io.ctrl.usesRs2 && decoder.io.rs2 === idEx.rd)
   )
+
+  val atomicRdData = WireDefault(loadData)
+  when(atomicSc) {
+    atomicRdData := Mux(scReservationMatch, 0.U, 1.U)
+  }.elsewhen(atomicRmw) {
+    atomicRdData := atomicOldData
+  }
+  val memStageRdData = Mux(
+    atomicInstruction,
+    atomicRdData,
+    Mux(exMem.ctrl.memRead, loadData, exMem.result)
+  )
+  val atomicCommittedMemory = Mux(
+    atomicLr,
+    io.dmem.valid && io.dmem.ready && !io.dmem.fault,
+    Mux(
+      atomicSc,
+      scReservationMatch && io.dmem.valid && io.dmem.ready && !io.dmem.fault,
+      atomicWriteRequest && io.dmem.valid && io.dmem.ready && !io.dmem.fault
+    )
+  )
+  val ordinaryCommittedMemory = exMem.valid && ordinaryDataAccess && !exMem.trap.valid && !memoryFault
+  val committedMemoryAccess = Mux(atomicInstruction, atomicCommittedMemory, ordinaryCommittedMemory)
+  val committedMemoryWrite = Mux(
+    atomicInstruction,
+    atomicCommittedMemory && (atomicSc || atomicRmw),
+    exMem.ctrl.memWrite
+  )
+  val committedMemoryWdata = Mux(atomicRmw, atomicWriteData, exMem.storeData)
+  val memoryFaultIsLoad = atomicLr || (!atomicInstruction && exMem.ctrl.memRead)
 
   io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
@@ -385,17 +464,23 @@ class AetherCore(
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
+    reservationValid := false.B
+    atomicWritePhase := false.B
   }.elsewhen(takingMret) {
     pc := csrFile.io.returnPc
     ifId.valid := false.B
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
+    reservationValid := false.B
+    atomicWritePhase := false.B
   }.elsewhen(waitingForInterrupt) {
     pc := memWb.pc + 4.U
     ifId.valid := false.B
     idEx.valid := false.B
     exMem.valid := false.B
+    reservationValid := false.B
+    atomicWritePhase := false.B
   }.elsewhen(memoryStall) {
     memWb.valid := false.B
 
@@ -405,18 +490,49 @@ class AetherCore(
     // to stale register-file snapshots on the following cycle.
     idEx.rs1Data := forwardedRs1
     idEx.rs2Data := forwardedRs2
+  }.elsewhen(atomicReadHold) {
+    // AMOs are indivisible with respect to this single-hart core: after the
+    // read completes, keep EX/MEM and all younger work frozen until the write
+    // phase completes.  Interrupt qualification resumes after the AMO reaches
+    // WB, so no interrupt can observe the read/modify/write midpoint.
+    memWb.valid := false.B
+    atomicOldData := loadData
+    atomicWritePhase := true.B
+    reservationValid := false.B
+    idEx.rs1Data := forwardedRs1
+    idEx.rs2Data := forwardedRs2
   }.otherwise {
+    atomicWritePhase := false.B
+
+    when(exMem.valid && atomicInstruction) {
+      when(atomicLr && !memoryFault && io.dmem.valid && io.dmem.ready && !io.dmem.fault) {
+        reservationValid := true.B
+        reservationAddress := exMem.result
+      }.elsewhen(!atomicLr) {
+        reservationValid := false.B
+      }.otherwise {
+        reservationValid := false.B
+      }
+    }.elsewhen(
+      exMem.valid && !exMem.trap.valid && exMem.ctrl.memWrite &&
+        io.dmem.valid && io.dmem.ready && !io.dmem.fault
+    ) {
+      // Conservatively invalidate the single reservation on any successful
+      // local store.  This is compatible with constrained LR/SC loops and
+      // prevents a stale reservation from surviving unrelated writes.
+      reservationValid := false.B
+    }
+
     memWb.valid := exMem.valid
     memWb.pc := exMem.pc
     memWb.inst := exMem.inst
     memWb.rd := exMem.rd
-    memWb.rdData := Mux(exMem.ctrl.memRead, loadData, exMem.result)
+    memWb.rdData := memStageRdData
     memWb.regWrite := exMem.ctrl.regWrite
-    memWb.memValid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-      !exMem.trap.valid && !memoryFault
-    memWb.memWrite := exMem.ctrl.memWrite
+    memWb.memValid := committedMemoryAccess
+    memWb.memWrite := committedMemoryWrite
     memWb.memAddr := exMem.result
-    memWb.memWdata := exMem.storeData
+    memWb.memWdata := committedMemoryWdata
     memWb.memWmask := storeMask
     memWb.csrWrite := exMem.csrWrite
     memWb.csrAddr := exMem.csrAddr
@@ -427,7 +543,7 @@ class AetherCore(
     when(memoryFault) {
       memWb.trap.valid := true.B
       memWb.trap.cause := Mux(
-        exMem.ctrl.memRead,
+        memoryFaultIsLoad,
         MachineExceptionCode.LoadAccessFault.U(xlen.W),
         MachineExceptionCode.StoreAccessFault.U(xlen.W)
       )

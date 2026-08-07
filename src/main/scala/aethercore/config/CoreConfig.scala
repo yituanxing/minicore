@@ -25,6 +25,7 @@ final case class IsaConfig(
   val hasA: Boolean = extensions.contains('A')
   val hasC: Boolean = extensions.contains('C')
   val hasZicsr: Boolean = zExtensions.contains("Zicsr")
+  val hasZifencei: Boolean = zExtensions.contains("Zifencei")
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
   val hasWordOps: Boolean = xlen == 64
@@ -127,6 +128,30 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr"),
+      pmpEntries = 4
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imuPmpOsSoftware: CoreConfig = CoreConfig(
+    name = "rv32imu-pmp-os-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      pmpEntries = 4
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imauPmpOsSoftware: CoreConfig = CoreConfig(
+    name = "rv32imau-pmp-os-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
       pmpEntries = 4
     ),
     platform = rv32Platform

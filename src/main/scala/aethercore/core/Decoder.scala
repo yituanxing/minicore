@@ -7,6 +7,7 @@ import aethercore.config.{CoreProfiles, IsaConfig}
 
 class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Module {
   private val hasM = isa.hasM
+  private val hasA = isa.hasA
   private val hasZicsr = isa.hasZicsr
   private val hasWordOps = isa.hasWordOps
 
@@ -22,6 +23,7 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   val funct3 = io.inst(14, 12)
   val funct7 = io.inst(31, 25)
   val funct6 = io.inst(31, 26)
+  val funct5 = io.inst(31, 27)
 
   val shiftLogicalImmediate =
     if (isa.xlen == 64) funct6 === "b000000".U else funct7 === "b0000000".U
@@ -40,6 +42,7 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   c.wbSel := WbSel.Alu
   c.csrOp := CsrOp.None
   c.branch := BranchType.None
+  c.atomicOp := AtomicOp.None
   if (hasWordOps) c.memSize := MemSize.DWord else c.memSize := MemSize.Word
   c.illegal := true.B
 
@@ -93,6 +96,59 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
         is("b010".U) { c.illegal := false.B; c.memSize := MemSize.Word }
         is("b011".U) {
           when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.DWord }
+        }
+      }
+    }
+    is("b0101111".U) {
+      // The first A-extension stage is deliberately RV32-only.  aq/rl are
+      // ordering annotations and do not change the operation decode; the
+      // current single-hart, in-order, uncached memory path is strongly
+      // ordered, so execution may treat them as no-ops once the MEM FSM is
+      // enabled.
+      if (isa.xlen == 32) {
+        when(hasA.B && funct3 === "b010".U) {
+          c.usesRs1 := true.B
+          c.regWrite := true.B
+          c.opBSel := OpBSel.Imm
+          c.wbSel := WbSel.Memory
+          c.memSize := MemSize.Word
+          switch(funct5) {
+            is("b00010".U) {
+              when(io.rs2 === 0.U) {
+                c.illegal := false.B; c.memRead := true.B; c.atomicOp := AtomicOp.Lr
+              }
+            }
+            is("b00011".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Sc
+            }
+            is("b00001".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Swap
+            }
+            is("b00000".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Add
+            }
+            is("b00100".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Xor
+            }
+            is("b01100".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.And
+            }
+            is("b01000".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Or
+            }
+            is("b10000".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Min
+            }
+            is("b10100".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Max
+            }
+            is("b11000".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Minu
+            }
+            is("b11100".U) {
+              c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Maxu
+            }
+          }
         }
       }
     }

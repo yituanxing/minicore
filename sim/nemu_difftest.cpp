@@ -258,3 +258,13 @@ NemuDifftest& NemuDifftest::operator=(NemuDifftest&&) noexcept = default;
 
 void NemuDifftest::check(const DifftestCommit& commit) { impl_->check(commit); }
 std::uint64_t NemuDifftest::checkedCommits() const { return impl_->checkedCommits(); }
+
+// The generic adapter executes every normal instruction directly in NEMU and
+// has no specialized shadow path. Its public counter API therefore reports
+// zero rather than leaving the declared methods undefined at link time.
+std::uint64_t NemuDifftest::zicsrShadowSteps() const { return 0; }
+std::uint64_t NemuDifftest::trapShadowSteps() const { return 0; }
+std::uint64_t NemuDifftest::fenceShadowSteps() const { return 0; }
+std::uint64_t NemuDifftest::wfiShadowSteps() const { return 0; }
+std::uint64_t NemuDifftest::mretShadowSteps() const { return 0; }
+std::uint64_t NemuDifftest::interruptShadowSteps() const { return 0; }
