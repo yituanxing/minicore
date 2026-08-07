@@ -77,13 +77,16 @@ class AetherCore(
   private val machineExternalCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineExternal)
 
-  require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
+  require(paddrBits >= xlen, "physical address width must cover the architectural address width")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
   require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
+  require(!config.isa.hasSv32 || paddrBits >= 34, "Sv32 requires a PA width of at least 34 bits")
+  require(!config.isa.hasSv32 || !config.isa.hasA, "Sv32 atomics are deferred until the translated AMO path is qualified")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
     val dmem = new DataBusIO(paddrBits, busDataBits)
+    val ptw = if (config.isa.hasSv32) Some(new PageTableReadBusIO(paddrBits)) else None
     val timerInterrupt = Input(Bool())
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
@@ -96,10 +99,6 @@ class AetherCore(
   val exMem = RegInit(0.U.asTypeOf(new ExMem(xlen)))
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
 
-  // RV32A is implemented inside the single-hart, single-master core.  LR/SC
-  // keeps one word reservation; AMOs retain the old word while MEM performs a
-  // read phase followed by a write phase.  No external bus lock is necessary
-  // until the platform grows another coherent master or a cache hierarchy.
   val reservationValid = RegInit(false.B)
   val reservationAddress = RegInit(0.U(xlen.W))
   val atomicWritePhase = RegInit(false.B)
@@ -111,6 +110,7 @@ class AetherCore(
   val csrFile = Module(new MachineCsrFile(config.isa, withMachineExternalInterrupt))
   val instructionPmp = Module(new PmpChecker(xlen))
   val dataPmp = Module(new PmpChecker(xlen))
+  val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
 
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
   instructionPmp.io.address := pc
@@ -125,11 +125,9 @@ class AetherCore(
   dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
   val takingTrap = memWb.valid && memWb.trap.valid
-  // The legacy pipeline field is now the generic xRET retirement handshake.
-  // Decoder only raises it for MRET/SRET; privilege legality is checked below.
   val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
 
-  io.imem.addr := pc
+  io.imem.addr := pc.pad(paddrBits)
   decoder.io.inst := ifId.inst
 
   registerFile.io.rs1Addr := decoder.io.rs1
@@ -154,9 +152,6 @@ class AetherCore(
   val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt
   val waitingForInterrupt = wfiRetiring && !rawInterruptPending
 
-  // A raw pending interrupt is sufficient to resume WFI even while mstatus.MIE
-  // is clear. Trap entry remains gated by the corresponding qualified CSR
-  // output, so a masked WFI resumes at PC+4 without a lost-wake window.
   val interruptPc = Mux(
     wfiRetiring,
     memWb.pc + 4.U,
@@ -378,12 +373,61 @@ class AetherCore(
     exMem.ctrl.memWrite
   )
 
-  io.dmem.valid := rawDataRequest && !dataPmpFault
-  io.dmem.write := dataBusWrite
-  io.dmem.addr := exMem.result
-  io.dmem.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
-  io.dmem.wmask := storeMask
-  io.dmem.size := exMem.ctrl.memSize
+  val vmCsrHazard = if (config.isa.hasSv32) {
+    memWb.valid && memWb.csrWrite && !memWb.trap.valid && (
+      memWb.csrAddr === SupervisorCsrAddress.Satp.U ||
+        memWb.csrAddr === SupervisorCsrAddress.Sstatus.U ||
+        memWb.csrAddr === MachineCsrAddress.Mstatus.U
+    )
+  } else false.B
+
+  val translatedPhysicalAddress = WireDefault(exMem.result.pad(paddrBits))
+  val vmRequestComplete = WireDefault(false.B)
+  val vmPageFault = WireDefault(false.B)
+  val vmAccessFault = WireDefault(false.B)
+
+  if (config.isa.hasSv32) {
+    val vm = dataVm.get
+    vm.io.requestValid := rawDataRequest && !dataPmpFault && !vmCsrHazard
+    vm.io.virtualAddress := exMem.result(31, 0)
+    vm.io.privilege := csrFile.io.currentPrivilege
+    vm.io.write := dataBusWrite
+    vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)(31, 0)
+    vm.io.wmask := storeMask(3, 0)
+    vm.io.size := exMem.ctrl.memSize
+    vm.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
+    vm.io.satpRootPpn := csrFile.io.satpRootPpn
+    vm.io.sum := csrFile.io.supervisorSum
+    vm.io.mxr := csrFile.io.supervisorMxr
+
+    io.ptw.get.valid := vm.io.pteValid
+    io.ptw.get.addr := vm.io.pteAddress
+    vm.io.pteReady := io.ptw.get.ready
+    vm.io.pteData := io.ptw.get.rdata
+    vm.io.pteFault := io.ptw.get.fault
+
+    io.dmem.valid := vm.io.dataValid
+    io.dmem.write := vm.io.dataWrite
+    io.dmem.addr := vm.io.dataAddress
+    io.dmem.wdata := vm.io.dataWdata
+    io.dmem.wmask := vm.io.dataWmask
+    io.dmem.size := vm.io.dataSize
+    vm.io.dataReady := io.dmem.ready
+    vm.io.dataRdata := io.dmem.rdata(31, 0)
+    vm.io.dataFault := io.dmem.fault
+
+    translatedPhysicalAddress := vm.io.physicalAddress
+    vmRequestComplete := vm.io.requestComplete
+    vmPageFault := vm.io.pageFault
+    vmAccessFault := vm.io.accessFault
+  } else {
+    io.dmem.valid := rawDataRequest && !dataPmpFault
+    io.dmem.write := dataBusWrite
+    io.dmem.addr := exMem.result.pad(paddrBits)
+    io.dmem.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
+    io.dmem.wmask := storeMask
+    io.dmem.size := exMem.ctrl.memSize
+  }
 
   def extendLoad(bits: Int): UInt = {
     require(bits <= xlen, s"cannot extend a $bits-bit load into XLEN=$xlen")
@@ -407,8 +451,14 @@ class AetherCore(
     is(MemSize.DWord) { loadData := io.dmem.rdata }
   }
 
-  val memoryStall = io.dmem.valid && !io.dmem.ready
-  val memoryFault = dataPmpFault || (io.dmem.valid && io.dmem.fault)
+  val memoryStall = if (config.isa.hasSv32) {
+    candidateDataAccess && (vmCsrHazard || !vmRequestComplete)
+  } else {
+    io.dmem.valid && !io.dmem.ready
+  }
+  val memoryPageFault = if (config.isa.hasSv32) vmPageFault else false.B
+  val memoryFault = dataPmpFault ||
+    (if (config.isa.hasSv32) vmAccessFault else io.dmem.valid && io.dmem.fault)
   val atomicReadHold = atomicReadPhase && io.dmem.valid && io.dmem.ready && !io.dmem.fault
   val lateResultHazard = idEx.ctrl.memRead || idEx.ctrl.atomicOp =/= AtomicOp.None
   val loadUseHazard = idEx.valid && lateResultHazard && idEx.rd =/= 0.U && ifId.valid && (
@@ -436,7 +486,8 @@ class AetherCore(
       atomicWriteRequest && io.dmem.valid && io.dmem.ready && !io.dmem.fault
     )
   )
-  val ordinaryCommittedMemory = exMem.valid && ordinaryDataAccess && !exMem.trap.valid && !memoryFault
+  val ordinaryCommittedMemory = exMem.valid && ordinaryDataAccess && !exMem.trap.valid &&
+    !memoryPageFault && !memoryFault
   val committedMemoryAccess = Mux(atomicInstruction, atomicCommittedMemory, ordinaryCommittedMemory)
   val committedMemoryWrite = Mux(
     atomicInstruction,
@@ -490,18 +541,9 @@ class AetherCore(
     atomicWritePhase := false.B
   }.elsewhen(memoryStall) {
     memWb.valid := false.B
-
-    // MEM backpressure freezes ID/EX while the current WB result retires and
-    // its forwarding source disappears. Persist the values already selected
-    // by the forwarding network so the frozen EX instruction cannot fall back
-    // to stale register-file snapshots on the following cycle.
     idEx.rs1Data := forwardedRs1
     idEx.rs2Data := forwardedRs2
   }.elsewhen(atomicReadHold) {
-    // AMOs are indivisible with respect to this single-hart core: after the
-    // read completes, keep EX/MEM and all younger work frozen until the write
-    // phase completes.  Interrupt qualification resumes after the AMO reaches
-    // WB, so no interrupt can observe the read/modify/write midpoint.
     memWb.valid := false.B
     atomicOldData := loadData
     atomicWritePhase := true.B
@@ -524,9 +566,6 @@ class AetherCore(
       exMem.valid && !exMem.trap.valid && exMem.ctrl.memWrite &&
         io.dmem.valid && io.dmem.ready && !io.dmem.fault
     ) {
-      // Conservatively invalidate the single reservation on any successful
-      // local store.  This is compatible with constrained LR/SC loops and
-      // prevents a stale reservation from surviving unrelated writes.
       reservationValid := false.B
     }
 
@@ -538,7 +577,7 @@ class AetherCore(
     memWb.regWrite := exMem.ctrl.regWrite
     memWb.memValid := committedMemoryAccess
     memWb.memWrite := committedMemoryWrite
-    memWb.memAddr := exMem.result
+    memWb.memAddr := translatedPhysicalAddress
     memWb.memWdata := committedMemoryWdata
     memWb.memWmask := storeMask
     memWb.csrWrite := exMem.csrWrite
@@ -547,13 +586,23 @@ class AetherCore(
     memWb.wfi := exMem.ctrl.wfi
     memWb.mret := exMem.ctrl.mret
     memWb.trap := exMem.trap
-    when(memoryFault) {
+    when((memoryPageFault || memoryFault) && !exMem.trap.valid) {
       memWb.trap.valid := true.B
       memWb.trap.cause := Mux(
-        memoryFaultIsLoad,
-        MachineExceptionCode.LoadAccessFault.U(xlen.W),
-        MachineExceptionCode.StoreAccessFault.U(xlen.W)
+        memoryPageFault,
+        Mux(
+          memoryFaultIsLoad,
+          MachineExceptionCode.LoadPageFault.U(xlen.W),
+          MachineExceptionCode.StorePageFault.U(xlen.W)
+        ),
+        Mux(
+          memoryFaultIsLoad,
+          MachineExceptionCode.LoadAccessFault.U(xlen.W),
+          MachineExceptionCode.StoreAccessFault.U(xlen.W)
+        )
       )
+      // stval/mtval report the faulting virtual address for informative
+      // translated load/store faults, including implicit PTW access failures.
       memWb.trap.value := exMem.result
     }
 
