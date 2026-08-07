@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "tools" / "make_aethercore_nuttx_p3_kernel_stack_overlay.py"
+BUILD = ROOT / "tools" / "ci" / "nuttx_p3_kernel_stack_build.sh"
 
 DUAL = "#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_ARCH_KERNEL_STACK)"
 SINGLE = "#ifdef CONFIG_ARCH_KERNEL_STACK"
@@ -39,6 +40,35 @@ class NuttxP3KernelStackContractTest(unittest.TestCase):
             "SIGSEGV",
         ):
             self.assertNotIn(forbidden, text)
+
+    def test_p3a_build_fails_closed_before_runtime_claims(self) -> None:
+        text = BUILD.read_text()
+        for fragment in (
+            "build/nuttx-p1/evidence/result.txt",
+            "make_aethercore_nuttx_p3_kernel_stack_overlay.py",
+            '"CONFIG_ARCH_KERNEL_STACK": "y"',
+            '"CONFIG_ARCH_ADDRENV": None',
+            '"CONFIG_ARCH_USE_MMU": None',
+            '"CONFIG_ARCH_USE_S_MODE": None',
+            "make olddefconfig",
+            "olddefconfig removed CONFIG_ARCH_KERNEL_STACK=y",
+            "make clean",
+            "up_addrenv_kstackalloc",
+            "up_addrenv_kstackfree",
+            "riscv_exception",
+            "exception_common",
+            "riscv_percpu_set_kstack",
+            "p3a-independent-kernel-stack-build-v1",
+            "runtime=not-yet-qualified",
+            "fault_isolation=not-yet-qualified",
+        ):
+            self.assertIn(fragment, text)
+        self.assertIn('KSTACK_SIZE="${AETHERCORE_NUTTX_P3_KSTACK_SIZE:-1568}"', text)
+        self.assertIn("address_environment=disabled", text)
+        self.assertIn("mmu=disabled", text)
+        self.assertIn("supervisor_mode=disabled", text)
+        self.assertNotIn("pmpfault", text)
+        self.assertNotIn("SIGSEGV", text)
 
     def test_overlay_rewrites_only_kernel_stack_storage_guards(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
