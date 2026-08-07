@@ -185,10 +185,10 @@ ret = function("return_from_exception")
 jump = function("riscv_jump_to_user")
 checks = [
     ("entry swaps mscratch", entry, r"\bcsrrw\s+a0,mscratch,a0\b"),
-    ("entry saves user SP", entry, r"\bsw\s+sp,12\(a0\)\b"),
-    ("entry loads kernel SP", entry, r"\blw\s+sp,16\(a0\)\b"),
-    ("entry consumes kernel SP", entry, r"\bsw\s+zero,16\(a0\)\b"),
-    ("return publishes kernel SP", ret, r"\bsw\s+a0,16\(s0\)\b"),
+    ("entry saves user SP", entry, r"\bsw\s+sp,12\(a0\)"),
+    ("entry loads kernel SP", entry, r"\blw\s+sp,16\(a0\)"),
+    ("entry consumes kernel SP", entry, r"\bsw\s+zero,16\(a0\)"),
+    ("return publishes kernel SP", ret, r"\bsw\s+a0,16\(s0\)"),
     ("return executes mret", ret, r"\bmret\b"),
     ("initial user jump reaches return path", jump, r"\bj\s+[0-9a-f]+\s+<return_from_exception>"),
 ]
