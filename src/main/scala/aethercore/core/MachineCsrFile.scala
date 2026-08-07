@@ -270,13 +270,15 @@ class MachineCsrFile(
     io.satpTranslationEnabled := satp.get.io.translationEnabled
     io.satpRootPpn := satp.get.io.rootPpn
     io.satpAsid := satp.get.io.asid
+    io.supervisorSum := mstatus(MachineCsrBit.SstatusSum)
+    io.supervisorMxr := mstatus(MachineCsrBit.SstatusMxr)
   } else {
     io.satpTranslationEnabled := false.B
     io.satpRootPpn := 0.U
     io.satpAsid := 0.U
+    io.supervisorSum := false.B
+    io.supervisorMxr := false.B
   }
-  io.supervisorSum := if (isa.hasSv32) mstatus(MachineCsrBit.SstatusSum) else false.B
-  io.supervisorMxr := if (isa.hasSv32) mstatus(MachineCsrBit.SstatusMxr) else false.B
 
   val sstatusWriteValue =
     (mstatus & (~supervisorStatusMask & allBits).U(xlen.W)) |
