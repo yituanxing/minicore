@@ -1,4 +1,4 @@
-qualification=rv32im-sv32-v2a-page-table-walker
-requested_after=c282437c746d9fc9b492616fa46ee5265387bf4c
-pre_request_fast_gate_run=31200898095
-scope=Sv32-two-level-walker-permissions-Svade-no-satp-no-TLB
+qualification=rv32im-supervisor-v1
+requested_after=c605ad44aa8cd985fd7ad79d1557b8a216ca2ecf
+pre_request_fast_gate_run=31195817621
+scope=M-S-U-delegated-sync-traps-SRET-no-Sv32
