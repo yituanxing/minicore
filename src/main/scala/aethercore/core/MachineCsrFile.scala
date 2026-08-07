@@ -207,11 +207,11 @@ class MachineCsrFile(
     val trapVector = Output(UInt(xlen.W))
     val trapDelegatedToSupervisor = Output(Bool())
 
-    // The existing return handshake is intentionally kept stable for V1.
-    // Machine-mode assertion performs MRET semantics; Supervisor-mode
-    // assertion performs SRET semantics. The core validates the instruction
-    // encoding before asserting this signal.
+    // trapReturn is the retirement pulse; trapReturnSupervisor identifies
+    // SRET explicitly. This matters because SRET is legal in M-mode as well
+    // as S-mode, so current privilege alone cannot identify the xRET kind.
     val trapReturn = Input(Bool())
+    val trapReturnSupervisor = Input(Bool())
     val returnPc = Output(UInt(xlen.W))
   })
 
@@ -302,11 +302,9 @@ class MachineCsrFile(
   }
   io.trapDelegatedToSupervisor := trapDelegatedToSupervisor
   io.trapVector := Mux(trapDelegatedToSupervisor, effectiveStvec, effectiveMtvec)
-  io.returnPc := Mux(
-    isa.hasS.B && privilege === PrivilegeMode.Supervisor.U,
-    sepc,
-    mepc
-  )
+  val returningViaSupervisor =
+    isa.hasS.B && (io.trapReturnSupervisor || privilege === PrivilegeMode.Supervisor.U)
+  io.returnPc := Mux(returningViaSupervisor, sepc, mepc)
   io.readData := 0.U
   io.readImplemented := false.B
   io.readWritable := false.B
@@ -320,16 +318,6 @@ class MachineCsrFile(
     is(MachineCsrAddress.Misa.U) {
       io.readData := misaValue.U(xlen.W)
       io.readImplemented := true.B
-    }
-    is(MachineCsrAddress.Medeleg.U) {
-      io.readData := medeleg
-      io.readImplemented := true.B
-      io.readWritable := isa.hasS.B
-    }
-    is(MachineCsrAddress.Mideleg.U) {
-      io.readData := mideleg
-      io.readImplemented := true.B
-      io.readWritable := isa.hasS.B
     }
     is(MachineCsrAddress.Mie.U) {
       io.readData := mie
@@ -376,6 +364,16 @@ class MachineCsrFile(
 
   if (isa.hasS) {
     switch(io.readAddr) {
+      is(MachineCsrAddress.Medeleg.U) {
+        io.readData := medeleg
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(MachineCsrAddress.Mideleg.U) {
+        io.readData := mideleg
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
       is(SupervisorCsrAddress.Sstatus.U) {
         io.readData := mstatus & supervisorStatusMask.U(xlen.W)
         io.readImplemented := true.B
@@ -470,7 +468,7 @@ class MachineCsrFile(
     stvec := effectiveStvec
     mscratch := effectiveMscratch
   }.elsewhen(io.trapReturn) {
-    when(isa.hasS.B && privilege === PrivilegeMode.Supervisor.U) {
+    when(isa.hasS.B && io.trapReturnSupervisor) {
       privilege := supervisorReturnPrivilege
       mstatus := supervisorReturnMstatus
     }.otherwise {
@@ -480,8 +478,6 @@ class MachineCsrFile(
   }.elsewhen(ordinaryWrite) {
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
-      is(MachineCsrAddress.Medeleg.U) { medeleg := canonicalWriteData }
-      is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
       is(MachineCsrAddress.Mie.U) { mie := canonicalWriteData }
       is(MachineCsrAddress.Mtvec.U) { mtvec := canonicalWriteData }
       is(MachineCsrAddress.Mscratch.U) { mscratch := canonicalWriteData }
@@ -492,6 +488,8 @@ class MachineCsrFile(
 
     if (isa.hasS) {
       switch(io.writeAddr) {
+        is(MachineCsrAddress.Medeleg.U) { medeleg := canonicalWriteData }
+        is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
         is(SupervisorCsrAddress.Sstatus.U) { mstatus := sstatusWriteValue }
         is(SupervisorCsrAddress.Sie.U) {
           // V1 has no delegated supervisor interrupt bits, so this is a
