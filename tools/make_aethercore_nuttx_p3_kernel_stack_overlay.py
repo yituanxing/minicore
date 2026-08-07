@@ -4,15 +4,16 @@
 Pinned NuttX 13.0.0 already switches between the user and per-task kernel
 stack in riscv_exception_common.S whenever CONFIG_ARCH_KERNEL_STACK is set.
 The allocator itself is also ordinary kernel-heap storage.  What prevents the
-pure protected/PMP configuration from using that machinery is a set of source
-and prototype guards that unnecessarily require CONFIG_ARCH_ADDRENV as well.
-The pinned arch/Kconfig also places ARCH_KERNEL_STACK inside the broader
-ARCH_ADDRENV && ARCH_NEED_ADDRENV_MAPPING menu guard even though the option
-itself only depends on BUILD_KERNEL || BUILD_PROTECTED.
+pure protected/PMP configuration from using that machinery is a set of source,
+prototype and exception-context guards that unnecessarily require
+CONFIG_ARCH_ADDRENV as well.  The pinned arch/Kconfig also places
+ARCH_KERNEL_STACK inside the broader ARCH_ADDRENV && ARCH_NEED_ADDRENV_MAPPING
+menu guard even though the option itself only depends on BUILD_KERNEL ||
+BUILD_PROTECTED.
 
-P3 changes only those storage/accounting guards and opens a narrow Kconfig
-window for ARCH_KERNEL_STACK.  Address-environment join, switch, leave, MMU,
-mapping and S-mode paths are deliberately untouched.
+P3 changes only those kernel-stack storage/accounting guards and opens a narrow
+Kconfig window for ARCH_KERNEL_STACK.  Address-environment join, switch, leave,
+MMU, mapping and S-mode paths are deliberately untouched.
 """
 
 from __future__ import annotations
@@ -41,16 +42,7 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
 
 
 def patch_kconfig_visibility(path: Path) -> None:
-    """Expose only ARCH_KERNEL_STACK outside the pinned ADDRENV mapping menu.
-
-    NuttX 13.0.0 nests ARCH_KERNEL_STACK below
-    ``if ARCH_ADDRENV && ARCH_NEED_ADDRENV_MAPPING``.  Pure PMP protected
-    builds intentionally keep ARCH_ADDRENV disabled, so olddefconfig removes
-    the requested kernel-stack option before any C/assembly hardening can be
-    built.  Close the outer guard immediately before the kernel-stack block and
-    reopen it immediately afterwards.  Everything else remains under the
-    original ADDRENV/mapping condition.
-    """
+    """Expose only ARCH_KERNEL_STACK outside the pinned ADDRENV mapping menu."""
 
     replace_once(
         path,
@@ -67,6 +59,29 @@ def patch_kconfig_visibility(path: Path) -> None:
         "if ARCH_ADDRENV && ARCH_NEED_ADDRENV_MAPPING\n\n"
         "config ARCH_PGPOOL_MAPPING",
         "kernel-stack Kconfig closing boundary",
+    )
+
+
+def patch_xcptcontext_kernel_stack(path: Path) -> None:
+    """Keep RISC-V kernel-stack pointers when ADDRENV is disabled."""
+
+    replace_once(
+        path,
+        "#ifdef CONFIG_ARCH_ADDRENV\n"
+        "#ifdef CONFIG_ARCH_KERNEL_STACK\n"
+        "  /* In this configuration, all syscalls execute from an internal kernel",
+        "#ifdef CONFIG_ARCH_KERNEL_STACK\n"
+        "  /* In this configuration, all syscalls execute from an internal kernel",
+        "RISC-V xcptcontext kernel-stack opening guard",
+    )
+    replace_once(
+        path,
+        "  uintptr_t *kstkptr;  /* Saved kernel stack pointer */\n"
+        "#endif\n"
+        "#endif",
+        "  uintptr_t *kstkptr;  /* Saved kernel stack pointer */\n"
+        "#endif",
+        "RISC-V xcptcontext kernel-stack closing guard",
     )
 
 
@@ -143,15 +158,23 @@ def main() -> None:
 
     arch_h, kstack_c, task_init, task_fork, pthread_create, release_tcb = required
 
-    # The real pinned build always has arch/Kconfig.  Keep synthetic unit
-    # fixtures from having to reproduce the whole Kconfig tree, but fail closed
-    # whenever a real configured NuttX tree is being patched.
+    # Real pinned builds always have both files.  Synthetic unit fixtures do
+    # not reproduce the complete Kconfig/arch include tree, so only require
+    # them when a configured NuttX tree is being patched.
+    configured = (root / ".config").is_file()
     arch_kconfig = root / "arch/Kconfig"
+    riscv_irq_h = root / "arch/risc-v/include/irq.h"
     if arch_kconfig.is_file():
         patch_kconfig_visibility(arch_kconfig)
-    elif (root / ".config").is_file():
+    elif configured:
         raise SystemExit(
             f"P3 overlay FAIL: configured pinned source is missing: {arch_kconfig}"
+        )
+    if riscv_irq_h.is_file():
+        patch_xcptcontext_kernel_stack(riscv_irq_h)
+    elif configured:
+        raise SystemExit(
+            f"P3 overlay FAIL: configured pinned source is missing: {riscv_irq_h}"
         )
 
     # Keep the historical up_addrenv_* names to minimize the pinned upstream
@@ -223,6 +246,7 @@ def main() -> None:
 
     print("P3 kernel-stack overlay PASS")
     print("  CONFIG_ARCH_KERNEL_STACK is visible to pure BUILD_PROTECTED configurations")
+    print("  RISC-V xcptcontext retains kernel-stack pointers without ARCH_ADDRENV")
     print("  CONFIG_ARCH_KERNEL_STACK may allocate/free per-task kernel stacks without ARCH_ADDRENV")
     print("  addrenv join/switch/leave, MMU and S-mode behavior remain untouched")
 
