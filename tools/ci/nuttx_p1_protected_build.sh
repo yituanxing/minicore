@@ -18,8 +18,8 @@ NUTTX_DIR="${SOURCE_DIR}/nuttx-${NUTTX_VERSION}"
 APPS_DIR="${SOURCE_DIR}/apps-${NUTTX_VERSION}"
 
 for command in make python3 tar riscv64-unknown-elf-gcc \
-  riscv64-unknown-elf-objcopy riscv64-unknown-elf-readelf \
-  riscv64-unknown-elf-nm sha256sum grep; do
+  riscv64-unknown-elf-objcopy riscv64-unknown-elf-objdump \
+  riscv64-unknown-elf-readelf riscv64-unknown-elf-nm sha256sum grep; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "P1 FAIL: required command not found: ${command}" >&2
     exit 2
@@ -69,7 +69,7 @@ import sys
 path = Path(sys.argv[1])
 settings: dict[str, str | bool] = {
     "CONFIG_ARCH_CHIP_QEMU_RV_ISA_M": True,
-    "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A": False,
+    "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A": True,
     "CONFIG_ARCH_CHIP_QEMU_RV_ISA_C": False,
     "CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI": True,
     "CONFIG_ARCH_RV_ISA_V": False,
@@ -133,6 +133,7 @@ required_enabled=(
   CONFIG_AETHERCORE_TIMER
   CONFIG_AETHERCORE_UART_RX_IRQ
   CONFIG_ARCH_CHIP_QEMU_RV_ISA_M
+  CONFIG_ARCH_CHIP_QEMU_RV_ISA_A
   CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI
   CONFIG_RISCV_TOOLCHAIN_GNU_RV64
 )
@@ -154,7 +155,6 @@ forbidden_enabled=(
   CONFIG_ARCH_USE_S_MODE
   CONFIG_SUPPRESS_INTERRUPTS
   CONFIG_16550_UART
-  CONFIG_ARCH_CHIP_QEMU_RV_ISA_A
   CONFIG_ARCH_CHIP_QEMU_RV_ISA_C
   CONFIG_ARCH_RV_ISA_V
   CONFIG_ARCH_FPU
@@ -207,6 +207,7 @@ riscv64-unknown-elf-readelf -A nuttx_user > "${OUT_DIR}/evidence/user-elf-attrib
 riscv64-unknown-elf-readelf -SW nuttx_user > "${OUT_DIR}/evidence/user-elf-sections.txt"
 riscv64-unknown-elf-nm -n nuttx > "${OUT_DIR}/evidence/kernel-symbols.txt"
 riscv64-unknown-elf-nm -n nuttx_user > "${OUT_DIR}/evidence/user-symbols.txt"
+riscv64-unknown-elf-objdump -d nuttx_user > "${OUT_DIR}/evidence/user-disassembly.txt"
 
 for symbol in \
   qemu_rv_userspace \
@@ -227,6 +228,15 @@ for symbol in nsh_main hello_main; do
     exit 4
   }
 done
+
+atomic_user_instructions="$(grep -Ec '[[:space:]](lr\.w|sc\.w|amo(add|swap|xor|and|or|min|max|minu|maxu)\.w)(\.(aq|rl|aqrl))?[[:space:]]' \
+  "${OUT_DIR}/evidence/user-disassembly.txt" || true)"
+if [[ "${atomic_user_instructions}" -eq 0 ]]; then
+  echo "P1 FAIL: RV32IMA userspace contains no LR/SC/AMO word instruction" >&2
+  exit 4
+fi
+echo "P1 RV32A userspace instructions: ${atomic_user_instructions}" \
+  | tee "${OUT_DIR}/evidence/user-atomic-summary.txt"
 
 python3 - \
   "${OUT_DIR}/evidence/kernel-elf-header.txt" \
@@ -280,10 +290,12 @@ for path in attribute_paths:
         raise SystemExit(f"P1 FAIL: unexpected ISA attribute {arch}")
     if "m" not in extensions and "m" not in tokens[1:]:
         raise SystemExit(f"P1 FAIL: M extension missing from {arch}")
-    for forbidden in ("a", "c", "f", "d", "v"):
+    if "a" not in extensions and "a" not in tokens[1:]:
+        raise SystemExit(f"P1 FAIL: A extension missing from {arch}")
+    for forbidden in ("c", "f", "d", "v"):
         if forbidden in extensions or forbidden in tokens[1:]:
             raise SystemExit(f"P1 FAIL: forbidden extension {forbidden} in {arch}")
-print("P1 ELF layout and ISA PASS")
+print("P1 ELF layout and RV32IMA ISA PASS")
 PY
 
 python3 - "${OUT_DIR}/nuttx.bin" "${OUT_DIR}/nuttx_user.bin" \
@@ -317,7 +329,7 @@ popd >/dev/null
 
 cat > "${OUT_DIR}/evidence/result.txt" <<EOF
 status=PASS
-contract=nuttx-13.0.0-aethercore-p1-protected-build-v1
+contract=nuttx-13.0.0-aethercore-p1-protected-rv32ima-build-v2
 kernel_image=${OUT_DIR}/nuttx.elf
 userspace_image=${OUT_DIR}/nuttx_user.elf
 combined_image=${OUT_DIR}/aethercore-protected.bin
@@ -337,13 +349,16 @@ syscall_stack=caller-user-stack-upstream-protected-pmp
 kernel_stack_hardening=deferred-requires-addrenv-aware-port
 user_transition=riscv_jump_to_user-mret
 user_programs=nsh,hello
+atomic_extension=A
+atomic_user_instructions=${atomic_user_instructions}
 runtime=not-yet-qualified
-profile=rv32im_zicsr_zifencei
+profile=rv32ima_zicsr_zifencei
 EOF
 sha256sum \
   "${OUT_DIR}/nuttx.elf" "${OUT_DIR}/nuttx_user.elf" \
   "${OUT_DIR}/nuttx.bin" "${OUT_DIR}/nuttx_user.bin" \
   "${OUT_DIR}/aethercore-protected.bin" "${OUT_DIR}/nuttx.config" \
+  "${OUT_DIR}/evidence/user-disassembly.txt" \
   > "${OUT_DIR}/evidence/artifacts.sha256"
 cat "${OUT_DIR}/evidence/result.txt"
-echo "P1 PASS: NuttX protected kernel and U-mode NSH/hello images built"
+echo "P1 PASS: NuttX protected RV32IMA kernel and U-mode NSH/hello images built"
