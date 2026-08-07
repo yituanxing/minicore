@@ -25,6 +25,7 @@ class Sv32PageTableWalker extends Module {
   val io = IO(new Bundle {
     val requestValid = Input(Bool())
     val requestReady = Output(Bool())
+    val kill = Input(Bool())
     val virtualAddress = Input(UInt(32.W))
     val rootPpn = Input(UInt(PpnBits.W))
     val privilege = Input(UInt(2.W))
@@ -33,7 +34,6 @@ class Sv32PageTableWalker extends Module {
     val sum = Input(Bool())
     val mxr = Input(Bool())
 
-    // Read-only implicit memory port for 32-bit page-table entries.
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PaddrBits.W))
     val pteReady = Input(Bool())
@@ -79,7 +79,7 @@ class Sv32PageTableWalker extends Module {
   val tableBase = Cat(tablePpn, 0.U(12.W))
   val pteOffset = Cat(vpnIndex, 0.U(2.W))
 
-  io.pteValid := walking
+  io.pteValid := walking && !io.kill
   io.pteAddress := tableBase + pteOffset
 
   def finish(pageFault: Bool, accessFault: Bool): Unit = {
@@ -88,7 +88,14 @@ class Sv32PageTableWalker extends Module {
     state := respond
   }
 
-  when(state === idle) {
+  when(io.kill) {
+    state := idle
+    resultPhysicalAddress := 0.U
+    resultPageFault := false.B
+    resultAccessFault := false.B
+    resultLeafLevel := 0.U
+    resultGlobal := false.B
+  }.elsewhen(state === idle) {
     when(io.requestValid) {
       virtualAddress := io.virtualAddress
       tablePpn := io.rootPpn
@@ -106,8 +113,6 @@ class Sv32PageTableWalker extends Module {
     }
   }.elsewhen(walking && io.pteReady) {
     when(io.pteFault) {
-      // A failed implicit PTE read becomes an access fault of the original
-      // explicit access type, not a page fault.
       finish(false.B, true.B)
     }.otherwise {
       val pte = io.pteData
@@ -126,11 +131,7 @@ class Sv32PageTableWalker extends Module {
       val invalidEncoding = !valid || (!readable && writable)
       val leaf = readable || executable
       val readAllowed = readable || (requestMxr && executable)
-      val accessAllowed = Mux(
-        requestExecute,
-        executable,
-        Mux(requestWrite, writable, readAllowed)
-      )
+      val accessAllowed = Mux(requestExecute, executable, Mux(requestWrite, writable, readAllowed))
       val privilegeAllowed = Mux(
         privilege === PrivilegeMode.User.U,
         user,
@@ -163,7 +164,6 @@ class Sv32PageTableWalker extends Module {
           tablePpn := nextPpn
           state := level0
         }.otherwise {
-          // A valid level-0 pointer cannot descend any further in Sv32.
           finish(true.B, false.B)
         }
       }
