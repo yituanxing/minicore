@@ -145,6 +145,18 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  val rv32imauPmpOsSoftware: CoreConfig = CoreConfig(
+    name = "rv32imau-pmp-os-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      pmpEntries = 4
+    ),
+    platform = rv32Platform
+  )
+
   val rv64imCurrent: CoreConfig = CoreConfig(
     name = "rv64im-current",
     isa = IsaConfig(
