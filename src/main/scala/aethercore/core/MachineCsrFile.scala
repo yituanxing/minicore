@@ -452,13 +452,14 @@ class MachineCsrFile(
         io.readImplemented := true.B
         io.readWritable := true.B
       }
-      if (isa.hasSv32) {
-        is(SupervisorCsrAddress.Satp.U) {
-          io.readData := satp.get.io.readData
-          io.readImplemented := true.B
-          io.readWritable := true.B
-        }
-      }
+    }
+  }
+
+  if (isa.hasSv32) {
+    when(io.readAddr === SupervisorCsrAddress.Satp.U) {
+      io.readData := satp.get.io.readData
+      io.readImplemented := true.B
+      io.readWritable := true.B
     }
   }
 
