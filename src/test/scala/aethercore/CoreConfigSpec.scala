@@ -18,6 +18,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasA shouldBe false
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
+    config.isa.hasSv32 shouldBe false
     config.isa.hasWordOps shouldBe true
     config.isa.march shouldBe "rv64im_zicsr"
     config.isa.mabi shouldBe "lp64"
@@ -38,6 +39,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasM shouldBe false
     config.isa.hasZicsr shouldBe false
     config.isa.hasZifencei shouldBe false
+    config.isa.hasSv32 shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32i"
     config.isa.mabi shouldBe "ilp32"
@@ -59,6 +61,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasM shouldBe true
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
+    config.isa.hasSv32 shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
     config.isa.mabi shouldBe "ilp32"
@@ -77,9 +80,27 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasPmp shouldBe false
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
+    config.isa.hasSv32 shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
     config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
+  }
+
+  it should "describe an independent RV32 Sv32 Supervisor ISA contract" in {
+    val isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv32")
+    )
+
+    isa.hasS shouldBe true
+    isa.hasU shouldBe true
+    isa.hasSv32 shouldBe true
+    isa.virtualMemoryModes shouldBe Set("Sv32")
+    isa.march shouldBe "rv32im_zicsr"
+    isa.mabi shouldBe "ilp32"
   }
 
   it should "keep the pre-atomic protected profile available for regressions" in {
@@ -87,6 +108,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
     config.name shouldBe "rv32imu-pmp-os-software"
     config.isa.hasA shouldBe false
+    config.isa.hasSv32 shouldBe false
     config.isa.march shouldBe "rv32im_zicsr_zifencei"
   }
 
@@ -103,6 +125,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.pmpEntries shouldBe 4
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe true
+    config.isa.hasSv32 shouldBe false
     config.isa.hasC shouldBe false
     config.isa.march shouldBe "rv32ima_zicsr_zifencei"
     config.isa.mabi shouldBe "ilp32"
@@ -120,12 +143,13 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.shiftBits shouldBe 5
     isa.hasZicsr shouldBe false
     isa.hasZifencei shouldBe false
+    isa.hasSv32 shouldBe false
     isa.hasWordOps shouldBe false
     isa.march shouldBe "rv32i"
     isa.mabi shouldBe "ilp32"
   }
 
-  it should "reject unsupported architectural, extension and platform widths early" in {
+  it should "reject unsupported architectural, extension, VM and platform widths early" in {
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(xlen = 48, extensions = Set('I'), privilegeModes = Set('M'))
 
@@ -135,6 +159,30 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
         extensions = Set('I'),
         privilegeModes = Set('M'),
         zExtensions = Set("icsr")
+      )
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(
+        xlen = 32,
+        extensions = Set('I'),
+        privilegeModes = Set('M', 'S'),
+        virtualMemoryModes = Set("Sv48")
+      )
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(
+        xlen = 64,
+        extensions = Set('I'),
+        privilegeModes = Set('M', 'S'),
+        virtualMemoryModes = Set("Sv32")
+      )
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(
+        xlen = 32,
+        extensions = Set('I'),
+        privilegeModes = Set('M'),
+        virtualMemoryModes = Set("Sv32")
       )
 
     an[IllegalArgumentException] should be thrownBy
