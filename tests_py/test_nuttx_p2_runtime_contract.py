@@ -56,6 +56,19 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             self.assertIn(fragment, text)
         self.assertNotIn("VAetherCoreSimTop", text)
 
+    def test_runner_disables_generic_toy_and_fault_modes(self) -> None:
+        text = generate_runner()
+        self.assertIn(
+            "bool faultCheck() const { return false; }  // Dedicated protected OS runner.",
+            text,
+        )
+        self.assertIn(
+            "// Protected NuttX legitimately uses x3 as its global pointer.",
+            text,
+        )
+        self.assertNotIn("fault checking and --self-check-exit are mutually exclusive", text)
+        self.assertNotIn("FAIL: x3 committed 0x", text)
+
     def test_uart_injection_arms_from_the_real_nsh_prompt(self) -> None:
         text = generate_runner()
         for fragment in (
@@ -125,7 +138,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
     def test_p2_cache_is_keyed_by_every_simulator_input(self) -> None:
         text = P2_SCRIPT.read_text()
         for fragment in (
-            'SIM_ABI_VERSION="nuttx-protected-sim-v2"',
+            'SIM_ABI_VERSION="nuttx-protected-sim-v3"',
             'SIM_FINGERPRINT_FILE="${SIM_ROOT}/source.sha256"',
             'find "${ROOT_DIR}/src/main/scala"',
             '"${ROOT_DIR}/build.sc"',
@@ -151,8 +164,7 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "-I${ROOT_DIR}/sim -std=c++20 -O2",
             "--top-module AetherCoreNuttXProtectedSimTop",
             '--rx-after-uart "nsh> "',
-            "--self-check-exit",
-            "shared_toy_assertions=disabled-via-self-check-exit",
+            "shared_toy_assertions=removed-by-dedicated-protected-runner",
             "STALL_PERIODS=(0 3)",
             "Hello, World!!",
             "UMODE_COMMAND_EVIDENCE",
@@ -164,7 +176,8 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
         self.assertEqual(text.count("verilator --cc --exe --build"), 1)
-        self.assertEqual(text.count("--self-check-exit"), 1)
+        self.assertNotIn("--self-check-exit", text)
+        self.assertNotIn("--expect-exception", text)
 
 
 if __name__ == "__main__":
