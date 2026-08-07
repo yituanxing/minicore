@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   fast-gate:
-    name: Incremental source, interrupt and FreeRTOS checks
+    name: Incremental source, privilege, interrupt and FreeRTOS checks
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 20
     env:
@@ -44,11 +44,17 @@ jobs:
           printf '%s\n' "$changed"
 
           run_chisel=false
+          run_smode_v1=false
           run_freertos=false
 
           if grep -Eq '^(src/main/scala/|src/test/scala/|build\.mill$|mill$)' <<<"$changed"; then
             run_chisel=true
+            run_smode_v1=true
             run_freertos=true
+          fi
+
+          if grep -Eq '^(software/rv32/supervisor_v1_workload\.S|Makefile\.rv32im-supervisor-v1$|tools/build_rv32im_supervisor_v1\.sh$)' <<<"$changed"; then
+            run_smode_v1=true
           fi
 
           if grep -Eq '^(software/freertos/|Makefile\.freertos($|-)|sim/|tools/(make_freertos|ci/full_gate_freertos)|tools/ensure_(riscv_none_elf|rv32_nemu))' <<<"$changed"; then
@@ -57,6 +63,7 @@ jobs:
 
           echo "CLASSIFIED_BASE_SHA=${classified_base}" >> "$GITHUB_ENV"
           echo "run_chisel=$run_chisel" >> "$GITHUB_OUTPUT"
+          echo "run_smode_v1=$run_smode_v1" >> "$GITHUB_OUTPUT"
           echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
 
       - name: Configure persistent fast cache
@@ -66,8 +73,9 @@ jobs:
           chmod +x mill
           key="pr-${{ github.event.pull_request.number || github.ref_name }}"
           root="$HOME/.cache/aethercore/fast-gate/$key"
-          mkdir -p "$root/mill-out" "$root/freertos" "$root/freertos-irq"
+          mkdir -p "$root/mill-out" "$root/smode-v1" "$root/freertos" "$root/freertos-irq"
           echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+          echo "FAST_SMODE_V1_BUILD=$root/smode-v1" >> "$GITHUB_ENV"
           echo "FAST_FREERTOS_BUILD=$root/freertos" >> "$GITHUB_ENV"
           echo "FAST_FREERTOS_IRQ_BUILD=$root/freertos-irq" >> "$GITHUB_ENV"
           echo "AETHERCORE_JOBS=$(nproc)" >> "$GITHUB_ENV"
@@ -75,12 +83,12 @@ jobs:
           echo "parallel_jobs=$(nproc)"
 
       - name: Provision fixed Verilator
-        if: steps.changes.outputs.run_chisel == 'true' || steps.changes.outputs.run_freertos == 'true'
+        if: steps.changes.outputs.run_chisel == 'true' || steps.changes.outputs.run_smode_v1 == 'true' || steps.changes.outputs.run_freertos == 'true'
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
       - name: Provision pinned RISC-V newlib sysroot
-        if: steps.changes.outputs.run_freertos == 'true'
+        if: steps.changes.outputs.run_smode_v1 == 'true' || steps.changes.outputs.run_freertos == 'true'
         shell: bash
         run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
 
@@ -109,6 +117,14 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.MachineExternalInterruptCoreSpec
           ./mill aethercore.test.testOnly aethercore.AetherCoreInterruptPlatformSpec
           ./mill aethercore.test.testOnly aethercore.WaitForInterruptCoreSpec
+
+      - name: Executable Supervisor V1 M-S-U workload
+        if: steps.changes.outputs.run_smode_v1 == 'true'
+        shell: bash
+        run: |
+          make -j"$AETHERCORE_JOBS" -f Makefile.rv32im-supervisor-v1 \
+            BUILD_DIR="$FAST_SMODE_V1_BUILD" \
+            JOBS="$AETHERCORE_JOBS" run-local
 
       - name: Incremental FreeRTOS WFI workload
         if: steps.changes.outputs.run_freertos == 'true'
@@ -162,10 +178,12 @@ jobs:
             echo "- head: \`${GITHUB_SHA}\`"
             echo "- classified range: \`${CLASSIFIED_BASE_SHA:-HEAD^1}..${GITHUB_SHA}\`"
             echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
+            echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
             echo '- CoreConfigSpec covers the frozen OS profiles plus the bounded V1 M/S/U supervisor profile'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, and the V1 delegated Supervisor trap/SRET loop'
+            echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
             echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
