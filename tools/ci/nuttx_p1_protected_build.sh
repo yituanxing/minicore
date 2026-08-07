@@ -19,14 +19,14 @@ APPS_DIR="${SOURCE_DIR}/apps-${NUTTX_VERSION}"
 
 for command in make python3 tar riscv64-unknown-elf-gcc \
   riscv64-unknown-elf-objcopy riscv64-unknown-elf-readelf \
-  riscv64-unknown-elf-nm sha256sum; do
+  riscv64-unknown-elf-nm sha256sum grep; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "P1 FAIL: required command not found: ${command}" >&2
     exit 2
   }
 done
 [[ -s "${NUTTX_ARCHIVE}" && -s "${APPS_ARCHIVE}" ]] || {
-  echo "P1 FAIL: pinned NuttX archives are missing; run the staged NuttX source fetch first" >&2
+  echo "P1 FAIL: pinned NuttX archives are missing; run the protected source fetch first" >&2
   exit 2
 }
 [[ -x "${KCONFIGLIB_DIR}/bin/olddefconfig" ]] || {
@@ -85,8 +85,8 @@ settings: dict[str, str | bool] = {
     "CONFIG_ARCH_USE_MPU": True,
     "CONFIG_LIB_SYSCALL": True,
     "CONFIG_RISCV_PERCPU_SCRATCH": True,
-    "CONFIG_ARCH_KERNEL_STACK": True,
-    "CONFIG_ARCH_KERNEL_STACKSIZE": "2048",
+    "CONFIG_ARCH_ADDRENV": False,
+    "CONFIG_ARCH_KERNEL_STACK": False,
     "CONFIG_BUILTIN": True,
     "CONFIG_SYSTEM_NSH": True,
     "CONFIG_NSH_BUILTIN_APPS": True,
@@ -125,7 +125,6 @@ required_enabled=(
   CONFIG_ARCH_USE_MPU
   CONFIG_LIB_SYSCALL
   CONFIG_RISCV_PERCPU_SCRATCH
-  CONFIG_ARCH_KERNEL_STACK
   CONFIG_BUILTIN
   CONFIG_SYSTEM_NSH
   CONFIG_NSH_BUILTIN_APPS
@@ -143,7 +142,15 @@ for symbol in "${required_enabled[@]}"; do
     exit 3
   }
 done
+
+# Keep P1 on the pure protected/PMP path.  NuttX only allocates a dedicated
+# per-process kernel stack when ARCH_ADDRENV is active; forcing the stack symbol
+# alone would be a false isolation claim and ARCH_ADDRENV would require an
+# MMU/S-mode port that AetherCore does not yet provide.
 forbidden_enabled=(
+  CONFIG_ARCH_ADDRENV
+  CONFIG_ARCH_KERNEL_STACK
+  CONFIG_ARCH_USE_MMU
   CONFIG_ARCH_USE_S_MODE
   CONFIG_SUPPRESS_INTERRUPTS
   CONFIG_16550_UART
@@ -164,12 +171,9 @@ for symbol in "${forbidden_enabled[@]}"; do
     exit 3
   fi
 done
+
 grep -Fqx 'CONFIG_NUTTX_USERSPACE=0x80040000' .config || {
   echo "P1 FAIL: userspace link address is not 0x80040000" >&2
-  exit 3
-}
-grep -Fqx 'CONFIG_ARCH_KERNEL_STACKSIZE=2048' .config || {
-  echo "P1 FAIL: protected kernel stack is not 2048 bytes" >&2
   exit 3
 }
 
@@ -291,9 +295,14 @@ kernel_path, user_path, output_path = map(Path, sys.argv[1:])
 kernel = kernel_path.read_bytes()
 user = user_path.read_bytes()
 user_offset = 0x40000
-if len(kernel) > user_offset:
+partition_size = 0x40000
+if len(kernel) > partition_size:
     raise SystemExit(
-        f"P1 FAIL: kernel load image ({len(kernel)} bytes) overlaps userspace offset"
+        f"P1 FAIL: kernel load image ({len(kernel)} bytes) exceeds 256 KiB kflash"
+    )
+if len(user) > partition_size:
+    raise SystemExit(
+        f"P1 FAIL: user load image ({len(user)} bytes) exceeds 256 KiB uflash"
     )
 combined = bytearray(max(len(kernel), user_offset + len(user)))
 combined[:len(kernel)] = kernel
@@ -321,10 +330,12 @@ pmp_mode=NAPOT
 pmp_entries_implemented=4
 pmp_entries_used=0,1
 pmp_free_scan=disabled-in-platform-init
+address_environment=disabled
+percpu_scratch=enabled
 syscall_boundary=ecall-riscv_swint-dispatch_syscall
+syscall_stack=caller-user-stack-upstream-protected-pmp
+kernel_stack_hardening=deferred-requires-addrenv-aware-port
 user_transition=riscv_jump_to_user-mret
-kernel_exception_stack=2048
-user_stack_trap_frames=forbidden
 user_programs=nsh,hello
 runtime=not-yet-qualified
 profile=rv32im_zicsr_zifencei
