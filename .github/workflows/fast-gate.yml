@@ -88,11 +88,13 @@ jobs:
         shell: bash
         run: python3 -m unittest discover -s tests_py -v
 
-      - name: Focused configuration, PLIC, UART, machine interrupt and WFI Chisel tests
+      - name: Focused configuration, RV32A, PLIC, UART, machine interrupt and WFI Chisel tests
         if: steps.changes.outputs.run_chisel == 'true'
         shell: bash
         run: |
           ./mill aethercore.test.testOnly aethercore.CoreConfigSpec
+          ./mill aethercore.test.testOnly aethercore.DecoderSpec
+          ./mill aethercore.test.testOnly aethercore.RV32AtomicCoreSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicMmioSpec
           ./mill aethercore.test.testOnly aethercore.MachineUartRxSpec
@@ -157,7 +159,8 @@ jobs:
             echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- CoreConfigSpec freezes the exact NuttX RV32IMU + PMP4 + Zicsr/Zifencei profile'
+            echo '- CoreConfigSpec freezes the exact NuttX RV32IMU + PMP4 + Zicsr/Zifencei profile until RV32A qualification is complete'
+            echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
             echo '- cached Verilator identity is checked without a disposable build probe'
