@@ -75,7 +75,24 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             self.assertIn(fragment, text)
         self.assertNotIn("user_stack_trap_frames=forbidden", text)
 
-    def test_p1_is_fail_closed_on_isolation_and_isa(self) -> None:
+    def test_p1_requires_real_rv32a_userspace_code(self) -> None:
+        text = SCRIPT.read_text()
+        for fragment in (
+            '"CONFIG_ARCH_CHIP_QEMU_RV_ISA_A": True',
+            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A",
+            "riscv64-unknown-elf-objdump -d nuttx_user",
+            "user-disassembly.txt",
+            "RV32IMA userspace contains no LR/SC/AMO word instruction",
+            "atomic_extension=A",
+            "atomic_user_instructions=${atomic_user_instructions}",
+            "profile=rv32ima_zicsr_zifencei",
+            "p1-protected-rv32ima-build-v2",
+        ):
+            self.assertIn(fragment, text)
+        self.assertIn('if "a" not in extensions', text)
+        self.assertNotIn('for forbidden in ("a", "c", "f", "d", "v")', text)
+
+    def test_p1_is_fail_closed_on_isolation_and_remaining_isa_extensions(self) -> None:
         text = SCRIPT.read_text()
         for fragment in (
             "qemu_rv_configure_mpu",
@@ -97,7 +114,6 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "CONFIG_ARCH_KERNEL_STACK",
             "CONFIG_ARCH_USE_MMU",
             "CONFIG_ARCH_USE_S_MODE",
-            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A",
             "CONFIG_ARCH_CHIP_QEMU_RV_ISA_C",
         ):
             self.assertIn(forbidden, text)
