@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 
 
 DUAL_GUARD = "#if defined(CONFIG_ARCH_ADDRENV) && defined(CONFIG_ARCH_KERNEL_STACK)"
 KSTACK_GUARD = "#ifdef CONFIG_ARCH_KERNEL_STACK"
+DUAL_GUARD_RE = re.compile(
+    r"#if[ \t]+defined\s*\(\s*CONFIG_ARCH_ADDRENV\s*\)\s*&&\s*"
+    r"defined\s*\(\s*CONFIG_ARCH_KERNEL_STACK\s*\)"
+)
 
 
 def replace_once(path: Path, old: str, new: str, label: str) -> None:
@@ -32,9 +37,46 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
 
 
 def patch_prototype(path: Path, function: str) -> None:
-    old = f"{DUAL_GUARD}\nint {function}(FAR struct tcb_s *tcb);\n#endif"
-    new = f"{KSTACK_GUARD}\nint {function}(FAR struct tcb_s *tcb);\n#endif"
-    replace_once(path, old, new, f"{function} prototype guard")
+    """Patch only the documented declaration block for one kstack API.
+
+    Apache release tarballs and git snapshots may differ in whitespace or
+    trailing preprocessor comments.  Matching the whole three-line
+    guard/prototype/endif sequence was therefore needlessly brittle.  Keep the
+    operation fail-closed by first isolating the named API documentation block,
+    then require exactly one ADDRENV+KSTACK guard and exactly one expected
+    prototype inside that block.
+    """
+
+    text = path.read_text(encoding="utf-8")
+    marker = f" * Name: {function}\n"
+    marker_pos = text.find(marker)
+    if marker_pos < 0:
+        raise SystemExit(
+            f"P3 overlay FAIL: missing {function} documentation block in {path}"
+        )
+    next_block = text.find("/****************************************************************************", marker_pos + len(marker))
+    if next_block < 0:
+        raise SystemExit(
+            f"P3 overlay FAIL: unterminated {function} declaration block in {path}"
+        )
+
+    block = text[marker_pos:next_block]
+    prototype_re = re.compile(
+        rf"int\s+{re.escape(function)}\s*\(\s*FAR\s+struct\s+tcb_s\s*\*\s*tcb\s*\)\s*;"
+    )
+    prototype_matches = list(prototype_re.finditer(block))
+    guard_matches = list(DUAL_GUARD_RE.finditer(block))
+    if len(prototype_matches) != 1 or len(guard_matches) != 1:
+        preview = "\\n".join(block.splitlines()[-12:])
+        raise SystemExit(
+            "P3 overlay FAIL: expected one protected kernel-stack guard and "
+            f"one {function} prototype in {path}; guards={len(guard_matches)} "
+            f"prototypes={len(prototype_matches)}; block-tail=\\n{preview}"
+        )
+
+    patched_block = DUAL_GUARD_RE.sub(KSTACK_GUARD, block, count=1)
+    patched = text[:marker_pos] + patched_block + text[next_block:]
+    path.write_text(patched, encoding="utf-8")
 
 
 def patch_alloc_call(path: Path, call_prefix: str, label: str) -> None:
