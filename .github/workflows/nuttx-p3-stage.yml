@@ -3,7 +3,7 @@ name: NuttX Protected Fault Isolation
 on:
   push:
     branches:
-      - agent/nuttx-protected-p3-**
+      - agent/nuttx-protected-p3-fault-isolation
     paths:
       - software/nuttx/**
       - tests_py/test_nuttx_p1_protected_contract.py
@@ -99,7 +99,7 @@ jobs:
               "nuttx-${NUTTX_COMMIT}.tar.gz"
             fetch_release \
               "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" \
-              "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+              "nuttx-apps-${NUTTX_VERSION}.tar.gz"
           } 2>&1 | tee build/nuttx-p3-source-fetch.log
 
       - name: Prepare pinned NuttX host tools
