@@ -1,6 +1,7 @@
 package aethercore.core
 
 import chisel3._
+import chisel3.util._
 
 object Sv32Satp {
   val ModeBare: Int = 0
