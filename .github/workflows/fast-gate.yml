@@ -194,5 +194,5 @@ jobs:
             echo '- exact reference, adapter, runner, standard ELF/binary and IRQ ELF/binary hashes are emitted'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- path selection covers the complete pull-request base-to-head range, not only the newest commit'
-            echo '- the exact 29-stage gate remains mandatory through .github/full-gate-request'
+            echo '- the consolidated Full Gate, including the real Supervisor V1 executable stage, remains mandatory through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
