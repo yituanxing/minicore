@@ -55,6 +55,9 @@ object MachineExceptionCode {
   val EnvironmentCallFromU: Int = 8
   val EnvironmentCallFromS: Int = 9
   val EnvironmentCallFromM: Int = 11
+  val InstructionPageFault: Int = 12
+  val LoadPageFault: Int = 13
+  val StorePageFault: Int = 15
 }
 
 object MachineInterruptCode {
@@ -94,6 +97,17 @@ class DataBusIO(val addrBits: Int = 64, val dataBits: Int = 64) extends Bundle {
   val fault = Input(Bool())
 }
 
+/** Read-only physical-memory port used for implicit page-table-entry loads. */
+class PageTableReadBusIO(val addrBits: Int = 34) extends Bundle {
+  require(addrBits >= 34, s"Sv32 PTW physical address width must be at least 34, got $addrBits")
+
+  val valid = Output(Bool())
+  val addr = Output(UInt(addrBits.W))
+  val ready = Input(Bool())
+  val rdata = Input(UInt(32.W))
+  val fault = Input(Bool())
+}
+
 class CommitTrace(
     val xlen: Int = 64,
     val paddrBits: Int = 64,
@@ -120,9 +134,6 @@ class CommitTrace(
   val exceptionCause = UInt(xlen.W)
   val exceptionValue = UInt(xlen.W)
 
-  // An asynchronous interrupt is taken after this normal instruction retires. The
-  // interrupted PC names the oldest younger instruction that must be replayed
-  // after MRET, rather than the retiring instruction reported above.
   val interrupt = Bool()
   val interruptCause = UInt(xlen.W)
   val interruptPc = UInt(xlen.W)
