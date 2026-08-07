@@ -7,6 +7,7 @@ final case class IsaConfig(
     extensions: Set[Char],
     privilegeModes: Set[Char],
     zExtensions: Set[String] = Set.empty,
+    virtualMemoryModes: Set[String] = Set.empty,
     pmpEntries: Int = 0
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
@@ -15,6 +16,14 @@ final case class IsaConfig(
   require(
     zExtensions.forall(name => name.startsWith("Z") && name.length > 1),
     s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
+  )
+  require(
+    virtualMemoryModes.subsetOf(Set("Sv32")),
+    s"unsupported virtual-memory mode set: $virtualMemoryModes"
+  )
+  require(
+    !virtualMemoryModes.contains("Sv32") || (xlen == 32 && privilegeModes.contains('S')),
+    "Sv32 requires RV32 with Supervisor mode"
   )
   require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
   require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
@@ -28,6 +37,7 @@ final case class IsaConfig(
   val hasZifencei: Boolean = zExtensions.contains("Zifencei")
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
+  val hasSv32: Boolean = virtualMemoryModes.contains("Sv32")
   val hasWordOps: Boolean = xlen == 64
   val hasPmp: Boolean = pmpEntries > 0
 
