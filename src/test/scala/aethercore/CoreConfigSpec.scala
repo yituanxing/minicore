@@ -65,21 +65,29 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
-  it should "describe the exact NuttX protected OS profile" in {
+  it should "keep the pre-atomic protected profile available for regressions" in {
     val config = CoreProfiles.rv32imuPmpOsSoftware
 
     config.name shouldBe "rv32imu-pmp-os-software"
+    config.isa.hasA shouldBe false
+    config.isa.march shouldBe "rv32im_zicsr_zifencei"
+  }
+
+  it should "describe the exact NuttX protected RV32IMAU OS profile" in {
+    val config = CoreProfiles.rv32imauPmpOsSoftware
+
+    config.name shouldBe "rv32imau-pmp-os-software"
     config.isa.xlen shouldBe 32
     config.isa.hasM shouldBe true
+    config.isa.hasA shouldBe true
     config.isa.hasU shouldBe true
     config.isa.hasS shouldBe false
     config.isa.hasPmp shouldBe true
     config.isa.pmpEntries shouldBe 4
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe true
-    config.isa.hasA shouldBe false
     config.isa.hasC shouldBe false
-    config.isa.march shouldBe "rv32im_zicsr_zifencei"
+    config.isa.march shouldBe "rv32ima_zicsr_zifencei"
     config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
