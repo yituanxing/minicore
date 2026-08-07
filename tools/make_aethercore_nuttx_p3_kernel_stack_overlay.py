@@ -224,7 +224,7 @@ def main() -> None:
     print("P3 kernel-stack overlay PASS")
     print("  CONFIG_ARCH_KERNEL_STACK is visible to pure BUILD_PROTECTED configurations")
     print("  CONFIG_ARCH_KERNEL_STACK may allocate/free per-task kernel stacks without ARCH_ADDRENV")
-    print("  addrenv join/switch/leave, mapping, MMU and S-mode behavior remain untouched")
+    print("  addrenv join/switch/leave, MMU and S-mode behavior remain untouched")
 
 
 if __name__ == "__main__":
