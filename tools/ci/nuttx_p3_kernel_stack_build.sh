@@ -95,11 +95,8 @@ if [[ "${olddefconfig_rc}" -ne 0 ]]; then
   exit 3
 fi
 
-# The build probe deliberately fails here if pinned Kconfig still hides the
-# kernel-stack option.  We do not patch Kconfig speculatively.
 grep -Fqx 'CONFIG_ARCH_KERNEL_STACK=y' .config || {
   echo "P3-A FAIL: olddefconfig removed CONFIG_ARCH_KERNEL_STACK=y" >&2
-  echo "P3-A NOTE: patch the pinned Kconfig visibility only after this real failure is observed" >&2
   exit 3
 }
 grep -Fqx "CONFIG_ARCH_KERNEL_STACKSIZE=${KSTACK_SIZE}" .config || {
@@ -149,12 +146,64 @@ riscv64-unknown-elf-readelf -A nuttx_user > "${OUT_DIR}/evidence/user-elf-attrib
 riscv64-unknown-elf-objdump -dr nuttx > "${OUT_DIR}/evidence/kernel-disassembly.txt"
 
 for symbol in up_addrenv_kstackalloc up_addrenv_kstackfree \
-  riscv_exception exception_common riscv_percpu_set_kstack; do
+  riscv_exception exception_common riscv_jump_to_user; do
   grep -Eq "[[:space:]]${symbol}$" "${OUT_DIR}/evidence/kernel-symbols.txt" || {
     echo "P3-A FAIL: hardened kernel image is missing ${symbol}" >&2
     exit 4
   }
 done
+
+# NuttX 13.0.0 defines riscv_percpu_set_kstack(), but the pinned protected
+# path does not call that helper.  With --gc-sections it is therefore valid
+# for the helper to disappear from the final ELF.  Qualify the real mechanism
+# instead: exception_common must move U-mode SP into the per-CPU USP slot,
+# load/consume the per-CPU KSP slot, and return_from_exception must publish the
+# unwound kernel SP back to that KSP slot before mret to userspace.
+python3 - "${OUT_DIR}/evidence/kernel-disassembly.txt" \
+  "${OUT_DIR}/evidence/kernel-stack-disassembly-summary.txt" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+disassembly = Path(sys.argv[1]).read_text(errors="replace")
+summary = Path(sys.argv[2])
+
+
+def function(name: str) -> str:
+    match = re.search(
+        rf"^[0-9a-f]+ <{re.escape(name)}>:\n(.*?)(?=^[0-9a-f]+ <|\Z)",
+        disassembly,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not match:
+        raise SystemExit(f"P3-A FAIL: disassembly is missing function {name}")
+    return match.group(1)
+
+
+entry = function("exception_common")
+ret = function("return_from_exception")
+jump = function("riscv_jump_to_user")
+checks = [
+    ("entry swaps mscratch", entry, r"\bcsrrw\s+a0,mscratch,a0\b"),
+    ("entry saves user SP", entry, r"\bsw\s+sp,12\(a0\)\b"),
+    ("entry loads kernel SP", entry, r"\blw\s+sp,16\(a0\)\b"),
+    ("entry consumes kernel SP", entry, r"\bsw\s+zero,16\(a0\)\b"),
+    ("return publishes kernel SP", ret, r"\bsw\s+a0,16\(s0\)\b"),
+    ("return executes mret", ret, r"\bmret\b"),
+    ("initial user jump reaches return path", jump, r"\bj\s+[0-9a-f]+\s+<return_from_exception>"),
+]
+for label, body, pattern in checks:
+    if not re.search(pattern, body):
+        raise SystemExit(f"P3-A FAIL: hardened kernel lacks {label}")
+
+summary.write_text(
+    "P3-A kernel-stack disassembly PASS\n"
+    "entry=save-USP/load-KSP/consume-KSP\n"
+    "return=publish-KSP/mret\n"
+    "initial-user-jump=return_from_exception\n"
+)
+print(summary.read_text(), end="")
+PY
 
 # Keep the same deterministic protected load-image layout as frozen P1/P2.
 python3 - "${OUT_DIR}/nuttx.bin" "${OUT_DIR}/nuttx_user.bin" \
@@ -199,6 +248,7 @@ userspace_privilege=U
 kernel_privilege=M
 pmp_entries=4
 profile=rv32ima_zicsr_zifencei
+kernel_stack_machine_path=qualified
 runtime=not-yet-qualified
 fault_isolation=not-yet-qualified
 EOF
