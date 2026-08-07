@@ -31,7 +31,7 @@ class NuttxP3KernelStackContractTest(unittest.TestCase):
             self.assertIn(fragment, text)
 
         # P3 must not invent a fake address environment or bypass exception
-        # recovery.  Configuration and runtime qualification are later gates.
+        # recovery. Configuration and runtime qualification are later gates.
         for forbidden in (
             "CONFIG_ARCH_USE_S_MODE=y",
             "CONFIG_ARCH_USE_MMU=y",
@@ -82,13 +82,25 @@ class NuttxP3KernelStackContractTest(unittest.TestCase):
             put(
                 "include/nuttx/arch.h",
                 f"""
-                {DUAL}
+                /****************************************************************************
+                 * Name: up_addrenv_kstackalloc
+                 ****************************************************************************/
+
+                #if   defined ( CONFIG_ARCH_ADDRENV ) && defined(CONFIG_ARCH_KERNEL_STACK)
                 int up_addrenv_kstackalloc(FAR struct tcb_s *tcb);
                 #endif
+
+                /****************************************************************************
+                 * Name: up_addrenv_kstackfree
+                 ****************************************************************************/
 
                 {DUAL}
                 int up_addrenv_kstackfree(FAR struct tcb_s *tcb);
                 #endif
+
+                /****************************************************************************
+                 * Name: next_arch_api
+                 ****************************************************************************/
                 """,
             )
             put(
@@ -191,6 +203,10 @@ class NuttxP3KernelStackContractTest(unittest.TestCase):
                 text = (root / relative).read_text()
                 self.assertNotIn(DUAL, text, relative)
                 self.assertIn(SINGLE, text, relative)
+
+            arch_h = (root / "include/nuttx/arch.h").read_text()
+            self.assertNotIn("#if   defined ( CONFIG_ARCH_ADDRENV )", arch_h)
+            self.assertEqual(arch_h.count(SINGLE), 2)
 
             fork = (root / "sched/task/task_fork.c").read_text()
             pthread = (root / "sched/pthread/pthread_create.c").read_text()
