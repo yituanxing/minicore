@@ -148,6 +148,7 @@ class AetherCore(
     csrFile.io.externalInterrupt.get := rawExternalInterrupt
   }
   csrFile.io.trapReturn := takingMret
+  csrFile.io.trapReturnSupervisor := takingMret && memWb.inst === "h10200073".U
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
   val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt
@@ -296,7 +297,7 @@ class AetherCore(
   val sretInstruction = idEx.inst === "h10200073".U
   val xretException = idEx.ctrl.mret && (
     (mretInstruction && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U) ||
-      (sretInstruction && csrFile.io.currentPrivilege =/= PrivilegeMode.Supervisor.U)
+      (sretInstruction && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U)
   )
 
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
