@@ -8,6 +8,8 @@ import aethercore.config.IsaConfig
 object MachineCsrAddress {
   val Mstatus: Int = 0x300
   val Misa: Int = 0x301
+  val Medeleg: Int = 0x302
+  val Mideleg: Int = 0x303
   val Mie: Int = 0x304
   val Mtvec: Int = 0x305
   val Mscratch: Int = 0x340
@@ -18,26 +20,61 @@ object MachineCsrAddress {
   val Mhartid: Int = 0xf14
 }
 
+object SupervisorCsrAddress {
+  val Sstatus: Int = 0x100
+  val Sie: Int = 0x104
+  val Stvec: Int = 0x105
+  val Sscratch: Int = 0x140
+  val Sepc: Int = 0x141
+  val Scause: Int = 0x142
+  val Stval: Int = 0x143
+  val Sip: Int = 0x144
+}
+
 object MachineCsrBit {
+  val SstatusSie: Int = 1
   val MstatusMie: Int = 3
+  val SstatusSpie: Int = 5
   val MstatusMpie: Int = 7
+  val SstatusSpp: Int = 8
   val MstatusMppLow: Int = 11
   val MachineTimerInterrupt: Int = 7
   val MachineExternalInterrupt: Int = 11
 }
 
 object MachineCsrWarl {
+  private def supervisorStatusMask(isa: IsaConfig): BigInt = {
+    if (!isa.hasS) BigInt(0)
+    else
+      (BigInt(1) << MachineCsrBit.SstatusSie) |
+        (BigInt(1) << MachineCsrBit.SstatusSpie) |
+        (BigInt(1) << MachineCsrBit.SstatusSpp)
+  }
+
+  private def machineStatusMask(isa: IsaConfig): BigInt =
+    (BigInt(1) << MachineCsrBit.MstatusMie) |
+      (BigInt(1) << MachineCsrBit.MstatusMpie) |
+      (BigInt(3) << MachineCsrBit.MstatusMppLow) |
+      supervisorStatusMask(isa)
+
+  private def delegableExceptionMask(isa: IsaConfig): BigInt = {
+    if (!isa.hasS) BigInt(0)
+    else {
+      // V1 only delegates synchronous exception classes the core already
+      // implements. ECALL-from-M (11) is intentionally not delegable.
+      Seq(1, 2, 3, 5, 7, 8, 9).foldLeft(BigInt(0))((mask, bit) => mask | (BigInt(1) << bit))
+    }
+  }
+
   def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
     val xlen = isa.xlen
     val allBits = (BigInt(1) << xlen) - 1
-    val mstatusNonMppMask =
-      (BigInt(1) << MachineCsrBit.MstatusMie) |
-        (BigInt(1) << MachineCsrBit.MstatusMpie)
     val machineInterruptMask =
       (BigInt(1) << MachineCsrBit.MachineTimerInterrupt) |
         (BigInt(1) << MachineCsrBit.MachineExternalInterrupt)
     val mtvecMask = allBits & ~BigInt(3)
-    val mepcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
+    val epcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
+    val sstatusMask = supervisorStatusMask(isa)
 
     val result = WireDefault(data)
     switch(address) {
@@ -68,11 +105,27 @@ object MachineCsrWarl {
         } else {
           PrivilegeMode.Machine.U(2.W)
         }
-        result := (data & mstatusNonMppMask.U(xlen.W)) | (legalMpp << 11)
+        result :=
+          (data & (machineStatusMask(isa) & ~(BigInt(3) << MachineCsrBit.MstatusMppLow)).U(xlen.W)) |
+            (legalMpp << MachineCsrBit.MstatusMppLow)
+      }
+      is(MachineCsrAddress.Medeleg.U) {
+        result := data & delegableExceptionMask(isa).U(xlen.W)
+      }
+      is(MachineCsrAddress.Mideleg.U) {
+        // No supervisor-level interrupt source is wired in V1. Keep mideleg
+        // architecturally present but WARL-zero rather than pretending that
+        // MTIP/MEIP are supervisor interrupts.
+        result := 0.U
       }
       is(MachineCsrAddress.Mie.U) { result := data & machineInterruptMask.U(xlen.W) }
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
-      is(MachineCsrAddress.Mepc.U) { result := data & mepcMask.U(xlen.W) }
+      is(MachineCsrAddress.Mepc.U) { result := data & epcMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Sstatus.U) { result := data & sstatusMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Sie.U) { result := 0.U }
+      is(SupervisorCsrAddress.Stvec.U) { result := data & mtvecMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Sepc.U) { result := data & epcMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Sip.U) { result := 0.U }
     }
 
     if (isa.hasPmp) {
@@ -95,13 +148,20 @@ class MachineCsrFile(
 ) extends Module {
   private val xlen = isa.xlen
   private val allBits = (BigInt(1) << xlen) - 1
+  private val sstatusSie = BigInt(1) << MachineCsrBit.SstatusSie
   private val mstatusMie = BigInt(1) << MachineCsrBit.MstatusMie
+  private val sstatusSpie = BigInt(1) << MachineCsrBit.SstatusSpie
   private val mstatusMpie = BigInt(1) << MachineCsrBit.MstatusMpie
+  private val sstatusSpp = BigInt(1) << MachineCsrBit.SstatusSpp
   private val mstatusMpp = BigInt(3) << MachineCsrBit.MstatusMppLow
+  private val supervisorStatusMask =
+    if (isa.hasS) sstatusSie | sstatusSpie | sstatusSpp else BigInt(0)
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val machineExternalMask = BigInt(1) << MachineCsrBit.MachineExternalInterrupt
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
   private val mstatusTransitionPreserveMask = allBits & ~mstatusTransitionMask
+  private val sstatusTransitionMask = sstatusSie | sstatusSpie | sstatusSpp
+  private val sstatusTransitionPreserveMask = allBits & ~sstatusTransitionMask
   private val leastPrivilege =
     if (isa.hasU) BigInt(PrivilegeMode.User)
     else if (isa.hasS) BigInt(PrivilegeMode.Supervisor)
@@ -145,19 +205,31 @@ class MachineCsrFile(
     val trapCause = Input(UInt(xlen.W))
     val trapValue = Input(UInt(xlen.W))
     val trapVector = Output(UInt(xlen.W))
+    val trapDelegatedToSupervisor = Output(Bool())
 
+    // trapReturn is the retirement pulse; trapReturnSupervisor identifies
+    // SRET explicitly. This matters because SRET is legal in M-mode as well
+    // as S-mode, so current privilege alone cannot identify the xRET kind.
     val trapReturn = Input(Bool())
+    val trapReturnSupervisor = Input(Bool())
     val returnPc = Output(UInt(xlen.W))
   })
 
   val privilege = RegInit(PrivilegeMode.Machine.U(2.W))
   val mstatus = RegInit(0.U(xlen.W))
+  val medeleg = RegInit(0.U(xlen.W))
+  val mideleg = RegInit(0.U(xlen.W))
   val mie = RegInit(0.U(xlen.W))
   val mtvec = RegInit(0.U(xlen.W))
   val mscratch = RegInit(0.U(xlen.W))
   val mepc = RegInit(0.U(xlen.W))
   val mcause = RegInit(0.U(xlen.W))
   val mtval = RegInit(0.U(xlen.W))
+  val stvec = RegInit(0.U(xlen.W))
+  val sscratch = RegInit(0.U(xlen.W))
+  val sepc = RegInit(0.U(xlen.W))
+  val scause = RegInit(0.U(xlen.W))
+  val stval = RegInit(0.U(xlen.W))
 
   val pmp = Module(new PmpCsrFile(isa))
   pmp.io.readAddr := io.readAddr
@@ -170,10 +242,17 @@ class MachineCsrFile(
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val ordinaryWrite = io.writeEnable
 
+  val sstatusWriteValue =
+    (mstatus & (~supervisorStatusMask & allBits).U(xlen.W)) |
+      (canonicalWriteData & supervisorStatusMask.U(xlen.W))
   val effectiveMstatus = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mstatus.U,
     canonicalWriteData,
-    mstatus
+    Mux(
+      ordinaryWrite && io.writeAddr === SupervisorCsrAddress.Sstatus.U,
+      sstatusWriteValue,
+      mstatus
+    )
   )
   val effectiveMie = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mie.U,
@@ -184,6 +263,11 @@ class MachineCsrFile(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mtvec.U,
     canonicalWriteData,
     mtvec
+  )
+  val effectiveStvec = Mux(
+    ordinaryWrite && io.writeAddr === SupervisorCsrAddress.Stvec.U,
+    canonicalWriteData,
+    stvec
   )
   val effectiveMscratch = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mscratch.U,
@@ -199,6 +283,14 @@ class MachineCsrFile(
   val machineInterruptGloballyEnabled =
     privilege < PrivilegeMode.Machine.U || effectiveMstatus(MachineCsrBit.MstatusMie)
 
+  val trapIsInterrupt = io.trapCause(xlen - 1)
+  val trapCauseIndex = io.trapCause(log2Ceil(xlen) - 1, 0)
+  val delegatedException = medeleg(trapCauseIndex)
+  val delegatedInterrupt = mideleg(trapCauseIndex)
+  val trapDelegatedToSupervisor =
+    isa.hasS.B && privilege =/= PrivilegeMode.Machine.U &&
+      Mux(trapIsInterrupt, delegatedInterrupt, delegatedException)
+
   io.currentPrivilege := privilege
   io.machineTimerInterrupt :=
     io.timerInterrupt && effectiveMie(MachineCsrBit.MachineTimerInterrupt) &&
@@ -208,8 +300,11 @@ class MachineCsrFile(
       rawExternalInterrupt && effectiveMie(MachineCsrBit.MachineExternalInterrupt) &&
         machineInterruptGloballyEnabled
   }
-  io.trapVector := effectiveMtvec
-  io.returnPc := mepc
+  io.trapDelegatedToSupervisor := trapDelegatedToSupervisor
+  io.trapVector := Mux(trapDelegatedToSupervisor, effectiveStvec, effectiveMtvec)
+  val returningViaSupervisor =
+    isa.hasS.B && (io.trapReturnSupervisor || privilege === PrivilegeMode.Supervisor.U)
+  io.returnPc := Mux(returningViaSupervisor, sepc, mepc)
   io.readData := 0.U
   io.readImplemented := false.B
   io.readWritable := false.B
@@ -267,36 +362,119 @@ class MachineCsrFile(
     }
   }
 
+  if (isa.hasS) {
+    switch(io.readAddr) {
+      is(MachineCsrAddress.Medeleg.U) {
+        io.readData := medeleg
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(MachineCsrAddress.Mideleg.U) {
+        io.readData := mideleg
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Sstatus.U) {
+        io.readData := mstatus & supervisorStatusMask.U(xlen.W)
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Sie.U) {
+        io.readData := mie & mideleg
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Stvec.U) {
+        io.readData := stvec
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Sscratch.U) {
+        io.readData := sscratch
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Sepc.U) {
+        io.readData := sepc
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Scause.U) {
+        io.readData := scause
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Stval.U) {
+        io.readData := stval
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+      is(SupervisorCsrAddress.Sip.U) {
+        io.readData := mipValue & mideleg
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
+    }
+  }
+
   when(pmp.io.readImplemented) {
     io.readData := pmp.io.readData
     io.readImplemented := true.B
     io.readWritable := pmp.io.readWritable
   }
 
-  val canonicalTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
-  val trapMstatus =
+  val canonicalMachineTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
+  val canonicalSupervisorTrapPc = MachineCsrWarl.canonicalize(isa, SupervisorCsrAddress.Sepc.U, io.trapPc)
+  val machineTrapMstatus =
     (effectiveMstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
       (effectiveMstatus(MachineCsrBit.MstatusMie).asUInt << MachineCsrBit.MstatusMpie) |
       (privilege << MachineCsrBit.MstatusMppLow)
-  val returnPrivilege = mstatus(12, 11)
-  val returnMstatus =
+  val supervisorTrapMstatus =
+    (effectiveMstatus & sstatusTransitionPreserveMask.U(xlen.W)) |
+      (effectiveMstatus(MachineCsrBit.SstatusSie).asUInt << MachineCsrBit.SstatusSpie) |
+      ((privilege === PrivilegeMode.Supervisor.U).asUInt << MachineCsrBit.SstatusSpp)
+
+  val machineReturnPrivilege = mstatus(12, 11)
+  val machineReturnMstatus =
     (mstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
       (mstatus(MachineCsrBit.MstatusMpie).asUInt << MachineCsrBit.MstatusMie) |
       mstatusMpie.U(xlen.W) |
       (leastPrivilege << MachineCsrBit.MstatusMppLow).U(xlen.W)
 
+  val supervisorReturnPrivilege =
+    if (isa.hasU) Mux(mstatus(MachineCsrBit.SstatusSpp), PrivilegeMode.Supervisor.U, PrivilegeMode.User.U)
+    else PrivilegeMode.Supervisor.U(2.W)
+  val supervisorReturnMstatus =
+    (mstatus & sstatusTransitionPreserveMask.U(xlen.W)) |
+      (mstatus(MachineCsrBit.SstatusSpie).asUInt << MachineCsrBit.SstatusSie) |
+      sstatusSpie.U(xlen.W)
+
   when(io.trapEnter) {
-    privilege := PrivilegeMode.Machine.U
-    mstatus := trapMstatus
+    when(trapDelegatedToSupervisor) {
+      privilege := PrivilegeMode.Supervisor.U
+      mstatus := supervisorTrapMstatus
+      sepc := canonicalSupervisorTrapPc
+      scause := io.trapCause
+      stval := io.trapValue
+    }.otherwise {
+      privilege := PrivilegeMode.Machine.U
+      mstatus := machineTrapMstatus
+      mepc := canonicalMachineTrapPc
+      mcause := io.trapCause
+      mtval := io.trapValue
+    }
     mie := effectiveMie
     mtvec := effectiveMtvec
+    stvec := effectiveStvec
     mscratch := effectiveMscratch
-    mepc := canonicalTrapPc
-    mcause := io.trapCause
-    mtval := io.trapValue
   }.elsewhen(io.trapReturn) {
-    privilege := returnPrivilege
-    mstatus := returnMstatus
+    when(isa.hasS.B && io.trapReturnSupervisor) {
+      privilege := supervisorReturnPrivilege
+      mstatus := supervisorReturnMstatus
+    }.otherwise {
+      privilege := machineReturnPrivilege
+      mstatus := machineReturnMstatus
+    }
   }.elsewhen(ordinaryWrite) {
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
@@ -306,6 +484,26 @@ class MachineCsrFile(
       is(MachineCsrAddress.Mepc.U) { mepc := canonicalWriteData }
       is(MachineCsrAddress.Mcause.U) { mcause := canonicalWriteData }
       is(MachineCsrAddress.Mtval.U) { mtval := canonicalWriteData }
+    }
+
+    if (isa.hasS) {
+      switch(io.writeAddr) {
+        is(MachineCsrAddress.Medeleg.U) { medeleg := canonicalWriteData }
+        is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
+        is(SupervisorCsrAddress.Sstatus.U) { mstatus := sstatusWriteValue }
+        is(SupervisorCsrAddress.Sie.U) {
+          // V1 has no delegated supervisor interrupt bits, so this is a
+          // writable WARL-zero alias and deliberately leaves mie unchanged.
+        }
+        is(SupervisorCsrAddress.Stvec.U) { stvec := canonicalWriteData }
+        is(SupervisorCsrAddress.Sscratch.U) { sscratch := canonicalWriteData }
+        is(SupervisorCsrAddress.Sepc.U) { sepc := canonicalWriteData }
+        is(SupervisorCsrAddress.Scause.U) { scause := canonicalWriteData }
+        is(SupervisorCsrAddress.Stval.U) { stval := canonicalWriteData }
+        is(SupervisorCsrAddress.Sip.U) {
+          // All currently implemented pending bits are hardware-driven.
+        }
+      }
     }
   }
 }

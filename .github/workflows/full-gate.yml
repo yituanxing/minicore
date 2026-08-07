@@ -65,6 +65,13 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate.sh chisel
 
+      - name: RV32 Supervisor V1 executable M-S-U qualification
+        shell: bash
+        run: |
+          make -j"$(nproc)" -f Makefile.rv32im-supervisor-v1 \
+            BUILD_DIR=build/rv32im-supervisor-v1 \
+            JOBS="$(nproc)" run-local
+
       - name: RV64 RTL, smoke and precise pipeline regressions
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-smoke
@@ -150,6 +157,8 @@ jobs:
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
             echo '- historical FreeRTOS exact DiffTest runs at stall=0 and stall=5 with a deliberate mismatch probe'
             echo '- fast architectural gates run before long software workloads'
+            echo '- Supervisor V1 executes a real RV32IM/Zicsr ELF through M->S, S/U delegated ECALLs and SRET at stall=0 and stall=3'
+            echo '- Supervisor V1 keeps Sv32 disabled and mideleg WARL-zero until genuine S-level interrupt sources exist'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
             echo '- PMP partitions kernel, user text and user data before any MMIO side effect'

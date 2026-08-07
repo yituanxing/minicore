@@ -125,6 +125,8 @@ class AetherCore(
   dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
   val takingTrap = memWb.valid && memWb.trap.valid
+  // The legacy pipeline field is now the generic xRET retirement handshake.
+  // Decoder only raises it for MRET/SRET; privilege legality is checked below.
   val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
 
   io.imem.addr := pc
@@ -146,6 +148,7 @@ class AetherCore(
     csrFile.io.externalInterrupt.get := rawExternalInterrupt
   }
   csrFile.io.trapReturn := takingMret
+  csrFile.io.trapReturnSupervisor := takingMret && memWb.inst === "h10200073".U
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
   val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt
@@ -290,8 +293,12 @@ class AetherCore(
   val csrException = csrInstruction && !csrLegal
   val wfiException =
     idEx.ctrl.wfi && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
-  val mretException =
-    idEx.ctrl.mret && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
+  val mretInstruction = idEx.inst === "h30200073".U
+  val sretInstruction = idEx.inst === "h10200073".U
+  val xretException = idEx.ctrl.mret && (
+    (mretInstruction && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U) ||
+      (sretInstruction && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U)
+  )
 
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
@@ -387,7 +394,7 @@ class AetherCore(
       Mux(
         exMem.ctrl.memUnsigned,
         Cat(0.U((xlen - bits).W), value),
-        Cat(Fill(xlen - bits, value(bits - 1)), value)
+        Cat(Fill(xlen - bits, value(bits - 1)), value(bits - 1, 0))
       )
     }
   }
@@ -561,7 +568,7 @@ class AetherCore(
     exMem.csrAddr := csrAddr
     exMem.csrData := canonicalCsrWriteData
     exMem.trap := idEx.trap
-    when((csrException || wfiException || mretException) && !idEx.trap.valid) {
+    when((csrException || wfiException || xretException) && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
       exMem.trap.value := idExInstructionValue

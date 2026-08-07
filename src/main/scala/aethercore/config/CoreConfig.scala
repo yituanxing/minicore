@@ -121,6 +121,20 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  // V1 supervisor bring-up profile. Keep it intentionally small: no PMP,
+  // atomics or virtual memory are required to qualify M -> S, delegated traps
+  // and SRET. Sv32 is a later milestone and must not leak into this profile.
+  val rv32imsuSoftware: CoreConfig = CoreConfig(
+    name = "rv32imsu-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
   val rv32imuPmpSoftware: CoreConfig = CoreConfig(
     name = "rv32imu-pmp-software",
     isa = IsaConfig(

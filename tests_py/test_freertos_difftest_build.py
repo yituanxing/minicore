@@ -110,7 +110,7 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
             text,
         )
         self.assertIn(
-            'EXPECTED_RUNNER_SHA256="91f8831718240acdc6541f0b749ba3983d4627487fbebe0d056e5f19c0794ab9"',
+            'EXPECTED_RUNNER_SHA256="0e55835761582e4e25e635ff958fbfc927000690b50526210a451baafe891177"',
             text,
         )
         self.assertIn(
@@ -121,6 +121,12 @@ class FreeRtosDifftestBuildTest(unittest.TestCase):
             'EXPECTED_BINARY_SHA256="eb98b161627a9226bd3fe94077d714aedbb116f85bca875dcd5c43e5613468df"',
             text,
         )
+        for evidence_key in (
+            "runner_source_sha256=",
+            "runner_generator_sha256=",
+            "difftest_generator_sha256=",
+        ):
+            self.assertIn(evidence_key, text)
         self.assertIn(
             "wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199",
             text,

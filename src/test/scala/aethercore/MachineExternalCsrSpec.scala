@@ -22,6 +22,7 @@ class MachineExternalCsrSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.trapCause.poke(0.U)
     dut.io.trapValue.poke(0.U)
     dut.io.trapReturn.poke(false.B)
+    dut.io.trapReturnSupervisor.poke(false.B)
   }
 
   private def write(dut: MachineCsrFile, address: Int, value: BigInt): Unit = {

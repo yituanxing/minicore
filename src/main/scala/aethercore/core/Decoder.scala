@@ -254,6 +254,11 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
           }.elsewhen(io.inst === "h30200073".U && hasZicsr.B) {
             c.illegal := false.B
             c.mret := true.B
+          }.elsewhen(io.inst === "h10200073".U && hasZicsr.B && isa.hasS.B) {
+            // Keep the existing pipeline return bit as the generic xRET
+            // handshake for V1. AetherCore validates MRET vs SRET privilege.
+            c.illegal := false.B
+            c.mret := true.B
           }
         }
         is("b001".U) {

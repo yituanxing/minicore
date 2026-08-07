@@ -22,6 +22,7 @@ class PrivilegeModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.trapCause.poke(0.U)
     dut.io.trapValue.poke(0.U)
     dut.io.trapReturn.poke(false.B)
+    dut.io.trapReturnSupervisor.poke(false.B)
   }
 
   private def read(dut: MachineCsrFile, address: Int): BigInt = {
@@ -38,6 +39,7 @@ class PrivilegeModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
   }
 
   private def mret(dut: MachineCsrFile): Unit = {
+    dut.io.trapReturnSupervisor.poke(false.B)
     dut.io.trapReturn.poke(true.B)
     dut.clock.step()
     dut.io.trapReturn.poke(false.B)

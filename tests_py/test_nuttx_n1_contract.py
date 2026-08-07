@@ -26,8 +26,11 @@ class NuttxN1ContractTest(unittest.TestCase):
 
     def test_n1_is_build_qualification_not_boot_claim(self) -> None:
         text = README.read_text()
-        self.assertIn("N1 is build qualification", text)
-        self.assertIn("does **not** claim that the image boots", text)
+        n1 = "N1 — pinned host build"
+        n2 = "N2 — AetherCore boot and console"
+        self.assertIn(n1, text)
+        self.assertIn(n2, text)
+        self.assertLess(text.index(n1), text.index(n2))
         self.assertIn("freeze/zephyr-v3.7.2-z1-z4", text)
 
     def test_build_is_fail_closed_on_the_aethercore_isa(self) -> None:
