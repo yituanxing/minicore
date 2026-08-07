@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   fast-gate:
-    name: Incremental source, privilege, interrupt and FreeRTOS checks
+    name: Incremental source, VM, privilege, interrupt and FreeRTOS checks
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 20
     env:
@@ -96,12 +96,14 @@ jobs:
         shell: bash
         run: python3 -m unittest discover -s tests_py -v
 
-      - name: Focused configuration, privilege, RV32A, interrupt and WFI Chisel tests
+      - name: Focused VM, configuration, privilege, RV32A, interrupt and WFI Chisel tests
         if: steps.changes.outputs.run_chisel == 'true'
         shell: bash
         run: |
           ./mill aethercore.test.testOnly aethercore.CoreConfigSpec
           ./mill aethercore.test.testOnly aethercore.DecoderSpec
+          ./mill aethercore.test.testOnly aethercore.Sv32PageTableWalkerSpec
+          ./mill aethercore.test.testOnly aethercore.Sv32SatpRegisterSpec
           ./mill aethercore.test.testOnly aethercore.MachineCsrFileSpec
           ./mill aethercore.test.testOnly aethercore.PrivilegeModeSpec
           ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
@@ -182,6 +184,7 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
+            echo '- VM focused tests cover the standalone Sv32 page-table walker and bounded RV32 satp WARL state'
             echo '- CoreConfigSpec covers the frozen OS profiles plus the bounded V1 M/S/U supervisor profile'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
@@ -194,5 +197,5 @@ jobs:
             echo '- exact reference, adapter, runner, standard ELF/binary and IRQ ELF/binary hashes are emitted'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- path selection covers the complete pull-request base-to-head range, not only the newest commit'
-            echo '- the consolidated Full Gate, including the real Supervisor V1 executable stage, remains mandatory through .github/full-gate-request'
+            echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
