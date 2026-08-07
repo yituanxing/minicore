@@ -24,16 +24,18 @@ def generate_runner() -> str:
 
 
 class NuttxP2RuntimeContractTest(unittest.TestCase):
-    def test_sim_top_combines_umode_pmp_timer_and_external_interrupts(self) -> None:
+    def test_sim_top_combines_umode_rv32a_pmp_timer_and_external_interrupts(self) -> None:
         text = TOP.read_text()
         for fragment in (
-            "CoreProfiles.rv32imuPmpOsSoftware",
-            "RV32IM + Zicsr + Zifencei",
+            "CoreProfiles.rv32imauPmpOsSoftware",
+            "RV32IMA + Zicsr + Zifencei",
+            "real protected NuttX userspace",
             "stopOnTrap = false",
             "withMachineInterruptPlatform = true",
             "stopOnWfi = false",
         ):
             self.assertIn(fragment, text)
+        self.assertNotIn("CoreProfiles.rv32imuPmpOsSoftware,", text)
         self.assertNotIn("CoreProfiles.rv32imuPmpSoftware,", text)
         self.assertIn("AetherCoreNuttXProtectedSimTop", ELABORATOR.read_text())
 
