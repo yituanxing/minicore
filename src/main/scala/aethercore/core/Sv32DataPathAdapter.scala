@@ -3,14 +3,7 @@ package aethercore.core
 import chisel3._
 import aethercore.common.MemSize
 
-/**
-  * Serial correctness-first adapter for one RV32 Load/Store memory operation.
-  *
-  * The CPU holds request fields stable until requestComplete. The adapter first
-  * translates the virtual address (or performs the architectural Bare/M-mode
-  * bypass), then exposes exactly one physical data-bus transaction. Translation
-  * faults complete without issuing a data-bus request.
-  */
+/** Serial correctness-first adapter for one RV32 Load/Store memory operation. */
 class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   require(paddrBits >= 34, s"Sv32 data path requires PA>=34, got $paddrBits")
 
@@ -53,6 +46,7 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
 
   val translation = Module(new Sv32TranslationUnit)
   translation.io.requestValid := io.requestValid
+  translation.io.kill := false.B
   translation.io.virtualAddress := io.virtualAddress
   translation.io.privilege := io.privilege
   translation.io.write := io.write
