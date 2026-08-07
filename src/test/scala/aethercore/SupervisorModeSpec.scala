@@ -27,6 +27,7 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.trapCause.poke(0.U)
     dut.io.trapValue.poke(0.U)
     dut.io.trapReturn.poke(false.B)
+    dut.io.trapReturnSupervisor.poke(false.B)
   }
 
   private def read(dut: MachineCsrFile, address: Int): BigInt = {
@@ -42,10 +43,19 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.writeEnable.poke(false.B)
   }
 
-  private def xret(dut: MachineCsrFile): Unit = {
+  private def mretCsr(dut: MachineCsrFile): Unit = {
+    dut.io.trapReturnSupervisor.poke(false.B)
     dut.io.trapReturn.poke(true.B)
     dut.clock.step()
     dut.io.trapReturn.poke(false.B)
+  }
+
+  private def sretCsr(dut: MachineCsrFile): Unit = {
+    dut.io.trapReturnSupervisor.poke(true.B)
+    dut.io.trapReturn.poke(true.B)
+    dut.clock.step()
+    dut.io.trapReturn.poke(false.B)
+    dut.io.trapReturnSupervisor.poke(false.B)
   }
 
   it should "advertise S mode and expose only implemented delegation state" in {
@@ -72,7 +82,7 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       write(dut, MachineCsrAddress.Mstatus, BigInt("00000880", 16)) // MPP=S, MPIE=1
 
       dut.io.returnPc.expect(supervisorEntry.U)
-      xret(dut)
+      mretCsr(dut)
       dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
       read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00000088", 16)
 
@@ -91,7 +101,7 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, SupervisorCsrAddress.Sstatus) shouldBe BigInt("00000100", 16)
       dut.io.returnPc.expect((supervisorEntry + 4).U)
 
-      xret(dut)
+      sretCsr(dut)
       dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
       read(dut, SupervisorCsrAddress.Sstatus) shouldBe BigInt("00000020", 16)
     }
@@ -105,7 +115,7 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       write(dut, MachineCsrAddress.Medeleg, BigInt(1) << MachineExceptionCode.EnvironmentCallFromU)
       write(dut, MachineCsrAddress.Mepc, supervisorEntry)
       write(dut, MachineCsrAddress.Mstatus, BigInt("00000080", 16)) // MPP=U, MPIE=1
-      xret(dut)
+      mretCsr(dut)
       dut.io.currentPrivilege.expect(PrivilegeMode.User.U)
 
       dut.io.trapPc.poke(supervisorEntry.U)
@@ -120,9 +130,24 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, SupervisorCsrAddress.Sstatus) shouldBe 0
       dut.io.returnPc.expect(supervisorEntry.U)
 
-      xret(dut)
+      sretCsr(dut)
       dut.io.currentPrivilege.expect(PrivilegeMode.User.U)
       read(dut, SupervisorCsrAddress.Sstatus) shouldBe BigInt("00000020", 16)
+    }
+  }
+
+  it should "apply SRET state restoration when SRET is executed from M mode" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imsuSoftware.isa)) { dut =>
+      initializeCsr(dut)
+
+      write(dut, SupervisorCsrAddress.Sepc, supervisorEntry)
+      write(dut, SupervisorCsrAddress.Sstatus, BigInt("00000120", 16)) // SPP=S, SPIE=1
+      dut.io.trapReturnSupervisor.poke(true.B)
+      dut.io.returnPc.expect(supervisorEntry.U)
+      sretCsr(dut)
+
+      dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
+      read(dut, SupervisorCsrAddress.Sstatus) shouldBe BigInt("00000022", 16)
     }
   }
 
@@ -221,6 +246,43 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       sawSupervisorEcall shouldBe true
       sawScause shouldBe true
       sawReturnedResult shouldBe true
+    }
+  }
+
+  it should "execute SRET from M mode and retire in S mode in the full core" in {
+    val program = Map(
+      base -> uType(0x80000, 1),
+      (base + 4) -> iType(0x80, 1, 0, 1, 0x13),
+      (base + 8) -> csr(SupervisorCsrAddress.Sepc, 1, 1, 0),
+      (base + 12) -> iType(0x100, 0, 0, 2, 0x13), // SPP=S
+      (base + 16) -> csr(SupervisorCsrAddress.Sstatus, 2, 1, 0),
+      (base + 20) -> sret,
+      supervisorEntry -> iType(77, 0, 0, 7, 0x13),
+      (supervisorEntry + 4) -> ebreak
+    )
+
+    simulate(new AetherCoreSimTop(CoreProfiles.rv32imsuSoftware, stopOnTrap = false)) { dut =>
+      initializeCore(dut)
+      var sawSupervisorRetirement = false
+      var cycles = 0
+
+      while (!sawSupervisorRetirement && cycles < 200) {
+        dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, ebreak).U)
+        dut.clock.step()
+        cycles += 1
+
+        if (
+          dut.io.commit.valid.peek().litToBoolean &&
+          dut.io.commit.rdWrite.peek().litToBoolean &&
+          dut.io.commit.pc.peek().litValue == supervisorEntry
+        ) {
+          dut.io.commit.rd.expect(7.U)
+          dut.io.commit.rdData.expect(77.U)
+          sawSupervisorRetirement = true
+        }
+      }
+
+      sawSupervisorRetirement shouldBe true
     }
   }
 }
