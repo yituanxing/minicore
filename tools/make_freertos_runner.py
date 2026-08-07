@@ -90,16 +90,6 @@ def adapt(source: str, trace: bool) -> str:
     )
     text = replace_once(
         text,
-        "    top.reset = 1;\n"
-        "    top.clock = 0;\n",
-        "    top.reset = 1;\n"
-        "    top.clock = 0;\n"
-        "    top.io_rxValid = 0;\n"
-        "    top.io_rxByte = 0;\n",
-        "UART RX input initialization",
-    )
-    text = replace_once(
-        text,
         "    for (; cycles < options.maxCycles && !top.io_halted && !exitRequested; ++cycles) {\n",
         "    for (; cycles < options.maxCycles &&\n"
         "           (options.selfCheckExit || !top.io_halted) && !exitRequested;\n"
@@ -108,18 +98,20 @@ def adapt(source: str, trace: bool) -> str:
     )
     text = replace_once(
         text,
-        "      top.clock = 0;\n"
-        "      driveInputs(top, memory, memoryReady);\n",
-        "      top.io_rxValid = 0;\n"
-        "      if (options.uartRxByte && !uartRxInjected && top.io_halted && top.io_rxReady) {\n"
-        "        top.io_rxByte = *options.uartRxByte;\n"
-        "        top.io_rxValid = 1;\n"
-        "        uartRxInjected = true;\n"
-        "        std::cout << \"FREERTOS RUNNER RX INJECT cycle=\" << cycles << '\\n';\n"
-        "      }\n\n"
-        "      top.clock = 0;\n"
-        "      driveInputs(top, memory, memoryReady);\n",
-        "UART RX WFI injection",
+        "      const bool rxValid = !top.reset && rxIndex < options.rxBytes.size() &&\n"
+        "                           cycles >= nextRxCycle;\n"
+        "      const std::uint8_t rxByte = rxValid ? options.rxBytes[rxIndex] : 0;\n",
+        "      const bool freertosRxValid = !top.reset && options.uartRxByte &&\n"
+        "                                  !uartRxInjected && top.io_halted &&\n"
+        "                                  top.io_rxReady;\n"
+        "      const bool genericRxValid = !top.reset && !options.uartRxByte &&\n"
+        "                                rxIndex < options.rxBytes.size() &&\n"
+        "                                cycles >= nextRxCycle;\n"
+        "      const bool rxValid = freertosRxValid || genericRxValid;\n"
+        "      const std::uint8_t rxByte = freertosRxValid\n"
+        "          ? static_cast<std::uint8_t>(*options.uartRxByte)\n"
+        "          : (genericRxValid ? options.rxBytes[rxIndex] : 0);\n",
+        "shared UART RX drive selection",
     )
     text = replace_once(
         text,
@@ -158,6 +150,23 @@ def adapt(source: str, trace: bool) -> str:
         "          }\n"
         "          if (difftest) difftest->check(makeDifftestCommit(top));\n",
         "WFI retirement counter",
+    )
+    text = replace_once(
+        text,
+        "      if (rxAccepted) {\n"
+        "        ++rxIndex;\n"
+        "        nextRxCycle = cycles + options.rxGapCycles;\n"
+        "      }\n",
+        "      if (rxAccepted) {\n"
+        "        if (freertosRxValid) {\n"
+        "          uartRxInjected = true;\n"
+        "          std::cout << \"FREERTOS RUNNER RX INJECT cycle=\" << cycles << '\\n';\n"
+        "        } else {\n"
+        "          ++rxIndex;\n"
+        "          nextRxCycle = cycles + options.rxGapCycles;\n"
+        "        }\n"
+        "      }\n",
+        "shared UART RX acceptance",
     )
     text = replace_once(
         text,
