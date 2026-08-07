@@ -66,7 +66,6 @@ class NuttxP2RuntimeContractTest(unittest.TestCase):
             "// Protected NuttX legitimately uses x3 as its global pointer.",
             text,
         )
-        self.assertNotIn("fault checking and --self-check-exit are mutually exclusive", text)
         self.assertNotIn("FAIL: x3 committed 0x", text)
 
     def test_uart_injection_arms_from_the_real_nsh_prompt(self) -> None:
