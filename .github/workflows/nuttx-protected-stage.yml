@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   protected:
-    name: P1 build, P2 U-mode hello, and conditional P3-A kernel stack
+    name: P1 build and P2 U-mode hello; conditional P3-A kernel stack
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 60
 
