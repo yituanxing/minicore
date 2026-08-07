@@ -2,11 +2,17 @@
 """Install the bounded AetherCore NuttX protected-userspace PMP overlay.
 
 The upstream qemu-rv protected profile appends PMP regions by scanning for the
-next free entry across the architectural 16-entry namespace.  AetherCore
-intentionally implements four PMP entries.  The P1 profile needs exactly two
+next free entry across the architectural 16-entry namespace. AetherCore
+intentionally implements four PMP entries. The P1 profile needs exactly two
 NAPOT entries, so bind user flash and user RAM to entries 0 and 1 explicitly.
-The profile also requires per-CPU scratch state and a kernel-only exception
-stack so user-controlled stack memory is never used for syscall handling.
+
+NuttX 13.0.0 only allocates per-process kernel stacks when ARCH_ADDRENV is
+active. The pure protected/PMP qemu-rv path used here deliberately keeps
+ARCH_ADDRENV disabled because AetherCore has no S-mode/MMU address-environment
+port yet. Therefore P1 freezes the real upstream semantics: per-CPU scratch is
+enabled for system calls, while syscall handling still uses the caller stack.
+Dedicated kernel-stack hardening is a later architecture milestone and must not
+be claimed by merely forcing an otherwise inactive Kconfig symbol.
 """
 
 from __future__ import annotations
@@ -42,12 +48,9 @@ BOOL_SETTINGS = {
     "CONFIG_ARCH_USE_MPU": True,
     "CONFIG_LIB_SYSCALL": True,
     "CONFIG_RISCV_PERCPU_SCRATCH": True,
-    "CONFIG_ARCH_KERNEL_STACK": True,
+    "CONFIG_ARCH_ADDRENV": False,
+    "CONFIG_ARCH_KERNEL_STACK": False,
     "CONFIG_ARCH_USE_S_MODE": False,
-}
-
-VALUE_SETTINGS = {
-    "CONFIG_ARCH_KERNEL_STACKSIZE": "2048",
 }
 
 
@@ -67,16 +70,13 @@ def replace_once(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new, 1))
 
 
-def set_config(path: Path, symbol: str, value: str | bool) -> None:
+def set_config(path: Path, symbol: str, value: bool) -> None:
     lines = path.read_text().splitlines()
     pattern = re.compile(
         rf"^(?:{re.escape(symbol)}=.*|# {re.escape(symbol)} is not set)$"
     )
     lines = [line for line in lines if not pattern.match(line)]
-    if isinstance(value, bool):
-        replacement = f"{symbol}=y" if value else f"# {symbol} is not set"
-    else:
-        replacement = f"{symbol}={value}"
+    replacement = f"{symbol}=y" if value else f"# {symbol} is not set"
     lines.append(replacement)
     path.write_text("\n".join(lines) + "\n")
 
@@ -97,8 +97,6 @@ def install(root: Path) -> None:
     replace_once(userspace, PMP_OLD, PMP_NEW)
     for symbol, value in BOOL_SETTINGS.items():
         set_config(config, symbol, value)
-    for symbol, value in VALUE_SETTINGS.items():
-        set_config(config, symbol, value)
 
     generated = userspace.read_text()
     required = (
@@ -118,8 +116,8 @@ def install(root: Path) -> None:
         "CONFIG_ARCH_USE_MPU=y",
         "CONFIG_LIB_SYSCALL=y",
         "CONFIG_RISCV_PERCPU_SCRATCH=y",
-        "CONFIG_ARCH_KERNEL_STACK=y",
-        "CONFIG_ARCH_KERNEL_STACKSIZE=2048",
+        "# CONFIG_ARCH_ADDRENV is not set",
+        "# CONFIG_ARCH_KERNEL_STACK is not set",
         "# CONFIG_ARCH_USE_S_MODE is not set",
     )
     for line in required_config:
