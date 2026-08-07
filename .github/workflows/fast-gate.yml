@@ -106,6 +106,7 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.Sv32SatpRegisterSpec
           ./mill aethercore.test.testOnly aethercore.Sv32SupervisorCsrSpec
           ./mill aethercore.test.testOnly aethercore.Sv32DataPathCoreSpec
+          ./mill aethercore.test.testOnly aethercore.Sv32InstructionTranslationSpec
           ./mill aethercore.test.testOnly aethercore.MachineCsrFileSpec
           ./mill aethercore.test.testOnly aethercore.PrivilegeModeSpec
           ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
@@ -186,18 +187,15 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- VM focused tests cover the Sv32 walker, satp/CSR boundary, translation composition, and PA34 core Load/Store integration'
+            echo '- VM focused tests cover data PA34 translation, cancellable instruction translation, and deterministic shared PTW arbitration'
             echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34 profile and fail-closed Sv32+PMP boundary'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
             echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
-            echo '- cached Verilator identity is checked without a disposable build probe'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
-            echo '- exact reference, adapter, runner, standard ELF/binary and IRQ ELF/binary hashes are emitted'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
-            echo '- path selection covers the complete pull-request base-to-head range, not only the newest commit'
             echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
