@@ -5,7 +5,7 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.common.PrivilegeMode
-import aethercore.core.Sv32PageTableWalker
+import aethercore.core.{Sv32PageTableWalker, Sv32TranslationUnit}
 
 class Sv32PageTableWalkerSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "Sv32PageTableWalker"
@@ -17,6 +17,22 @@ class Sv32PageTableWalkerSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.privilege.poke(PrivilegeMode.Supervisor.U)
     dut.io.write.poke(false.B)
     dut.io.execute.poke(false.B)
+    dut.io.sum.poke(false.B)
+    dut.io.mxr.poke(false.B)
+    dut.io.pteReady.poke(false.B)
+    dut.io.pteData.poke(0.U)
+    dut.io.pteFault.poke(false.B)
+    dut.io.responseReady.poke(false.B)
+  }
+
+  private def initializeTranslation(dut: Sv32TranslationUnit): Unit = {
+    dut.io.requestValid.poke(false.B)
+    dut.io.virtualAddress.poke(0.U)
+    dut.io.privilege.poke(PrivilegeMode.Supervisor.U)
+    dut.io.write.poke(false.B)
+    dut.io.execute.poke(false.B)
+    dut.io.satpTranslationEnabled.poke(false.B)
+    dut.io.satpRootPpn.poke(0.U)
     dut.io.sum.poke(false.B)
     dut.io.mxr.poke(false.B)
     dut.io.pteReady.poke(false.B)
@@ -189,7 +205,6 @@ class Sv32PageTableWalkerSpec extends AnyFlatSpec with Matchers with ChiselSim {
       val pteAddress = (rootPpn << 12) + (vpn1 << 2)
       val megapagePpn = BigInt("140", 16) << 10
 
-      // U load from execute-only page requires MXR.
       issue(dut, va, rootPpn, PrivilegeMode.User, mxr = false)
       providePte(
         dut,
@@ -211,7 +226,6 @@ class Sv32PageTableWalkerSpec extends AnyFlatSpec with Matchers with ChiselSim {
         leafLevel = 1
       )
 
-      // Supervisor data access to U=1 requires SUM, while execute is always denied.
       issue(dut, va, rootPpn, PrivilegeMode.Supervisor, sum = false)
       providePte(
         dut,
@@ -241,7 +255,6 @@ class Sv32PageTableWalkerSpec extends AnyFlatSpec with Matchers with ChiselSim {
       )
       finish(dut, pageFault = true)
 
-      // Svade-style A/D handling: no hardware PTE update in V2-A.
       issue(dut, va, rootPpn, PrivilegeMode.User)
       providePte(
         dut,
@@ -324,6 +337,105 @@ class Sv32PageTableWalkerSpec extends AnyFlatSpec with Matchers with ChiselSim {
         fault = true
       )
       finish(dut, accessFault = true)
+    }
+  }
+
+  it should "bypass translation in Bare mode and preserve the full RV32 address" in {
+    simulate(new Sv32TranslationUnit) { dut =>
+      initializeTranslation(dut)
+      val va = BigInt("fedcba98", 16)
+
+      dut.io.virtualAddress.poke(va.U)
+      dut.io.privilege.poke(PrivilegeMode.Supervisor.U)
+      dut.io.satpTranslationEnabled.poke(false.B)
+      dut.io.requestValid.poke(true.B)
+      dut.io.requestReady.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+
+      dut.io.pteValid.expect(false.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.physicalAddress.expect(va.U)
+      dut.io.pageFault.expect(false.B)
+      dut.io.accessFault.expect(false.B)
+
+      dut.io.responseReady.poke(true.B)
+      dut.clock.step()
+      dut.io.responseReady.poke(false.B)
+      dut.io.requestReady.expect(true.B)
+    }
+  }
+
+  it should "bypass Sv32 while executing in Machine mode" in {
+    simulate(new Sv32TranslationUnit) { dut =>
+      initializeTranslation(dut)
+      val va = BigInt("81234560", 16)
+
+      dut.io.virtualAddress.poke(va.U)
+      dut.io.privilege.poke(PrivilegeMode.Machine.U)
+      dut.io.satpTranslationEnabled.poke(true.B)
+      dut.io.satpRootPpn.poke(BigInt("3fffff", 16).U)
+      dut.io.requestValid.poke(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+
+      dut.io.pteValid.expect(false.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.physicalAddress.expect(va.U)
+      dut.io.pageFault.expect(false.B)
+      dut.io.accessFault.expect(false.B)
+    }
+  }
+
+  it should "route an active U-mode Sv32 request through the qualified walker" in {
+    simulate(new Sv32TranslationUnit) { dut =>
+      initializeTranslation(dut)
+
+      val va = BigInt("40403024", 16)
+      val rootPpn = BigInt("20000", 16)
+      val nextPpn = BigInt("21000", 16)
+      val leafPpn = BigInt("30001", 16)
+      val vpn1 = (va >> 22) & 0x3ff
+      val vpn0 = (va >> 12) & 0x3ff
+
+      dut.io.virtualAddress.poke(va.U)
+      dut.io.privilege.poke(PrivilegeMode.User.U)
+      dut.io.satpTranslationEnabled.poke(true.B)
+      dut.io.satpRootPpn.poke(rootPpn.U)
+      dut.io.requestValid.poke(true.B)
+      dut.io.requestReady.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteAddress.expect(((rootPpn << 12) + (vpn1 << 2)).U)
+      dut.io.pteData.poke(pte(nextPpn).U)
+      dut.io.pteReady.poke(true.B)
+      dut.clock.step()
+      dut.io.pteReady.poke(false.B)
+
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteAddress.expect(((nextPpn << 12) + (vpn0 << 2)).U)
+      dut.io.pteData.poke(
+        pte(
+          leafPpn,
+          read = true,
+          user = true,
+          accessed = true
+        ).U
+      )
+      dut.io.pteReady.poke(true.B)
+      dut.clock.step()
+      dut.io.pteReady.poke(false.B)
+
+      dut.io.responseValid.expect(true.B)
+      dut.io.physicalAddress.expect(((leafPpn << 12) | (va & 0xfff)).U)
+      dut.io.pageFault.expect(false.B)
+      dut.io.accessFault.expect(false.B)
+      dut.io.responseReady.poke(true.B)
+      dut.clock.step()
+      dut.io.responseReady.poke(false.B)
+      dut.io.requestReady.expect(true.B)
     }
   }
 }
