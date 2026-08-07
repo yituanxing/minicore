@@ -11,7 +11,7 @@ OBJ_DIR="${SIM_ROOT}/obj"
 GENERATED_MAIN="${SIM_ROOT}/sim_main_nuttx_protected.cpp"
 RUNNER="${OBJ_DIR}/VAetherCoreNuttXProtectedSimTop"
 SIM_FINGERPRINT_FILE="${SIM_ROOT}/source.sha256"
-SIM_ABI_VERSION="nuttx-protected-sim-v2"
+SIM_ABI_VERSION="nuttx-protected-sim-v3"
 IMAGE="${P1_DIR}/aethercore-protected.bin"
 MAX_CYCLES="${AETHERCORE_NUTTX_P2_MAX_CYCLES:-30000000}"
 RX_GAP_CYCLES="${AETHERCORE_NUTTX_P2_RX_GAP_CYCLES:-1000}"
@@ -166,7 +166,6 @@ run_positive() {
   local args=(
     "${IMAGE}"
     --max-cycles "${MAX_CYCLES}"
-    --self-check-exit
     "${rx_args[@]}"
   )
   if [[ "${stall_period}" != "0" ]]; then
@@ -235,7 +234,7 @@ user_output=Hello, World!!
 input_arm=nsh-prompt
 input_command=hello
 image_layout=kflash-0x80000000-0x80040000,uflash-0x80040000-0x80080000
-shared_toy_assertions=disabled-via-self-check-exit
+shared_toy_assertions=removed-by-dedicated-protected-runner
 syscall_proof=ecall-from-u-cause-8
 transition_proof=mret-and-user-text-commit
 command_phase_proof=post-first-prompt-user-commit-ecall-mret
