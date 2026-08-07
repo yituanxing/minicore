@@ -19,8 +19,8 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "CONFIG_ARCH_USE_MPU",
             "CONFIG_LIB_SYSCALL",
             "CONFIG_RISCV_PERCPU_SCRATCH",
-            "CONFIG_ARCH_KERNEL_STACK",
-            "CONFIG_ARCH_KERNEL_STACKSIZE=2048",
+            '"CONFIG_ARCH_ADDRENV": False',
+            '"CONFIG_ARCH_KERNEL_STACK": False',
             "CONFIG_NUTTX_USERSPACE=0x80040000",
             "nuttx_user",
             "aethercore-protected.bin",
@@ -29,6 +29,7 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "user_programs=nsh,hello",
         ):
             self.assertIn(fragment, text)
+        self.assertNotIn("CONFIG_ARCH_KERNEL_STACKSIZE=2048", text)
 
     def test_p1_reuses_frozen_aethercore_os_boundaries(self) -> None:
         text = SCRIPT.read_text()
@@ -50,12 +51,14 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "riscv_config_pmp_region(1, USRAM_F",
             '"CONFIG_LIB_SYSCALL": True',
             '"CONFIG_RISCV_PERCPU_SCRATCH": True',
-            '"CONFIG_ARCH_KERNEL_STACK": True',
-            '"CONFIG_ARCH_KERNEL_STACKSIZE": "2048"',
+            '"CONFIG_ARCH_ADDRENV": False',
+            '"CONFIG_ARCH_KERNEL_STACK": False',
             "AetherCore exposes four PMP entries",
+            "Dedicated kernel-stack hardening is a later architecture milestone",
         ):
             self.assertIn(fragment, text)
         self.assertIn('if "riscv_append_pmp_region(" in generated', text)
+        self.assertNotIn("CONFIG_ARCH_KERNEL_STACKSIZE", text)
 
     def test_p1_requires_real_user_transition_and_syscall_dispatch(self) -> None:
         text = SCRIPT.read_text()
@@ -65,10 +68,12 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "dispatch_syscall",
             "syscall_boundary=ecall-riscv_swint-dispatch_syscall",
             "user_transition=riscv_jump_to_user-mret",
-            "kernel_exception_stack=2048",
-            "user_stack_trap_frames=forbidden",
+            "percpu_scratch=enabled",
+            "syscall_stack=caller-user-stack-upstream-protected-pmp",
+            "kernel_stack_hardening=deferred-requires-addrenv-aware-port",
         ):
             self.assertIn(fragment, text)
+        self.assertNotIn("user_stack_trap_frames=forbidden", text)
 
     def test_p1_is_fail_closed_on_isolation_and_isa(self) -> None:
         text = SCRIPT.read_text()
@@ -80,15 +85,22 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "pmp_entries_used=0,1",
             "pmp_free_scan=disabled-in-platform-init",
             "pmp_mode=NAPOT",
+            "address_environment=disabled",
             "forbidden extension",
             "kernel load image",
             "runtime=not-yet-qualified",
         ):
             self.assertIn(fragment, text)
         self.assertNotIn("riscv_append_pmp_region riscv_swint", text)
-        self.assertIn("CONFIG_ARCH_USE_S_MODE", text)
-        self.assertIn("CONFIG_ARCH_CHIP_QEMU_RV_ISA_A", text)
-        self.assertIn("CONFIG_ARCH_CHIP_QEMU_RV_ISA_C", text)
+        for forbidden in (
+            "CONFIG_ARCH_ADDRENV",
+            "CONFIG_ARCH_KERNEL_STACK",
+            "CONFIG_ARCH_USE_MMU",
+            "CONFIG_ARCH_USE_S_MODE",
+            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A",
+            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_C",
+        ):
+            self.assertIn(forbidden, text)
 
     def test_protected_stage_prepares_tools_without_rebuilding_n1_to_n4(self) -> None:
         prepare = PREPARE.read_text()
