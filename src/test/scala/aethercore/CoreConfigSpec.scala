@@ -2,14 +2,13 @@ package aethercore
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.config.{CoreProfiles, IsaConfig, PlatformConfig}
+import aethercore.config.{CoreConfig, CoreProfiles, IsaConfig, PlatformConfig}
 
 class CoreConfigSpec extends AnyFlatSpec with Matchers {
   behavior of "CoreConfig"
 
   it should "describe the exact current RV64IM software contract" in {
     val config = CoreProfiles.rv64imCurrent
-
     config.name shouldBe "rv64im-current"
     config.isa.xlen shouldBe 64
     config.isa.xBytes shouldBe 8
@@ -31,7 +30,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "describe the executable RV32I profile" in {
     val config = CoreProfiles.rv32iMinimal
-
     config.name shouldBe "rv32i-minimal"
     config.isa.xlen shouldBe 32
     config.isa.xBytes shouldBe 4
@@ -53,7 +51,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "describe the RV32IM real-software profile" in {
     val config = CoreProfiles.rv32imSoftware
-
     config.name shouldBe "rv32im-software"
     config.isa.xlen shouldBe 32
     config.isa.xBytes shouldBe 4
@@ -70,7 +67,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "describe the bounded RV32IM M/S/U V1 supervisor profile" in {
     val config = CoreProfiles.rv32imsuSoftware
-
     config.name shouldBe "rv32imsu-software"
     config.isa.xlen shouldBe 32
     config.isa.hasM shouldBe true
@@ -86,6 +82,21 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
+  it should "describe the bounded RV32 Sv32 PA34 data-translation profile" in {
+    val config = CoreProfiles.rv32imsuSv32Software
+    config.name shouldBe "rv32imsu-sv32-software"
+    config.isa.xlen shouldBe 32
+    config.isa.hasS shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasSv32 shouldBe true
+    config.isa.hasA shouldBe false
+    config.isa.hasPmp shouldBe false
+    config.isa.march shouldBe "rv32im_zicsr"
+    config.platform.paddrBits shouldBe 34
+    config.platform.busDataBits shouldBe 32
+    config.platform.resetVector shouldBe BigInt("80000000", 16)
+  }
+
   it should "describe an independent RV32 Sv32 Supervisor ISA contract" in {
     val isa = IsaConfig(
       xlen = 32,
@@ -94,7 +105,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
       zExtensions = Set("Zicsr"),
       virtualMemoryModes = Set("Sv32")
     )
-
     isa.hasS shouldBe true
     isa.hasU shouldBe true
     isa.hasSv32 shouldBe true
@@ -105,7 +115,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "keep the pre-atomic protected profile available for regressions" in {
     val config = CoreProfiles.rv32imuPmpOsSoftware
-
     config.name shouldBe "rv32imu-pmp-os-software"
     config.isa.hasA shouldBe false
     config.isa.hasSv32 shouldBe false
@@ -114,7 +123,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "describe the exact NuttX protected RV32IMAU OS profile" in {
     val config = CoreProfiles.rv32imauPmpOsSoftware
-
     config.name shouldBe "rv32imau-pmp-os-software"
     config.isa.xlen shouldBe 32
     config.isa.hasM shouldBe true
@@ -133,12 +141,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "derive an independent RV32I software contract" in {
-    val isa = IsaConfig(
-      xlen = 32,
-      extensions = Set('I'),
-      privilegeModes = Set('M')
-    )
-
+    val isa = IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'))
     isa.xBytes shouldBe 4
     isa.shiftBits shouldBe 5
     isa.hasZicsr shouldBe false
@@ -154,35 +157,45 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
       IsaConfig(xlen = 48, extensions = Set('I'), privilegeModes = Set('M'))
 
     an[IllegalArgumentException] should be thrownBy
-      IsaConfig(
-        xlen = 32,
-        extensions = Set('I'),
-        privilegeModes = Set('M'),
-        zExtensions = Set("icsr")
-      )
+      IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'), zExtensions = Set("icsr"))
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M', 'S'), virtualMemoryModes = Set("Sv48"))
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(xlen = 64, extensions = Set('I'), privilegeModes = Set('M', 'S'), virtualMemoryModes = Set("Sv32"))
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'), virtualMemoryModes = Set("Sv32"))
 
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(
         xlen = 32,
         extensions = Set('I'),
         privilegeModes = Set('M', 'S'),
-        virtualMemoryModes = Set("Sv48")
+        virtualMemoryModes = Set("Sv32"),
+        pmpEntries = 4
       )
 
+    val sv32Isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I'),
+      privilegeModes = Set('M', 'S'),
+      virtualMemoryModes = Set("Sv32")
+    )
     an[IllegalArgumentException] should be thrownBy
-      IsaConfig(
-        xlen = 64,
-        extensions = Set('I'),
-        privilegeModes = Set('M', 'S'),
-        virtualMemoryModes = Set("Sv32")
-      )
-
-    an[IllegalArgumentException] should be thrownBy
-      IsaConfig(
-        xlen = 32,
-        extensions = Set('I'),
-        privilegeModes = Set('M'),
-        virtualMemoryModes = Set("Sv32")
+      CoreConfig(
+        "bad-sv32-pa",
+        sv32Isa,
+        PlatformConfig(
+          resetVector = BigInt("80000000", 16),
+          paddrBits = 32,
+          busDataBits = 32,
+          uartAddress = BigInt("10000000", 16),
+          exitAddress = BigInt("10000008", 16),
+          mtimeAddress = BigInt("0200bff8", 16),
+          mtimecmpAddress = BigInt("02004000", 16)
+        )
       )
 
     an[IllegalArgumentException] should be thrownBy
