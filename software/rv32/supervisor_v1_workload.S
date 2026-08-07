@@ -111,7 +111,8 @@ supervisor_trap:
   csrr t3, sstatus
   csrr t4, sscratch
 
-  beq t0, CAUSE_ECALL_S, handle_s_ecall
+  li t5, CAUSE_ECALL_S
+  beq t0, t5, handle_s_ecall
   li t5, CAUSE_ECALL_U
   beq t0, t5, handle_u_ecall
   li a0, 20
