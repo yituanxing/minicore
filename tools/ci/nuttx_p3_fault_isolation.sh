@@ -177,7 +177,7 @@ run_fault() {
     echo "P3-B FAIL: expected exactly one U-mode load-access fault at 0x80000000, got ${fault_count}" >&2
     exit 4
   }
-  grep -Eq 'EXCEPTION: Load access fault\. MCAUSE: 5, EPC: [0-9a-fA-F]+, MTVAL: 80000000' "${log_file}" || {
+  grep -Eq 'EXCEPTION: Load access fault\. MCAUSE: 0*5, EPC: [0-9a-fA-F]+, MTVAL: 80000000' "${log_file}" || {
     echo "P3-B FAIL: NuttX did not report the precise PMP load fault" >&2
     exit 4
   }
