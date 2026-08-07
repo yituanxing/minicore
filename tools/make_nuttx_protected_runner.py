@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Generate the dedicated NuttX protected-userspace Verilator runner.
 
-The shared simulator is intentionally generic.  This adapter selects the
+The shared simulator is intentionally generic. This adapter selects the
 RV32IMU/PMP/interrupt top and adds fail-closed evidence that execution really
 entered U-mode: retired instructions from the protected user text region and
-architecturally classified ECALL-from-U traps (mcause=8).  It snapshots those
+architecturally classified ECALL-from-U traps (mcause=8). It snapshots those
 counters at the first NSH prompt, so the hello command phase itself must add
 user commits, U-mode ECALLs, and MRET transitions before the second prompt.
+
+The generated runner is a dedicated OS runner. Generic precise-fault and toy
+x3/self-check modes belong to sim_main.cpp's small-program harness and are
+explicitly disabled here instead of abusing --self-check-exit merely to bypass
+the x3=12 assertion.
 """
 
 from __future__ import annotations
@@ -32,6 +37,16 @@ def main() -> None:
 
     text = text.replace(
         "VAetherCoreSimTop", "VAetherCoreNuttXProtectedSimTop"
+    )
+
+    # This runner is exclusively for a long-running protected OS image. The
+    # generic precise-fault mode is a different harness contract and must not
+    # become active because of unrelated protected-runner options.
+    text = replace_once(
+        text,
+        "  bool faultCheck() const { return expectedExceptionPc.has_value(); }\n",
+        "  bool faultCheck() const { return false; }  // Dedicated protected OS runner.\n",
+        "generic precise-fault mode disable",
     )
 
     text = replace_once(
@@ -99,6 +114,21 @@ def main() -> None:
         "  }\n"
         "  return options;\n",
         "prompt-armed RX validation",
+    )
+
+    # The generic harness checks x3==12 for its tiny smoke program. NuttX uses
+    # x3 as the architectural global pointer, so that assertion is invalid for
+    # an OS image. Remove only the assertion; normal x3 commit observation is
+    # left intact.
+    text = replace_once(
+        text,
+        "            if (!options.selfCheckExit && !options.faultCheck() && value != kExpectedX3) {\n"
+        "              std::cerr << \"\\nFAIL: x3 committed 0x\" << std::hex << value\n"
+        "                        << \", expected 0x\" << kExpectedX3 << std::dec << '\\n';\n"
+        "              return 3;\n"
+        "            }\n",
+        "            // Protected NuttX legitimately uses x3 as its global pointer.\n",
+        "generic x3 toy assertion disable",
     )
 
     text = replace_once(
