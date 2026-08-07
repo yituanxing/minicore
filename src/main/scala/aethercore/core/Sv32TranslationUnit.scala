@@ -4,23 +4,14 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.PrivilegeMode
 
-/**
-  * Composes the qualified Sv32 walker with the privilege/satp activation rule.
-  *
-  * This is intentionally still a pipeline-independent block: M-mode and Bare
-  * accesses bypass translation, while S/U accesses under satp.MODE=Sv32 are
-  * handed to the two-level walker. The only memory traffic emitted by this
-  * unit is the walker's read-only implicit PTE port.
-  *
-  * No TLB is present yet. Consequently every translated access walks the page
-  * tables, and there is no SFENCE.VMA state to invalidate in this slice.
-  */
+/** Composes Sv32 activation rules with the two-level walker. */
 class Sv32TranslationUnit extends Module {
   private val PaddrBits = 34
 
   val io = IO(new Bundle {
     val requestValid = Input(Bool())
     val requestReady = Output(Bool())
+    val kill = Input(Bool())
     val virtualAddress = Input(UInt(32.W))
     val privilege = Input(UInt(2.W))
     val write = Input(Bool())
@@ -54,8 +45,8 @@ class Sv32TranslationUnit extends Module {
   val translationRequired =
     io.satpTranslationEnabled && io.privilege =/= PrivilegeMode.Machine.U
 
-  walker.io.requestValid :=
-    state === idle && io.requestValid && translationRequired
+  walker.io.requestValid := state === idle && io.requestValid && translationRequired
+  walker.io.kill := io.kill
   walker.io.virtualAddress := io.virtualAddress
   walker.io.rootPpn := io.satpRootPpn
   walker.io.privilege := io.privilege
@@ -63,16 +54,14 @@ class Sv32TranslationUnit extends Module {
   walker.io.execute := io.execute
   walker.io.sum := io.sum
   walker.io.mxr := io.mxr
-
   walker.io.pteReady := io.pteReady
   walker.io.pteData := io.pteData
   walker.io.pteFault := io.pteFault
   walker.io.responseReady := state === walking && io.responseReady
 
-  io.pteValid := walker.io.pteValid
+  io.pteValid := walker.io.pteValid && !io.kill
   io.pteAddress := walker.io.pteAddress
-
-  io.requestReady := state === idle &&
+  io.requestReady := state === idle && !io.kill &&
     Mux(translationRequired, walker.io.requestReady, true.B)
 
   io.responseValid := false.B
@@ -83,18 +72,21 @@ class Sv32TranslationUnit extends Module {
   io.global := false.B
 
   when(state === walking) {
-    io.responseValid := walker.io.responseValid
+    io.responseValid := walker.io.responseValid && !io.kill
     io.physicalAddress := walker.io.physicalAddress
     io.pageFault := walker.io.pageFault
     io.accessFault := walker.io.accessFault
     io.leafLevel := walker.io.leafLevel
     io.global := walker.io.global
   }.elsewhen(state === bypassResponse) {
-    io.responseValid := true.B
+    io.responseValid := !io.kill
     io.physicalAddress := bypassPhysicalAddress
   }
 
-  when(state === idle && io.requestValid && io.requestReady) {
+  when(io.kill) {
+    state := idle
+    bypassPhysicalAddress := 0.U
+  }.elsewhen(state === idle && io.requestValid && io.requestReady) {
     when(translationRequired) {
       state := walking
     }.otherwise {
