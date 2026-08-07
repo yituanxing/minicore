@@ -107,6 +107,7 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
           ./mill aethercore.test.testOnly aethercore.UserModeCoreSpec
           ./mill aethercore.test.testOnly aethercore.SupervisorModeSpec
+          ./mill aethercore.test.testOnly aethercore.SupervisorPrivilegeBoundarySpec
           ./mill aethercore.test.testOnly aethercore.RV32AtomicCoreSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicMmioSpec
@@ -182,7 +183,7 @@ jobs:
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
             echo '- CoreConfigSpec covers the frozen OS profiles plus the bounded V1 M/S/U supervisor profile'
-            echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, and the V1 delegated Supervisor trap/SRET loop'
+            echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
             echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
