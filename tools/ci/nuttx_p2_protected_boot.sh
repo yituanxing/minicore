@@ -88,7 +88,7 @@ sim_fingerprint="$({
       sha256sum "${source}"
     done
   sha256sum \
-    "${ROOT_DIR}/build.sc" \
+    "${ROOT_DIR}/build.mill" \
     "${ROOT_DIR}/mill" \
     "${ROOT_DIR}/sim/sim_main.cpp" \
     "${ROOT_DIR}/sim/nemu_difftest.cpp" \
