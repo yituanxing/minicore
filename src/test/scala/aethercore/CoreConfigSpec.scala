@@ -65,6 +65,23 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
+  it should "describe the bounded RV32IM M/S/U V1 supervisor profile" in {
+    val config = CoreProfiles.rv32imsuSoftware
+
+    config.name shouldBe "rv32imsu-software"
+    config.isa.xlen shouldBe 32
+    config.isa.hasM shouldBe true
+    config.isa.hasS shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasA shouldBe false
+    config.isa.hasPmp shouldBe false
+    config.isa.hasZicsr shouldBe true
+    config.isa.hasZifencei shouldBe false
+    config.isa.march shouldBe "rv32im_zicsr"
+    config.isa.mabi shouldBe "ilp32"
+    config.platform shouldBe CoreProfiles.rv32iMinimal.platform
+  }
+
   it should "keep the pre-atomic protected profile available for regressions" in {
     val config = CoreProfiles.rv32imuPmpOsSoftware
 
