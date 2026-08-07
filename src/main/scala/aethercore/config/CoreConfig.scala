@@ -27,6 +27,10 @@ final case class IsaConfig(
   )
   require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
   require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
+  require(
+    !virtualMemoryModes.contains("Sv32") || pmpEntries == 0,
+    "Sv32+PMP is deferred until PMP checks consume the full translated PA34"
+  )
 
   val xBytes: Int = xlen / 8
   val shiftBits: Int = log2Ceil(xlen)
@@ -83,6 +87,10 @@ final case class CoreConfig(
     platform: PlatformConfig
 ) {
   require(name.nonEmpty, "core profile name must not be empty")
+  require(
+    !isa.hasSv32 || platform.paddrBits >= 34,
+    s"Sv32 requires at least 34 physical address bits, got ${platform.paddrBits}"
+  )
 }
 
 object CoreProfiles {
@@ -98,6 +106,8 @@ object CoreProfiles {
     mtimeAddress = mtimeAddress,
     mtimecmpAddress = mtimecmpAddress
   )
+
+  private val rv32Sv32Platform: PlatformConfig = rv32Platform.copy(paddrBits = 34)
 
   val rv32iMinimal: CoreConfig = CoreConfig(
     name = "rv32i-minimal",
@@ -131,9 +141,6 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
-  // V1 supervisor bring-up profile. Keep it intentionally small: no PMP,
-  // atomics or virtual memory are required to qualify M -> S, delegated traps
-  // and SRET. Sv32 is a later milestone and must not leak into this profile.
   val rv32imsuSoftware: CoreConfig = CoreConfig(
     name = "rv32imsu-software",
     isa = IsaConfig(
@@ -143,6 +150,20 @@ object CoreProfiles {
       zExtensions = Set("Zicsr")
     ),
     platform = rv32Platform
+  )
+
+  // V2-E data-translation profile. Instruction fetch remains physical in this
+  // slice; S/U data accesses may use the full 34-bit Sv32 translated PA.
+  val rv32imsuSv32Software: CoreConfig = CoreConfig(
+    name = "rv32imsu-sv32-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv32")
+    ),
+    platform = rv32Sv32Platform
   )
 
   val rv32imuPmpSoftware: CoreConfig = CoreConfig(
