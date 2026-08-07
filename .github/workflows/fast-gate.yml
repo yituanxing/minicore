@@ -104,6 +104,7 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.DecoderSpec
           ./mill aethercore.test.testOnly aethercore.Sv32PageTableWalkerSpec
           ./mill aethercore.test.testOnly aethercore.Sv32SatpRegisterSpec
+          ./mill aethercore.test.testOnly aethercore.Sv32SupervisorCsrSpec
           ./mill aethercore.test.testOnly aethercore.MachineCsrFileSpec
           ./mill aethercore.test.testOnly aethercore.PrivilegeModeSpec
           ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
@@ -184,8 +185,8 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- VM focused tests cover the standalone Sv32 page-table walker and bounded RV32 satp WARL state'
-            echo '- CoreConfigSpec covers the frozen OS profiles plus the bounded V1 M/S/U supervisor profile'
+            echo '- VM focused tests cover the standalone Sv32 walker, bounded satp WARL state, and Supervisor satp/SUM/MXR CSR boundary'
+            echo '- CoreConfigSpec covers the frozen OS profiles plus the bounded V1 M/S/U supervisor profile and explicit Sv32 capability validation'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
             echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
