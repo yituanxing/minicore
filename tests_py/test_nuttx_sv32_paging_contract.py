@@ -31,6 +31,22 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
         self.assertNotIn("make_aethercore_nuttx_overlay.py", text)
         self.assertNotIn("make_aethercore_nuttx_protected_overlay.py", text)
 
+    def test_n5b_removes_optional_isa_but_keeps_real_requirements(self):
+        text = (ROOT / "tools/ci/nuttx_sv32_paging_aether_profile_build.sh").read_text()
+        for required in (
+            '"CONFIG_ARCH_CHIP_QEMU_RV_ISA_A": True',
+            '"CONFIG_ARCH_CHIP_QEMU_RV_ISA_C": False',
+            '"CONFIG_ARCH_FPU": False',
+            '"CONFIG_ARCH_DPFPU": False',
+            '"CONFIG_ARCH_RV_EXT_SSTC": True',
+            '"CONFIG_ARCH_USE_S_MODE": True',
+            '"CONFIG_ARCH_USE_MMU": True',
+            '"CONFIG_PAGING": True',
+            "RV32A=required-by-real-kernel-and-userspace",
+            "runtime_qualification=not-yet-attempted",
+        ):
+            self.assertIn(required, text)
+
 
 if __name__ == "__main__":
     unittest.main()
