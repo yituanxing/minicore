@@ -56,6 +56,12 @@ image:
 		'_start:' \
 		'  li a0, 0' \
 		'  li a1, 0' \
+		'  li t0, 0x20' \
+		'  csrw mideleg, t0' \
+		'  li t0, 0x2' \
+		'  csrw mcounteren, t0' \
+		'  li t0, 0x80000000' \
+		'  csrw 0x31a, t0' \
 		'  li t0, 0x800' \
 		'  csrw mstatus, t0' \
 		"  li t0, $$entry" \
@@ -78,7 +84,7 @@ image:
 	[[ $$image_size -le $$((ram_limit_dec - ram_base_dec)) ]] || { \
 		echo "ERROR: combined N5-C image exceeds runner RAM"; exit 3; \
 	}; \
-	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
+	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; STIP delegated, TM/STCE enabled; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
 	sha256sum "$(NUTTX_ELF)" $(BOOT_BIN) $(KERNEL_IMAGE) $(IMAGE) | tee $(BUILD_DIR)/images.sha256
 
 sim: rtl
