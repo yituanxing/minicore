@@ -8,7 +8,8 @@ from pathlib import Path
 import re
 
 _ARCH_RE = re.compile(r'Tag_RISCV_arch:\s*"([^"]+)"', re.I)
-_VERSION_RE = re.compile(r"^(?P<name>[a-z][a-z0-9]*?)(?:\d+p\d+)?$")
+_TRAILING_VERSION_RE = re.compile(r"\d+p\d+$")
+_EXTENSION_NAME_RE = re.compile(r"^[a-z][a-z0-9]*$")
 _BASE_RE = re.compile(r"^rv(?P<xlen>32|64)i(?:\d+p\d+)?$")
 _ATOMIC_RE = re.compile(
     r"\b(?:lr\.w|sc\.w|amo(?:swap|add|xor|and|or|min|max|minu|maxu)\.w)"
@@ -27,9 +28,11 @@ def parse_arch(arch: str) -> tuple[int, set[str]]:
     """Return XLEN and exact canonical extension names.
 
     GNU readelf emits versioned components such as
-    rv32i2p1_m2p0_a2p1_zicsr2p0_zifencei2p0_zmmul1p0.  Parse components,
-    rather than looking for individual letters as substrings, so e.g. the
-    letter 'f' inside unrelated text can never masquerade as the F extension.
+    rv32i2p1_m2p0_a2p1_zicsr2p0_zifencei2p0_zmmul1p0.  Strip only a trailing
+    ``<major>p<minor>`` version from each extension component, then validate
+    the remaining exact extension name.  This avoids substring matching and
+    also avoids a regex ambiguity where the extension name can accidentally
+    absorb its numeric version (for example ``m2p0`` instead of ``m``).
     """
 
     parts = arch.lower().split("_")
@@ -42,10 +45,10 @@ def parse_arch(arch: str) -> tuple[int, set[str]]:
 
     extensions = {"i"}
     for component in parts[1:]:
-        match = _VERSION_RE.fullmatch(component)
-        if not match:
+        name = _TRAILING_VERSION_RE.sub("", component)
+        if name == component or not _EXTENSION_NAME_RE.fullmatch(name):
             raise ValueError(f"unparseable RISC-V extension component {component!r} in {arch}")
-        extensions.add(match.group("name"))
+        extensions.add(name)
 
     return int(base.group("xlen")), extensions
 
