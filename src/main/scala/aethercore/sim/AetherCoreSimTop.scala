@@ -4,14 +4,19 @@ import chisel3._
 import chisel3.util._
 import aethercore.common._
 import aethercore.config.{CoreConfig, CoreProfiles}
-import aethercore.core.AetherCore
+import aethercore.core.{AetherCore, MachinePlicMmioMap}
 
 class AetherCoreSimTop(
     val config: CoreConfig = CoreProfiles.rv64imCurrent,
     val stopOnTrap: Boolean = true,
     val withMachineInterruptPlatform: Boolean = false,
     val stopOnWfi: Boolean = true,
-    val withNs16550Uart: Boolean = false
+    val withNs16550Uart: Boolean = false,
+    val interruptPlatformSourceCount: Int = 8,
+    val interruptPlicEnableBase: Int = MachinePlicMmioMap.Enable,
+    val interruptPlicThresholdOffset: Int = MachinePlicMmioMap.Threshold,
+    val interruptPlicClaimCompleteOffset: Int = MachinePlicMmioMap.ClaimComplete,
+    val interruptUartSourceId: Int = 1
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
@@ -81,7 +86,15 @@ class AetherCoreSimTop(
   val core = Module(new AetherCore(config, withMachineExternalInterrupt = withMachineInterruptPlatform))
   val interruptPlatform =
     if (withMachineInterruptPlatform) {
-      Some(Module(new MachineInterruptPlatform(addressBits = paddrBits, uartBase = uartRxBase)))
+      Some(Module(new MachineInterruptPlatform(
+        addressBits = paddrBits,
+        uartBase = uartRxBase,
+        sourceCount = interruptPlatformSourceCount,
+        plicEnableBase = interruptPlicEnableBase,
+        plicThresholdOffset = interruptPlicThresholdOffset,
+        plicClaimCompleteOffset = interruptPlicClaimCompleteOffset,
+        uartSourceId = interruptUartSourceId
+      )))
     } else None
 
   val uartAddress = config.platform.uartAddress.U(paddrBits.W)
