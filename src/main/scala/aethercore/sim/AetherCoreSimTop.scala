@@ -41,6 +41,15 @@ class AetherCoreSimTop(
     val memRdata = Input(UInt(busDataBits.W))
     val memFault = Input(Bool())
 
+    // Sv32 page-table walks are exposed as a second physical read port in the
+    // simulation shell. This intentionally stays simple: runners may service
+    // PTW reads from the same backing memory as instruction/data accesses.
+    val ptwValid = if (config.isa.hasSv32) Some(Output(Bool())) else None
+    val ptwAddr = if (config.isa.hasSv32) Some(Output(UInt(paddrBits.W))) else None
+    val ptwReady = if (config.isa.hasSv32) Some(Input(Bool())) else None
+    val ptwRdata = if (config.isa.hasSv32) Some(Input(UInt(32.W))) else None
+    val ptwFault = if (config.isa.hasSv32) Some(Input(Bool())) else None
+
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
     val rxValid = if (withMachineInterruptPlatform) Some(Input(Bool())) else None
@@ -84,6 +93,14 @@ class AetherCoreSimTop(
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
   io.imemAddr := core.io.imem.addr
+
+  if (config.isa.hasSv32) {
+    io.ptwValid.get := core.io.ptw.get.valid
+    io.ptwAddr.get := core.io.ptw.get.addr
+    core.io.ptw.get.ready := io.ptwReady.get
+    core.io.ptw.get.rdata := io.ptwRdata.get
+    core.io.ptw.get.fault := io.ptwFault.get
+  }
 
   val isWrite = core.io.dmem.valid && core.io.dmem.write
   val isUartTx = isWrite && core.io.dmem.addr === uartAddress
