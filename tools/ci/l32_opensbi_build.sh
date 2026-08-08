@@ -15,25 +15,58 @@ TOOLCHAIN_MODE="${L32_TOOLCHAIN_MODE:-llvm}"
 
 mkdir -p "${CACHE_ROOT}/opensbi" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
-select_linux_cross_compile() {
-  local candidates=()
-  [[ -n "${L32_CROSS_COMPILE:-}" ]] && candidates+=("${L32_CROSS_COMPILE}")
-  candidates+=(riscv64-linux-gnu- riscv32-linux-gnu- riscv64-linux-musl- riscv32-linux-musl-)
+probe_gcc_prefix() {
+  local prefix="$1"
+  local compiler="${prefix}gcc"
+  command -v "${compiler}" >/dev/null 2>&1 || return 1
 
-  local prefix compiler machine
-  for prefix in "${candidates[@]}"; do
-    compiler="${prefix}gcc"
-    command -v "${compiler}" >/dev/null 2>&1 || continue
-    machine="$(${compiler} -dumpmachine 2>/dev/null || true)"
+  if ! printf 'int l32_toolchain_probe;\n' | \
+    "${compiler}" -x c -c -o "${BUILD_DIR}/toolchain-probe.o" - \
+      -march=rv32ima_zicsr_zifencei -mabi=ilp32 -fPIE >/dev/null 2>&1; then
+    return 1
+  fi
+
+  # Match OpenSBI v1.6's mandatory linker capability check. An explicitly
+  # pinned bare-metal toolchain is acceptable only when its linker can really
+  # create the RV32 PIE firmware; target naming alone is not the contract.
+  if ! "${compiler}" \
+    -march=rv32ima_zicsr_zifencei -mabi=ilp32 \
+    -fPIE -nostdlib -Wl,-pie -x c /dev/null \
+    -o "${BUILD_DIR}/toolchain-pie-probe.elf" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  return 0
+}
+
+select_pie_cross_compile() {
+  local prefix machine
+
+  # Explicit prefixes are trusted only after the exact PIE link probe above.
+  # L32 uses this for the repository-pinned xPack GCC installed by CI.
+  if [[ -n "${L32_CROSS_COMPILE:-}" ]]; then
+    prefix="${L32_CROSS_COMPILE}"
+    if probe_gcc_prefix "${prefix}"; then
+      printf '%s\n' "${prefix}"
+      return 0
+    fi
+    echo "L32_EXPLICIT_GCC_PIE_FAILED: ${prefix}gcc cannot build RV32 ILP32 PIE" >&2
+    return 20
+  fi
+
+  # Automatic discovery remains Linux-target only. Never silently fall back to
+  # whatever system unknown-elf compiler happens to be installed.
+  for prefix in riscv64-linux-gnu- riscv32-linux-gnu- riscv64-linux-musl- riscv32-linux-musl-; do
+    command -v "${prefix}gcc" >/dev/null 2>&1 || continue
+    machine="$(${prefix}gcc -dumpmachine 2>/dev/null || true)"
     [[ "${machine}" == *linux* ]] || continue
-    if printf 'int l32_toolchain_probe;\n' | \
-      "${compiler}" -x c -c -o "${BUILD_DIR}/toolchain-probe.o" - \
-        -march=rv32ima_zicsr_zifencei -mabi=ilp32 -fPIE >/dev/null 2>&1; then
+    if probe_gcc_prefix "${prefix}"; then
       printf '%s\n' "${prefix}"
       return 0
     fi
   done
-  echo "L32_LINUX_GCC_MISSING: need a Linux-target RISC-V GCC with RV32 ILP32 PIE support" >&2
+
+  echo "L32_PIE_GCC_MISSING: need a RISC-V GCC that can compile and link RV32 ILP32 PIE" >&2
   return 20
 }
 
@@ -48,7 +81,7 @@ if [[ "${TOOLCHAIN_MODE}" == "llvm" ]]; then
   done
   if ! printf 'int l32_toolchain_probe;\n' | \
     clang --target=riscv32-unknown-elf -fuse-ld=lld -x c -nostdlib -fPIE -Wl,-pie \
-      -march=rv32ima_zicsr_zifencei -mabi=ilp32 -o "${BUILD_DIR}/toolchain-probe.elf" - \
+      -march=rv32ima_zicsr_zifencei -mabi=ilp32 -o "${BUILD_DIR}/toolchain-pie-probe.elf" - \
       >/dev/null 2>&1; then
     echo "L32_LLVM_RV32_PIE_MISSING: clang/lld cannot link the frozen RV32 PIE probe" >&2
     exit 20
@@ -56,7 +89,7 @@ if [[ "${TOOLCHAIN_MODE}" == "llvm" ]]; then
   MAKE_TOOLCHAIN_ARGS+=(LLVM=1)
   TOOLCHAIN_SUMMARY="llvm"
 elif [[ "${TOOLCHAIN_MODE}" == "gcc" ]]; then
-  CROSS_COMPILE="$(select_linux_cross_compile)"
+  CROSS_COMPILE="$(select_pie_cross_compile)"
   COMPILER="${CROSS_COMPILE}gcc"
   MAKE_TOOLCHAIN_ARGS+=("CROSS_COMPILE=${CROSS_COMPILE}")
   TOOLCHAIN_SUMMARY="${CROSS_COMPILE}"
@@ -107,6 +140,7 @@ mkdir -p "${BUILD_DIR}/build"
   else
     "${COMPILER}" --version | head -n 1
     "${COMPILER}" -dumpmachine
+    "${CROSS_COMPILE}ld" --version | head -n 1
   fi
   python3 --version
 } | tee "${EVIDENCE_DIR}/inputs.txt"
@@ -124,7 +158,13 @@ FW_ELF="${BUILD_DIR}/build/platform/${L32_PLATFORM}/firmware/fw_payload.elf"
 FW_BIN="${BUILD_DIR}/build/platform/${L32_PLATFORM}/firmware/fw_payload.bin"
 [[ -s "${FW_ELF}" && -s "${FW_BIN}" ]] || { echo "ERROR: missing OpenSBI payload outputs" >&2; exit 23; }
 
-READELF="$(command -v llvm-readelf || command -v readelf)"
+if [[ "${TOOLCHAIN_MODE}" == "gcc" ]]; then
+  READELF="${CROSS_COMPILE}readelf"
+elif command -v llvm-readelf >/dev/null 2>&1; then
+  READELF="llvm-readelf"
+else
+  READELF="readelf"
+fi
 "${READELF}" -h -l -A "${FW_ELF}" | tee "${EVIDENCE_DIR}/fw_payload-readelf.txt"
 file "${FW_ELF}" | tee "${EVIDENCE_DIR}/fw_payload-file.txt"
 sha256sum "${FW_ELF}" "${FW_BIN}" "${DTB}" | tee "${EVIDENCE_DIR}/sha256.txt"
