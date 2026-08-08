@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,15 +18,30 @@ class Memory {
  public:
   Memory() : bytes_(kRamSize, 0) {}
 
-  void load(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
+  void load(const std::string& path, std::uint64_t loadAddress) {
+    if (loadAddress < kRamBase || loadAddress - kRamBase >= bytes_.size())
+      throw std::runtime_error("image load address is outside RAM");
+
+    const auto offset = static_cast<std::size_t>(loadAddress - kRamBase);
+    const auto capacity = bytes_.size() - offset;
+
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) throw std::runtime_error("cannot open image: " + path);
-    input.read(reinterpret_cast<char*>(bytes_.data()),
-               static_cast<std::streamsize>(bytes_.size()));
-    if (input.bad()) throw std::runtime_error("failed while reading image: " + path);
+    const auto end = input.tellg();
+    if (end < 0) throw std::runtime_error("cannot determine image size: " + path);
+    const auto size = static_cast<std::uint64_t>(end);
+    if (size > capacity)
+      throw std::runtime_error("image does not fit in RAM at requested load address");
+
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char*>(bytes_.data() + offset),
+               static_cast<std::streamsize>(size));
+    if (!input || input.gcount() != static_cast<std::streamsize>(size))
+      throw std::runtime_error("failed while reading image: " + path);
   }
 
   bool contains(std::uint64_t address, std::size_t size = 1) const {
+    if (size == 0 || size > bytes_.size()) return false;
     return address >= kRamBase && address - kRamBase <= bytes_.size() - size;
   }
 
@@ -78,18 +94,23 @@ void driveMemory(VAetherCoreNuttXPagingSimTop& top, const Memory& memory) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 3)
-      throw std::runtime_error("usage: VAetherCoreNuttXPagingSimTop IMAGE.bin [MAX_CYCLES]");
+    if (argc < 2 || argc > 4)
+      throw std::runtime_error(
+          "usage: VAetherCoreNuttXPagingSimTop IMAGE.bin [MAX_CYCLES] [LOAD_ADDRESS]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
-        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 500000ULL;
+        argc >= 3 ? std::stoull(argv[2], nullptr, 0) : 500000ULL;
+    const std::uint64_t loadAddress =
+        argc >= 4 ? std::stoull(argv[3], nullptr, 0) : kRamBase;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
     VAetherCoreNuttXPagingSimTop top{&context};
     Memory memory;
-    memory.load(image);
+    memory.load(image, loadAddress);
+    std::cerr << "N5C_IMAGE load=0x" << std::hex << loadAddress
+              << " ram-base=0x" << kRamBase << std::dec << "\n";
 
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
