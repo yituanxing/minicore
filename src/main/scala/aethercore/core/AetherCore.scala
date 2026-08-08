@@ -115,6 +115,14 @@ class AetherCore(
   val fetchVm = if (config.isa.hasSv32) Some(Module(new Sv32InstructionFetchAdapter(paddrBits))) else None
   val ptwArbiter = if (config.isa.hasSv32) Some(Module(new Sv32PtwArbiter(paddrBits))) else None
 
+  val ifIdSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(ifId.inst) else false.B
+  val idExSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(idEx.inst) else false.B
+  val memWbSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(memWb.inst) else false.B
+
+  val takingTrap = memWb.valid && memWb.trap.valid
+  val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
+  val takingSfence = memWb.valid && memWbSfenceVma && !memWb.trap.valid
+
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
   instructionPmp.io.address := pc
   instructionPmp.io.bytes := 4.U
@@ -144,6 +152,7 @@ class AetherCore(
     val fetch = fetchVm.get
     fetch.io.requestValid := !fetchKill
     fetch.io.kill := fetchKill
+    fetch.io.flush := takingSfence
     fetch.io.virtualAddress := pc(31, 0)
     fetch.io.privilege := csrFile.io.currentPrivilege
     fetch.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
@@ -175,9 +184,6 @@ class AetherCore(
     fetchPageFault := fetch.io.pageFault
     fetchAccessFault := fetch.io.accessFault
   }
-
-  val takingTrap = memWb.valid && memWb.trap.valid
-  val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
 
   io.imem.addr := fetchPhysicalAddress
   decoder.io.inst := ifId.inst
@@ -254,7 +260,11 @@ class AetherCore(
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.InstructionAccessFault.U(xlen.W)
     decodedTrap.value := ifId.pc
-  }.elsewhen(decoder.io.ctrl.illegal) {
+  }.elsewhen(ifIdSfenceVma && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U) {
+    decodedTrap.valid := true.B
+    decodedTrap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
+    decodedTrap.value := instructionTrapValue
+  }.elsewhen(decoder.io.ctrl.illegal && !ifIdSfenceVma) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
     decodedTrap.value := instructionTrapValue
@@ -350,6 +360,8 @@ class AetherCore(
     (mretInstruction && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U) ||
       (sretInstruction && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U)
   )
+  val sfencePrivilegeException = idExSfenceVma &&
+    csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U
 
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
@@ -409,7 +421,7 @@ class AetherCore(
 
   val ordinaryDataAccess = !atomicInstruction && (exMem.ctrl.memRead || exMem.ctrl.memWrite)
   val memoryBoundaryOpen = !exMem.trap.valid && !takingTrap && !takingInterrupt &&
-    !takingMret && !waitingForInterrupt
+    !takingMret && !takingSfence && !waitingForInterrupt
   val candidateDataAccess = exMem.valid && (ordinaryDataAccess || atomicInstruction) && memoryBoundaryOpen
   val atomicNeedsWritePermission = atomicSc || atomicRmw
 
@@ -445,6 +457,7 @@ class AetherCore(
   if (config.isa.hasSv32) {
     val vm = dataVm.get
     vm.io.requestValid := rawDataRequest && !dataPmpFault && !vmCsrHazard
+    vm.io.flush := takingSfence
     vm.io.virtualAddress := exMem.result(31, 0)
     vm.io.privilege := csrFile.io.currentPrivilege
     vm.io.write := dataBusWrite
@@ -554,9 +567,9 @@ class AetherCore(
   val memoryFaultIsLoad = atomicLr || (!atomicInstruction && exMem.ctrl.memRead)
 
   val fetchContextChange = vmCsrHazard
-  fetchKill := takingTrap || takingInterrupt || takingMret || waitingForInterrupt ||
+  fetchKill := takingTrap || takingInterrupt || takingMret || takingSfence || waitingForInterrupt ||
     redirect || fetchContextChange
-  val frontendAdvance = !takingTrap && !takingInterrupt && !takingMret &&
+  val frontendAdvance = !takingTrap && !takingInterrupt && !takingMret && !takingSfence &&
     !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
   if (config.isa.hasSv32) {
     fetchResponseReady := frontendAdvance && fetchResponseValid
@@ -596,6 +609,16 @@ class AetherCore(
     exMem.valid := false.B
     memWb.valid := false.B
     reservationValid := false.B
+    atomicWritePhase := false.B
+  }.elsewhen(takingSfence) {
+    // The first implementation deliberately over-fences: every legal
+    // SFENCE.VMA serializes the younger pipeline and globally flushes both
+    // translation caches. The spec explicitly permits this conservative form.
+    pc := memWb.pc + 4.U
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    memWb.valid := false.B
     atomicWritePhase := false.B
   }.elsewhen(waitingForInterrupt) {
     pc := memWb.pc + 4.U
@@ -680,7 +703,7 @@ class AetherCore(
     exMem.csrAddr := csrAddr
     exMem.csrData := canonicalCsrWriteData
     exMem.trap := idEx.trap
-    when((csrException || wfiException || xretException) && !idEx.trap.valid) {
+    when((csrException || wfiException || xretException || sfencePrivilegeException) && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
       exMem.trap.value := idExInstructionValue
