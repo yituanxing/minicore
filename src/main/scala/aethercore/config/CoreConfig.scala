@@ -152,8 +152,6 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
-  // V2-E data-translation profile. Instruction fetch remains physical in this
-  // slice; S/U data accesses may use the full 34-bit Sv32 translated PA.
   val rv32imsuSv32Software: CoreConfig = CoreConfig(
     name = "rv32imsu-sv32-software",
     isa = IsaConfig(
@@ -161,6 +159,20 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'S', 'U'),
       zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv32")
+    ),
+    platform = rv32Sv32Platform
+  )
+
+  // N5 real-paging profile: same frozen Sv32/MMU contract, now with the RV32A
+  // word atomics that the pinned NuttX kernel and userspace actually emit.
+  val rv32imasuSv32Software: CoreConfig = CoreConfig(
+    name = "rv32imasu-sv32-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
       virtualMemoryModes = Set("Sv32")
     ),
     platform = rv32Sv32Platform
