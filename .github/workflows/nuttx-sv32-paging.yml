@@ -6,6 +6,7 @@ on:
       - software/nuttx/**
       - tools/ci/nuttx_sv32_paging_build_audit.sh
       - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+      - tools/ci/audit_riscv_elf_profile.py
       - tools/ci/nuttx_prepare_host_tools.sh
       - tools/ci/ensure_genromfs.sh
       - tools/ci/kconfig-tweak
@@ -40,6 +41,7 @@ jobs:
           set -euo pipefail
           bash -n tools/ci/nuttx_sv32_paging_build_audit.sh
           bash -n tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          python3 -m py_compile tools/ci/audit_riscv_elf_profile.py
           python3 -m unittest tests_py.test_nuttx_sv32_paging_contract -v
 
       - name: Fetch verified pinned NuttX release sources
