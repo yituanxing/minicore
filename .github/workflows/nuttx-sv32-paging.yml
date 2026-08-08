@@ -9,6 +9,7 @@ on:
       - Makefile.nuttx-sv32-probe
       - tools/ci/nuttx_sv32_paging_build_audit.sh
       - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+      - tools/ci/nuttx_sv32_paging_cache_key.sh
       - tools/ci/audit_riscv_elf_profile.py
       - tools/ci/nuttx_prepare_host_tools.sh
       - tools/ci/ensure_genromfs.sh
@@ -44,10 +45,26 @@ jobs:
           set -euo pipefail
           bash -n tools/ci/nuttx_sv32_paging_build_audit.sh
           bash -n tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          bash -n tools/ci/nuttx_sv32_paging_cache_key.sh
           python3 -m py_compile tools/ci/audit_riscv_elf_profile.py
           python3 -m unittest tests_py.test_nuttx_sv32_paging_contract -v
 
+      - name: Check reusable N5 software image
+        id: software-cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=build/nuttx-sv32-paging-aether-profile
+          if bash tools/ci/nuttx_sv32_paging_cache_key.sh check "$target"; then
+            echo 'reuse=true' >> "$GITHUB_OUTPUT"
+            echo 'N5-A/N5-B software image is content-identical; reusing persistent workspace output.'
+          else
+            echo 'reuse=false' >> "$GITHUB_OUTPUT"
+            echo 'N5 software cache miss; rebuilding N5-A/N5-B once before the boot probe.'
+          fi
+
       - name: Fetch verified pinned NuttX release sources
+        if: steps.software-cache.outputs.reuse != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -72,12 +89,14 @@ jobs:
           fetch_release "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
 
       - name: Prepare pinned NuttX host tools
+        if: steps.software-cache.outputs.reuse != 'true'
         shell: bash
         run: |
           chmod +x tools/ci/nuttx_prepare_host_tools.sh
           bash tools/ci/nuttx_prepare_host_tools.sh
 
       - name: N5-A build and audit upstream paging configuration
+        if: steps.software-cache.outputs.reuse != 'true'
         shell: bash
         env:
           NUTTX_JOBS: "6"
@@ -86,7 +105,7 @@ jobs:
           bash tools/ci/nuttx_sv32_paging_build_audit.sh
 
       - name: Upload N5-A evidence
-        if: always()
+        if: always() && steps.software-cache.outputs.reuse != 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -105,6 +124,7 @@ jobs:
             build/nuttx-sv32-paging-audit/evidence/
 
       - name: N5-B build bounded RV32IMA Sv32 paging profile
+        if: steps.software-cache.outputs.reuse != 'true'
         shell: bash
         env:
           NUTTX_JOBS: "6"
@@ -112,8 +132,16 @@ jobs:
           chmod +x tools/ci/nuttx_sv32_paging_aether_profile_build.sh
           bash tools/ci/nuttx_sv32_paging_aether_profile_build.sh
 
+      - name: Mark reusable N5 software image
+        if: steps.software-cache.outputs.reuse != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/nuttx_sv32_paging_cache_key.sh mark build/nuttx-sv32-paging-aether-profile
+          bash tools/ci/nuttx_sv32_paging_cache_key.sh check build/nuttx-sv32-paging-aether-profile
+
       - name: Upload N5-B evidence
-        if: always()
+        if: always() && steps.software-cache.outputs.reuse != 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -154,5 +182,6 @@ jobs:
           if-no-files-found: warn
           path: |
             build/nuttx-sv32-boot-probe/nuttx-readelf.txt
+            build/nuttx-sv32-boot-probe/image-load-address.txt
             build/nuttx-sv32-boot-probe/images.sha256
             build/nuttx-sv32-boot-probe/logs/*.log
