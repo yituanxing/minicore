@@ -15,6 +15,12 @@ object PmpCsrAddress {
 }
 
 object PmpCsrWarl {
+  def addressBits(isa: IsaConfig): Int = {
+    // The currently supported Sv32 platform is PA34, so RV32 pmpaddr consumes
+    // all 32 CSR bits as PA[33:2]. Non-Sv32 RV32 keeps the frozen PA32 shape.
+    if (isa.hasSv32) isa.xlen else isa.xlen - 2
+  }
+
   def canonicalizeConfigByte(data: UInt): UInt = {
     val read = data(PmpConstants.ConfigRead)
     val write = data(PmpConstants.ConfigWrite) && read
@@ -32,8 +38,8 @@ object PmpCsrWarl {
   }
 
   def canonicalizeAddress(isa: IsaConfig, data: UInt): UInt = {
-    val addressBits = isa.xlen - 2
-    data & ((BigInt(1) << addressBits) - 1).U(isa.xlen.W)
+    val implementedBits = addressBits(isa)
+    data & ((BigInt(1) << implementedBits) - 1).U(isa.xlen.W)
   }
 
   def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
@@ -54,7 +60,8 @@ object PmpCsrWarl {
 
 class PmpCsrFile(val isa: IsaConfig) extends Module {
   private val xlen = isa.xlen
-  private val pmpAddressBits = xlen - 2
+  private val pmpAddressBits = PmpCsrWarl.addressBits(isa)
+  require(pmpAddressBits <= xlen, "pmpaddr must fit in one architectural CSR")
 
   val io = IO(new Bundle {
     val readAddr = Input(UInt(12.W))
@@ -89,7 +96,11 @@ class PmpCsrFile(val isa: IsaConfig) extends Module {
     }
     for (entry <- 0 until isa.pmpEntries) {
       when(io.readAddr === PmpCsrAddress.pmpaddr(entry).U) {
-        io.readData := Cat(0.U(2.W), pmpAddress(entry))
+        if (pmpAddressBits == xlen) {
+          io.readData := pmpAddress(entry)
+        } else {
+          io.readData := Cat(0.U((xlen - pmpAddressBits).W), pmpAddress(entry))
+        }
         io.readImplemented := true.B
         io.readWritable := true.B
       }
