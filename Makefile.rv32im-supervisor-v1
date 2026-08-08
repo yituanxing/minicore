@@ -28,10 +28,11 @@ runner-source:
 
 sim: rtl runner-source
 	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM Supervisor V1 SystemVerilog files in $(RTL_DIR)"; exit 1; }
-	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+	+$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
-		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest_rv32.cpp)
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest_rv32.cpp) \
+		-j $(JOBS)
 
 run-local: sim workload
 	mkdir -p $(BUILD_DIR)/logs
