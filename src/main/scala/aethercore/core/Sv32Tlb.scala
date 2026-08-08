@@ -18,7 +18,7 @@ import chisel3.util._
   * qualified.
   */
 class Sv32Tlb(val entries: Int = 8) extends Module {
-  require(entries > 0 && isPow2(entries), s"Sv32 TLB entries must be a positive power of two, got $entries")
+  require(entries >= 2 && isPow2(entries), s"Sv32 TLB entries must be a power of two >= 2, got $entries")
 
   private val PaddrBits = 34
   private val PpnBits = 22
@@ -36,6 +36,7 @@ class Sv32Tlb(val entries: Int = 8) extends Module {
     val sum = Bool()
     val mxr = Bool()
     val leafLevel = UInt(1.W)
+    val global = Bool()
   }
 
   val io = IO(new Bundle {
@@ -51,6 +52,7 @@ class Sv32Tlb(val entries: Int = 8) extends Module {
     val hit = Output(Bool())
     val physicalAddress = Output(UInt(PaddrBits.W))
     val leafLevel = Output(UInt(1.W))
+    val global = Output(Bool())
 
     val refillValid = Input(Bool())
     val refillVirtualAddress = Input(UInt(32.W))
@@ -62,6 +64,7 @@ class Sv32Tlb(val entries: Int = 8) extends Module {
     val refillSum = Input(Bool())
     val refillMxr = Input(Bool())
     val refillLeafLevel = Input(UInt(1.W))
+    val refillGlobal = Input(Bool())
 
     val flush = Input(Bool())
   })
@@ -91,6 +94,7 @@ class Sv32Tlb(val entries: Int = 8) extends Module {
   val hitIndex = PriorityEncoder(matches.asUInt)
   val hitEntry = table(hitIndex)
   io.leafLevel := Mux(io.hit, hitEntry.leafLevel, 0.U)
+  io.global := io.hit && hitEntry.global
   io.physicalAddress := Mux(
     io.hit,
     Mux(
@@ -125,6 +129,7 @@ class Sv32Tlb(val entries: Int = 8) extends Module {
     entry.sum := io.refillSum
     entry.mxr := io.refillMxr
     entry.leafLevel := io.refillLeafLevel
+    entry.global := io.refillGlobal
     replacement := refillIndex + 1.U
   }
 }
