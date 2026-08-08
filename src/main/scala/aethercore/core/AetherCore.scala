@@ -82,7 +82,6 @@ class AetherCore(
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
   require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!config.isa.hasSv32 || paddrBits >= 34, "Sv32 requires a PA width of at least 34 bits")
-  require(!config.isa.hasSv32 || !config.isa.hasA, "Sv32 atomics are deferred until the translated AMO path is qualified")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
@@ -101,7 +100,7 @@ class AetherCore(
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
 
   val reservationValid = RegInit(false.B)
-  val reservationAddress = RegInit(0.U(xlen.W))
+  val reservationAddress = RegInit(0.U(paddrBits.W))
   val atomicWritePhase = RegInit(false.B)
   val atomicOldData = RegInit(0.U(xlen.W))
 
@@ -390,13 +389,15 @@ class AetherCore(
     }
   }
 
+  val translatedPhysicalAddress = WireDefault(exMem.result.pad(paddrBits))
+  val scReservationMatch = WireDefault(reservationValid && reservationAddress === exMem.result.pad(paddrBits))
+
   val atomicInstruction = exMem.ctrl.atomicOp =/= AtomicOp.None
   val atomicLr = exMem.ctrl.atomicOp === AtomicOp.Lr
   val atomicSc = exMem.ctrl.atomicOp === AtomicOp.Sc
   val atomicRmw = atomicInstruction && !atomicLr && !atomicSc
   val atomicReadPhase = atomicRmw && !atomicWritePhase
   val atomicWriteRequest = atomicRmw && atomicWritePhase
-  val scReservationMatch = reservationValid && reservationAddress === exMem.result
 
   val atomicWriteData = WireDefault(exMem.storeData)
   switch(exMem.ctrl.atomicOp) {
@@ -432,8 +433,8 @@ class AetherCore(
 
   val dataPmpFault = candidateDataAccess &&
     (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
-  val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest ||
-    (atomicSc && scReservationMatch)
+  val atomicScBusRequest = if (config.isa.hasSv32) atomicSc else atomicSc && scReservationMatch
+  val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
   val rawDataRequest = candidateDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
   val dataBusWrite = Mux(
     atomicInstruction,
@@ -449,7 +450,6 @@ class AetherCore(
     )
   } else false.B
 
-  val translatedPhysicalAddress = WireDefault(exMem.result.pad(paddrBits))
   val vmRequestComplete = WireDefault(false.B)
   val vmPageFault = WireDefault(false.B)
   val vmAccessFault = WireDefault(false.B)
@@ -460,6 +460,7 @@ class AetherCore(
     vm.io.flush := takingSfence
     vm.io.virtualAddress := exMem.result(31, 0)
     vm.io.privilege := csrFile.io.currentPrivilege
+    vm.io.translateWrite := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
     vm.io.write := dataBusWrite
     vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)(31, 0)
     vm.io.wmask := storeMask(3, 0)
@@ -486,6 +487,7 @@ class AetherCore(
     vm.io.dataFault := io.dmem.fault
 
     translatedPhysicalAddress := vm.io.physicalAddress
+    scReservationMatch := reservationValid && reservationAddress === vm.io.physicalAddress
     vmRequestComplete := vm.io.requestComplete
     vmPageFault := vm.io.pageFault
     vmAccessFault := vm.io.accessFault
@@ -644,7 +646,7 @@ class AetherCore(
     when(exMem.valid && atomicInstruction) {
       when(atomicLr && !memoryFault && io.dmem.valid && io.dmem.ready && !io.dmem.fault) {
         reservationValid := true.B
-        reservationAddress := exMem.result
+        reservationAddress := translatedPhysicalAddress
       }.elsewhen(!atomicLr) {
         reservationValid := false.B
       }.otherwise {
