@@ -1,7 +1,13 @@
 from pathlib import Path
+import importlib.util
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+AUDITOR_PATH = ROOT / "tools/ci/audit_riscv_elf_profile.py"
+_spec = importlib.util.spec_from_file_location("audit_riscv_elf_profile", AUDITOR_PATH)
+_auditor = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(_auditor)
 
 
 class NuttXSv32PagingContractTest(unittest.TestCase):
@@ -44,8 +50,26 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
             '"CONFIG_PAGING": True',
             "RV32A=required-by-real-kernel-and-userspace",
             "runtime_qualification=not-yet-attempted",
+            "audit_riscv_elf_profile.py",
         ):
             self.assertIn(required, text)
+
+    def test_real_n5b_arch_string_parses_as_rv32ima_without_cfdv(self):
+        arch = "rv32i2p1_m2p0_a2p1_zicsr2p0_zifencei2p0_zmmul1p0"
+        xlen, extensions = _auditor.parse_arch(arch)
+        self.assertEqual(xlen, 32)
+        self.assertTrue({"i", "m", "a", "zicsr", "zifencei", "zmmul"} <= extensions)
+        self.assertFalse({"c", "f", "d", "v"} & extensions)
+        attributes = f'  Tag_RISCV_arch: "{arch}"\n'
+        parsed_arch, atomics = _auditor.audit_image("kernel", attributes, "80000000: 1000202f lr.w x0,(x0)\n")
+        self.assertEqual(parsed_arch, arch)
+        self.assertEqual(atomics, 1)
+
+    def test_exact_parser_rejects_a_real_f_extension_component(self):
+        arch = "rv32i2p1_m2p0_a2p1_f2p2_zicsr2p0_zifencei2p0"
+        attributes = f'  Tag_RISCV_arch: "{arch}"\n'
+        with self.assertRaisesRegex(ValueError, "retained unsupported extensions"):
+            _auditor.audit_image("kernel", attributes, "80000000: 1000202f lr.w x0,(x0)\n")
 
 
 if __name__ == "__main__":
