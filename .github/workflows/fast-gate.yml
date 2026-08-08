@@ -100,34 +100,39 @@ jobs:
         if: steps.changes.outputs.run_chisel == 'true'
         shell: bash
         run: |
-          ./mill aethercore.test.testOnly aethercore.CoreConfigSpec
-          ./mill aethercore.test.testOnly aethercore.DecoderSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32PageTableWalkerSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32SatpRegisterSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32SupervisorCsrSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32DataPathCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32InstructionTranslationSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32InstructionFetchCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32TlbSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32TranslationUnitTlbSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32SfenceCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32PageFaultDelegationSpec
-          ./mill aethercore.test.testOnly aethercore.MachineCsrFileSpec
-          ./mill aethercore.test.testOnly aethercore.PrivilegeModeSpec
-          ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
-          ./mill aethercore.test.testOnly aethercore.UserModeCoreSpec
-          ./mill aethercore.test.testOnly aethercore.SupervisorModeSpec
-          ./mill aethercore.test.testOnly aethercore.SupervisorPrivilegeBoundarySpec
-          ./mill aethercore.test.testOnly aethercore.RV32AtomicCoreSpec
-          ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
-          ./mill aethercore.test.testOnly aethercore.MachinePlicMmioSpec
-          ./mill aethercore.test.testOnly aethercore.MachineUartRxSpec
-          ./mill aethercore.test.testOnly aethercore.MachineInterruptPlatformSpec
-          ./mill aethercore.test.testOnly aethercore.MachineInterruptArbiterSpec
-          ./mill aethercore.test.testOnly aethercore.MachineExternalCsrSpec
-          ./mill aethercore.test.testOnly aethercore.MachineExternalInterruptCoreSpec
-          ./mill aethercore.test.testOnly aethercore.AetherCoreInterruptPlatformSpec
-          ./mill aethercore.test.testOnly aethercore.WaitForInterruptCoreSpec
+          ./mill aethercore.test.testOnly \
+            aethercore.CoreConfigSpec \
+            aethercore.DecoderSpec \
+            aethercore.Sv32PageTableWalkerSpec \
+            aethercore.Sv32SatpRegisterSpec \
+            aethercore.Sv32SupervisorCsrSpec \
+            aethercore.Sv32DataPathCoreSpec \
+            aethercore.Sv32InstructionTranslationSpec \
+            aethercore.Sv32InstructionFetchCoreSpec \
+            aethercore.Sv32TlbSpec \
+            aethercore.Sv32TranslationUnitTlbSpec \
+            aethercore.Sv32SfenceCoreSpec \
+            aethercore.Sv32PageFaultDelegationSpec \
+            aethercore.MachineCsrFileSpec \
+            aethercore.Rv32SstcTimerSpec \
+            aethercore.Rv32SstcCsrSpec \
+            aethercore.Rv32SstcCoreSpec \
+            aethercore.PrivilegeModeSpec \
+            aethercore.MachineMretCoreSpec \
+            aethercore.UserModeCoreSpec \
+            aethercore.SupervisorModeSpec \
+            aethercore.SupervisorPrivilegeBoundarySpec \
+            aethercore.RV32AtomicCoreSpec \
+            aethercore.Sv32AtomicCoreSpec \
+            aethercore.MachinePlicSpec \
+            aethercore.MachinePlicMmioSpec \
+            aethercore.MachineUartRxSpec \
+            aethercore.MachineInterruptPlatformSpec \
+            aethercore.MachineInterruptArbiterSpec \
+            aethercore.MachineExternalCsrSpec \
+            aethercore.MachineExternalInterruptCoreSpec \
+            aethercore.AetherCoreInterruptPlatformSpec \
+            aethercore.WaitForInterruptCoreSpec
 
       - name: Executable Supervisor V1 M-S-U workload
         if: steps.changes.outputs.run_smode_v1 == 'true'
@@ -192,11 +197,12 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, and deterministic shared PTW arbitration'
-            echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34 profile and fail-closed Sv32+PMP boundary'
+            echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, translated RV32A reservation/remap semantics, and deterministic shared PTW arbitration'
+            echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34/Sstc profile and fail-closed configuration boundaries'
+            echo '- Sstc tests cover RV32 stimecmp split writes, TM/STCE access gates, time/timeh, full M-to-S execution, delegated STIP visibility and local/global interrupt qualification'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
-            echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
+            echo '- DecoderSpec, RV32AtomicCoreSpec and Sv32AtomicCoreSpec cover RV32A decode, LR/SC reservation, AMO results, translated PA34 identity and memory backpressure/remap behavior'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'

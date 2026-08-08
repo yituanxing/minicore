@@ -99,6 +99,33 @@ class MachineInterruptPlatformSpec extends AnyFlatSpec with Matchers with Chisel
     }
   }
 
+  it should "map QEMU-virt UART source ten through the N5 Supervisor context" in {
+    simulate(new MachineInterruptPlatform(
+      sourceCount = 52,
+      plicEnableBase = MachinePlicMmioMap.SupervisorEnable,
+      plicThresholdOffset = MachinePlicMmioMap.SupervisorThreshold,
+      plicClaimCompleteOffset = MachinePlicMmioMap.SupervisorClaimComplete,
+      uartSourceId = 10
+    )) { dut =>
+      initialize(dut)
+
+      write(dut, plicBase + MachinePlicMmioMap.priority(10), 3)
+      write(dut, plicBase + MachinePlicMmioMap.SupervisorEnable, BigInt(1) << 10)
+      write(dut, plicBase + MachinePlicMmioMap.SupervisorThreshold, 0)
+      write(dut, uartBase + MachineUartRxMap.Control, 1)
+
+      push(dut, 0x41)
+      dut.io.uartInterrupt.expect(true.B)
+      dut.io.externalInterrupt.expect(true.B)
+      read(dut, plicBase + MachinePlicMmioMap.Pending) shouldBe (BigInt(1) << 10)
+      read(dut, plicBase + MachinePlicMmioMap.SupervisorClaimComplete) shouldBe 10
+
+      read(dut, uartBase + MachineUartRxMap.Data) shouldBe 0x41
+      write(dut, plicBase + MachinePlicMmioMap.SupervisorClaimComplete, 10)
+      dut.io.externalInterrupt.expect(false.B)
+    }
+  }
+
   it should "fault unmapped platform addresses without touching either device" in {
     simulate(new MachineInterruptPlatform()) { dut =>
       initialize(dut)

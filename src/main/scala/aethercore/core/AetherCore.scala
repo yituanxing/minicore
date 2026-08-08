@@ -73,6 +73,8 @@ class AetherCore(
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val supervisorTimerCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorTimerInterrupt)
   private val machineTimerCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineTimer)
   private val machineExternalCause =
@@ -82,13 +84,13 @@ class AetherCore(
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
   require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!config.isa.hasSv32 || paddrBits >= 34, "Sv32 requires a PA width of at least 34 bits")
-  require(!config.isa.hasSv32 || !config.isa.hasA, "Sv32 atomics are deferred until the translated AMO path is qualified")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
     val dmem = new DataBusIO(paddrBits, busDataBits)
     val ptw = if (config.isa.hasSv32) Some(new PageTableReadBusIO(paddrBits)) else None
     val timerInterrupt = Input(Bool())
+    val time = if (config.isa.hasSstc) Some(Input(UInt(64.W))) else None
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
@@ -101,7 +103,7 @@ class AetherCore(
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
 
   val reservationValid = RegInit(false.B)
-  val reservationAddress = RegInit(0.U(xlen.W))
+  val reservationAddress = RegInit(0.U(paddrBits.W))
   val atomicWritePhase = RegInit(false.B)
   val atomicOldData = RegInit(0.U(xlen.W))
 
@@ -198,6 +200,9 @@ class AetherCore(
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
   csrFile.io.timerInterrupt := io.timerInterrupt
+  if (config.isa.hasSstc) {
+    csrFile.io.time.get := io.time.get
+  }
   val rawExternalInterrupt =
     if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
   if (withMachineExternalInterrupt) {
@@ -207,7 +212,9 @@ class AetherCore(
   csrFile.io.trapReturnSupervisor := takingMret && memWb.inst === "h10200073".U
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
-  val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt
+  val rawSupervisorTimerPending =
+    if (config.isa.hasSstc) csrFile.io.supervisorTimerPending.get else false.B
+  val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt || rawSupervisorTimerPending
   val waitingForInterrupt = wfiRetiring && !rawInterruptPending
 
   val interruptPc = Mux(
@@ -218,12 +225,19 @@ class AetherCore(
   val takingExternalInterrupt =
     if (withMachineExternalInterrupt) csrFile.io.machineExternalInterrupt.get else false.B
   val takingTimerInterrupt = csrFile.io.machineTimerInterrupt
-  val qualifiedInterrupt = takingExternalInterrupt || takingTimerInterrupt
+  val takingSupervisorTimerInterrupt =
+    if (config.isa.hasSstc) csrFile.io.supervisorTimerInterrupt.get else false.B
+  val qualifiedInterrupt =
+    takingExternalInterrupt || takingTimerInterrupt || takingSupervisorTimerInterrupt
   val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret && qualifiedInterrupt
   val interruptCause = Mux(
     takingExternalInterrupt,
     machineExternalCause.U(xlen.W),
-    machineTimerCause.U(xlen.W)
+    Mux(
+      takingTimerInterrupt,
+      machineTimerCause.U(xlen.W),
+      supervisorTimerCause.U(xlen.W)
+    )
   )
 
   csrFile.io.trapEnter := takingTrap || takingInterrupt
@@ -390,13 +404,15 @@ class AetherCore(
     }
   }
 
+  val translatedPhysicalAddress = WireDefault(exMem.result.pad(paddrBits))
+  val scReservationMatch = WireDefault(reservationValid && reservationAddress === exMem.result.pad(paddrBits))
+
   val atomicInstruction = exMem.ctrl.atomicOp =/= AtomicOp.None
   val atomicLr = exMem.ctrl.atomicOp === AtomicOp.Lr
   val atomicSc = exMem.ctrl.atomicOp === AtomicOp.Sc
   val atomicRmw = atomicInstruction && !atomicLr && !atomicSc
   val atomicReadPhase = atomicRmw && !atomicWritePhase
   val atomicWriteRequest = atomicRmw && atomicWritePhase
-  val scReservationMatch = reservationValid && reservationAddress === exMem.result
 
   val atomicWriteData = WireDefault(exMem.storeData)
   switch(exMem.ctrl.atomicOp) {
@@ -432,8 +448,8 @@ class AetherCore(
 
   val dataPmpFault = candidateDataAccess &&
     (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
-  val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest ||
-    (atomicSc && scReservationMatch)
+  val atomicScBusRequest = if (config.isa.hasSv32) atomicSc else atomicSc && scReservationMatch
+  val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
   val rawDataRequest = candidateDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
   val dataBusWrite = Mux(
     atomicInstruction,
@@ -449,7 +465,6 @@ class AetherCore(
     )
   } else false.B
 
-  val translatedPhysicalAddress = WireDefault(exMem.result.pad(paddrBits))
   val vmRequestComplete = WireDefault(false.B)
   val vmPageFault = WireDefault(false.B)
   val vmAccessFault = WireDefault(false.B)
@@ -460,6 +475,7 @@ class AetherCore(
     vm.io.flush := takingSfence
     vm.io.virtualAddress := exMem.result(31, 0)
     vm.io.privilege := csrFile.io.currentPrivilege
+    vm.io.translateWrite := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
     vm.io.write := dataBusWrite
     vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)(31, 0)
     vm.io.wmask := storeMask(3, 0)
@@ -486,6 +502,7 @@ class AetherCore(
     vm.io.dataFault := io.dmem.fault
 
     translatedPhysicalAddress := vm.io.physicalAddress
+    scReservationMatch := reservationValid && reservationAddress === vm.io.physicalAddress
     vmRequestComplete := vm.io.requestComplete
     vmPageFault := vm.io.pageFault
     vmAccessFault := vm.io.accessFault
@@ -611,9 +628,6 @@ class AetherCore(
     reservationValid := false.B
     atomicWritePhase := false.B
   }.elsewhen(takingSfence) {
-    // The first implementation deliberately over-fences: every legal
-    // SFENCE.VMA serializes the younger pipeline and globally flushes both
-    // translation caches. The spec explicitly permits this conservative form.
     pc := memWb.pc + 4.U
     ifId.valid := false.B
     idEx.valid := false.B
@@ -644,7 +658,7 @@ class AetherCore(
     when(exMem.valid && atomicInstruction) {
       when(atomicLr && !memoryFault && io.dmem.valid && io.dmem.ready && !io.dmem.fault) {
         reservationValid := true.B
-        reservationAddress := exMem.result
+        reservationAddress := translatedPhysicalAddress
       }.elsewhen(!atomicLr) {
         reservationValid := false.B
       }.otherwise {

@@ -3,7 +3,7 @@ package aethercore.core
 import chisel3._
 import aethercore.common.MemSize
 
-/** Serial correctness-first adapter for one RV32 Load/Store memory operation. */
+/** Serial correctness-first adapter for one RV32 Load/Store/Atomic memory operation. */
 class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   require(paddrBits >= 34, s"Sv32 data path requires PA>=34, got $paddrBits")
 
@@ -12,6 +12,10 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
     val flush = Input(Bool())
     val virtualAddress = Input(UInt(32.W))
     val privilege = Input(UInt(2.W))
+    // Translation permission intent is deliberately separate from the physical
+    // bus direction. AMO read phases require Store/AMO write permission while
+    // still issuing a physical read before the write-back phase.
+    val translateWrite = Input(Bool())
     val write = Input(Bool())
     val wdata = Input(UInt(32.W))
     val wmask = Input(UInt(4.W))
@@ -51,7 +55,7 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   translation.io.flush := io.flush
   translation.io.virtualAddress := io.virtualAddress
   translation.io.privilege := io.privilege
-  translation.io.write := io.write
+  translation.io.write := io.translateWrite
   translation.io.execute := false.B
   translation.io.satpTranslationEnabled := io.satpTranslationEnabled
   translation.io.satpRootPpn := io.satpRootPpn

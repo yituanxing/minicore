@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/nuttx-**
+      - '!agent/nuttx-sv32-**'
     paths:
       - software/nuttx/**
       - tests_py/test_nuttx_*.py

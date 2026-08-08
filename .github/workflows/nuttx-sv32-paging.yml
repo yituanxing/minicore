@@ -1,0 +1,183 @@
+name: NuttX Sv32 Paging
+
+on:
+  pull_request:
+    paths:
+      - software/nuttx/**
+      - src/main/scala/aethercore/**
+      - sim/nuttx_paging_boot_main.cpp
+      - Makefile.nuttx-sv32-probe
+      - tools/ci/nuttx_sv32_paging_build_audit.sh
+      - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+      - tools/ci/nuttx_sv32_paging_cache_key.sh
+      - tools/ci/audit_riscv_elf_profile.py
+      - tools/ci/nuttx_prepare_host_tools.sh
+      - tools/ci/ensure_genromfs.sh
+      - tools/ci/kconfig-tweak
+      - tools/fetch_range_archive.py
+      - tests_py/test_nuttx_sv32_paging_contract.py
+      - .github/workflows/nuttx-sv32-paging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: nuttx-sv32-paging-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  n5:
+    name: N5-A audit, N5-B bounded build, N5-C first real boot probe
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout AetherCore
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate N5 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/nuttx_sv32_paging_build_audit.sh
+          bash -n tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          bash -n tools/ci/nuttx_sv32_paging_cache_key.sh
+          python3 -m py_compile tools/ci/audit_riscv_elf_profile.py
+          python3 -m unittest tests_py.test_nuttx_sv32_paging_contract -v
+
+      - name: Probe reusable N5 software image
+        id: n5_software_cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/nuttx_sv32_paging_cache_key.sh
+          if tools/ci/nuttx_sv32_paging_cache_key.sh check build/nuttx-sv32-paging-aether-profile; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+            echo 'N5 software cache miss: rebuild N5-A/N5-B once, then mark the image.'
+          fi
+
+      - name: Fetch verified pinned NuttX release sources
+        if: steps.n5_software_cache.outputs.hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/nuttx/manifest.env
+          cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+          archive_dir="${cache_root}/archives"
+          mkdir -p "${archive_dir}" build
+
+          fetch_release() {
+            local release_name="$1"
+            local output_name="$2"
+            python3 tools/fetch_range_archive.py \
+              --url "https://archive.apache.org/dist/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
+              --output "${archive_dir}/${output_name}" \
+              --chunk-size 1048576 --jobs 6 --retries 5 --max-time 180
+            tar -tzf "${archive_dir}/${output_name}" >/dev/null
+          }
+
+          fetch_release "apache-nuttx-${NUTTX_VERSION}.tar.gz" "nuttx-${NUTTX_COMMIT}.tar.gz"
+          fetch_release "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+
+      - name: Prepare pinned NuttX host tools
+        if: steps.n5_software_cache.outputs.hit != 'true'
+        shell: bash
+        run: |
+          chmod +x tools/ci/nuttx_prepare_host_tools.sh
+          bash tools/ci/nuttx_prepare_host_tools.sh
+
+      - name: N5-A build and audit upstream paging configuration
+        if: steps.n5_software_cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_sv32_paging_build_audit.sh
+          bash tools/ci/nuttx_sv32_paging_build_audit.sh
+
+      - name: Upload N5-A evidence
+        if: always() && steps.n5_software_cache.outputs.hit != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-sv32-n5a-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-sv32-paging-audit/nuttx.elf
+            build/nuttx-sv32-paging-audit/user-init.elf
+            build/nuttx-sv32-paging-audit/nuttx.map
+            build/nuttx-sv32-paging-audit/resolved.config
+            build/nuttx-sv32-paging-audit/*build*.log
+            build/nuttx-sv32-paging-audit/export.log
+            build/nuttx-sv32-paging-audit/romfs.log
+            build/nuttx-sv32-paging-audit/evidence/
+
+      - name: N5-B build bounded RV32IMA Sv32 paging profile
+        if: steps.n5_software_cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          bash tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+
+      - name: Mark reusable N5-B software image
+        if: steps.n5_software_cache.outputs.hit != 'true'
+        shell: bash
+        run: tools/ci/nuttx_sv32_paging_cache_key.sh mark build/nuttx-sv32-paging-aether-profile
+
+      - name: Upload N5-B evidence
+        if: always() && steps.n5_software_cache.outputs.hit != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-sv32-n5b-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-sv32-paging-aether-profile/nuttx.elf
+            build/nuttx-sv32-paging-aether-profile/user-init.elf
+            build/nuttx-sv32-paging-aether-profile/nuttx.map
+            build/nuttx-sv32-paging-aether-profile/resolved.config
+            build/nuttx-sv32-paging-aether-profile/*build*.log
+            build/nuttx-sv32-paging-aether-profile/export.log
+            build/nuttx-sv32-paging-aether-profile/romfs.log
+            build/nuttx-sv32-paging-aether-profile/evidence/
+
+      - name: Provision fixed Verilator for N5-C
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: N5-C run first real NuttX paging boot probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.nuttx-sv32-probe \
+            BUILD_DIR=build/nuttx-sv32-boot-probe \
+            NUTTX_ELF=build/nuttx-sv32-paging-aether-profile/nuttx.elf \
+            JOBS="$(nproc)" MAX_CYCLES=50000000 run-local
+
+      - name: Upload N5-C first-boot evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-sv32-n5c-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/nuttx-sv32-boot-probe/nuttx-readelf.txt
+            build/nuttx-sv32-boot-probe/image-layout.txt
+            build/nuttx-sv32-boot-probe/images.sha256
+            build/nuttx-sv32-boot-probe/logs/*.log

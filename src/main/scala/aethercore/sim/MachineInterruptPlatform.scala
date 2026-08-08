@@ -1,24 +1,30 @@
 package aethercore.sim
 
 import chisel3._
-import aethercore.core.{MachinePlicMmio, MachineUartRx}
+import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap, MachineUartRx}
 
-/** First interrupt-capable AetherCore machine platform slice.
+/** Interrupt-capable AetherCore platform slice.
   *
-  * The module connects the UART RX level interrupt to PLIC source ID 1 and
-  * exposes a single 32-bit MMIO request port. It intentionally stops at the raw
-  * Machine external interrupt request; the next core-integration slice will
-  * route externalInterrupt into mip.MEIP/mie.MEIE and precise trap entry.
+  * The historical machine-context defaults remain unchanged. Real OS profiles
+  * can select a different PLIC context window and UART source ID without
+  * forking the controller implementation; N5 uses QEMU-virt hart0 Supervisor
+  * context and source ID 10.
   */
 class MachineInterruptPlatform(
     val addressBits: Int = 32,
     val plicBase: BigInt = BigInt("0c000000", 16),
     val uartBase: BigInt = BigInt("10000000", 16),
-    val sourceCount: Int = 8
+    val sourceCount: Int = 8,
+    val plicEnableBase: Int = MachinePlicMmioMap.Enable,
+    val plicThresholdOffset: Int = MachinePlicMmioMap.Threshold,
+    val plicClaimCompleteOffset: Int = MachinePlicMmioMap.ClaimComplete,
+    val uartSourceId: Int = 1
 ) extends Module {
   require(addressBits >= 32, s"platform MMIO map requires at least 32 address bits")
-  require(sourceCount > 0 && sourceCount <= 31,
-    s"single-word one-based platform PLIC supports 1..31 real sources, got $sourceCount")
+  require(sourceCount > 0 && sourceCount <= 63,
+    s"two-word one-based platform PLIC supports 1..63 real sources, got $sourceCount")
+  require(uartSourceId > 0 && uartSourceId <= sourceCount,
+    s"UART PLIC source ID must be in 1..$sourceCount, got $uartSourceId")
 
   private val plicSpan = BigInt("00400000", 16)
   private val uartSpan = BigInt(0x10)
@@ -42,7 +48,13 @@ class MachineInterruptPlatform(
     val uartInterrupt = Output(Bool())
   })
 
-  val plic = Module(new MachinePlicMmio(sourceCount = sourceCount, addressBits = 24))
+  val plic = Module(new MachinePlicMmio(
+    sourceCount = sourceCount,
+    addressBits = 24,
+    enableBase = plicEnableBase,
+    thresholdOffset = plicThresholdOffset,
+    claimCompleteOffset = plicClaimCompleteOffset
+  ))
   val uart = Module(new MachineUartRx(depth = 4, addressBits = 4))
 
   uart.io.rxValid := io.rxValid
@@ -66,8 +78,10 @@ class MachineInterruptPlatform(
   uart.io.wdata := io.wdata
   uart.io.wmask := io.wmask
 
-  val sources = WireDefault(0.U(sourceCount.W))
-  sources := uart.io.interrupt.asUInt
+  // Avoid assigning through a UInt bit-select: Chisel models that selection as
+  // a read-only OpResult. A one-hot shift preserves the architectural source
+  // ID directly and zero-extends to the configured PLIC width.
+  val sources = (uart.io.interrupt.asUInt << (uartSourceId - 1)).pad(sourceCount)
   plic.io.sources := sources
 
   val selected = plicSelected || uartSelected

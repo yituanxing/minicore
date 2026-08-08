@@ -138,4 +138,51 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.inService.expect(0.U)
     }
   }
+
+  it should "cover the N5 QEMU-virt supervisor context and both enable words" in {
+    simulate(new MachinePlicMmio(
+      sourceCount = 52,
+      priorityBits = 3,
+      enableBase = MachinePlicMmioMap.SupervisorEnable,
+      thresholdOffset = MachinePlicMmioMap.SupervisorThreshold,
+      claimCompleteOffset = MachinePlicMmioMap.SupervisorClaimComplete
+    )) { dut =>
+      initialize(dut)
+
+      // NuttX initializes priority entries through source 52.
+      write(dut, MachinePlicMmioMap.priority(1), 1)
+      write(dut, MachinePlicMmioMap.priority(31), 2)
+      write(dut, MachinePlicMmioMap.priority(32), 3)
+      write(dut, MachinePlicMmioMap.priority(52), 4)
+      read(dut, MachinePlicMmioMap.priority(52)) shouldBe 4
+
+      // Word 0 exposes IDs 1..31 at architectural bits 1..31.
+      write(dut, MachinePlicMmioMap.SupervisorEnable, BigInt("80000002", 16))
+      // Word 1 exposes source 32 at bit 0 and source 52 at bit 20.
+      write(dut, MachinePlicMmioMap.SupervisorEnable + 4, BigInt("00100001", 16))
+
+      read(dut, MachinePlicMmioMap.SupervisorEnable) shouldBe BigInt("80000002", 16)
+      read(dut, MachinePlicMmioMap.SupervisorEnable + 4) shouldBe BigInt("00100001", 16)
+
+      val expectedEnabled =
+        (BigInt(1) << 0) |
+          (BigInt(1) << 30) |
+          (BigInt(1) << 31) |
+          (BigInt(1) << 51)
+      dut.io.enabled.expect(expectedEnabled.U)
+
+      dut.io.sources.poke(expectedEnabled.U)
+      dut.clock.step()
+      read(dut, MachinePlicMmioMap.Pending) shouldBe BigInt("80000002", 16)
+      read(dut, MachinePlicMmioMap.Pending + 4) shouldBe BigInt("00100001", 16)
+
+      write(dut, MachinePlicMmioMap.SupervisorThreshold, 2)
+      read(dut, MachinePlicMmioMap.SupervisorThreshold) shouldBe 2
+      read(dut, MachinePlicMmioMap.SupervisorClaimComplete) shouldBe 52
+
+      // This instance intentionally exposes only the selected context window.
+      expectReadFault(dut, MachinePlicMmioMap.Enable)
+      expectReadFault(dut, MachinePlicMmioMap.Threshold)
+    }
+  }
 }
