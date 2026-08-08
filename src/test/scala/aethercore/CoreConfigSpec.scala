@@ -18,6 +18,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
     config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe true
     config.isa.march shouldBe "rv64im_zicsr"
     config.isa.mabi shouldBe "lp64"
@@ -38,6 +39,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasZicsr shouldBe false
     config.isa.hasZifencei shouldBe false
     config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32i"
     config.isa.mabi shouldBe "ilp32"
@@ -59,6 +61,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
     config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
     config.isa.mabi shouldBe "ilp32"
@@ -77,6 +80,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
     config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
     config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
@@ -89,12 +93,26 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasS shouldBe true
     config.isa.hasU shouldBe true
     config.isa.hasSv32 shouldBe true
+    config.isa.hasSstc shouldBe false
     config.isa.hasA shouldBe false
     config.isa.hasPmp shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
     config.platform.paddrBits shouldBe 34
     config.platform.busDataBits shouldBe 32
     config.platform.resetVector shouldBe BigInt("80000000", 16)
+  }
+
+  it should "describe the N5 RV32IMA Sv32 plus Sstc workload profile" in {
+    val config = CoreProfiles.rv32imasuSv32Software
+    config.isa.xlen shouldBe 32
+    config.isa.hasA shouldBe true
+    config.isa.hasS shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasSv32 shouldBe true
+    config.isa.hasSstc shouldBe true
+    // Sstc is a privileged extension and deliberately does not alter the
+    // compiler march string used by the ordinary instruction toolchain.
+    config.isa.march shouldBe "rv32ima_zicsr_zifencei"
   }
 
   it should "describe an independent RV32 Sv32 Supervisor ISA contract" in {
@@ -108,6 +126,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.hasS shouldBe true
     isa.hasU shouldBe true
     isa.hasSv32 shouldBe true
+    isa.hasSstc shouldBe false
     isa.virtualMemoryModes shouldBe Set("Sv32")
     isa.march shouldBe "rv32im_zicsr"
     isa.mabi shouldBe "ilp32"
@@ -118,6 +137,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.name shouldBe "rv32imu-pmp-os-software"
     config.isa.hasA shouldBe false
     config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
     config.isa.march shouldBe "rv32im_zicsr_zifencei"
   }
 
@@ -134,6 +154,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe true
     config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
     config.isa.hasC shouldBe false
     config.isa.march shouldBe "rv32ima_zicsr_zifencei"
     config.isa.mabi shouldBe "ilp32"
@@ -147,6 +168,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.hasZicsr shouldBe false
     isa.hasZifencei shouldBe false
     isa.hasSv32 shouldBe false
+    isa.hasSstc shouldBe false
     isa.hasWordOps shouldBe false
     isa.march shouldBe "rv32i"
     isa.mabi shouldBe "ilp32"
@@ -167,6 +189,12 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'), virtualMemoryModes = Set("Sv32"))
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'), sstc = true)
+
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(xlen = 64, extensions = Set('I'), privilegeModes = Set('M', 'S'), sstc = true)
 
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(
