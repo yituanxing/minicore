@@ -10,6 +10,7 @@ class IfId(val xlen: Int = 64) extends Bundle {
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val fault = Bool()
+  val pageFault = Bool()
 }
 
 class IdEx(val xlen: Int = 64) extends Bundle {
@@ -111,6 +112,8 @@ class AetherCore(
   val instructionPmp = Module(new PmpChecker(xlen))
   val dataPmp = Module(new PmpChecker(xlen))
   val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
+  val fetchVm = if (config.isa.hasSv32) Some(Module(new Sv32InstructionFetchAdapter(paddrBits))) else None
+  val ptwArbiter = if (config.isa.hasSv32) Some(Module(new Sv32PtwArbiter(paddrBits))) else None
 
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
   instructionPmp.io.address := pc
@@ -124,10 +127,59 @@ class AetherCore(
   dataPmp.io.config := csrFile.io.pmpConfig
   dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
+  val fetchKill = WireDefault(false.B)
+  val fetchResponseReady = WireDefault(false.B)
+  val fetchResponseValid = WireDefault(true.B)
+  val fetchPhysicalAddress = WireDefault(pc.pad(paddrBits))
+  val fetchPageFault = WireDefault(false.B)
+  val fetchAccessFault = WireDefault(false.B)
+
+  val dataPteValid = WireDefault(false.B)
+  val dataPteAddress = WireDefault(0.U(paddrBits.W))
+  val dataPteReady = WireDefault(false.B)
+  val dataPteRdata = WireDefault(0.U(32.W))
+  val dataPteFault = WireDefault(false.B)
+
+  if (config.isa.hasSv32) {
+    val fetch = fetchVm.get
+    fetch.io.requestValid := !fetchKill
+    fetch.io.kill := fetchKill
+    fetch.io.virtualAddress := pc(31, 0)
+    fetch.io.privilege := csrFile.io.currentPrivilege
+    fetch.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
+    fetch.io.satpRootPpn := csrFile.io.satpRootPpn
+    fetch.io.mxr := csrFile.io.supervisorMxr
+    fetch.io.responseReady := fetchResponseReady
+
+    val arbiter = ptwArbiter.get
+    arbiter.io.dataValid := dataPteValid
+    arbiter.io.dataAddress := dataPteAddress
+    dataPteReady := arbiter.io.dataReady
+    dataPteRdata := arbiter.io.dataRdata
+    dataPteFault := arbiter.io.dataFault
+
+    arbiter.io.fetchValid := fetch.io.pteValid
+    arbiter.io.fetchAddress := fetch.io.pteAddress
+    fetch.io.pteReady := arbiter.io.fetchReady
+    fetch.io.pteData := arbiter.io.fetchRdata
+    fetch.io.pteFault := arbiter.io.fetchFault
+
+    io.ptw.get.valid := arbiter.io.memoryValid
+    io.ptw.get.addr := arbiter.io.memoryAddress
+    arbiter.io.memoryReady := io.ptw.get.ready
+    arbiter.io.memoryRdata := io.ptw.get.rdata
+    arbiter.io.memoryFault := io.ptw.get.fault
+
+    fetchResponseValid := fetch.io.responseValid
+    fetchPhysicalAddress := fetch.io.physicalAddress
+    fetchPageFault := fetch.io.pageFault
+    fetchAccessFault := fetch.io.accessFault
+  }
+
   val takingTrap = memWb.valid && memWb.trap.valid
   val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
 
-  io.imem.addr := pc.pad(paddrBits)
+  io.imem.addr := fetchPhysicalAddress
   decoder.io.inst := ifId.inst
 
   registerFile.io.rs1Addr := decoder.io.rs1
@@ -194,7 +246,11 @@ class AetherCore(
     )
   )
   val decodedTrap = WireInit(0.U.asTypeOf(new TrapInfo(xlen)))
-  when(ifId.fault) {
+  when(ifId.pageFault) {
+    decodedTrap.valid := true.B
+    decodedTrap.cause := MachineExceptionCode.InstructionPageFault.U(xlen.W)
+    decodedTrap.value := ifId.pc
+  }.elsewhen(ifId.fault) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.InstructionAccessFault.U(xlen.W)
     decodedTrap.value := ifId.pc
@@ -400,11 +456,11 @@ class AetherCore(
     vm.io.sum := csrFile.io.supervisorSum
     vm.io.mxr := csrFile.io.supervisorMxr
 
-    io.ptw.get.valid := vm.io.pteValid
-    io.ptw.get.addr := vm.io.pteAddress
-    vm.io.pteReady := io.ptw.get.ready
-    vm.io.pteData := io.ptw.get.rdata
-    vm.io.pteFault := io.ptw.get.fault
+    dataPteValid := vm.io.pteValid
+    dataPteAddress := vm.io.pteAddress
+    vm.io.pteReady := dataPteReady
+    vm.io.pteData := dataPteRdata
+    vm.io.pteFault := dataPteFault
 
     io.dmem.valid := vm.io.dataValid
     io.dmem.write := vm.io.dataWrite
@@ -496,6 +552,15 @@ class AetherCore(
   )
   val committedMemoryWdata = Mux(atomicRmw, atomicWriteData, exMem.storeData)
   val memoryFaultIsLoad = atomicLr || (!atomicInstruction && exMem.ctrl.memRead)
+
+  val fetchContextChange = vmCsrHazard
+  fetchKill := takingTrap || takingInterrupt || takingMret || waitingForInterrupt ||
+    redirect || fetchContextChange
+  val frontendAdvance = !takingTrap && !takingInterrupt && !takingMret &&
+    !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
+  if (config.isa.hasSv32) {
+    fetchResponseReady := frontendAdvance && fetchResponseValid
+  }
 
   io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
@@ -601,8 +666,6 @@ class AetherCore(
           MachineExceptionCode.StoreAccessFault.U(xlen.W)
         )
       )
-      // stval/mtval report the faulting virtual address for informative
-      // translated load/store faults, including implicit PTW access failures.
       memWb.trap.value := exMem.result
     }
 
@@ -642,12 +705,28 @@ class AetherCore(
       idEx.ctrl := decoder.io.ctrl
       idEx.trap := decodedTrap
 
-      ifId.valid := true.B
-      ifId.pc := pc
-      ifId.inst := io.imem.inst
-      ifId.fault := io.imem.fault ||
-        (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
-      pc := pc + 4.U
+      if (config.isa.hasSv32) {
+        when(fetchResponseValid) {
+          ifId.valid := true.B
+          ifId.pc := pc
+          ifId.inst := io.imem.inst
+          ifId.pageFault := fetchPageFault
+          ifId.fault := fetchAccessFault || (!fetchPageFault && io.imem.fault)
+          pc := pc + 4.U
+        }.otherwise {
+          ifId.valid := false.B
+          ifId.fault := false.B
+          ifId.pageFault := false.B
+        }
+      } else {
+        ifId.valid := true.B
+        ifId.pc := pc
+        ifId.inst := io.imem.inst
+        ifId.fault := io.imem.fault ||
+          (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
+        ifId.pageFault := false.B
+        pc := pc + 4.U
+      }
     }
   }
 }
