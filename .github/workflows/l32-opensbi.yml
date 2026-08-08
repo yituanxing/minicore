@@ -7,6 +7,7 @@ on:
       - tools/ci/l32_opensbi_build.sh
       - tools/ci/make_l32_dtb.py
       - tests_py/test_l32_opensbi_contract.py
+      - tools/ensure_riscv_none_elf_gcc_15_2.sh
       - .github/workflows/l32-opensbi.yml
   workflow_dispatch:
 
@@ -37,11 +38,16 @@ jobs:
           python3 -m py_compile tools/ci/make_l32_dtb.py
           python3 -m unittest tests_py.test_l32_opensbi_contract -v
 
+      - name: Provision pinned RV32-capable xPack GCC
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
       - name: Build pinned RV32 OpenSBI executable payload
         shell: bash
         env:
           L32_JOBS: "6"
-          L32_TOOLCHAIN_MODE: llvm
+          L32_TOOLCHAIN_MODE: gcc
+          L32_CROSS_COMPILE: riscv-none-elf-
         run: |
           set -euo pipefail
           chmod +x tools/ci/l32_opensbi_build.sh
