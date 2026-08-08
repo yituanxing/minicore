@@ -56,6 +56,8 @@ image:
 		'_start:' \
 		'  li a0, 0' \
 		'  li a1, 0' \
+		'  li t0, 0xb000' \
+		'  csrw medeleg, t0' \
 		'  li t0, 0x20' \
 		'  csrw mideleg, t0' \
 		'  li t0, 0x2' \
@@ -84,7 +86,7 @@ image:
 	[[ $$image_size -le $$((ram_limit_dec - ram_base_dec)) ]] || { \
 		echo "ERROR: combined N5-C image exceeds runner RAM"; exit 3; \
 	}; \
-	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; STIP delegated, TM/STCE enabled; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
+	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; page faults/STIP delegated, TM/STCE enabled; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
 	sha256sum "$(NUTTX_ELF)" $(BOOT_BIN) $(KERNEL_IMAGE) $(IMAGE) | tee $(BUILD_DIR)/images.sha256
 
 sim: rtl
@@ -106,8 +108,12 @@ run-local: image sim
 		$(OBJ_DIR)/V$(TOP) $(IMAGE) $(MAX_CYCLES) 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
-	grep -Eq 'N5C_(FIRST_EXCEPTION|BOOT_REACHED_NSH)' $(BUILD_DIR)/logs/boot-probe.log || { \
-		echo "ERROR: boot probe produced neither a first exception nor an NSH milestone (runner rc=$$rc)"; exit 5; \
+	if [[ $$rc -ne 0 ]]; then \
+		echo "ERROR: N5-C boot probe failed before NSH (runner rc=$$rc)"; \
+		exit $$rc; \
+	fi
+	grep -q 'N5C_BOOT_REACHED_NSH' $(BUILD_DIR)/logs/boot-probe.log || { \
+		echo "ERROR: N5-C returned success without the NSH milestone"; exit 5; \
 	}
 	sha256sum $(BUILD_DIR)/logs/boot-probe.log
 
