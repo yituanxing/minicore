@@ -18,6 +18,9 @@ class L32OpenSBIContractTest(unittest.TestCase):
         self.assertIn("linux-6.6.143.tar.xz", text)
         self.assertIn("OPENSBI_VERSION=1.6", text)
         self.assertIn("OPENSBI_COMMIT=bd613dd92113f683052acfb23d9dc8ba60029e0a", text)
+        self.assertIn("L32_TOOLCHAIN_VERSION=riscv32-ilp32d--glibc--stable-2024.05-1", text)
+        self.assertIn("L32_TOOLCHAIN_SHA256=00112418e6d4b0733019a673b682a39f1ce6300b9448cd840f1194aa4b064192", text)
+        self.assertIn("L32_CROSS_COMPILE_PREFIX=riscv32-buildroot-linux-gnu-", text)
         self.assertIn("L32_XLEN=32", text)
         self.assertIn("L32_PLATFORM=generic", text)
 
@@ -42,12 +45,28 @@ class L32OpenSBIContractTest(unittest.TestCase):
         self.assertIn("make_l32_dtb.py", text)
         self.assertIn("L32_OPENSBI_RESULT: status=PASS", text)
 
-    def test_workflow_uses_only_repository_pinned_gcc_fallback(self):
+    def test_bootlin_provisioner_is_pinned_and_validates_real_pie(self):
+        text = (ROOT / "tools/ensure_l32_riscv32_linux_gcc.sh").read_text()
+        for required in (
+            "L32_TOOLCHAIN_URL",
+            "L32_TOOLCHAIN_SHA256",
+            "L32_CROSS_COMPILE_PREFIX",
+            "13.3.0",
+            "-march=rv32ima_zicsr_zifencei",
+            "-mabi=ilp32",
+            "-Wl,-pie",
+            "Type:[[:space:]]*DYN",
+            "L32_BOOTLIN_PIE_LINK_FAILED",
+            "GITHUB_PATH",
+        ):
+            self.assertIn(required, text)
+
+    def test_workflow_uses_only_pinned_bootlin_linux_gcc(self):
         text = (ROOT / ".github/workflows/l32-opensbi.yml").read_text()
-        self.assertIn("tools/ensure_riscv_none_elf_gcc_15_2.sh", text)
+        self.assertIn("tools/ensure_l32_riscv32_linux_gcc.sh", text)
         self.assertIn("L32_TOOLCHAIN_MODE: gcc", text)
-        self.assertIn("L32_CROSS_COMPILE: riscv-none-elf-", text)
-        self.assertNotIn("riscv64-unknown-elf-", text)
+        self.assertNotIn("ensure_riscv_none_elf_gcc_15_2.sh", text)
+        self.assertNotIn("riscv-none-elf-", text)
 
     def test_minimal_fdt_matches_frozen_platform(self):
         text = (ROOT / "software/l32/aethercore-rv32.dts").read_text()
