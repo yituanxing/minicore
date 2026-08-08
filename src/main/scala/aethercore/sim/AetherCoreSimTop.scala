@@ -48,9 +48,6 @@ class AetherCoreSimTop(
     val memRdata = Input(UInt(busDataBits.W))
     val memFault = Input(Bool())
 
-    // Sv32 page-table walks are exposed as a second physical read port in the
-    // simulation shell. This intentionally stays simple: runners may service
-    // PTW reads from the same backing memory as instruction/data accesses.
     val ptwValid = if (config.isa.hasSv32) Some(Output(Bool())) else None
     val ptwAddr = if (config.isa.hasSv32) Some(Output(UInt(paddrBits.W))) else None
     val ptwReady = if (config.isa.hasSv32) Some(Input(Bool())) else None
@@ -104,6 +101,9 @@ class AetherCoreSimTop(
 
   val mtime = RegInit(0.U(64.W))
   val mtimecmp = RegInit("hffffffffffffffff".U(64.W))
+  if (config.isa.hasSstc) {
+    core.io.time.get := mtime
+  }
 
   val uartLcr = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
   val uartIer = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
@@ -168,12 +168,9 @@ class AetherCoreSimTop(
       is(1.U) {
         uartReadData := Mux(uartLcr.get(7), uartDlm.get, uartIer.get).pad(busDataBits)
       }
-      // IIR bit 0=1 means no interrupt is pending. FIFO state is deliberately
-      // omitted until the real workload requires it.
       is(2.U) { uartReadData := 1.U(busDataBits.W) }
       is(3.U) { uartReadData := uartLcr.get.pad(busDataBits) }
       is(4.U) { uartReadData := uartMcr.get.pad(busDataBits) }
-      // LSR: transmitter holding register empty + transmitter empty. No RX byte.
       is(5.U) { uartReadData := "h60".U(busDataBits.W) }
       is(7.U) { uartReadData := uartScr.get.pad(busDataBits) }
     }
