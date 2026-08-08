@@ -16,6 +16,10 @@ constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr std::size_t kRecentStoreCount = 8;
 constexpr std::uint64_t kSupervisorTimerInterruptCode = 5ULL;
+constexpr std::uint64_t kInstructionPageFault = 12ULL;
+constexpr std::uint64_t kLoadPageFault = 13ULL;
+constexpr std::uint64_t kStorePageFault = 15ULL;
+constexpr std::uint64_t kMaxSamePagingFaultRepeats = 8ULL;
 
 struct StoreTrace {
   std::uint64_t address = 0;
@@ -62,6 +66,11 @@ class Memory {
 
   std::vector<std::uint8_t> bytes_;
 };
+
+bool isExpectedPagingFault(std::uint64_t cause) {
+  return cause == kInstructionPageFault || cause == kLoadPageFault ||
+         cause == kStorePageFault;
+}
 
 void driveMemory(VAetherCoreNuttXPagingSimTop& top, const Memory& memory) {
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
@@ -111,6 +120,12 @@ int main(int argc, char** argv) {
     std::uint64_t supervisorTimerInterrupts = 0;
     std::uint64_t lastInterruptCause = 0;
     std::uint64_t lastInterruptPc = 0;
+    std::uint64_t exceptions = 0;
+    std::uint64_t pagingFaults = 0;
+    std::uint64_t samePagingFaultRepeats = 0;
+    std::uint64_t lastPagingFaultCause = ~0ULL;
+    std::uint64_t lastPagingFaultPc = ~0ULL;
+    std::uint64_t lastPagingFaultValue = ~0ULL;
     std::string uart;
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
@@ -154,6 +169,8 @@ int main(int argc, char** argv) {
         if (uart.find("nsh>") != std::string::npos) {
           std::cerr << "\nN5C_BOOT_REACHED_NSH cycles=" << cycles
                     << " commits=" << commits
+                    << " exceptions=" << exceptions
+                    << " paging-faults=" << pagingFaults
                     << " interrupts=" << interrupts
                     << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
                     << "\n";
@@ -185,18 +202,58 @@ int main(int argc, char** argv) {
         }
 
         if (top.io_commit_exception) {
-          std::cerr << "\nN5C_FIRST_EXCEPTION cycles=" << cycles
-                    << " commits=" << commits
-                    << " pc=0x" << std::hex
-                    << static_cast<std::uint64_t>(top.io_commit_pc)
-                    << " inst=0x" << static_cast<std::uint32_t>(top.io_commit_inst)
-                    << " cause=0x" << static_cast<std::uint64_t>(top.io_commit_exceptionCause)
-                    << " value=0x" << static_cast<std::uint64_t>(top.io_commit_exceptionValue)
-                    << std::dec
-                    << " interrupts=" << interrupts
-                    << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
-                    << "\n";
-          return 0;
+          ++exceptions;
+          const auto cause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
+          const auto pc = static_cast<std::uint64_t>(top.io_commit_pc);
+          const auto value = static_cast<std::uint64_t>(top.io_commit_exceptionValue);
+
+          if (isExpectedPagingFault(cause)) {
+            ++pagingFaults;
+            if (pagingFaults == 1) {
+              std::cerr << "\nN5C_FIRST_EXPECTED_PAGE_FAULT cycles=" << cycles
+                        << " commits=" << commits
+                        << " pc=0x" << std::hex << pc
+                        << " inst=0x" << static_cast<std::uint32_t>(top.io_commit_inst)
+                        << " cause=0x" << cause
+                        << " value=0x" << value << std::dec << "\n";
+            }
+
+            if (cause == lastPagingFaultCause && pc == lastPagingFaultPc &&
+                value == lastPagingFaultValue) {
+              ++samePagingFaultRepeats;
+            } else {
+              lastPagingFaultCause = cause;
+              lastPagingFaultPc = pc;
+              lastPagingFaultValue = value;
+              samePagingFaultRepeats = 1;
+            }
+
+            if (samePagingFaultRepeats > kMaxSamePagingFaultRepeats) {
+              std::cerr << "\nN5C_PAGE_FAULT_LIVELOCK cycles=" << cycles
+                        << " commits=" << commits
+                        << " repeats=" << samePagingFaultRepeats
+                        << " pc=0x" << std::hex << pc
+                        << " cause=0x" << cause
+                        << " value=0x" << value << std::dec
+                        << " paging-faults=" << pagingFaults
+                        << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
+                        << "\n";
+              return 4;
+            }
+          } else {
+            std::cerr << "\nN5C_FIRST_UNEXPECTED_EXCEPTION cycles=" << cycles
+                      << " commits=" << commits
+                      << " pc=0x" << std::hex << pc
+                      << " inst=0x" << static_cast<std::uint32_t>(top.io_commit_inst)
+                      << " cause=0x" << cause
+                      << " value=0x" << value << std::dec
+                      << " exceptions=" << exceptions
+                      << " paging-faults=" << pagingFaults
+                      << " interrupts=" << interrupts
+                      << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
+                      << "\n";
+            return 3;
+          }
         }
       }
     }
@@ -212,6 +269,8 @@ int main(int argc, char** argv) {
               << " external-irq=" << static_cast<unsigned>(top.io_externalInterrupt)
               << " halted=" << static_cast<unsigned>(top.io_halted)
               << " uart-bytes=" << uart.size()
+              << " exceptions=" << exceptions
+              << " paging-faults=" << pagingFaults
               << " interrupts=" << interrupts
               << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
               << " committed-stores=" << committedStores;
