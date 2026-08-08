@@ -21,7 +21,7 @@ class L32OpenSBIContractTest(unittest.TestCase):
         self.assertIn("L32_XLEN=32", text)
         self.assertIn("L32_PLATFORM=generic", text)
 
-    def test_build_requires_pie_capable_llvm_or_linux_gcc(self):
+    def test_build_accepts_only_real_pie_capable_toolchains(self):
         text = (ROOT / "tools/ci/l32_opensbi_build.sh").read_text()
         self.assertIn("PLATFORM_RISCV_XLEN=", text)
         self.assertIn("-march=rv32ima_zicsr_zifencei", text)
@@ -30,13 +30,24 @@ class L32OpenSBIContractTest(unittest.TestCase):
         self.assertIn("--target=riscv32-unknown-elf", text)
         self.assertIn("-Wl,-pie", text)
         self.assertIn("L32_TOOLCHAIN_MODE", text)
+        self.assertIn("L32_CROSS_COMPILE", text)
+        self.assertIn("probe_gcc_prefix", text)
+        self.assertIn("L32_EXPLICIT_GCC_PIE_FAILED", text)
         self.assertIn("riscv64-linux-gnu-", text)
         self.assertNotIn("riscv64-unknown-elf-", text)
+        self.assertNotIn("riscv32-unknown-elf-", text)
         self.assertIn("fw_payload.elf", text)
         self.assertIn('FW_TEXT_START="0x80000000"', text)
         self.assertIn('FW_FDT_PATH="${DTB}"', text)
         self.assertIn("make_l32_dtb.py", text)
         self.assertIn("L32_OPENSBI_RESULT: status=PASS", text)
+
+    def test_workflow_uses_only_repository_pinned_gcc_fallback(self):
+        text = (ROOT / ".github/workflows/l32-opensbi.yml").read_text()
+        self.assertIn("tools/ensure_riscv_none_elf_gcc_15_2.sh", text)
+        self.assertIn("L32_TOOLCHAIN_MODE: gcc", text)
+        self.assertIn("L32_CROSS_COMPILE: riscv-none-elf-", text)
+        self.assertNotIn("riscv64-unknown-elf-", text)
 
     def test_minimal_fdt_matches_frozen_platform(self):
         text = (ROOT / "software/l32/aethercore-rv32.dts").read_text()
