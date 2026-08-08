@@ -1,0 +1,64 @@
+name: L32 OpenSBI Bring-up
+
+on:
+  pull_request:
+    paths:
+      - software/l32/**
+      - tools/ci/l32_opensbi_build.sh
+      - tools/ci/make_l32_dtb.py
+      - tests_py/test_l32_opensbi_contract.py
+      - .github/workflows/l32-opensbi.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-opensbi-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  opensbi-rv32:
+    name: Pinned RV32 OpenSBI executable payload build
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate L32 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_opensbi_build.sh
+          python3 -m py_compile tools/ci/make_l32_dtb.py
+          python3 -m unittest tests_py.test_l32_opensbi_contract -v
+
+      - name: Build pinned RV32 OpenSBI executable payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+          L32_TOOLCHAIN_MODE: llvm
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_opensbi_build.sh
+          bash tools/ci/l32_opensbi_build.sh
+
+      - name: Upload L32 OpenSBI evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-opensbi-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-opensbi/result.txt
+            build/l32-opensbi/opensbi-build.log
+            build/l32-opensbi/aethercore-rv32.dtb
+            build/l32-opensbi/evidence/
+            build/l32-opensbi/build/platform/generic/firmware/fw_payload.elf
+            build/l32-opensbi/build/platform/generic/firmware/fw_payload.bin
