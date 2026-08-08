@@ -1,6 +1,7 @@
 #include "VAetherCoreNuttXPagingSimTop.h"
 #include "verilated.h"
 
+#include <array>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -12,6 +13,7 @@ namespace {
 constexpr std::uint64_t kRamBase = 0x80000000ULL;
 constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kEbreak = 0x00100073U;
+constexpr std::size_t kRecentCommitCount = 16;
 
 class Memory {
  public:
@@ -83,7 +85,7 @@ int main(int argc, char** argv) {
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
-        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 500000ULL;
+        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 5000000ULL;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
@@ -94,6 +96,9 @@ int main(int argc, char** argv) {
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
     std::string uart;
+    std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
+    std::size_t recentCount = 0;
+    std::size_t recentIndex = 0;
 
     top.reset = 1;
     top.clock = 0;
@@ -135,6 +140,10 @@ int main(int argc, char** argv) {
 
       if (top.io_commit_valid) {
         ++commits;
+        recentPcs[recentIndex] = static_cast<std::uint64_t>(top.io_commit_pc);
+        recentIndex = (recentIndex + 1) % kRecentCommitCount;
+        if (recentCount < kRecentCommitCount) ++recentCount;
+
         if (top.io_commit_exception) {
           std::cerr << "\nN5C_FIRST_EXCEPTION cycles=" << cycles
                     << " commits=" << commits
@@ -153,7 +162,17 @@ int main(int argc, char** argv) {
               << " commits=" << commits
               << " last-pc=0x" << std::hex
               << static_cast<std::uint64_t>(top.io_commit_pc)
-              << std::dec << " uart-bytes=" << uart.size() << "\n";
+              << " mtime=0x" << static_cast<std::uint64_t>(top.io_mtime)
+              << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)
+              << std::dec << " timer-irq=" << static_cast<unsigned>(top.io_timerInterrupt)
+              << " halted=" << static_cast<unsigned>(top.io_halted)
+              << " uart-bytes=" << uart.size() << " recent-pcs=";
+    for (std::size_t i = 0; i < recentCount; ++i) {
+      const auto slot = (recentIndex + kRecentCommitCount - recentCount + i) % kRecentCommitCount;
+      if (i != 0) std::cerr << ',';
+      std::cerr << "0x" << std::hex << recentPcs[slot];
+    }
+    std::cerr << std::dec << "\n";
     return 2;
   } catch (const std::exception& error) {
     std::cerr << "N5C_RUNNER_ERROR: " << error.what() << "\n";
