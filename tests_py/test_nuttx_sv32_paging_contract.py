@@ -54,18 +54,29 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-    def test_n5c_handoff_enables_required_sstc_firmware_gates(self):
+    def test_n5c_handoff_enables_required_supervisor_firmware_gates(self):
         text = (ROOT / "Makefile.nuttx-sv32-probe").read_text()
         for required in (
+            "csrw medeleg, t0",
             "csrw mideleg, t0",
             "csrw mcounteren, t0",
             "csrw 0x31a, t0",
+            "li t0, 0xb000",
             "li t0, 0x20",
             "li t0, 0x2",
             "li t0, 0x80000000",
-            "STIP delegated, TM/STCE enabled",
+            "page faults/STIP delegated, TM/STCE enabled",
         ):
             self.assertIn(required, text)
+
+    def test_n5c_probe_only_succeeds_at_nsh(self):
+        makefile = (ROOT / "Makefile.nuttx-sv32-probe").read_text()
+        runner = (ROOT / "sim/nuttx_paging_boot_main.cpp").read_text()
+        self.assertIn("N5C_BOOT_REACHED_NSH", makefile)
+        self.assertIn("N5C_FIRST_EXPECTED_PAGE_FAULT", runner)
+        self.assertIn("N5C_FIRST_UNEXPECTED_EXCEPTION", runner)
+        self.assertIn("N5C_PAGE_FAULT_LIVELOCK", runner)
+        self.assertNotIn("N5C_(FIRST_EXCEPTION|BOOT_REACHED_NSH)", makefile)
 
     def test_real_n5b_arch_string_parses_as_rv32ima_without_cfdv(self):
         arch = "rv32i2p1_m2p0_a2p1_zicsr2p0_zifencei2p0_zmmul1p0"
