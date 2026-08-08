@@ -100,35 +100,36 @@ jobs:
         if: steps.changes.outputs.run_chisel == 'true'
         shell: bash
         run: |
-          ./mill aethercore.test.testOnly aethercore.CoreConfigSpec
-          ./mill aethercore.test.testOnly aethercore.DecoderSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32PageTableWalkerSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32SatpRegisterSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32SupervisorCsrSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32DataPathCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32InstructionTranslationSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32InstructionFetchCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32TlbSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32TranslationUnitTlbSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32SfenceCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32PageFaultDelegationSpec
-          ./mill aethercore.test.testOnly aethercore.MachineCsrFileSpec
-          ./mill aethercore.test.testOnly aethercore.PrivilegeModeSpec
-          ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
-          ./mill aethercore.test.testOnly aethercore.UserModeCoreSpec
-          ./mill aethercore.test.testOnly aethercore.SupervisorModeSpec
-          ./mill aethercore.test.testOnly aethercore.SupervisorPrivilegeBoundarySpec
-          ./mill aethercore.test.testOnly aethercore.RV32AtomicCoreSpec
-          ./mill aethercore.test.testOnly aethercore.Sv32AtomicCoreSpec
-          ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
-          ./mill aethercore.test.testOnly aethercore.MachinePlicMmioSpec
-          ./mill aethercore.test.testOnly aethercore.MachineUartRxSpec
-          ./mill aethercore.test.testOnly aethercore.MachineInterruptPlatformSpec
-          ./mill aethercore.test.testOnly aethercore.MachineInterruptArbiterSpec
-          ./mill aethercore.test.testOnly aethercore.MachineExternalCsrSpec
-          ./mill aethercore.test.testOnly aethercore.MachineExternalInterruptCoreSpec
-          ./mill aethercore.test.testOnly aethercore.AetherCoreInterruptPlatformSpec
-          ./mill aethercore.test.testOnly aethercore.WaitForInterruptCoreSpec
+          ./mill aethercore.test.testOnly \
+            aethercore.CoreConfigSpec \
+            aethercore.DecoderSpec \
+            aethercore.Sv32PageTableWalkerSpec \
+            aethercore.Sv32SatpRegisterSpec \
+            aethercore.Sv32SupervisorCsrSpec \
+            aethercore.Sv32DataPathCoreSpec \
+            aethercore.Sv32InstructionTranslationSpec \
+            aethercore.Sv32InstructionFetchCoreSpec \
+            aethercore.Sv32TlbSpec \
+            aethercore.Sv32TranslationUnitTlbSpec \
+            aethercore.Sv32SfenceCoreSpec \
+            aethercore.Sv32PageFaultDelegationSpec \
+            aethercore.MachineCsrFileSpec \
+            aethercore.PrivilegeModeSpec \
+            aethercore.MachineMretCoreSpec \
+            aethercore.UserModeCoreSpec \
+            aethercore.SupervisorModeSpec \
+            aethercore.SupervisorPrivilegeBoundarySpec \
+            aethercore.RV32AtomicCoreSpec \
+            aethercore.Sv32AtomicCoreSpec \
+            aethercore.MachinePlicSpec \
+            aethercore.MachinePlicMmioSpec \
+            aethercore.MachineUartRxSpec \
+            aethercore.MachineInterruptPlatformSpec \
+            aethercore.MachineInterruptArbiterSpec \
+            aethercore.MachineExternalCsrSpec \
+            aethercore.MachineExternalInterruptCoreSpec \
+            aethercore.AetherCoreInterruptPlatformSpec \
+            aethercore.WaitForInterruptCoreSpec
 
       - name: Executable Supervisor V1 M-S-U workload
         if: steps.changes.outputs.run_smode_v1 == 'true'
