@@ -158,18 +158,22 @@ class MachinePlicMmio(
     plic.io.priorityWriteData := priorityMerged(priorityBits - 1, 0)
   }
 
-  val nextEnabled = WireDefault(plic.io.enabled)
+  // A UInt bit-select is a read-only OpResult in Chisel, so build the next
+  // compact enable state through a writable Vec[Bool] before converting it
+  // back to UInt for MachinePlic. This preserves all untouched source bits.
+  val nextEnabledBits = Wire(Vec(sourceCount, Bool()))
+  nextEnabledBits := VecInit(plic.io.enabled.asBools)
   for (index <- 0 until sourceCount) {
     val sourceId = index + 1
     val word = sourceId / 32
     val bit = sourceId % 32
     when(accepted && io.write && enableHits(word)) {
-      nextEnabled(index) := enabledMergedWords(word)(bit)
+      nextEnabledBits(index) := enabledMergedWords(word)(bit)
     }
   }
   when(accepted && io.write && enableHit) {
     plic.io.enableWrite := true.B
-    plic.io.enableWriteData := nextEnabled
+    plic.io.enableWriteData := nextEnabledBits.asUInt
   }
 
   when(accepted && io.write && thresholdHit) {
