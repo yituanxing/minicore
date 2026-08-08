@@ -3,7 +3,7 @@ package aethercore.core
 import chisel3._
 import aethercore.common.MemSize
 
-/** Serial correctness-first adapter for one RV32 data-side translation and optional memory action. */
+/** Serial correctness-first adapter for one RV32 Load/Store memory operation. */
 class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   require(paddrBits >= 34, s"Sv32 data path requires PA>=34, got $paddrBits")
 
@@ -12,13 +12,6 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
     val flush = Input(Bool())
     val virtualAddress = Input(UInt(32.W))
     val privilege = Input(UInt(2.W))
-
-    // accessWrite describes the architectural access for page permission/A-D
-    // checks. dataWrite describes the eventual physical bus phase. They differ
-    // for AMO read phases: the access is a write/AMO for translation purposes,
-    // but the first physical transaction is a read.
-    val accessWrite = Input(Bool())
-    val memoryEnable = Input(Bool())
     val write = Input(Bool())
     val wdata = Input(UInt(32.W))
     val wmask = Input(UInt(4.W))
@@ -58,7 +51,7 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   translation.io.flush := io.flush
   translation.io.virtualAddress := io.virtualAddress
   translation.io.privilege := io.privilege
-  translation.io.write := io.accessWrite
+  translation.io.write := io.write
   translation.io.execute := false.B
   translation.io.satpTranslationEnabled := io.satpTranslationEnabled
   translation.io.satpRootPpn := io.satpRootPpn
@@ -72,8 +65,7 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   io.pteAddress := translation.io.pteAddress.pad(paddrBits)
 
   val translationFault = translation.io.pageFault || translation.io.accessFault
-  io.dataValid :=
-    io.requestValid && translation.io.responseValid && !translationFault && io.memoryEnable
+  io.dataValid := io.requestValid && translation.io.responseValid && !translationFault
   io.dataWrite := io.write
   io.dataAddress := translation.io.physicalAddress.pad(paddrBits)
   io.dataWdata := io.wdata
@@ -81,10 +73,8 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   io.dataSize := io.size
 
   val physicalComplete = io.dataValid && io.dataReady
-  val translationOnlyComplete =
-    io.requestValid && translation.io.responseValid && !translationFault && !io.memoryEnable
   val faultComplete = io.requestValid && translation.io.responseValid && translationFault
-  io.requestComplete := physicalComplete || translationOnlyComplete || faultComplete
+  io.requestComplete := physicalComplete || faultComplete
   translation.io.responseReady := io.requestComplete
 
   io.physicalAddress := translation.io.physicalAddress.pad(paddrBits)
