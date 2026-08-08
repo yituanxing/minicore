@@ -13,6 +13,16 @@ on:
       - tools/fetch_range_archive.py
       - tests_py/test_nuttx_sv32_paging_contract.py
       - .github/workflows/nuttx-sv32-paging.yml
+  pull_request:
+    paths:
+      - software/nuttx/**
+      - tools/ci/nuttx_sv32_paging_build_audit.sh
+      - tools/ci/nuttx_prepare_host_tools.sh
+      - tools/ci/ensure_genromfs.sh
+      - tools/ci/kconfig-tweak
+      - tools/fetch_range_archive.py
+      - tests_py/test_nuttx_sv32_paging_contract.py
+      - .github/workflows/nuttx-sv32-paging.yml
   workflow_dispatch:
 
 permissions:
@@ -20,7 +30,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: nuttx-sv32-paging-${{ github.ref }}
+  group: nuttx-sv32-paging-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
