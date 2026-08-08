@@ -73,6 +73,8 @@ class AetherCore(
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val supervisorTimerCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorTimerInterrupt)
   private val machineTimerCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineTimer)
   private val machineExternalCause =
@@ -88,6 +90,7 @@ class AetherCore(
     val dmem = new DataBusIO(paddrBits, busDataBits)
     val ptw = if (config.isa.hasSv32) Some(new PageTableReadBusIO(paddrBits)) else None
     val timerInterrupt = Input(Bool())
+    val time = if (config.isa.hasSstc) Some(Input(UInt(64.W))) else None
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
@@ -197,6 +200,9 @@ class AetherCore(
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
   csrFile.io.timerInterrupt := io.timerInterrupt
+  if (config.isa.hasSstc) {
+    csrFile.io.time.get := io.time.get
+  }
   val rawExternalInterrupt =
     if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
   if (withMachineExternalInterrupt) {
@@ -206,7 +212,9 @@ class AetherCore(
   csrFile.io.trapReturnSupervisor := takingMret && memWb.inst === "h10200073".U
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
-  val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt
+  val rawSupervisorTimerPending =
+    if (config.isa.hasSstc) csrFile.io.supervisorTimerPending.get else false.B
+  val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt || rawSupervisorTimerPending
   val waitingForInterrupt = wfiRetiring && !rawInterruptPending
 
   val interruptPc = Mux(
@@ -217,12 +225,19 @@ class AetherCore(
   val takingExternalInterrupt =
     if (withMachineExternalInterrupt) csrFile.io.machineExternalInterrupt.get else false.B
   val takingTimerInterrupt = csrFile.io.machineTimerInterrupt
-  val qualifiedInterrupt = takingExternalInterrupt || takingTimerInterrupt
+  val takingSupervisorTimerInterrupt =
+    if (config.isa.hasSstc) csrFile.io.supervisorTimerInterrupt.get else false.B
+  val qualifiedInterrupt =
+    takingExternalInterrupt || takingTimerInterrupt || takingSupervisorTimerInterrupt
   val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret && qualifiedInterrupt
   val interruptCause = Mux(
     takingExternalInterrupt,
     machineExternalCause.U(xlen.W),
-    machineTimerCause.U(xlen.W)
+    Mux(
+      takingTimerInterrupt,
+      machineTimerCause.U(xlen.W),
+      supervisorTimerCause.U(xlen.W)
+    )
   )
 
   csrFile.io.trapEnter := takingTrap || takingInterrupt
@@ -613,9 +628,6 @@ class AetherCore(
     reservationValid := false.B
     atomicWritePhase := false.B
   }.elsewhen(takingSfence) {
-    // The first implementation deliberately over-fences: every legal
-    // SFENCE.VMA serializes the younger pipeline and globally flushes both
-    // translation caches. The spec explicitly permits this conservative form.
     pc := memWb.pc + 4.U
     ifId.valid := false.B
     idEx.valid := false.B
