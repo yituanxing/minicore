@@ -43,9 +43,9 @@ make distclean >/dev/null 2>&1 || true
   2>&1 | tee "${OUT_DIR}/evidence/configure.log"
 
 # Keep every paging/MMU/S-mode requirement from the upstream workload, but
-# remove optional ISA features that AetherCore has not implemented.  RV32A is
+# remove optional ISA features that AetherCore has not implemented. RV32A is
 # intentionally retained because N5-A proved that both kernel and userspace
-# contain real LR/SC/AMO instructions.  Sstc is also retained: it is a genuine
+# contain real LR/SC/AMO instructions. Sstc is also retained: it is a genuine
 # supervisor-timer requirement of the pinned workload and should drive RTL,
 # not be silently compiled away.
 python3 - .config <<'PY'
@@ -139,44 +139,12 @@ for image in nuttx "${USER_INIT}"; do
 done
 riscv64-unknown-elf-nm -n nuttx > "${OUT_DIR}/evidence/kernel-symbols.txt"
 
-python3 - "${OUT_DIR}" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-root = Path(sys.argv[1])
-
-def arch(name: str) -> str:
-    text = (root / "evidence" / f"{name}-elf-attributes.txt").read_text(errors="replace")
-    m = re.search(r'Tag_RISCV_arch:\s*"([^"]+)"', text, re.I)
-    if not m:
-        raise SystemExit(f"N5-B FAIL: missing Tag_RISCV_arch for {name}")
-    return m.group(1).lower()
-
-def atomics(name: str) -> int:
-    text = (root / "evidence" / f"{name}-disassembly.txt").read_text(errors="replace")
-    return len(re.findall(r"\b(?:lr\.w|sc\.w|amo(?:swap|add|xor|and|or|min|max|minu|maxu)\.w)(?:\.(?:aq|rl|aqrl))?\b", text))
-
-lines = []
-for name in ("kernel", "user"):
-    a = arch(name)
-    normalized = re.sub(r"\d+p\d+", "", a)
-    tokens = normalized.split("_")
-    base = tokens[0]
-    ext = base[len("rv32i"):]
-    if not base.startswith("rv32i") or "m" not in ext or "a" not in ext:
-        raise SystemExit(f"N5-B FAIL: {name} is not RV32IMA: {a}")
-    for forbidden in ("c", "f", "d", "v"):
-        if forbidden in ext:
-            raise SystemExit(f"N5-B FAIL: {name} retained {forbidden.upper()}: {a}")
-    if "zicsr" not in tokens or "zifencei" not in tokens:
-        raise SystemExit(f"N5-B FAIL: {name} lost Zicsr/Zifencei: {a}")
-    count = atomics(name)
-    if count == 0:
-        raise SystemExit(f"N5-B FAIL: {name} contains no real RV32A instruction")
-    lines += [f"{name}_arch={a}", f"{name}_atomic_instructions={count}"]
-(root / "evidence" / "isa-audit.txt").write_text("\n".join(lines) + "\n")
-PY
+python3 "${ROOT_DIR}/tools/ci/audit_riscv_elf_profile.py" \
+  --kernel-attributes "${OUT_DIR}/evidence/kernel-elf-attributes.txt" \
+  --kernel-disassembly "${OUT_DIR}/evidence/kernel-disassembly.txt" \
+  --user-attributes "${OUT_DIR}/evidence/user-elf-attributes.txt" \
+  --user-disassembly "${OUT_DIR}/evidence/user-disassembly.txt" \
+  --output "${OUT_DIR}/evidence/isa-audit.txt"
 
 for symbol in riscv_fillpage up_addrenv_create up_addrenv_select up_addrenv_destroy riscv_jump_to_user; do
   grep -Eq "[[:space:]]${symbol}$" "${OUT_DIR}/evidence/kernel-symbols.txt" || {
