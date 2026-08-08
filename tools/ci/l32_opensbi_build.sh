@@ -22,15 +22,12 @@ probe_gcc_prefix() {
 
   if ! printf 'int l32_toolchain_probe;\n' | \
     "${compiler}" -x c -c -o "${BUILD_DIR}/toolchain-probe.o" - \
-      -march=rv32ima_zicsr_zifencei -mabi=ilp32 -fPIE >/dev/null 2>&1; then
+      -march="${OPENSBI_RV32_ISA}" -mabi="${OPENSBI_RV32_ABI}" -fPIE >/dev/null 2>&1; then
     return 1
   fi
 
-  # Match OpenSBI v1.6's mandatory linker capability check. An explicitly
-  # pinned bare-metal toolchain is acceptable only when its linker can really
-  # create the RV32 PIE firmware; target naming alone is not the contract.
   if ! "${compiler}" \
-    -march=rv32ima_zicsr_zifencei -mabi=ilp32 \
+    -march="${OPENSBI_RV32_ISA}" -mabi="${OPENSBI_RV32_ABI}" \
     -fPIE -nostdlib -Wl,-pie -x c /dev/null \
     -o "${BUILD_DIR}/toolchain-pie-probe.elf" >/dev/null 2>&1; then
     return 1
@@ -42,20 +39,16 @@ probe_gcc_prefix() {
 select_pie_cross_compile() {
   local prefix machine
 
-  # Explicit prefixes are trusted only after the exact PIE link probe above.
-  # L32 uses this for the repository-pinned xPack GCC installed by CI.
   if [[ -n "${L32_CROSS_COMPILE:-}" ]]; then
     prefix="${L32_CROSS_COMPILE}"
     if probe_gcc_prefix "${prefix}"; then
       printf '%s\n' "${prefix}"
       return 0
     fi
-    echo "L32_EXPLICIT_GCC_PIE_FAILED: ${prefix}gcc cannot build RV32 ILP32 PIE" >&2
+    echo "L32_EXPLICIT_GCC_PIE_FAILED: ${prefix}gcc cannot build frozen RV32 PIE" >&2
     return 20
   fi
 
-  # Automatic discovery remains Linux-target only. Never silently fall back to
-  # whatever system unknown-elf compiler happens to be installed.
   for prefix in riscv64-linux-gnu- riscv32-linux-gnu- riscv64-linux-musl- riscv32-linux-musl-; do
     command -v "${prefix}gcc" >/dev/null 2>&1 || continue
     machine="$(${prefix}gcc -dumpmachine 2>/dev/null || true)"
@@ -66,7 +59,7 @@ select_pie_cross_compile() {
     fi
   done
 
-  echo "L32_PIE_GCC_MISSING: need a RISC-V GCC that can compile and link RV32 ILP32 PIE" >&2
+  echo "L32_PIE_GCC_MISSING: need a RISC-V GCC that can compile and link frozen RV32 ILP32 PIE" >&2
   return 20
 }
 
@@ -81,8 +74,8 @@ if [[ "${TOOLCHAIN_MODE}" == "llvm" ]]; then
   done
   if ! printf 'int l32_toolchain_probe;\n' | \
     clang --target=riscv32-unknown-elf -fuse-ld=lld -x c -nostdlib -fPIE -Wl,-pie \
-      -march=rv32ima_zicsr_zifencei -mabi=ilp32 -o "${BUILD_DIR}/toolchain-pie-probe.elf" - \
-      >/dev/null 2>&1; then
+      -march="${OPENSBI_RV32_ISA}" -mabi="${OPENSBI_RV32_ABI}" \
+      -o "${BUILD_DIR}/toolchain-pie-probe.elf" - >/dev/null 2>&1; then
     echo "L32_LLVM_RV32_PIE_MISSING: clang/lld cannot link the frozen RV32 PIE probe" >&2
     exit 20
   fi
@@ -130,6 +123,8 @@ mkdir -p "${BUILD_DIR}/build"
   echo "OPENSBI_COMMIT=${OPENSBI_COMMIT}"
   echo "PLATFORM=${L32_PLATFORM}"
   echo "PLATFORM_RISCV_XLEN=${L32_XLEN}"
+  echo "PLATFORM_RISCV_ISA=${OPENSBI_RV32_ISA}"
+  echo "PLATFORM_RISCV_ABI=${OPENSBI_RV32_ABI}"
   echo "FW_TEXT_START=${FW_TEXT_START}"
   echo "FW_FDT_PATH=${DTB}"
   echo "TOOLCHAIN_MODE=${TOOLCHAIN_MODE}"
@@ -149,6 +144,8 @@ make -C "${SOURCE_DIR}" \
   O="${BUILD_DIR}/build" \
   PLATFORM="${L32_PLATFORM}" \
   PLATFORM_RISCV_XLEN="${L32_XLEN}" \
+  PLATFORM_RISCV_ISA="${OPENSBI_RV32_ISA}" \
+  PLATFORM_RISCV_ABI="${OPENSBI_RV32_ABI}" \
   FW_TEXT_START="${FW_TEXT_START}" \
   FW_FDT_PATH="${DTB}" \
   "${MAKE_TOOLCHAIN_ARGS[@]}" \
@@ -173,12 +170,27 @@ sha256sum "${FW_ELF}" "${FW_BIN}" "${DTB}" | tee "${EVIDENCE_DIR}/sha256.txt"
 entry="$(${READELF} -h "${FW_ELF}" | awk '/Entry point address:/{print $4; exit}')"
 [[ "$((entry))" -eq "$((FW_TEXT_START))" ]] || { echo "ERROR: OpenSBI entry ${entry} != ${FW_TEXT_START}" >&2; exit 25; }
 
+arch="$(${READELF} -A "${FW_ELF}" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
+[[ -n "${arch}" ]] || { echo "ERROR: missing Tag_RISCV_arch" >&2; exit 26; }
+[[ "${arch}" == rv32i* ]] || { echo "ERROR: unexpected OpenSBI arch ${arch}" >&2; exit 26; }
+[[ "${arch}" == *"_m"* && "${arch}" == *"_a"* ]] || {
+  echo "ERROR: OpenSBI arch lost required M/A extensions: ${arch}" >&2; exit 26;
+}
+[[ "${arch}" == *"zicsr"* && "${arch}" == *"zifencei"* ]] || {
+  echo "ERROR: OpenSBI arch lost Zicsr/Zifencei: ${arch}" >&2; exit 26;
+}
+if [[ "${arch}" =~ _f[0-9] || "${arch}" =~ _d[0-9] || "${arch}" =~ _c[0-9] ]]; then
+  echo "ERROR: OpenSBI arch retained unsupported F/D/C extension: ${arch}" >&2
+  exit 26
+fi
+
 {
   echo "L32_OPENSBI_RESULT: status=PASS"
   echo "firmware=${FW_ELF}"
   echo "firmware_bin=${FW_BIN}"
   echo "fdt=${DTB}"
   echo "entry=${entry}"
+  echo "arch=${arch}"
   echo "commit=${OPENSBI_COMMIT}"
   echo "xlen=${L32_XLEN}"
   echo "platform=${L32_PLATFORM}"
