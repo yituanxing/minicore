@@ -10,7 +10,8 @@ class AetherCoreSimTop(
     val config: CoreConfig = CoreProfiles.rv64imCurrent,
     val stopOnTrap: Boolean = true,
     val withMachineInterruptPlatform: Boolean = false,
-    val stopOnWfi: Boolean = true
+    val stopOnWfi: Boolean = true,
+    val withNs16550Uart: Boolean = false
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
@@ -20,6 +21,7 @@ class AetherCoreSimTop(
   private val plicLimit = plicBase + BigInt("00400000", 16)
   private val uartRxBase = config.platform.uartAddress + BigInt(0x100)
   private val uartRxLimit = uartRxBase + BigInt(0x10)
+  private val ns16550Limit = config.platform.uartAddress + BigInt(8)
 
   if (withMachineInterruptPlatform) {
     require(busDataBits == 32,
@@ -90,6 +92,13 @@ class AetherCoreSimTop(
   val mtime = RegInit(0.U(64.W))
   val mtimecmp = RegInit("hffffffffffffffff".U(64.W))
 
+  val uartLcr = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+  val uartIer = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+  val uartDll = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+  val uartDlm = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+  val uartMcr = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+  val uartScr = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
   io.imemAddr := core.io.imem.addr
@@ -103,8 +112,59 @@ class AetherCoreSimTop(
   }
 
   val isWrite = core.io.dmem.valid && core.io.dmem.write
-  val isUartTx = isWrite && core.io.dmem.addr === uartAddress
+  val isNs16550Address = if (withNs16550Uart) {
+    core.io.dmem.valid && core.io.dmem.addr >= uartAddress &&
+      core.io.dmem.addr < ns16550Limit.U(paddrBits.W)
+  } else false.B
+  val uartOffset = core.io.dmem.addr - uartAddress
+  val uartDlab = if (withNs16550Uart) uartLcr.get(7) else false.B
+  val isUartTx = if (withNs16550Uart) {
+    isWrite && core.io.dmem.addr === uartAddress && !uartDlab
+  } else {
+    isWrite && core.io.dmem.addr === uartAddress
+  }
+  val isUartMmio = if (withNs16550Uart) isNs16550Address else isUartTx
   val isExit = isWrite && core.io.dmem.addr === exitAddress
+
+  if (withNs16550Uart) {
+    when(isNs16550Address && core.io.dmem.write) {
+      switch(uartOffset(2, 0)) {
+        is(0.U) {
+          when(uartLcr.get(7)) { uartDll.get := core.io.dmem.wdata(7, 0) }
+        }
+        is(1.U) {
+          when(uartLcr.get(7)) {
+            uartDlm.get := core.io.dmem.wdata(7, 0)
+          }.otherwise {
+            uartIer.get := core.io.dmem.wdata(7, 0)
+          }
+        }
+        is(3.U) { uartLcr.get := core.io.dmem.wdata(7, 0) }
+        is(4.U) { uartMcr.get := core.io.dmem.wdata(7, 0) }
+        is(7.U) { uartScr.get := core.io.dmem.wdata(7, 0) }
+      }
+    }
+  }
+
+  val uartReadData = WireDefault(0.U(busDataBits.W))
+  if (withNs16550Uart) {
+    switch(uartOffset(2, 0)) {
+      is(0.U) {
+        uartReadData := Mux(uartLcr.get(7), uartDll.get, 0.U(8.W)).pad(busDataBits)
+      }
+      is(1.U) {
+        uartReadData := Mux(uartLcr.get(7), uartDlm.get, uartIer.get).pad(busDataBits)
+      }
+      // IIR bit 0=1 means no interrupt is pending. FIFO state is deliberately
+      // omitted until the real workload requires it.
+      is(2.U) { uartReadData := 1.U(busDataBits.W) }
+      is(3.U) { uartReadData := uartLcr.get.pad(busDataBits) }
+      is(4.U) { uartReadData := uartMcr.get.pad(busDataBits) }
+      // LSR: transmitter holding register empty + transmitter empty. No RX byte.
+      is(5.U) { uartReadData := "h60".U(busDataBits.W) }
+      is(7.U) { uartReadData := uartScr.get.pad(busDataBits) }
+    }
+  }
 
   val isPlicAddress = if (withMachineInterruptPlatform) {
     core.io.dmem.valid && core.io.dmem.addr >= plicBase.U(paddrBits.W) &&
@@ -142,7 +202,7 @@ class AetherCoreSimTop(
     isMtimeLow || isMtimecmpLow
   }
   val isTimer = core.io.dmem.valid && isTimerAddress
-  val isMmio = isUartTx || isExit || isTimer || isInterruptMmio
+  val isMmio = isUartMmio || isExit || isTimer || isInterruptMmio
 
   val timerReadData = WireDefault(0.U(busDataBits.W))
   if (busDataBits == 32) {
@@ -208,7 +268,7 @@ class AetherCoreSimTop(
   core.io.dmem.rdata := Mux(
     isInterruptMmio,
     interruptReadData.pad(busDataBits),
-    Mux(isTimer, timerReadData, io.memRdata)
+    Mux(isTimer, timerReadData, Mux(isUartMmio, uartReadData, io.memRdata))
   )
   core.io.dmem.fault := Mux(
     isInterruptMmio,
