@@ -8,7 +8,8 @@ final case class IsaConfig(
     privilegeModes: Set[Char],
     zExtensions: Set[String] = Set.empty,
     virtualMemoryModes: Set[String] = Set.empty,
-    pmpEntries: Int = 0
+    pmpEntries: Int = 0,
+    sstc: Boolean = false
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
@@ -24,6 +25,14 @@ final case class IsaConfig(
   require(
     !virtualMemoryModes.contains("Sv32") || (xlen == 32 && privilegeModes.contains('S')),
     "Sv32 requires RV32 with Supervisor mode"
+  )
+  require(
+    !sstc || privilegeModes.contains('S'),
+    "Sstc requires Supervisor mode"
+  )
+  require(
+    !sstc || xlen == 32,
+    "the current bounded Sstc implementation is RV32-only"
   )
   require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
   require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
@@ -42,6 +51,7 @@ final case class IsaConfig(
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
   val hasSv32: Boolean = virtualMemoryModes.contains("Sv32")
+  val hasSstc: Boolean = sstc
   val hasWordOps: Boolean = xlen == 64
   val hasPmp: Boolean = pmpEntries > 0
 
@@ -164,8 +174,8 @@ object CoreProfiles {
     platform = rv32Sv32Platform
   )
 
-  // N5 real-paging profile: same frozen Sv32/MMU contract, now with the RV32A
-  // word atomics that the pinned NuttX kernel and userspace actually emit.
+  // N5 real-paging profile: same frozen Sv32/MMU contract, with the RV32A
+  // atomics and Sstc timer facility emitted by the pinned NuttX workload.
   val rv32imasuSv32Software: CoreConfig = CoreConfig(
     name = "rv32imasu-sv32-software",
     isa = IsaConfig(
@@ -173,7 +183,8 @@ object CoreProfiles {
       extensions = Set('I', 'M', 'A'),
       privilegeModes = Set('M', 'S', 'U'),
       zExtensions = Set("Zicsr", "Zifencei"),
-      virtualMemoryModes = Set("Sv32")
+      virtualMemoryModes = Set("Sv32"),
+      sstc = true
     ),
     platform = rv32Sv32Platform
   )
