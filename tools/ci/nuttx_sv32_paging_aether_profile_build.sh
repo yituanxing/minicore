@@ -32,7 +32,8 @@ CONFIG_NAME="$(cat "${ROOT_DIR}/build/nuttx-sv32-paging-audit/evidence/upstream-
   exit 2
 }
 
-export PATH="${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
+GENROMFS_BIN="$(bash "${ROOT_DIR}/tools/ci/ensure_genromfs.sh" "${CACHE_ROOT}")"
+export PATH="$(dirname "${GENROMFS_BIN}"):${KCONFIGLIB_DIR}/bin:${ROOT_DIR}/tools/ci:${PATH}"
 export PYTHONPATH="${KCONFIGLIB_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/evidence"
