@@ -70,10 +70,14 @@ object MachineCsrWarl {
   private def delegableExceptionMask(isa: IsaConfig): BigInt = {
     if (!isa.hasS) BigInt(0)
     else {
-      // V1 only delegates synchronous exception classes the core already
-      // implements. ECALL-from-M (11) is intentionally not delegable. Page
-      // faults are added only when the translation path itself is integrated.
-      Seq(1, 2, 3, 5, 7, 8, 9).foldLeft(BigInt(0))((mask, bit) => mask | (BigInt(1) << bit))
+      val v1Causes = Seq(1, 2, 3, 5, 7, 8, 9)
+      val implementedCauses =
+        if (isa.hasSv32) v1Causes ++ Seq(12, 13, 15)
+        else v1Causes
+      // Page-fault delegation only becomes WARL-visible on the Sv32 profile,
+      // where the core can actually generate instruction/load/store page
+      // faults. The frozen no-VM V1 mask remains byte-for-byte equivalent.
+      implementedCauses.foldLeft(BigInt(0))((mask, bit) => mask | (BigInt(1) << bit))
     }
   }
 
