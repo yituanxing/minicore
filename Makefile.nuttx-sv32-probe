@@ -5,11 +5,17 @@ BUILD_DIR ?= build/nuttx-sv32-boot-probe
 RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 IMAGE := $(BUILD_DIR)/nuttx.bin
+KERNEL_IMAGE := $(BUILD_DIR)/nuttx-kernel.bin
+BOOT_SRC := $(BUILD_DIR)/n5c-handoff.S
+BOOT_ELF := $(BUILD_DIR)/n5c-handoff.elf
+BOOT_BIN := $(BUILD_DIR)/n5c-handoff.bin
 TOP := AetherCoreNuttXPagingSimTop
 VERILATOR ?= verilator
 JOBS ?= 6
 NUTTX_ELF ?=
 MAX_CYCLES ?= 500000
+RAM_BASE := 0x80000000
+RAM_LIMIT := 0x90000000
 
 .PHONY: all rtl image sim run-local clean
 
@@ -29,12 +35,49 @@ image:
 	@test -s "$(NUTTX_ELF)"
 	mkdir -p $(BUILD_DIR)
 	riscv64-unknown-elf-readelf -h -l "$(NUTTX_ELF)" | tee $(BUILD_DIR)/nuttx-readelf.txt
+	entry="$$(riscv64-unknown-elf-readelf -h "$(NUTTX_ELF)" | awk '/Entry point address:/{print $$4; exit}')"; \
 	first_load="$$(riscv64-unknown-elf-readelf -l "$(NUTTX_ELF)" | awk '/^[[:space:]]*LOAD/{print $$4; exit}')"; \
-		[[ "$$first_load" == "0x80000000" ]] || { \
-			echo "ERROR: first NuttX LOAD paddr is $$first_load, runner RAM base is 0x80000000"; exit 3; \
-		}
-	riscv64-unknown-elf-objcopy -O binary "$(NUTTX_ELF)" $(IMAGE)
-	sha256sum "$(NUTTX_ELF)" $(IMAGE) | tee $(BUILD_DIR)/images.sha256
+	entry_dec=$$((entry)); \
+	first_load_dec=$$((first_load)); \
+	ram_base_dec=$$(($(RAM_BASE))); \
+	ram_limit_dec=$$(($(RAM_LIMIT))); \
+	[[ $$first_load_dec -ge $$ram_base_dec && $$first_load_dec -lt $$ram_limit_dec ]] || { \
+		echo "ERROR: first NuttX LOAD paddr $$first_load is outside runner RAM [$(RAM_BASE),$(RAM_LIMIT))"; exit 3; \
+	}; \
+	[[ $$entry_dec -eq $$first_load_dec ]] || { \
+		echo "ERROR: NuttX entry $$entry does not match first LOAD paddr $$first_load"; exit 3; \
+	}; \
+	load_offset=$$((first_load_dec - ram_base_dec)); \
+	printf '%s\n' \
+		'.section .text.boot,"ax",@progbits' \
+		'.globl _start' \
+		'_start:' \
+		'  li a0, 0' \
+		'  li a1, 0' \
+		'  li t0, 0x800' \
+		'  csrw mstatus, t0' \
+		"  li t0, $$entry" \
+		'  csrw mepc, t0' \
+		'  mret' \
+		'1: j 1b' > $(BOOT_SRC); \
+	riscv64-unknown-elf-gcc -march=rv32ima_zicsr_zifencei -mabi=ilp32 \
+		-nostdlib -nostartfiles -Wl,--build-id=none -Wl,-e,_start -Wl,-Ttext=$(RAM_BASE) \
+		-o $(BOOT_ELF) $(BOOT_SRC); \
+	riscv64-unknown-elf-objcopy -O binary $(BOOT_ELF) $(BOOT_BIN); \
+	riscv64-unknown-elf-objcopy -O binary "$(NUTTX_ELF)" $(KERNEL_IMAGE); \
+	boot_size="$$(stat -c %s $(BOOT_BIN))"; \
+	[[ $$boot_size -le $$load_offset ]] || { \
+		echo "ERROR: N5-C handoff image ($$boot_size bytes) overlaps NuttX at offset $$load_offset"; exit 3; \
+	}; \
+	cp $(BOOT_BIN) $(IMAGE); \
+	truncate -s $$load_offset $(IMAGE); \
+	cat $(KERNEL_IMAGE) >> $(IMAGE); \
+	image_size="$$(stat -c %s $(IMAGE))"; \
+	[[ $$image_size -le $$((ram_limit_dec - ram_base_dec)) ]] || { \
+		echo "ERROR: combined N5-C image exceeds runner RAM"; exit 3; \
+	}; \
+	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
+	sha256sum "$(NUTTX_ELF)" $(BOOT_BIN) $(KERNEL_IMAGE) $(IMAGE) | tee $(BUILD_DIR)/images.sha256
 
 sim: rtl
 	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no paging RTL generated"; exit 4; }
