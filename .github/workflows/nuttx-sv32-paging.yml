@@ -155,4 +155,4 @@ jobs:
           path: |
             build/nuttx-sv32-boot-probe/nuttx-readelf.txt
             build/nuttx-sv32-boot-probe/images.sha256
-            build/nuttx-sv32-boot-probe/logs/boot-probe.log
+            build/nuttx-sv32-boot-probe/logs/*.log
