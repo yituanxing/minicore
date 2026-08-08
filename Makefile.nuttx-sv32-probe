@@ -5,11 +5,14 @@ BUILD_DIR ?= build/nuttx-sv32-boot-probe
 RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 IMAGE := $(BUILD_DIR)/nuttx.bin
+IMAGE_LOAD_ADDR := $(BUILD_DIR)/image-load-address.txt
 TOP := AetherCoreNuttXPagingSimTop
 VERILATOR ?= verilator
 JOBS ?= 6
 NUTTX_ELF ?=
 MAX_CYCLES ?= 500000
+RAM_BASE ?= 0x80000000
+RAM_END ?= 0x90000000
 
 .PHONY: all rtl image sim run-local clean
 
@@ -30,16 +33,18 @@ image:
 	mkdir -p $(BUILD_DIR)
 	riscv64-unknown-elf-readelf -h -l "$(NUTTX_ELF)" | tee $(BUILD_DIR)/nuttx-readelf.txt
 	first_load="$$(riscv64-unknown-elf-readelf -l "$(NUTTX_ELF)" | awk '/^[[:space:]]*LOAD/{print $$4; exit}')"; \
-		[[ "$$first_load" == "0x80000000" ]] || { \
-			echo "ERROR: first NuttX LOAD paddr is $$first_load, runner RAM base is 0x80000000"; exit 3; \
-		}
+		[[ -n "$$first_load" ]] || { echo "ERROR: NuttX ELF has no PT_LOAD segment"; exit 3; }; \
+		(( $$first_load >= $(RAM_BASE) && $$first_load < $(RAM_END) )) || { \
+			echo "ERROR: first NuttX LOAD paddr $$first_load is outside RAM [$(RAM_BASE), $(RAM_END))"; exit 3; \
+		}; \
+		printf '%s\n' "$$first_load" > $(IMAGE_LOAD_ADDR)
 	riscv64-unknown-elf-objcopy -O binary "$(NUTTX_ELF)" $(IMAGE)
 	sha256sum "$(NUTTX_ELF)" $(IMAGE) | tee $(BUILD_DIR)/images.sha256
 
 sim: rtl
 	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no paging RTL generated"; exit 4; }
 	mkdir -p $(BUILD_DIR)/logs
-	set +e; \
+	+set +e; \
 		$(VERILATOR) --cc --exe --build -Wall -Wno-fatal \
 			--top-module $(TOP) -Mdir $(OBJ_DIR) \
 			-CFLAGS "-std=c++20 -O2" \
@@ -51,8 +56,10 @@ sim: rtl
 
 run-local: image sim
 	mkdir -p $(BUILD_DIR)/logs
+	@test -s $(IMAGE_LOAD_ADDR)
 	set +e; \
-		$(OBJ_DIR)/V$(TOP) $(IMAGE) $(MAX_CYCLES) 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) $(IMAGE) $(MAX_CYCLES) "$$(cat $(IMAGE_LOAD_ADDR))" \
+			2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	grep -Eq 'N5C_(FIRST_EXCEPTION|BOOT_REACHED_NSH)' $(BUILD_DIR)/logs/boot-probe.log || { \
