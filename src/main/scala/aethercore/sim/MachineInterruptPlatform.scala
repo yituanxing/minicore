@@ -78,8 +78,10 @@ class MachineInterruptPlatform(
   uart.io.wdata := io.wdata
   uart.io.wmask := io.wmask
 
-  val sources = WireDefault(0.U(sourceCount.W))
-  sources(uartSourceId - 1) := uart.io.interrupt
+  // Avoid assigning through a UInt bit-select: Chisel models that selection as
+  // a read-only OpResult. A one-hot shift preserves the architectural source
+  // ID directly and zero-extends to the configured PLIC width.
+  val sources = (uart.io.interrupt.asUInt << (uartSourceId - 1)).pad(sourceCount)
   plic.io.sources := sources
 
   val selected = plicSelected || uartSelected
