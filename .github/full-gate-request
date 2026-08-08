@@ -1,4 +1,4 @@
-qualification=rv32im-supervisor-v1
-requested_after=c605ad44aa8cd985fd7ad79d1557b8a216ca2ecf
-pre_request_fast_gate_run=31195817621
-scope=M-S-U-delegated-sync-traps-SRET-no-Sv32
+qualification=rv32im-supervisor-sv32-v2
+requested_after=caeb34c1e0f54b9a167f23d8d340445056289762
+pre_request_fast_gate_run=31243642551
+scope=M-S-U-Sv32-PA34-I-D-pagewalk-TLB-SFENCE-page-fault-delegation
