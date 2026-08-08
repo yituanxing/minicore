@@ -1,6 +1,7 @@
 package aethercore.core
 
 import chisel3._
+import chisel3.util.Cat
 
 /** CSR addresses and bits used by the bounded RV32 Sstc path. */
 object Rv32SstcCsrAddress {
