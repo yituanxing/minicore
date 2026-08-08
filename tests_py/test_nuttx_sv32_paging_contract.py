@@ -38,7 +38,7 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
             '"CONFIG_ARCH_CHIP_QEMU_RV_ISA_C": False',
             '"CONFIG_ARCH_FPU": False',
             '"CONFIG_ARCH_DPFPU": False',
-            '"CONFIG_ARCH_RV_EXT_SSTC": True',
+            '"CONFIG_ARCH_RV_ISA_SSTC": True',
             '"CONFIG_ARCH_USE_S_MODE": True',
             '"CONFIG_ARCH_USE_MMU": True',
             '"CONFIG_PAGING": True',
