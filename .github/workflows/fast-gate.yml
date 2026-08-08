@@ -119,6 +119,7 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.SupervisorModeSpec
           ./mill aethercore.test.testOnly aethercore.SupervisorPrivilegeBoundarySpec
           ./mill aethercore.test.testOnly aethercore.RV32AtomicCoreSpec
+          ./mill aethercore.test.testOnly aethercore.Sv32AtomicCoreSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicSpec
           ./mill aethercore.test.testOnly aethercore.MachinePlicMmioSpec
           ./mill aethercore.test.testOnly aethercore.MachineUartRxSpec
@@ -192,11 +193,11 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, and deterministic shared PTW arbitration'
+            echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, translated RV32A reservation/remap semantics, and deterministic shared PTW arbitration'
             echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34 profile and fail-closed Sv32+PMP boundary'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
-            echo '- DecoderSpec and RV32AtomicCoreSpec fail closed on the RV32A word decode, LR/SC reservation, AMO results and memory backpressure path'
+            echo '- DecoderSpec, RV32AtomicCoreSpec and Sv32AtomicCoreSpec cover RV32A decode, LR/SC reservation, AMO results, translated PA34 identity and memory backpressure/remap behavior'
             echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
