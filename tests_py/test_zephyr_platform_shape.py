@@ -66,20 +66,42 @@ class ZephyrPlatformShapeTest(unittest.TestCase):
         platform_spec = PLATFORM_SPEC.read_text(encoding="utf-8")
         freertos = FREERTOS_PLATFORM.read_text(encoding="utf-8")
 
+        # Freeze the architectural contract rather than one obsolete single-word
+        # implementation shape. Source zero stays reserved, word zero exposes
+        # source IDs 1..31 at bits 1..31, and later words continue naturally.
         for token in (
             "val priorityZeroHit",
             "priorityZeroHit || priorityHit",
-            "val shifted = Cat(value, 0.U(1.W))",
-            "plic.io.enableWriteData := enableMerged(sourceCount, 1)",
-            "sourceCount <= 31",
+            "private def architecturalWord",
+            "sourceId == 0 || sourceId > sourceCount",
+            "plic.io.enableWriteData := nextEnabled",
+            "sourceCount <= 63",
+            "val SupervisorEnable: Int = 0x002080",
         ):
             self.assertIn(token, mmio)
 
+        # Preserve the frozen one-word behavior used by Zephyr/FreeRTOS.
         self.assertIn("read(dut, MachinePlicMmioMap.Enable) shouldBe 0x0e", mmio_spec)
         self.assertIn("read(dut, MachinePlicMmioMap.Pending) shouldBe 0x0e", mmio_spec)
         self.assertIn("read(dut, MachinePlicMmioMap.Enable) shouldBe 0x14", mmio_spec)
         self.assertIn("MachinePlicMmioMap.Enable, 2", platform_spec)
         self.assertIn("MachinePlicMmioMap.Pending) shouldBe 2", platform_spec)
+
+        # N5 adds a second architectural word and the QEMU-virt Supervisor
+        # context without changing the historical machine-context contract.
+        self.assertIn(
+            'it should "cover the N5 QEMU-virt supervisor context and both enable words"',
+            mmio_spec,
+        )
+        self.assertIn(
+            "MachinePlicMmioMap.SupervisorEnable + 4, BigInt(\"00100001\", 16)",
+            mmio_spec,
+        )
+        self.assertIn(
+            "read(dut, MachinePlicMmioMap.Pending + 4) shouldBe BigInt(\"00100001\", 16)",
+            mmio_spec,
+        )
+
         self.assertIn("1UL << AETHERCORE_UART_RX_SOURCE_ID", freertos)
         self.assertNotIn("AETHERCORE_UART_RX_SOURCE_ID - 1UL", freertos)
 
