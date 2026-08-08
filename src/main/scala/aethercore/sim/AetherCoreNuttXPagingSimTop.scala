@@ -13,5 +13,6 @@ class AetherCoreNuttXPagingSimTop
       config = CoreProfiles.rv32imasuSv32Software,
       stopOnTrap = false,
       withMachineInterruptPlatform = false,
-      stopOnWfi = false
+      stopOnWfi = false,
+      withNs16550Uart = true
     )
