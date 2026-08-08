@@ -109,6 +109,7 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.Sv32InstructionTranslationSpec
           ./mill aethercore.test.testOnly aethercore.Sv32InstructionFetchCoreSpec
           ./mill aethercore.test.testOnly aethercore.Sv32TlbSpec
+          ./mill aethercore.test.testOnly aethercore.Sv32TranslationUnitTlbSpec
           ./mill aethercore.test.testOnly aethercore.MachineCsrFileSpec
           ./mill aethercore.test.testOnly aethercore.PrivilegeModeSpec
           ./mill aethercore.test.testOnly aethercore.MachineMretCoreSpec
@@ -189,7 +190,7 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
-            echo '- VM focused tests cover data PA34 translation, cancellable translated instruction fetch, the bounded TLB, and deterministic shared PTW arbitration'
+            echo '- VM focused tests cover data PA34 translation, cancellable translated instruction fetch, TLB hit/refill/flush semantics, and deterministic shared PTW arbitration'
             echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34 profile and fail-closed Sv32+PMP boundary'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
