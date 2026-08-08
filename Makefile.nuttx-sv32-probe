@@ -1,0 +1,54 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/nuttx-sv32-boot-probe
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+IMAGE := $(BUILD_DIR)/nuttx.bin
+TOP := AetherCoreNuttXPagingSimTop
+VERILATOR ?= verilator
+JOBS ?= 6
+NUTTX_ELF ?=
+MAX_CYCLES ?= 500000
+
+.PHONY: all rtl image sim run-local clean
+
+all: run-local
+
+rtl:
+	mkdir -p $(RTL_DIR)
+	./mill aethercore.runMain aethercore.ElaborateNuttXPaging --target-dir $(RTL_DIR)
+
+image:
+	@test -n "$(NUTTX_ELF)" || { echo "ERROR: set NUTTX_ELF=/path/to/nuttx.elf"; exit 2; }
+	@test -s "$(NUTTX_ELF)"
+	mkdir -p $(BUILD_DIR)
+	riscv64-unknown-elf-readelf -h -l "$(NUTTX_ELF)" | tee $(BUILD_DIR)/nuttx-readelf.txt
+	first_load="$$(riscv64-unknown-elf-readelf -l "$(NUTTX_ELF)" | awk '/^[[:space:]]*LOAD/{print $$4; exit}')"; \
+		[[ "$$first_load" == "0x80000000" ]] || { \
+			echo "ERROR: first NuttX LOAD paddr is $$first_load, runner RAM base is 0x80000000"; exit 3; \
+		}
+	riscv64-unknown-elf-objcopy -O binary "$(NUTTX_ELF)" $(IMAGE)
+	sha256sum "$(NUTTX_ELF)" $(IMAGE) | tee $(BUILD_DIR)/images.sha256
+
+sim: rtl
+	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no paging RTL generated"; exit 4; }
+	$(VERILATOR) --cc --exe --build -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2" \
+		$(RTL_DIR)/*.sv $(abspath sim/nuttx_paging_boot_main.cpp) \
+		-j $(JOBS)
+
+run-local: sim image
+	mkdir -p $(BUILD_DIR)/logs
+	set +e; \
+		$(OBJ_DIR)/V$(TOP) $(IMAGE) $(MAX_CYCLES) 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	grep -Eq 'N5C_(FIRST_EXCEPTION|BOOT_REACHED_NSH)' $(BUILD_DIR)/logs/boot-probe.log || { \
+		echo "ERROR: boot probe produced neither a first exception nor an NSH milestone (runner rc=$$rc)"; exit 5; \
+	}
+	sha256sum $(BUILD_DIR)/logs/boot-probe.log
+
+clean:
+	rm -rf $(BUILD_DIR)
