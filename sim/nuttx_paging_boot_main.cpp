@@ -75,6 +75,11 @@ void driveMemory(VAetherCoreNuttXPagingSimTop& top, const Memory& memory) {
   top.io_ptwReady = true;
   top.io_ptwFault = ptwFault;
   top.io_ptwRdata = (!ptwValid || ptwFault) ? 0 : memory.read32(ptwAddr);
+
+  // N5 currently validates boot-time PLIC MMIO only. Keep the QEMU UART RX
+  // source quiescent until Supervisor external interrupt delegation is frozen.
+  top.io_rxValid = 0;
+  top.io_rxByte = 0;
 }
 }  // namespace
 
@@ -165,6 +170,7 @@ int main(int argc, char** argv) {
               << " mtime=0x" << static_cast<std::uint64_t>(top.io_mtime)
               << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)
               << std::dec << " timer-irq=" << static_cast<unsigned>(top.io_timerInterrupt)
+              << " external-irq=" << static_cast<unsigned>(top.io_externalInterrupt)
               << " halted=" << static_cast<unsigned>(top.io_halted)
               << " uart-bytes=" << uart.size() << " recent-pcs=";
     for (std::size_t i = 0; i < recentCount; ++i) {
