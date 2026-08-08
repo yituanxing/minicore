@@ -1,18 +1,6 @@
 name: NuttX Sv32 Paging
 
 on:
-  push:
-    branches:
-      - agent/nuttx-sv32-knsh-paging
-    paths:
-      - software/nuttx/**
-      - tools/ci/nuttx_sv32_paging_build_audit.sh
-      - tools/ci/nuttx_prepare_host_tools.sh
-      - tools/ci/ensure_genromfs.sh
-      - tools/ci/kconfig-tweak
-      - tools/fetch_range_archive.py
-      - tests_py/test_nuttx_sv32_paging_contract.py
-      - .github/workflows/nuttx-sv32-paging.yml
   pull_request:
     paths:
       - software/nuttx/**
