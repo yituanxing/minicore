@@ -62,16 +62,30 @@ class Sv32SfenceCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       (if (accessed) BigInt(1) << 6 else BigInt(0)) |
       (if (dirty) BigInt(1) << 7 else BigInt(0))
 
-  private def machineSetup(entry: BigInt, mpp: Int, body: Map[BigInt, BigInt]): Map[BigInt, BigInt] = Map(
-    base -> uType(0x80020, 1),              // satp = Sv32 | rootPpn 0x20000
-    (base + 0x04) -> csr(0x180, 1),
-    (base + 0x08) -> uType(0x80000, 2),
-    (base + 0x0c) -> iType((entry - base).toInt, 2, 0, 2, 0x13),
-    (base + 0x10) -> csr(0x341, 2),         // mepc = entry
-    (base + 0x14) -> iType(mpp << 11, 0, 0, 3, 0x13),
-    (base + 0x18) -> csr(0x300, 3),         // mstatus.MPP
-    (base + 0x1c) -> BigInt("30200073", 16)
-  ) ++ body
+  private def machineSetup(entry: BigInt, supervisor: Boolean, body: Map[BigInt, BigInt]): Map[BigInt, BigInt] = {
+    val common = Map(
+      base -> uType(0x80020, 1),              // satp = Sv32 | rootPpn 0x20000
+      (base + 0x04) -> csr(0x180, 1),
+      (base + 0x08) -> uType(0x80000, 2),
+      (base + 0x0c) -> iType((entry - base).toInt, 2, 0, 2, 0x13),
+      (base + 0x10) -> csr(0x341, 2)          // mepc = entry
+    )
+    val privilegeSetup = if (supervisor) {
+      Map(
+        (base + 0x14) -> uType(0x1, 3),
+        (base + 0x18) -> iType(-2048, 3, 0, 3, 0x13), // x3 = 0x800, MPP=S
+        (base + 0x1c) -> csr(0x300, 3),
+        (base + 0x20) -> BigInt("30200073", 16)
+      )
+    } else {
+      Map(
+        (base + 0x14) -> iType(0, 0, 0, 3, 0x13),    // x3 = 0, MPP=U
+        (base + 0x18) -> csr(0x300, 3),
+        (base + 0x1c) -> BigInt("30200073", 16)
+      )
+    }
+    common ++ privilegeSetup ++ body
+  }
 
   private def initialize(dut: AetherCore): Unit = {
     dut.io.imem.inst.poke(BigInt("00000013", 16).U)
@@ -95,7 +109,7 @@ class Sv32SfenceCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       (supervisorEntry + 0x14) -> iType(0, 5, 2, 8, 0x03),
       (supervisorEntry + 0x18) -> BigInt("00100073", 16)
     )
-    val program = machineSetup(supervisorEntry, mpp = 1, body)
+    val program = machineSetup(supervisorEntry, supervisor = true, body)
     val codeLeaf = pte(codePpn, execute = true, accessed = true)
     val pointer = pte(nextPpn)
 
@@ -175,7 +189,7 @@ class Sv32SfenceCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
   it should "trap SFENCE.VMA from U-mode as a precise illegal instruction" in {
     val body = Map(userEntry -> sfenceVma)
-    val program = machineSetup(userEntry, mpp = 0, body)
+    val program = machineSetup(userEntry, supervisor = false, body)
     val userCodeLeaf = pte(codePpn, execute = true, user = true, accessed = true)
 
     simulate(new AetherCore(CoreProfiles.rv32imsuSv32Software)) { dut =>
