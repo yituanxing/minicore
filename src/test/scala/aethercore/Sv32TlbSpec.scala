@@ -29,6 +29,7 @@ class Sv32TlbSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.refillSum.poke(false.B)
     dut.io.refillMxr.poke(false.B)
     dut.io.refillLeafLevel.poke(0.U)
+    dut.io.refillGlobal.poke(false.B)
     dut.io.flush.poke(false.B)
   }
 
@@ -42,7 +43,8 @@ class Sv32TlbSpec extends AnyFlatSpec with Matchers with ChiselSim {
       execute: Boolean = false,
       sum: Boolean = false,
       mxr: Boolean = false,
-      leafLevel: Int = 0
+      leafLevel: Int = 0,
+      global: Boolean = false
   ): Unit = {
     dut.io.refillVirtualAddress.poke(va.U)
     dut.io.refillPhysicalAddress.poke(pa.U)
@@ -53,6 +55,7 @@ class Sv32TlbSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.refillSum.poke(sum.B)
     dut.io.refillMxr.poke(mxr.B)
     dut.io.refillLeafLevel.poke(leafLevel.U)
+    dut.io.refillGlobal.poke(global.B)
     dut.io.refillValid.poke(true.B)
     dut.clock.step()
     dut.io.refillValid.poke(false.B)
@@ -88,11 +91,12 @@ class Sv32TlbSpec extends AnyFlatSpec with Matchers with ChiselSim {
       lookup(dut, va, root)
       dut.io.hit.expect(false.B)
 
-      refill(dut, va, pa, root)
+      refill(dut, va, pa, root, global = true)
       lookup(dut, va + 0x3c0, root)
       dut.io.hit.expect(true.B)
       dut.io.physicalAddress.expect((pa + 0x3c0).U)
       dut.io.leafLevel.expect(0.U)
+      dut.io.global.expect(true.B)
 
       lookup(dut, va, root + 1)
       dut.io.hit.expect(false.B)
@@ -120,6 +124,7 @@ class Sv32TlbSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.hit.expect(true.B)
       dut.io.physicalAddress.expect(expectedPa.U)
       dut.io.leafLevel.expect(1.U)
+      dut.io.global.expect(false.B)
 
       lookup(dut, BigInt("80800000", 16), root, execute = true)
       dut.io.hit.expect(false.B)
