@@ -23,6 +23,8 @@ all: run-local
 
 rtl:
 	mkdir -p $(RTL_DIR) $(BUILD_DIR)/logs
+	@test -f ./mill || { echo "ERROR: mill launcher is missing"; exit 4; }
+	chmod +x ./mill
 	set +e; \
 		./mill aethercore.runMain aethercore.ElaborateNuttXPaging --target-dir $(RTL_DIR) \
 			2>&1 | tee $(BUILD_DIR)/logs/rtl-build.log; \
