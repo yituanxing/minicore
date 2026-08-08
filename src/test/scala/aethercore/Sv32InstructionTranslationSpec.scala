@@ -28,6 +28,7 @@ class Sv32InstructionTranslationSpec extends AnyFlatSpec with Matchers with Chis
   private def initialize(dut: Sv32InstructionFetchAdapter): Unit = {
     dut.io.requestValid.poke(false.B)
     dut.io.kill.poke(false.B)
+    dut.io.flush.poke(false.B)
     dut.io.virtualAddress.poke(0.U)
     dut.io.privilege.poke(PrivilegeMode.Supervisor.U)
     dut.io.satpTranslationEnabled.poke(false.B)
