@@ -5,6 +5,7 @@ on:
     paths:
       - software/nuttx/**
       - tools/ci/nuttx_sv32_paging_build_audit.sh
+      - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
       - tools/ci/nuttx_prepare_host_tools.sh
       - tools/ci/ensure_genromfs.sh
       - tools/ci/kconfig-tweak
@@ -22,10 +23,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  n5a:
-    name: N5-A pinned upstream Sv32 paging build audit
+  n5:
+    name: N5-A upstream audit and N5-B bounded RV32IMA paging build
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout AetherCore
@@ -33,11 +34,12 @@ jobs:
         with:
           clean: false
 
-      - name: Validate N5-A contract
+      - name: Validate N5 contracts
         shell: bash
         run: |
           set -euo pipefail
           bash -n tools/ci/nuttx_sv32_paging_build_audit.sh
+          bash -n tools/ci/nuttx_sv32_paging_aether_profile_build.sh
           python3 -m unittest tests_py.test_nuttx_sv32_paging_contract -v
 
       - name: Fetch verified pinned NuttX release sources
@@ -70,7 +72,7 @@ jobs:
           chmod +x tools/ci/nuttx_prepare_host_tools.sh
           bash tools/ci/nuttx_prepare_host_tools.sh
 
-      - name: Build and audit upstream paging configuration
+      - name: N5-A build and audit upstream paging configuration
         shell: bash
         env:
           NUTTX_JOBS: "6"
@@ -96,3 +98,30 @@ jobs:
             build/nuttx-sv32-paging-audit/export.log
             build/nuttx-sv32-paging-audit/romfs.log
             build/nuttx-sv32-paging-audit/evidence/
+
+      - name: N5-B build bounded RV32IMA Sv32 paging profile
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          bash tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+
+      - name: Upload N5-B evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-sv32-n5b-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-sv32-paging-aether-profile/nuttx.elf
+            build/nuttx-sv32-paging-aether-profile/user-init.elf
+            build/nuttx-sv32-paging-aether-profile/nuttx.map
+            build/nuttx-sv32-paging-aether-profile/resolved.config
+            build/nuttx-sv32-paging-aether-profile/*build*.log
+            build/nuttx-sv32-paging-aether-profile/export.log
+            build/nuttx-sv32-paging-aether-profile/romfs.log
+            build/nuttx-sv32-paging-aether-profile/evidence/
