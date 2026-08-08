@@ -121,7 +121,9 @@ extract_dir="$(mktemp -d "${cache_root}/.l32-bootlin.XXXXXX")"
 trap 'rm -rf "${extract_dir}"' EXIT
 
 tar -xJf "${archive}" -C "${extract_dir}"
-found_gcc="$(find "${extract_dir}" -type f -path "*/bin/${L32_CROSS_COMPILE_PREFIX}gcc" -print -quit)"
+# Bootlin exposes the cross compiler through symlinks/wrappers in bin/, so do
+# not require the path itself to be a regular file.
+found_gcc="$(find "${extract_dir}" -path "*/bin/${L32_CROSS_COMPILE_PREFIX}gcc" -print -quit)"
 [[ -n "${found_gcc}" ]] || fail "Bootlin archive does not contain ${L32_CROSS_COMPILE_PREFIX}gcc"
 candidate="$(dirname "$(dirname "${found_gcc}")")"
 validate_payload "${candidate}" || fail "downloaded Bootlin toolchain failed RV32 PIE validation"
