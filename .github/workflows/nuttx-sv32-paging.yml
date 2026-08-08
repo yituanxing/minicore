@@ -1,0 +1,100 @@
+name: NuttX Sv32 Paging
+
+on:
+  push:
+    branches:
+      - agent/nuttx-sv32-knsh-paging
+    paths:
+      - software/nuttx/**
+      - tools/ci/nuttx_sv32_paging_build_audit.sh
+      - tools/ci/nuttx_prepare_host_tools.sh
+      - tools/ci/ensure_genromfs.sh
+      - tools/ci/kconfig-tweak
+      - tools/fetch_range_archive.py
+      - tests_py/test_nuttx_sv32_paging_contract.py
+      - .github/workflows/nuttx-sv32-paging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: nuttx-sv32-paging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  n5a:
+    name: N5-A pinned upstream Sv32 paging build audit
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout AetherCore
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate N5-A contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/nuttx_sv32_paging_build_audit.sh
+          python3 -m unittest tests_py.test_nuttx_sv32_paging_contract -v
+
+      - name: Fetch verified pinned NuttX release sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/nuttx/manifest.env
+          cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+          archive_dir="${cache_root}/archives"
+          mkdir -p "${archive_dir}" build
+
+          fetch_release() {
+            local release_name="$1"
+            local output_name="$2"
+            python3 tools/fetch_range_archive.py \
+              --url "https://archive.apache.org/dist/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
+              --output "${archive_dir}/${output_name}" \
+              --chunk-size 1048576 --jobs 6 --retries 5 --max-time 180
+            tar -tzf "${archive_dir}/${output_name}" >/dev/null
+          }
+
+          fetch_release "apache-nuttx-${NUTTX_VERSION}.tar.gz" "nuttx-${NUTTX_COMMIT}.tar.gz"
+          fetch_release "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+
+      - name: Prepare pinned NuttX host tools
+        shell: bash
+        run: |
+          chmod +x tools/ci/nuttx_prepare_host_tools.sh
+          bash tools/ci/nuttx_prepare_host_tools.sh
+
+      - name: Build and audit upstream paging configuration
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_sv32_paging_build_audit.sh
+          bash tools/ci/nuttx_sv32_paging_build_audit.sh
+
+      - name: Upload N5-A evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-sv32-n5a-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-sv32-paging-audit/nuttx.elf
+            build/nuttx-sv32-paging-audit/user-init.elf
+            build/nuttx-sv32-paging-audit/nuttx.map
+            build/nuttx-sv32-paging-audit/resolved.config
+            build/nuttx-sv32-paging-audit/*build*.log
+            build/nuttx-sv32-paging-audit/export.log
+            build/nuttx-sv32-paging-audit/romfs.log
+            build/nuttx-sv32-paging-audit/evidence/
