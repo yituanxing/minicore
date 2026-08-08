@@ -166,7 +166,7 @@ jobs:
           make -f Makefile.nuttx-sv32-probe \
             BUILD_DIR=build/nuttx-sv32-boot-probe \
             NUTTX_ELF=build/nuttx-sv32-paging-aether-profile/nuttx.elf \
-            JOBS="$(nproc)" MAX_CYCLES=5000000 run-local
+            JOBS="$(nproc)" MAX_CYCLES=20000000 run-local
 
       - name: Upload N5-C first-boot evidence
         if: always()
