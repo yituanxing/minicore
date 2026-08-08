@@ -10,40 +10,43 @@ object MachinePlicMmioMap {
   val Threshold: Int = 0x200000
   val ClaimComplete: Int = 0x200004
 
+  // QEMU virt hart0 Supervisor context used by the pinned N5 NuttX image.
+  val SupervisorEnable: Int = 0x002080
+  val SupervisorThreshold: Int = 0x201000
+  val SupervisorClaimComplete: Int = 0x201004
+
   def priority(sourceId: Int): Int = PriorityBase + sourceId * 4
+  def pendingWord(word: Int): Int = Pending + word * 4
+  def enableWord(base: Int, word: Int): Int = base + word * 4
 }
 
 /** Bus-facing single-context PLIC register map.
   *
-  * The offsets follow the conventional SiFive/QEMU PLIC layout used by
-  * upstream RISC-V software: source priority registers start at 0x4, pending
-  * is at 0x1000, the context enable word is at 0x2000, and context threshold
-  * plus claim/complete are at 0x200000/0x200004.
-  *
-  * Priority source zero is architecturally reserved. Upstream PLIC software
-  * commonly clears priority entries starting at index zero, so address 0x0 is
-  * implemented as a read-zero/write-ignored register instead of a bus fault.
-  * Pending and enable registers also reserve bit zero: internal compact source
-  * index zero is exposed at architectural bit one for source ID one.
-  *
-  * This first platform profile supports at most 31 real interrupt sources so
-  * reserved source zero plus all real sources fit in one 32-bit pending/enable
-  * word. Every access completes in one cycle. Unknown or misaligned addresses
-  * raise a bus fault and have no side effects.
+  * Source IDs remain architectural one-based IDs, while the underlying
+  * MachinePlic keeps compact zero-based source state. The MMIO shell supports
+  * two architectural pending/enable words (sources 1..63) so the real NuttX
+  * QEMU-virt profile can initialize its 52 PLIC sources without a synthetic
+  * bus fault. Context offsets are constructor parameters: existing users keep
+  * the historical machine-context defaults, while N5 can select hart0's
+  * Supervisor context at 0x2080 / 0x201000 / 0x201004.
   */
 class MachinePlicMmio(
     val sourceCount: Int = 8,
     val priorityBits: Int = 3,
-    val addressBits: Int = 24
+    val addressBits: Int = 24,
+    val enableBase: Int = MachinePlicMmioMap.Enable,
+    val thresholdOffset: Int = MachinePlicMmioMap.Threshold,
+    val claimCompleteOffset: Int = MachinePlicMmioMap.ClaimComplete
 ) extends Module {
-  require(sourceCount > 0 && sourceCount <= 31,
-    s"single-word one-based PLIC profile supports 1..31 real sources, got $sourceCount")
+  require(sourceCount > 0 && sourceCount <= 63,
+    s"two-word one-based PLIC profile supports 1..63 real sources, got $sourceCount")
   require(priorityBits > 0 && priorityBits <= 32,
     s"PLIC priority width must be 1..32, got $priorityBits")
   require(addressBits >= 22,
     s"PLIC MMIO offsets require at least 22 address bits, got $addressBits")
 
   private val sourceIdBits = log2Ceil(sourceCount + 1)
+  private val wordCount = sourceCount / 32 + 1
 
   val io = IO(new Bundle {
     val sources = Input(UInt(sourceCount.W))
@@ -69,9 +72,12 @@ class MachinePlicMmio(
     if (width == 32) value else Cat(0.U((32 - width).W), value)
   }
 
-  private def oneBasedRegister(value: UInt): UInt = {
-    val shifted = Cat(value, 0.U(1.W))
-    extendTo32(shifted, sourceCount + 1)
+  private def architecturalWord(value: UInt, word: Int): UInt = {
+    VecInit((0 until 32).map { bit =>
+      val sourceId = word * 32 + bit
+      if (sourceId == 0 || sourceId > sourceCount) false.B
+      else value(sourceId - 1)
+    }).asUInt
   }
 
   private def mergeBytes(oldValue: UInt, newValue: UInt, mask: UInt): UInt = {
@@ -89,7 +95,7 @@ class MachinePlicMmio(
   plic.io.priorityWriteId := 0.U
   plic.io.priorityWriteData := 0.U
   plic.io.enableWrite := false.B
-  plic.io.enableWriteData := 0.U
+  plic.io.enableWriteData := plic.io.enabled
   plic.io.thresholdWrite := false.B
   plic.io.thresholdWriteData := 0.U
   plic.io.claimRead := false.B
@@ -109,10 +115,16 @@ class MachinePlicMmio(
     }
   }
 
-  val pendingHit = io.address === MachinePlicMmioMap.Pending.U(addressBits.W)
-  val enableHit = io.address === MachinePlicMmioMap.Enable.U(addressBits.W)
-  val thresholdHit = io.address === MachinePlicMmioMap.Threshold.U(addressBits.W)
-  val claimCompleteHit = io.address === MachinePlicMmioMap.ClaimComplete.U(addressBits.W)
+  val pendingHits = (0 until wordCount).map { word =>
+    io.address === MachinePlicMmioMap.pendingWord(word).U(addressBits.W)
+  }
+  val enableHits = (0 until wordCount).map { word =>
+    io.address === MachinePlicMmioMap.enableWord(enableBase, word).U(addressBits.W)
+  }
+  val pendingHit = pendingHits.reduce(_ || _)
+  val enableHit = enableHits.reduce(_ || _)
+  val thresholdHit = io.address === thresholdOffset.U(addressBits.W)
+  val claimCompleteHit = io.address === claimCompleteOffset.U(addressBits.W)
   val implemented = priorityZeroHit || priorityHit || pendingHit || enableHit || thresholdHit || claimCompleteHit
   val aligned = io.address(1, 0) === 0.U
   val accepted = io.request && aligned && implemented
@@ -120,21 +132,23 @@ class MachinePlicMmio(
   io.ready := io.request
   io.fault := io.request && (!aligned || !implemented)
 
-  val pendingReadData = oneBasedRegister(plic.io.pending)
-  val enabledReadData = oneBasedRegister(plic.io.enabled)
+  val pendingReadWords = (0 until wordCount).map(word => architecturalWord(plic.io.pending, word))
+  val enabledReadWords = (0 until wordCount).map(word => architecturalWord(plic.io.enabled, word))
+  val enabledMergedWords = enabledReadWords.map(word => mergeBytes(word, io.wdata, io.wmask))
   val thresholdReadData = extendTo32(plic.io.threshold, priorityBits)
   val claimReadData = extendTo32(plic.io.claim, sourceIdBits)
 
   val readData = WireDefault(0.U(32.W))
   when(priorityHit) { readData := priorityReadData }
-  when(pendingHit) { readData := pendingReadData }
-  when(enableHit) { readData := enabledReadData }
+  for (word <- 0 until wordCount) {
+    when(pendingHits(word)) { readData := pendingReadWords(word) }
+    when(enableHits(word)) { readData := enabledReadWords(word) }
+  }
   when(thresholdHit) { readData := thresholdReadData }
   when(claimCompleteHit) { readData := claimReadData }
   io.rdata := Mux(accepted && !io.write, readData, 0.U)
 
   val priorityMerged = mergeBytes(priorityReadData, io.wdata, io.wmask)
-  val enableMerged = mergeBytes(enabledReadData, io.wdata, io.wmask)
   val thresholdMerged = mergeBytes(thresholdReadData, io.wdata, io.wmask)
   val completeMerged = mergeBytes(0.U(32.W), io.wdata, io.wmask)
 
@@ -144,9 +158,18 @@ class MachinePlicMmio(
     plic.io.priorityWriteData := priorityMerged(priorityBits - 1, 0)
   }
 
+  val nextEnabled = WireDefault(plic.io.enabled)
+  for (index <- 0 until sourceCount) {
+    val sourceId = index + 1
+    val word = sourceId / 32
+    val bit = sourceId % 32
+    when(accepted && io.write && enableHits(word)) {
+      nextEnabled(index) := enabledMergedWords(word)(bit)
+    }
+  }
   when(accepted && io.write && enableHit) {
     plic.io.enableWrite := true.B
-    plic.io.enableWriteData := enableMerged(sourceCount, 1)
+    plic.io.enableWriteData := nextEnabled
   }
 
   when(accepted && io.write && thresholdHit) {
