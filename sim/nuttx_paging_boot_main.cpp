@@ -16,6 +16,7 @@ constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr std::size_t kRecentStoreCount = 8;
 constexpr std::uint64_t kSupervisorTimerInterruptCode = 5ULL;
+constexpr std::uint64_t kUserEnvironmentCall = 8ULL;
 constexpr std::uint64_t kInstructionPageFault = 12ULL;
 constexpr std::uint64_t kLoadPageFault = 13ULL;
 constexpr std::uint64_t kStorePageFault = 15ULL;
@@ -106,7 +107,7 @@ int main(int argc, char** argv) {
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
-        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 20000000ULL;
+        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 50000000ULL;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
@@ -122,6 +123,7 @@ int main(int argc, char** argv) {
     std::uint64_t lastInterruptPc = 0;
     std::uint64_t exceptions = 0;
     std::uint64_t pagingFaults = 0;
+    std::uint64_t userEcalls = 0;
     std::uint64_t samePagingFaultRepeats = 0;
     std::uint64_t lastPagingFaultCause = ~0ULL;
     std::uint64_t lastPagingFaultPc = ~0ULL;
@@ -171,6 +173,7 @@ int main(int argc, char** argv) {
                     << " commits=" << commits
                     << " exceptions=" << exceptions
                     << " paging-faults=" << pagingFaults
+                    << " user-ecalls=" << userEcalls
                     << " interrupts=" << interrupts
                     << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
                     << "\n";
@@ -240,6 +243,15 @@ int main(int argc, char** argv) {
                         << "\n";
               return 4;
             }
+          } else if (cause == kUserEnvironmentCall) {
+            ++userEcalls;
+            if (userEcalls == 1) {
+              std::cerr << "\nN5C_FIRST_EXPECTED_USER_ECALL cycles=" << cycles
+                        << " commits=" << commits
+                        << " pc=0x" << std::hex << pc
+                        << " inst=0x" << static_cast<std::uint32_t>(top.io_commit_inst)
+                        << std::dec << "\n";
+            }
           } else {
             std::cerr << "\nN5C_FIRST_UNEXPECTED_EXCEPTION cycles=" << cycles
                       << " commits=" << commits
@@ -249,6 +261,7 @@ int main(int argc, char** argv) {
                       << " value=0x" << value << std::dec
                       << " exceptions=" << exceptions
                       << " paging-faults=" << pagingFaults
+                      << " user-ecalls=" << userEcalls
                       << " interrupts=" << interrupts
                       << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
                       << "\n";
@@ -271,6 +284,7 @@ int main(int argc, char** argv) {
               << " uart-bytes=" << uart.size()
               << " exceptions=" << exceptions
               << " paging-faults=" << pagingFaults
+              << " user-ecalls=" << userEcalls
               << " interrupts=" << interrupts
               << " supervisor-timer-interrupts=" << supervisorTimerInterrupts
               << " committed-stores=" << committedStores;
