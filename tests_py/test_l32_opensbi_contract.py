@@ -18,6 +18,8 @@ class L32OpenSBIContractTest(unittest.TestCase):
         self.assertIn("linux-6.6.143.tar.xz", text)
         self.assertIn("OPENSBI_VERSION=1.6", text)
         self.assertIn("OPENSBI_COMMIT=bd613dd92113f683052acfb23d9dc8ba60029e0a", text)
+        self.assertIn("OPENSBI_RV32_ISA=rv32ima_zicsr_zifencei", text)
+        self.assertIn("OPENSBI_RV32_ABI=ilp32", text)
         self.assertIn("L32_TOOLCHAIN_VERSION=riscv32-ilp32d--glibc--stable-2024.05-1", text)
         self.assertIn("L32_TOOLCHAIN_SHA256=00112418e6d4b0733019a673b682a39f1ce6300b9448cd840f1194aa4b064192", text)
         self.assertIn("L32_CROSS_COMPILE_PREFIX=riscv32-buildroot-linux-gnu-", text)
@@ -27,8 +29,10 @@ class L32OpenSBIContractTest(unittest.TestCase):
     def test_build_accepts_only_real_pie_capable_toolchains(self):
         text = (ROOT / "tools/ci/l32_opensbi_build.sh").read_text()
         self.assertIn("PLATFORM_RISCV_XLEN=", text)
-        self.assertIn("-march=rv32ima_zicsr_zifencei", text)
-        self.assertIn("-mabi=ilp32", text)
+        self.assertIn('PLATFORM_RISCV_ISA="${OPENSBI_RV32_ISA}"', text)
+        self.assertIn('PLATFORM_RISCV_ABI="${OPENSBI_RV32_ABI}"', text)
+        self.assertIn('-march="${OPENSBI_RV32_ISA}"', text)
+        self.assertIn('-mabi="${OPENSBI_RV32_ABI}"', text)
         self.assertIn("LLVM=1", text)
         self.assertIn("--target=riscv32-unknown-elf", text)
         self.assertIn("-Wl,-pie", text)
@@ -43,6 +47,8 @@ class L32OpenSBIContractTest(unittest.TestCase):
         self.assertIn('FW_TEXT_START="0x80000000"', text)
         self.assertIn('FW_FDT_PATH="${DTB}"', text)
         self.assertIn("make_l32_dtb.py", text)
+        self.assertIn("Tag_RISCV_arch", text)
+        self.assertIn("retained unsupported F/D/C extension", text)
         self.assertIn("L32_OPENSBI_RESULT: status=PASS", text)
 
     def test_bootlin_provisioner_is_pinned_and_validates_real_pie(self):
