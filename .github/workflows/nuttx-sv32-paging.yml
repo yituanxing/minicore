@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - software/nuttx/**
+      - src/main/scala/aethercore/**
+      - sim/nuttx_paging_boot_main.cpp
+      - Makefile.nuttx-sv32-probe
       - tools/ci/nuttx_sv32_paging_build_audit.sh
       - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
       - tools/ci/audit_riscv_elf_profile.py
@@ -25,7 +28,7 @@ concurrency:
 
 jobs:
   n5:
-    name: N5-A upstream audit and N5-B bounded RV32IMA paging build
+    name: N5-A audit, N5-B bounded build, N5-C first real boot probe
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 60
 
@@ -127,3 +130,29 @@ jobs:
             build/nuttx-sv32-paging-aether-profile/export.log
             build/nuttx-sv32-paging-aether-profile/romfs.log
             build/nuttx-sv32-paging-aether-profile/evidence/
+
+      - name: Provision fixed Verilator for N5-C
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: N5-C run first real NuttX paging boot probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.nuttx-sv32-probe \
+            BUILD_DIR=build/nuttx-sv32-boot-probe \
+            NUTTX_ELF=build/nuttx-sv32-paging-aether-profile/nuttx.elf \
+            JOBS="$(nproc)" MAX_CYCLES=500000 run-local
+
+      - name: Upload N5-C first-boot evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-sv32-n5c-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/nuttx-sv32-boot-probe/nuttx-readelf.txt
+            build/nuttx-sv32-boot-probe/images.sha256
+            build/nuttx-sv32-boot-probe/logs/boot-probe.log
