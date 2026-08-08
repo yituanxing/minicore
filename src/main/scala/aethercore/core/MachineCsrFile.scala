@@ -74,19 +74,20 @@ object MachineCsrWarl {
       val implementedCauses =
         if (isa.hasSv32) v1Causes ++ Seq(12, 13, 15)
         else v1Causes
-      // Page-fault delegation only becomes WARL-visible on the Sv32 profile,
-      // where the core can actually generate instruction/load/store page
-      // faults. The frozen no-VM V1 mask remains byte-for-byte equivalent.
       implementedCauses.foldLeft(BigInt(0))((mask, bit) => mask | (BigInt(1) << bit))
     }
   }
+
+  private def supervisorInterruptMask(isa: IsaConfig): BigInt =
+    if (isa.hasSstc) BigInt(1) << Rv32SstcBit.SupervisorTimerInterrupt else BigInt(0)
 
   def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
     val xlen = isa.xlen
     val allBits = (BigInt(1) << xlen) - 1
     val machineInterruptMask =
       (BigInt(1) << MachineCsrBit.MachineTimerInterrupt) |
-        (BigInt(1) << MachineCsrBit.MachineExternalInterrupt)
+        (BigInt(1) << MachineCsrBit.MachineExternalInterrupt) |
+        supervisorInterruptMask(isa)
     val mtvecMask = allBits & ~BigInt(3)
     val epcMask = allBits & ~(if (isa.hasC) BigInt(1) else BigInt(3))
     val sstatusMask = supervisorStatusMask(isa)
@@ -128,19 +129,25 @@ object MachineCsrWarl {
         result := data & delegableExceptionMask(isa).U(xlen.W)
       }
       is(MachineCsrAddress.Mideleg.U) {
-        // No supervisor-level interrupt source is wired yet. Keep mideleg
-        // architecturally present but WARL-zero rather than pretending that
-        // MTIP/MEIP are supervisor interrupts.
-        result := 0.U
+        result := data & supervisorInterruptMask(isa).U(xlen.W)
       }
       is(MachineCsrAddress.Mie.U) { result := data & machineInterruptMask.U(xlen.W) }
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(MachineCsrAddress.Mepc.U) { result := data & epcMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sstatus.U) { result := data & sstatusMask.U(xlen.W) }
-      is(SupervisorCsrAddress.Sie.U) { result := 0.U }
+      is(SupervisorCsrAddress.Sie.U) { result := data & supervisorInterruptMask(isa).U(xlen.W) }
       is(SupervisorCsrAddress.Stvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sepc.U) { result := data & epcMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sip.U) { result := 0.U }
+    }
+
+    if (isa.hasSstc) {
+      when(address === Rv32SstcCsrAddress.Mcounteren.U) {
+        result := data & (BigInt(1) << Rv32SstcBit.McounterenTime).U(xlen.W)
+      }
+      when(address === Rv32SstcCsrAddress.Menvcfgh.U) {
+        result := data & (BigInt(1) << Rv32SstcBit.MenvcfghStce).U(xlen.W)
+      }
     }
 
     if (isa.hasPmp) {
@@ -178,6 +185,8 @@ class MachineCsrFile(
     } else BigInt(0)
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val machineExternalMask = BigInt(1) << MachineCsrBit.MachineExternalInterrupt
+  private val supervisorTimerMask =
+    if (isa.hasSstc) BigInt(1) << Rv32SstcBit.SupervisorTimerInterrupt else BigInt(0)
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
   private val mstatusTransitionPreserveMask = allBits & ~mstatusTransitionMask
   private val sstatusTransitionMask = sstatusSie | sstatusSpie | sstatusSpp
@@ -220,7 +229,10 @@ class MachineCsrFile(
     val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt((xlen - 2).W)))
 
     val timerInterrupt = Input(Bool())
+    val time = if (isa.hasSstc) Some(Input(UInt(64.W))) else None
     val machineTimerInterrupt = Output(Bool())
+    val supervisorTimerPending = Output(Bool())
+    val supervisorTimerInterrupt = Output(Bool())
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val machineExternalInterrupt =
       if (withMachineExternalInterrupt) Some(Output(Bool())) else None
@@ -232,9 +244,6 @@ class MachineCsrFile(
     val trapVector = Output(UInt(xlen.W))
     val trapDelegatedToSupervisor = Output(Bool())
 
-    // trapReturn is the retirement pulse; trapReturnSupervisor identifies
-    // SRET explicitly. This matters because SRET is legal in M-mode as well
-    // as S-mode, so current privilege alone cannot identify the xRET kind.
     val trapReturn = Input(Bool())
     val trapReturnSupervisor = Input(Bool())
     val returnPc = Output(UInt(xlen.W))
@@ -255,6 +264,8 @@ class MachineCsrFile(
   val sepc = RegInit(0.U(xlen.W))
   val scause = RegInit(0.U(xlen.W))
   val stval = RegInit(0.U(xlen.W))
+  val mcounteren = if (isa.hasSstc) Some(RegInit(0.U(xlen.W))) else None
+  val menvcfgh = if (isa.hasSstc) Some(RegInit(0.U(xlen.W))) else None
 
   val pmp = Module(new PmpCsrFile(isa))
   pmp.io.readAddr := io.readAddr
@@ -266,6 +277,14 @@ class MachineCsrFile(
 
   val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
   val ordinaryWrite = io.writeEnable
+
+  val sstcTimer = if (isa.hasSstc) Some(Module(new Rv32SstcTimer)) else None
+  if (isa.hasSstc) {
+    sstcTimer.get.io.time := io.time.get
+    sstcTimer.get.io.writeLow := ordinaryWrite && io.writeAddr === Rv32SstcCsrAddress.Stimecmp.U
+    sstcTimer.get.io.writeHigh := ordinaryWrite && io.writeAddr === Rv32SstcCsrAddress.Stimecmph.U
+    sstcTimer.get.io.writeData := io.writeData(31, 0)
+  }
 
   val satp = if (isa.hasSv32) Some(Module(new Sv32SatpRegister)) else None
   if (isa.hasSv32) {
@@ -287,6 +306,8 @@ class MachineCsrFile(
   val sstatusWriteValue =
     (mstatus & (~supervisorStatusMask & allBits).U(xlen.W)) |
       (canonicalWriteData & supervisorStatusMask.U(xlen.W))
+  val sieWriteValue =
+    (mie & (~mideleg & allBits.U(xlen.W))) | (canonicalWriteData & mideleg)
   val effectiveMstatus = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mstatus.U,
     canonicalWriteData,
@@ -299,7 +320,11 @@ class MachineCsrFile(
   val effectiveMie = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mie.U,
     canonicalWriteData,
-    mie
+    Mux(
+      ordinaryWrite && io.writeAddr === SupervisorCsrAddress.Sie.U,
+      sieWriteValue,
+      mie
+    )
   )
   val effectiveMtvec = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mtvec.U,
@@ -319,11 +344,19 @@ class MachineCsrFile(
 
   val rawExternalInterrupt =
     if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
+  val supervisorTimerPending =
+    if (isa.hasSstc) sstcTimer.get.io.pending else false.B
   val mipValue =
     Mux(io.timerInterrupt, machineTimerMask.U(xlen.W), 0.U(xlen.W)) |
+      Mux(supervisorTimerPending, supervisorTimerMask.U(xlen.W), 0.U(xlen.W)) |
       Mux(rawExternalInterrupt, machineExternalMask.U(xlen.W), 0.U(xlen.W))
   val machineInterruptGloballyEnabled =
     privilege < PrivilegeMode.Machine.U || effectiveMstatus(MachineCsrBit.MstatusMie)
+  val supervisorInterruptGloballyEnabled =
+    privilege < PrivilegeMode.Supervisor.U ||
+      (privilege === PrivilegeMode.Supervisor.U && effectiveMstatus(MachineCsrBit.SstatusSie))
+  val supervisorTimerDelegated =
+    if (isa.hasSstc) mideleg(Rv32SstcBit.SupervisorTimerInterrupt) else false.B
 
   val trapIsInterrupt = io.trapCause(xlen - 1)
   val trapCauseIndex = io.trapCause(log2Ceil(xlen) - 1, 0)
@@ -337,6 +370,14 @@ class MachineCsrFile(
   io.machineTimerInterrupt :=
     io.timerInterrupt && effectiveMie(MachineCsrBit.MachineTimerInterrupt) &&
       machineInterruptGloballyEnabled
+  io.supervisorTimerPending := supervisorTimerPending
+  io.supervisorTimerInterrupt :=
+    supervisorTimerPending && effectiveMie(Rv32SstcBit.SupervisorTimerInterrupt) &&
+      Mux(
+        supervisorTimerDelegated,
+        privilege =/= PrivilegeMode.Machine.U && supervisorInterruptGloballyEnabled,
+        machineInterruptGloballyEnabled
+      )
   if (withMachineExternalInterrupt) {
     io.machineExternalInterrupt.get :=
       rawExternalInterrupt && effectiveMie(MachineCsrBit.MachineExternalInterrupt) &&
@@ -350,6 +391,18 @@ class MachineCsrFile(
   io.readData := 0.U
   io.readImplemented := false.B
   io.readWritable := false.B
+
+  val timeReadable = if (isa.hasSstc) {
+    privilege === PrivilegeMode.Machine.U ||
+      (privilege === PrivilegeMode.Supervisor.U &&
+        mcounteren.get(Rv32SstcBit.McounterenTime))
+  } else false.B
+  val stimecmpAccessible = if (isa.hasSstc) {
+    privilege === PrivilegeMode.Machine.U ||
+      (privilege === PrivilegeMode.Supervisor.U &&
+        mcounteren.get(Rv32SstcBit.McounterenTime) &&
+        menvcfgh.get(Rv32SstcBit.MenvcfghStce))
+  } else false.B
 
   switch(io.readAddr) {
     is(MachineCsrAddress.Mstatus.U) {
@@ -394,8 +447,6 @@ class MachineCsrFile(
     is(MachineCsrAddress.Mip.U) {
       io.readData := mipValue
       io.readImplemented := true.B
-      // mip is a writable CSR address even when all implemented pending bits are
-      // driven by hardware. Software writes are accepted and ignored.
       io.readWritable := true.B
     }
     is(MachineCsrAddress.Mhartid.U) {
@@ -464,6 +515,37 @@ class MachineCsrFile(
       io.readData := satp.get.io.readData
       io.readImplemented := true.B
       io.readWritable := true.B
+    }
+  }
+
+  if (isa.hasSstc) {
+    when(io.readAddr === Rv32SstcCsrAddress.Mcounteren.U) {
+      io.readData := mcounteren.get
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    when(io.readAddr === Rv32SstcCsrAddress.Menvcfgh.U) {
+      io.readData := menvcfgh.get
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    when(io.readAddr === Rv32SstcCsrAddress.Time.U) {
+      io.readData := io.time.get(31, 0)
+      io.readImplemented := timeReadable
+    }
+    when(io.readAddr === Rv32SstcCsrAddress.Timeh.U) {
+      io.readData := io.time.get(63, 32)
+      io.readImplemented := timeReadable
+    }
+    when(io.readAddr === Rv32SstcCsrAddress.Stimecmp.U) {
+      io.readData := sstcTimer.get.io.readLow
+      io.readImplemented := stimecmpAccessible
+      io.readWritable := stimecmpAccessible
+    }
+    when(io.readAddr === Rv32SstcCsrAddress.Stimecmph.U) {
+      io.readData := sstcTimer.get.io.readHigh
+      io.readImplemented := stimecmpAccessible
+      io.readWritable := stimecmpAccessible
     }
   }
 
@@ -541,18 +623,24 @@ class MachineCsrFile(
         is(MachineCsrAddress.Medeleg.U) { medeleg := canonicalWriteData }
         is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
         is(SupervisorCsrAddress.Sstatus.U) { mstatus := sstatusWriteValue }
-        is(SupervisorCsrAddress.Sie.U) {
-          // There are still no delegated supervisor interrupt bits, so this is
-          // a writable WARL-zero alias and deliberately leaves mie unchanged.
-        }
+        is(SupervisorCsrAddress.Sie.U) { mie := sieWriteValue }
         is(SupervisorCsrAddress.Stvec.U) { stvec := canonicalWriteData }
         is(SupervisorCsrAddress.Sscratch.U) { sscratch := canonicalWriteData }
         is(SupervisorCsrAddress.Sepc.U) { sepc := canonicalWriteData }
         is(SupervisorCsrAddress.Scause.U) { scause := canonicalWriteData }
         is(SupervisorCsrAddress.Stval.U) { stval := canonicalWriteData }
         is(SupervisorCsrAddress.Sip.U) {
-          // All currently implemented pending bits are hardware-driven.
+          // Sstc STIP and all other implemented pending bits are hardware-driven.
         }
+      }
+    }
+
+    if (isa.hasSstc) {
+      when(io.writeAddr === Rv32SstcCsrAddress.Mcounteren.U) {
+        mcounteren.get := canonicalWriteData
+      }
+      when(io.writeAddr === Rv32SstcCsrAddress.Menvcfgh.U) {
+        menvcfgh.get := canonicalWriteData
       }
     }
   }
