@@ -78,8 +78,7 @@ class MachineInterruptPlatform(
   uart.io.wdata := io.wdata
   uart.io.wmask := io.wmask
 
-  val sources = WireDefault(0.U(sourceCount.W))
-  sources(uartSourceId - 1) := uart.io.interrupt
+  val sources = (uart.io.interrupt.asUInt << (uartSourceId - 1)).pad(sourceCount)
   plic.io.sources := sources
 
   val selected = plicSelected || uartSelected
