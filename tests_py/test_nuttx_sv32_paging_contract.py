@@ -54,6 +54,19 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_n5c_handoff_enables_required_sstc_firmware_gates(self):
+        text = (ROOT / "Makefile.nuttx-sv32-probe").read_text()
+        for required in (
+            "csrw mideleg, t0",
+            "csrw mcounteren, t0",
+            "csrw 0x31a, t0",
+            "li t0, 0x20",
+            "li t0, 0x2",
+            "li t0, 0x80000000",
+            "STIP delegated, TM/STCE enabled",
+        ):
+            self.assertIn(required, text)
+
     def test_real_n5b_arch_string_parses_as_rv32ima_without_cfdv(self):
         arch = "rv32i2p1_m2p0_a2p1_zicsr2p0_zifencei2p0_zmmul1p0"
         xlen, extensions = _auditor.parse_arch(arch)
