@@ -9,7 +9,6 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
 
   val io = IO(new Bundle {
     val requestValid = Input(Bool())
-    val flush = Input(Bool())
     val virtualAddress = Input(UInt(32.W))
     val privilege = Input(UInt(2.W))
     val write = Input(Bool())
@@ -48,7 +47,7 @@ class Sv32DataPathAdapter(val paddrBits: Int = 34) extends Module {
   val translation = Module(new Sv32TranslationUnit)
   translation.io.requestValid := io.requestValid
   translation.io.kill := false.B
-  translation.io.flush := io.flush
+  translation.io.flush := false.B
   translation.io.virtualAddress := io.virtualAddress
   translation.io.privilege := io.privilege
   translation.io.write := io.write
