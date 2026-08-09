@@ -34,16 +34,17 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
             "Verify exact BusyBox Linux runtime payload",
             "Run real Linux BusyBox multiprocess pipeline over ttyS0",
             "printf 'PIPE_TOKEN\\n' | /bin/sh -c",
-            'read x; [ "$$x" = PIPE_TOKEN ]',
+            'read x; [ "$x" = PIPE_TOKEN ]',
             'printf "L32 BUSYBOX PIPE CHILD %s\\n" OK',
             "printf 'L32 BUSYBOX PIPE PARENT %s\\n' OK",
             'MILESTONE="L32 BUSYBOX PIPE PARENT OK"',
             "MIN_INTERRUPTS=1",
             "MIN_SEIP=1",
             'UART_TRIGGER="L32 BUSYBOX SHELL READY"',
-            'UART_COMMAND="$L32_BUSYBOX_PIPE_COMMAND"',
-            "grep -qx 'L32 BUSYBOX PIPE CHILD OK'",
-            "grep -qx 'L32 BUSYBOX PIPE PARENT OK'",
+            'printf \'%s\\n\' "$L32_BUSYBOX_PIPE_COMMAND" > "$command_file"',
+            'UART_COMMAND_FILE="$command_file"',
+            "grep -Fxq 'L32 BUSYBOX PIPE CHILD OK'",
+            "grep -Fxq 'L32 BUSYBOX PIPE PARENT OK'",
             "grep -q '^L32_UART_INPUT_COMPLETE '",
             "grep -q '^L32_UART_RX_INTERRUPT '",
             "grep -q '^L32_UART_INPUT_SEIP '",
@@ -57,15 +58,22 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         command = command_match.group(1)
         self.assertNotIn("L32 BUSYBOX PIPE CHILD OK", command)
         self.assertNotIn("L32 BUSYBOX PIPE PARENT OK", command)
-        self.assertIn("$$x", command)
+        self.assertIn("$x", command)
+        self.assertNotIn("$$x", command)
 
         makefile = MAKEFILE.read_text()
         for required in (
+            "UART_COMMAND_FILE ?=",
+            "export AETHERCORE_UART_COMMAND := $(UART_COMMAND)",
+            'uart_command="$${AETHERCORE_UART_COMMAND-}"',
+            'uart_command="$$(cat "$(UART_COMMAND_FILE)")"',
+            '"$$uart_command"',
             "L32_UART_INPUT_COMPLETE",
             "L32_UART_RX_INTERRUPT",
             "L32_UART_INPUT_SEIP",
         ):
             self.assertIn(required, makefile)
+        self.assertNotIn('"$(UART_COMMAND)" 2>&1', makefile)
 
     def test_workflow_rebuilds_then_hash_qualifies_before_runtime(self):
         text = WORKFLOW.read_text()
