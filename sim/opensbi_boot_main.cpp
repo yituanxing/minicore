@@ -2,6 +2,7 @@
 #include "verilated.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -16,6 +17,11 @@ constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
 constexpr std::uint64_t kSupervisorExternalInterruptCause = 0x80000009ULL;
+
+bool endsWith(const std::string& text, const std::string& suffix) {
+  return !suffix.empty() && text.size() >= suffix.size() &&
+      text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 class Memory {
  public:
@@ -33,12 +39,12 @@ class Memory {
     return address >= kRamBase && address - kRamBase <= bytes_.size() - size;
   }
 
-  std::uint32_t read32(std::uint64_t address) const {
-    const auto offset = checkedOffset(address, 4);
-    std::uint32_t value = 0;
-    for (unsigned i = 0; i < 4; ++i)
-      value |= std::uint32_t(bytes_[offset + i]) << (8 * i);
-    return value;
+  std::uint32_t read32Unchecked(std::uint64_t address) const {
+    const auto offset = static_cast<std::size_t>(address - kRamBase);
+    return std::uint32_t(bytes_[offset]) |
+        (std::uint32_t(bytes_[offset + 1]) << 8) |
+        (std::uint32_t(bytes_[offset + 2]) << 16) |
+        (std::uint32_t(bytes_[offset + 3]) << 24);
   }
 
   void write32Masked(std::uint64_t address, std::uint32_t data, std::uint8_t mask) {
@@ -62,29 +68,29 @@ void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& memory) {
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const bool ifault = !memory.contains(iaddr, 4);
   top.io_imemFault = ifault;
-  top.io_imemInst = ifault ? kEbreak : memory.read32(iaddr);
+  top.io_imemInst = ifault ? kEbreak : memory.read32Unchecked(iaddr);
 
   const bool dvalid = top.io_memValid;
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
   const bool dfault = dvalid && !memory.contains(daddr, 4);
   top.io_memReady = true;
   top.io_memFault = dfault;
-  top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read32(daddr);
+  top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read32Unchecked(daddr);
 
   const bool ptwValid = top.io_ptwValid;
   const auto ptwAddr = static_cast<std::uint64_t>(top.io_ptwAddr);
   const bool ptwFault = ptwValid && !memory.contains(ptwAddr, 4);
   top.io_ptwReady = true;
   top.io_ptwFault = ptwFault;
-  top.io_ptwRdata = (!ptwValid || ptwFault) ? 0 : memory.read32(ptwAddr);
+  top.io_ptwRdata = (!ptwValid || ptwFault) ? 0 : memory.read32Unchecked(ptwAddr);
 }
 }  // namespace
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 8)
+    if (argc < 2 || argc > 10)
       throw std::runtime_error(
-          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND]");
+          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
@@ -96,6 +102,10 @@ int main(int argc, char** argv) {
         argc >= 6 ? std::stoull(argv[5], nullptr, 0) : 0ULL;
     const std::string uartTrigger = argc >= 7 ? argv[6] : "";
     const std::string uartCommand = argc >= 8 ? argv[7] : "";
+    const std::uint64_t postInputMaxCycles =
+        argc >= 9 ? std::stoull(argv[8], nullptr, 0) : 0ULL;
+    const std::uint64_t progressIntervalCycles =
+        argc >= 10 ? std::stoull(argv[9], nullptr, 0) : 0ULL;
     std::string uartInput;
     if (!uartCommand.empty()) {
       uartInput = uartCommand;
@@ -124,6 +134,11 @@ int main(int argc, char** argv) {
     std::uint64_t seipAtInputStart = 0;
     bool sawRxInterrupt = false;
     bool sawPostInputSeip = false;
+    bool postInputDeadlineArmed = false;
+    std::uint64_t inputCompleteCycle = 0;
+    std::uint64_t postInputDeadline = 0;
+    std::uint64_t nextProgressCycle = progressIntervalCycles;
+    const auto hostStart = std::chrono::steady_clock::now();
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
@@ -167,12 +182,31 @@ int main(int argc, char** argv) {
       if (cycles == 3) top.reset = 0;
       if (top.reset) continue;
 
+      if (progressIntervalCycles != 0 && cycles >= nextProgressCycle) {
+        const auto elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - hostStart).count();
+        const auto cyclesPerSecond = elapsed > 0.0 ? cycles / elapsed : 0.0;
+        std::cerr << "\nL32_SIM_PROGRESS cycles=" << cycles
+                  << " commits=" << commits
+                  << " host-seconds=" << elapsed
+                  << " cycles-per-second=" << cyclesPerSecond
+                  << " input=" << inputIndex << '/' << uartInput.size()
+                  << " milestone=" << (sawMilestone ? 1 : 0) << "\n";
+        nextProgressCycle += progressIntervalCycles;
+      }
+
       if (rxAccepted) {
         ++inputIndex;
         if (inputIndex == uartInput.size()) {
+          inputCompleteCycle = cycles;
+          if (postInputMaxCycles != 0) {
+            postInputDeadlineArmed = true;
+            postInputDeadline = cycles + postInputMaxCycles;
+          }
           std::cerr << "\nL32_UART_INPUT_COMPLETE cycles=" << cycles
                     << " commits=" << commits
-                    << " bytes=" << inputIndex << "\n";
+                    << " bytes=" << inputIndex
+                    << " post-input-budget=" << postInputMaxCycles << "\n";
         }
       }
 
@@ -186,14 +220,15 @@ int main(int argc, char** argv) {
       if (top.io_uartValid) {
         const char byte = static_cast<char>(top.io_uartByte);
         uart.push_back(byte);
-        std::cout << byte << std::flush;
-        if (!sawOpenSbiBanner && uart.find("OpenSBI v1.6") != std::string::npos) {
+        std::cout.put(byte);
+        if (byte == '\n') std::cout.flush();
+        if (!sawOpenSbiBanner && endsWith(uart, "OpenSBI v1.6")) {
           sawOpenSbiBanner = true;
           std::cerr << "\nL32_OPENSBI_BANNER cycles=" << cycles
                     << " commits=" << commits << "\n";
         }
         if (!inputStarted && !uartInput.empty() && !uartTrigger.empty() &&
-            uart.find(uartTrigger) != std::string::npos) {
+            endsWith(uart, uartTrigger)) {
           inputStarted = true;
           seipAtInputStart = supervisorExternalInterrupts;
           std::cerr << "\nL32_UART_INPUT_START cycles=" << cycles
@@ -203,7 +238,7 @@ int main(int argc, char** argv) {
                     << " trigger=" << uartTrigger
                     << " command=" << uartCommand << "\n";
         }
-        if (!sawMilestone && uart.find(milestone) != std::string::npos) {
+        if (!sawMilestone && endsWith(uart, milestone)) {
           sawMilestone = true;
           std::cerr << "\nL32_UART_MILESTONE cycles=" << cycles
                     << " commits=" << commits
@@ -271,6 +306,7 @@ int main(int argc, char** argv) {
           (inputStarted && inputIndex == uartInput.size() && sawRxInterrupt && sawPostInputSeip);
       if (sawMilestone && interrupts >= minInterrupts &&
           supervisorExternalInterrupts >= minSeip && inputSatisfied) {
+        std::cout.flush();
         if (milestone == kDefaultMilestone) {
           std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
                     << " commits=" << commits
@@ -293,8 +329,23 @@ int main(int argc, char** argv) {
                   << " marker=" << milestone << "\n";
         return sawOpenSbiBanner ? 0 : 5;
       }
+
+      if (postInputDeadlineArmed && cycles >= postInputDeadline) {
+        std::cout.flush();
+        std::cerr << "\nL32_POST_INPUT_TIMEOUT cycles=" << cycles
+                  << " commits=" << commits
+                  << " input-complete-cycle=" << inputCompleteCycle
+                  << " post-input-cycles=" << (cycles - inputCompleteCycle)
+                  << " budget=" << postInputMaxCycles
+                  << " milestone=" << (sawMilestone ? 1 : 0)
+                  << " interrupts=" << interrupts
+                  << " seip=" << supervisorExternalInterrupts
+                  << " marker=" << milestone << "\n";
+        return 12;
+      }
     }
 
+    std::cout.flush();
     std::cerr << "\nL32_OPENSBI_TIMEOUT cycles=" << cycles
               << " commits=" << commits
               << " uart-bytes=" << uart.size()
