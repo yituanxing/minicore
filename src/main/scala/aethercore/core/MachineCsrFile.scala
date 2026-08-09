@@ -54,6 +54,7 @@ object MachineCsrBit {
   val SstatusMxr: Int = 19
   val SupervisorTimerInterrupt: Int = Rv32SstcBit.SupervisorTimerInterrupt
   val MachineTimerInterrupt: Int = 7
+  val SupervisorExternalInterrupt: Int = 9
   val MachineExternalInterrupt: Int = 11
 }
 
@@ -95,10 +96,13 @@ object MachineCsrWarl {
     val allBits = (BigInt(1) << xlen) - 1
     val supervisorTimerMask =
       if (isa.hasSstc) BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt else BigInt(0)
+    val supervisorExternalMask =
+      if (isa.hasS) BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt else BigInt(0)
+    val supervisorInterruptMask = supervisorTimerMask | supervisorExternalMask
     val timeCounterMask =
       if (isa.hasSstc) BigInt(1) << Rv32SstcBit.McounterenTime else BigInt(0)
     val machineInterruptMask =
-      supervisorTimerMask |
+      supervisorInterruptMask |
         (BigInt(1) << MachineCsrBit.MachineTimerInterrupt) |
         (BigInt(1) << MachineCsrBit.MachineExternalInterrupt)
     val mtvecMask = allBits & ~BigInt(3)
@@ -143,7 +147,7 @@ object MachineCsrWarl {
         result := data & delegableExceptionMask(isa).U(xlen.W)
       }
       is(MachineCsrAddress.Mideleg.U) {
-        result := data & supervisorTimerMask.U(xlen.W)
+        result := data & supervisorInterruptMask.U(xlen.W)
       }
       is(MachineCsrAddress.Mie.U) { result := data & machineInterruptMask.U(xlen.W) }
       is(MachineCsrAddress.Mcounteren.U) {
@@ -158,7 +162,7 @@ object MachineCsrWarl {
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(MachineCsrAddress.Mepc.U) { result := data & epcMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sstatus.U) { result := data & sstatusMask.U(xlen.W) }
-      is(SupervisorCsrAddress.Sie.U) { result := data & supervisorTimerMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Sie.U) { result := data & supervisorInterruptMask.U(xlen.W) }
       is(SupervisorCsrAddress.Scounteren.U) { result := data & timeCounterMask.U(xlen.W) }
       is(SupervisorCsrAddress.Stvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sepc.U) { result := data & epcMask.U(xlen.W) }
@@ -181,8 +185,11 @@ object MachineCsrWarl {
 
 class MachineCsrFile(
     val isa: IsaConfig,
-    val withMachineExternalInterrupt: Boolean = false
+    val withMachineExternalInterrupt: Boolean = false,
+    val withSupervisorExternalInterrupt: Boolean = false
 ) extends Module {
+  require(!withSupervisorExternalInterrupt || isa.hasS, "supervisor external interrupt requires S-mode")
+
   private val xlen = isa.xlen
   private val allBits = (BigInt(1) << xlen) - 1
   private val sstatusSie = BigInt(1) << MachineCsrBit.SstatusSie
@@ -200,6 +207,9 @@ class MachineCsrFile(
     } else BigInt(0)
   private val supervisorTimerMask =
     if (isa.hasSstc) BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt else BigInt(0)
+  private val supervisorExternalMask =
+    if (isa.hasS) BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt else BigInt(0)
+  private val supervisorInterruptMask = supervisorTimerMask | supervisorExternalMask
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val machineExternalMask = BigInt(1) << MachineCsrBit.MachineExternalInterrupt
   private val mstatusTransitionMask = mstatusMie | mstatusMpie | mstatusMpp
@@ -251,6 +261,10 @@ class MachineCsrFile(
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val machineExternalInterrupt =
       if (withMachineExternalInterrupt) Some(Output(Bool())) else None
+    val supervisorExternalInterruptPending =
+      if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
+    val supervisorExternalInterrupt =
+      if (withSupervisorExternalInterrupt) Some(Output(Bool())) else None
 
     val trapEnter = Input(Bool())
     val trapPc = Input(UInt(xlen.W))
@@ -345,8 +359,8 @@ class MachineCsrFile(
     )
   )
   val sieWriteValue =
-    (mie & (~supervisorTimerMask & allBits).U(xlen.W)) |
-      (canonicalWriteData & supervisorTimerMask.U(xlen.W))
+    (mie & (~supervisorInterruptMask & allBits).U(xlen.W)) |
+      (canonicalWriteData & supervisorInterruptMask.U(xlen.W))
   val effectiveMie = Mux(
     ordinaryWrite && io.writeAddr === MachineCsrAddress.Mie.U,
     canonicalWriteData,
@@ -374,9 +388,12 @@ class MachineCsrFile(
 
   val rawExternalInterrupt =
     if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
+  val rawSupervisorExternalInterrupt =
+    if (withSupervisorExternalInterrupt) io.supervisorExternalInterruptPending.get else false.B
   val sstcPending = if (isa.hasSstc) sstc.get.io.pending else false.B
   val mipValue =
     Mux(sstcPending, supervisorTimerMask.U(xlen.W), 0.U(xlen.W)) |
+      Mux(rawSupervisorExternalInterrupt, supervisorExternalMask.U(xlen.W), 0.U(xlen.W)) |
       Mux(io.timerInterrupt, machineTimerMask.U(xlen.W), 0.U(xlen.W)) |
       Mux(rawExternalInterrupt, machineExternalMask.U(xlen.W), 0.U(xlen.W))
   val machineInterruptGloballyEnabled =
@@ -408,6 +425,12 @@ class MachineCsrFile(
     io.machineExternalInterrupt.get :=
       rawExternalInterrupt && effectiveMie(MachineCsrBit.MachineExternalInterrupt) &&
         machineInterruptGloballyEnabled
+  }
+  if (withSupervisorExternalInterrupt) {
+    io.supervisorExternalInterrupt.get :=
+      rawSupervisorExternalInterrupt && mideleg(MachineCsrBit.SupervisorExternalInterrupt) &&
+        effectiveMie(MachineCsrBit.SupervisorExternalInterrupt) &&
+        supervisorInterruptGloballyEnabled && privilege =/= PrivilegeMode.Machine.U
   }
   io.trapDelegatedToSupervisor := trapDelegatedToSupervisor
   io.trapVector := Mux(trapDelegatedToSupervisor, effectiveStvec, effectiveMtvec)
