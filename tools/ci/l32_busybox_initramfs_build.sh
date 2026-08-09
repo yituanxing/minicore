@@ -10,8 +10,11 @@ SOURCE_DIR="${CACHE_ROOT}/linux-${LINUX_VERSION}"
 FROZEN_BUILD_DIR="${ROOT_DIR}/build/l32-linux"
 BUSYBOX_BUILD_DIR="${ROOT_DIR}/build/l32-busybox"
 BUSYBOX_ELF="${BUSYBOX_BUILD_DIR}/busybox-src/busybox"
+PROBE_BUILD_DIR="${ROOT_DIR}/build/l32-runtime-probe"
+PROBE_ELF="${PROBE_BUILD_DIR}/l32-runtime-probe"
 BUILD_DIR="${ROOT_DIR}/build/l32-linux-busybox"
 OBJ_DIR="${BUILD_DIR}/obj"
+OBJ_MARKER="${OBJ_DIR}/.aethercore-object-inputs"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 ROOTFS_DIR="${BUILD_DIR}/rootfs"
 INIT_SCRIPT="${ROOTFS_DIR}/init"
@@ -43,6 +46,18 @@ recorded_busybox_sha="$(sed -n 's/^busybox_sha256=//p' "${BUSYBOX_BUILD_DIR}/res
   exit 23
 }
 
+grep -qx 'L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS' "${PROBE_BUILD_DIR}/result.txt" || {
+  echo "ERROR: qualified L32 runtime probe is required" >&2
+  exit 23
+}
+[[ -s "${PROBE_ELF}" ]] || { echo "ERROR: qualified runtime probe ELF is missing" >&2; exit 23; }
+actual_probe_sha="$(sha256sum "${PROBE_ELF}" | awk '{print $1}')"
+recorded_probe_sha="$(sed -n 's/^probe_sha256=//p' "${PROBE_BUILD_DIR}/result.txt" | head -n 1)"
+[[ -n "${recorded_probe_sha}" && "${actual_probe_sha}" == "${recorded_probe_sha}" ]] || {
+  echo "ERROR: qualified runtime probe ELF hash drifted" >&2
+  exit 23
+}
+
 rm -rf "${ROOTFS_DIR}"
 mkdir -p "${ROOTFS_DIR}"
 cat > "${INIT_SCRIPT}" <<'EOF'
@@ -54,8 +69,8 @@ EOF
 chmod 0755 "${INIT_SCRIPT}"
 
 # gen_init_cpio avoids privileged mknod and keeps the image deterministic.
-# /init is interpreted by the just-built BusyBox ash, then execs an interactive
-# /bin/sh so the next checkpoint can inject real UART commands into Linux ttyS0.
+# Keep the shell minimal and put semantic checks in a separately-built static
+# probe so Linux/CPU validation is not coupled to BusyBox shell features.
 cat > "${INIT_SPEC}" <<EOF
 dir /bin 0755 0 0
 dir /dev 0755 0 0
@@ -64,6 +79,7 @@ dir /sys 0555 0 0
 dir /tmp 1777 0 0
 nod /dev/console 0600 0 0 c 5 1
 file /bin/busybox ${BUSYBOX_ELF} 0755 0 0
+file /bin/l32-runtime-probe ${PROBE_ELF} 0755 0 0
 slink /bin/sh busybox 0777 0 0
 slink /bin/uname busybox 0777 0 0
 slink /bin/echo busybox 0777 0 0
@@ -71,8 +87,18 @@ slink /bin/printf busybox 0777 0 0
 file /init ${INIT_SCRIPT} 0755 0 0
 EOF
 
-rm -rf "${OBJ_DIR}"
+# Preserve this variant's Kbuild object tree across test/probe changes. Kernel
+# dependency tracking will rebuild the initramfs-bearing objects and final Image;
+# discard the tree only when the immutable kernel/toolchain contract changes.
+obj_inputs="${LINUX_SHA256}:${L32_TOOLCHAIN_VERSION}:${L32_CROSS_COMPILE_PREFIX}"
+if [[ -d "${OBJ_DIR}" ]] && {
+  [[ ! -f "${OBJ_MARKER}" ]] || [[ "$(cat "${OBJ_MARKER}" 2>/dev/null)" != "${obj_inputs}" ]];
+}; then
+  rm -rf "${OBJ_DIR}"
+fi
 mkdir -p "${OBJ_DIR}"
+printf '%s\n' "${obj_inputs}" > "${OBJ_MARKER}"
+
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
   "${LINUX_RV32_DEFCONFIG}" 2>&1 | tee "${BUILD_DIR}/config.log"
@@ -114,7 +140,7 @@ cp "${OBJ_DIR}/.config" "${EVIDENCE_DIR}/resolved.config"
 cp "${INIT_SPEC}" "${EVIDENCE_DIR}/initramfs.list"
 cp "${INIT_SCRIPT}" "${EVIDENCE_DIR}/init"
 sha256sum \
-  "${BUSYBOX_ELF}" "${INIT_SCRIPT}" "${INIT_SPEC}" \
+  "${BUSYBOX_ELF}" "${PROBE_ELF}" "${INIT_SCRIPT}" "${INIT_SPEC}" \
   "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
 
@@ -124,6 +150,8 @@ sha256sum \
   echo "busybox_version=${BUSYBOX_VERSION}"
   echo "busybox=${BUSYBOX_ELF}"
   echo "busybox_sha256=${actual_busybox_sha}"
+  echo "runtime_probe=${PROBE_ELF}"
+  echo "runtime_probe_sha256=${actual_probe_sha}"
   echo "init=${INIT_SCRIPT}"
   echo "initramfs_spec=${INIT_SPEC}"
   echo "vmlinux=${VMLINUX}"
