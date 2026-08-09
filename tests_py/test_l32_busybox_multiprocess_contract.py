@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 FREEZE = ROOT / "tools/ci/l32_busybox_runtime_freeze.sh"
 MAKEFILE = ROOT / "Makefile.l32-linux-boot"
+RUNNER = ROOT / "sim/opensbi_boot_main.cpp"
 
 
 class L32BusyBoxMultiprocessContract(unittest.TestCase):
@@ -67,16 +68,36 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         makefile = MAKEFILE.read_text()
         for required in (
             "UART_COMMAND_FILE ?=",
+            "POST_INPUT_MAX_CYCLES ?= 0",
+            "PROGRESS_INTERVAL_CYCLES ?= 25000000",
             "export AETHERCORE_UART_COMMAND := $(UART_COMMAND)",
             'uart_command="$${AETHERCORE_UART_COMMAND-}"',
             'uart_command="$$(cat "$(UART_COMMAND_FILE)")"',
-            '"$$uart_command"',
+            '"$$uart_command" "$(POST_INPUT_MAX_CYCLES)" "$(PROGRESS_INTERVAL_CYCLES)"',
             "L32_UART_INPUT_COMPLETE",
             "L32_UART_RX_INTERRUPT",
             "L32_UART_INPUT_SEIP",
         ):
             self.assertIn(required, makefile)
         self.assertNotIn('"$(UART_COMMAND)" 2>&1', makefile)
+
+    def test_runtime_harness_has_bounded_post_input_fast_fail_and_hot_path_guards(self):
+        text = RUNNER.read_text()
+        for required in (
+            "POST_INPUT_MAX_CYCLES",
+            "PROGRESS_INTERVAL_CYCLES",
+            "L32_SIM_PROGRESS",
+            "L32_POST_INPUT_TIMEOUT",
+            "read32Unchecked",
+            "endsWith(uart, milestone)",
+            "std::cout.put(byte)",
+            "if (byte == '\\n') std::cout.flush()",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("std::cout << byte << std::flush", text)
+        self.assertNotIn("uart.find(milestone)", text)
+        self.assertNotIn("uart.find(uartTrigger)", text)
+        self.assertNotIn('uart.find("OpenSBI v1.6")', text)
 
     def test_workflow_rebuilds_then_hash_qualifies_before_runtime(self):
         text = WORKFLOW.read_text()
