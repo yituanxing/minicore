@@ -68,8 +68,10 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         makefile = MAKEFILE.read_text()
         for required in (
             "VERILATOR_MODEL_OPT ?= -O3",
+            "VERILATOR_THREADS ?= 1",
+            "VERILATOR_THREAD_FLAGS := $(if $(filter 1,$(VERILATOR_THREADS)),,--threads $(VERILATOR_THREADS))",
             "SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native",
-            "$(VERILATOR) $(VERILATOR_MODEL_OPT) --cc --exe --build",
+            "$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_THREAD_FLAGS) --cc --exe --build",
             '-CFLAGS "$(SIM_CXXFLAGS)"',
             "UART_COMMAND_FILE ?=",
             "POST_INPUT_MAX_CYCLES ?= 0",
