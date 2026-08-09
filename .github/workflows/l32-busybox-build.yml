@@ -1,4 +1,4 @@
-name: L32 BusyBox Shell
+name: L32 BusyBox Shell + Multiprocess
 
 on:
   pull_request:
@@ -7,7 +7,9 @@ on:
       - tools/ci/l32_busybox_build.sh
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
+      - tools/ci/l32_busybox_runtime_freeze.sh
       - tests_py/test_l32_busybox_contract.py
+      - tests_py/test_l32_busybox_multiprocess_contract.py
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
@@ -25,7 +27,7 @@ concurrency:
 
 jobs:
   busybox-shell:
-    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell
+    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell/process
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
 
@@ -42,7 +44,10 @@ jobs:
           bash -n tools/ci/l32_busybox_build.sh
           bash -n tools/ci/l32_busybox_initramfs_build.sh
           bash -n tools/ci/l32_busybox_payload_build.sh
-          python3 -m unittest tests_py.test_l32_busybox_contract -v
+          bash -n tools/ci/l32_busybox_runtime_freeze.sh
+          python3 -m unittest \
+            tests_py.test_l32_busybox_contract \
+            tests_py.test_l32_busybox_multiprocess_contract -v
 
       - name: Build soft-float musl and static BusyBox
         shell: bash
@@ -169,27 +174,42 @@ jobs:
           chmod +x tools/ci/l32_busybox_payload_build.sh
           tools/ci/l32_busybox_payload_build.sh
 
+      - name: Verify exact BusyBox Linux runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_runtime_freeze.sh
+          tools/ci/l32_busybox_runtime_freeze.sh
+
       - name: Provision fixed Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run real Linux BusyBox ash command over ttyS0
+      - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
         shell: bash
         run: |
           set -euo pipefail
+          uart_command="$(cat <<'EOF'
+printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && echo L32 BUSYBOX PIPE CHILD OK' && echo L32 BUSYBOX PIPE PARENT OK
+EOF
+          )"
           make -f Makefile.l32-linux-boot \
-            BUILD_DIR=build/l32-busybox-shell-probe \
+            BUILD_DIR=build/l32-busybox-multiprocess-probe \
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
-            MILESTONE="L32 BUSYBOX RX COMMAND OK" \
+            MILESTONE="L32 BUSYBOX PIPE PARENT OK" \
             MIN_INTERRUPTS=1 \
             MIN_SEIP=1 \
             UART_TRIGGER="L32 BUSYBOX SHELL READY" \
-            UART_COMMAND="printf 'L32 BUSYBOX RX COMMAND %s\n' OK" \
+            UART_COMMAND="$uart_command" \
             run-local
+          grep -q 'L32 BUSYBOX PIPE CHILD OK' \
+            build/l32-busybox-multiprocess-probe/logs/boot-probe.log
+          grep -q 'L32 BUSYBOX PIPE PARENT OK' \
+            build/l32-busybox-multiprocess-probe/logs/boot-probe.log
 
-      - name: Upload BusyBox shell evidence
+      - name: Upload BusyBox shell/process evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -209,7 +229,8 @@ jobs:
             build/l32-linux-busybox/linux-build.log
             build/l32-linux-busybox/evidence/
             build/l32-busybox-shell-boot/result.txt
+            build/l32-busybox-shell-boot/runtime-freeze.txt
             build/l32-busybox-shell-boot/opensbi-busybox-build.log
             build/l32-busybox-shell-boot/evidence/
-            build/l32-busybox-shell-probe/firmware.sha256
-            build/l32-busybox-shell-probe/logs/*.log
+            build/l32-busybox-multiprocess-probe/firmware.sha256
+            build/l32-busybox-multiprocess-probe/logs/*.log
