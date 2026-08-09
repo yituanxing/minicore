@@ -47,6 +47,19 @@ class L32MinimalInitramfsContractTest(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
+    def test_dtb_preserves_supervisor_plic_context_hole_and_uart_irq(self):
+        text = (ROOT / "tools/ci/make_l32_dtb.py").read_text()
+        for required in (
+            'b.prop("reg", cells(0, 0x0C000000, 0, 0x00400000))',
+            'b.prop("riscv,ndev", cells(52))',
+            "cells(CPU_INTC_PHANDLE, 0xFFFFFFFF, CPU_INTC_PHANDLE, 9)",
+            'b.prop("interrupt-parent", cells(PLIC_PHANDLE))',
+            'b.prop("interrupts", cells(10))',
+            '"plic_m_context=absent"',
+            '"plic_s_context=1"',
+        ):
+            self.assertIn(required, text)
+
     def test_userspace_stage_does_not_modify_rtl(self):
         for path in (
             ROOT / "tools/ci/l32_minimal_initramfs_build.sh",
