@@ -5,6 +5,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "software/l32_busybox/manifest.env"
 FIRMWARE_MANIFEST = ROOT / "software/l32/manifest.env"
 BUILD = ROOT / "tools/ci/l32_busybox_build.sh"
+INITRAMFS_BUILD = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
+PAYLOAD_BUILD = ROOT / "tools/ci/l32_busybox_payload_build.sh"
+WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 
 
 class L32BusyBoxContract(unittest.TestCase):
@@ -65,6 +68,59 @@ class L32BusyBoxContract(unittest.TestCase):
         self.assertIn("statically linked", text)
         self.assertIn("BusyBox retained unsupported F/D/C extension", text)
         self.assertIn("L32_BUSYBOX_BUILD_RESULT: status=PASS", text)
+
+    def test_busybox_initramfs_executes_real_ash_without_replacing_frozen_linux(self):
+        text = INITRAMFS_BUILD.read_text()
+        for required in (
+            'BUSYBOX_ELF="${BUSYBOX_BUILD_DIR}/busybox-src/busybox"',
+            "L32_BUSYBOX_BUILD_RESULT: status=PASS",
+            'FROZEN_BUILD_DIR="${ROOT_DIR}/build/l32-linux"',
+            'BUILD_DIR="${ROOT_DIR}/build/l32-linux-busybox"',
+            "nod /dev/console 0600 0 0 c 5 1",
+            "file /bin/busybox",
+            "slink /bin/sh busybox",
+            "slink /bin/uname busybox",
+            "#!/bin/sh",
+            '/bin/uname -a',
+            'echo "L32 BUSYBOX SHELL READY"',
+            "exec /bin/sh -i",
+            "BLK_DEV_INITRD",
+            "INITRAMFS_SOURCE",
+            "L32_BUSYBOX_INITRAMFS_BUILD_RESULT: status=PASS",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn('rm -rf "${FROZEN_BUILD_DIR}"', text)
+        self.assertNotIn("src/main/scala", text)
+
+    def test_busybox_payload_keeps_linux_platform_and_rdinit_boundary(self):
+        text = PAYLOAD_BUILD.read_text()
+        for required in (
+            'LINUX_BUILD_DIR="${ROOT_DIR}/build/l32-linux-busybox"',
+            "L32_BUSYBOX_INITRAMFS_BUILD_RESULT: status=PASS",
+            "rdinit=/init",
+            'FW_PAYLOAD_OFFSET="0x00400000"',
+            'FW_PAYLOAD_FDT_ADDR="0x87f00000"',
+            "L32_BUSYBOX_SHELL_PAYLOAD_BUILD_RESULT: status=PASS",
+            "next_addr=0x80400000",
+            "next_mode=S-mode",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("src/main/scala", text)
+
+    def test_workflow_runs_busybox_through_real_linux_shell_startup(self):
+        text = WORKFLOW.read_text()
+        for required in (
+            "tools/ci/l32_busybox_initramfs_build.sh",
+            "tools/ci/l32_busybox_payload_build.sh",
+            "Provision pinned Bootlin RV32 Linux GCC",
+            "Build Linux Image with static BusyBox ash initramfs",
+            "Build OpenSBI with BusyBox Linux payload",
+            "Run real Linux BusyBox ash startup",
+            'MILESTONE="L32 BUSYBOX SHELL READY"',
+            "MIN_INTERRUPTS=1",
+            "MIN_SEIP=1",
+        ):
+            self.assertIn(required, text)
 
 
 if __name__ == "__main__":
