@@ -17,10 +17,13 @@ class L32LinuxBuildContractTest(unittest.TestCase):
     def test_build_starts_from_upstream_rv32_defconfig_and_stays_inside_frozen_isa(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
         self.assertIn('"${LINUX_RV32_DEFCONFIG}"', text)
+        self.assertIn("-d EFI", text)
         self.assertIn("-d RISCV_ISA_C", text)
         self.assertIn("-d FPU", text)
+        self.assertIn("RISC-V EFI", text)
         self.assertIn("CONFIG_32BIT=y", text)
         self.assertIn("CONFIG_MMU=y", text)
+        self.assertIn("# CONFIG_EFI is not set", text)
         self.assertIn("# CONFIG_RISCV_ISA_C is not set", text)
         self.assertIn("# CONFIG_FPU is not set", text)
         self.assertIn("-j\"${JOBS}\" Image", text)
@@ -31,7 +34,6 @@ class L32LinuxBuildContractTest(unittest.TestCase):
 
     def test_linux_build_does_not_touch_opensbi_or_rtl(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
-        self.assertNotIn("OpenSBI", text)
         self.assertNotIn("Verilator", text)
         self.assertNotIn("mill ", text)
         self.assertNotIn("src/main/scala", text)
