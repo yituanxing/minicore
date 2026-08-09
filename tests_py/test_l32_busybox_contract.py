@@ -47,10 +47,20 @@ class L32BusyBoxContract(unittest.TestCase):
         self.assertIn("soft-float ABI", text)
         self.assertNotIn("--sysroot=/", text)
 
-    def test_busybox_is_static_ash_and_rejects_fdc(self):
+    def test_busybox_is_minimal_static_ash_and_rejects_fdc(self):
         text = BUILD.read_text()
-        self.assertIn("CONFIG_STATIC=y", text)
-        self.assertIn("CONFIG_ASH=y", text)
+        self.assertIn("make ARCH=riscv allnoconfig", text)
+        self.assertNotIn("make ARCH=riscv defconfig", text)
+        for symbol in (
+            "CONFIG_STATIC",
+            "CONFIG_ASH",
+            "CONFIG_SH_IS_ASH",
+            "CONFIG_ECHO",
+            "CONFIG_PRINTF",
+            "CONFIG_TEST",
+        ):
+            self.assertIn(f"'{symbol}'", text)
+        self.assertIn("minimal shell config unexpectedly enabled kbd_mode", text)
         self.assertIn("statically linked", text)
         self.assertIn("BusyBox retained unsupported F/D/C extension", text)
         self.assertIn("L32_BUSYBOX_BUILD_RESULT: status=PASS", text)
