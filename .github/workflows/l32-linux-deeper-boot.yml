@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   linux-deeper-boot:
-    name: Linux 6.6.143 deeper generic initialization
+    name: Linux 6.6.143 IRQ initialization
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 50
 
@@ -83,14 +83,14 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Drive Linux through memory initialization
+      - name: Drive Linux into IRQ initialization
         shell: bash
         run: |
           set -euo pipefail
           make -f Makefile.l32-linux-boot \
             JOBS="$(nproc)" \
-            MAX_CYCLES=300000000 \
-            MILESTONE="Memory:" \
+            MAX_CYCLES=600000000 \
+            MILESTONE="NR_IRQS:" \
             run-local
 
       - name: Upload deeper-boot evidence
