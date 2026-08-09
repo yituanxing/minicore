@@ -87,7 +87,7 @@ class DtbBuilder:
         return header + reserve_map + bytes(self.struct_block) + bytes(self.strings)
 
 
-def build_l32_dtb() -> bytes:
+def build_l32_dtb(bootargs: str | None = None) -> bytes:
     b = DtbBuilder()
     b.begin_node("")
     b.prop("#address-cells", cells(2))
@@ -97,6 +97,8 @@ def build_l32_dtb() -> bytes:
 
     b.begin_node("chosen")
     b.prop("stdout-path", string("/soc/serial@10000000"))
+    if bootargs:
+        b.prop("bootargs", string(bootargs))
     b.end_node()
 
     b.begin_node("cpus")
@@ -159,29 +161,31 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--summary", type=Path)
+    parser.add_argument("--bootargs")
     args = parser.parse_args()
 
-    blob = build_l32_dtb()
+    blob = build_l32_dtb(args.bootargs)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(blob)
     digest = hashlib.sha256(blob).hexdigest()
 
-    summary = "\n".join(
-        (
-            "L32_DTB_RESULT: status=PASS",
-            f"bytes={len(blob)}",
-            f"sha256={digest}",
-            "hart=0",
-            "isa=rv32ima_zicsr_zifencei_sstc",
-            "mmu=sv32",
-            "ram=0x80000000+0x10000000",
-            "uart=ns16550a@0x10000000",
-            "mtime=0x0200bff8",
-            "mtimecmp=0x02004000",
-            "mtime_irq=7",
-            "timebase_frequency=10000000",
-        )
-    ) + "\n"
+    lines = [
+        "L32_DTB_RESULT: status=PASS",
+        f"bytes={len(blob)}",
+        f"sha256={digest}",
+        "hart=0",
+        "isa=rv32ima_zicsr_zifencei_sstc",
+        "mmu=sv32",
+        "ram=0x80000000+0x10000000",
+        "uart=ns16550a@0x10000000",
+        "mtime=0x0200bff8",
+        "mtimecmp=0x02004000",
+        "mtime_irq=7",
+        "timebase_frequency=10000000",
+    ]
+    if args.bootargs:
+        lines.append(f"bootargs={args.bootargs}")
+    summary = "\n".join(lines) + "\n"
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         args.summary.write_text(summary)

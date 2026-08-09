@@ -1,0 +1,113 @@
+name: L32 Linux Early Boot
+
+on:
+  pull_request:
+    paths:
+      - software/l32/**
+      - tools/ci/l32_linux_build.sh
+      - tools/ci/l32_linux_cache_key.sh
+      - tools/ci/l32_linux_payload_build.sh
+      - tools/ci/make_l32_dtb.py
+      - tools/ensure_l32_riscv32_linux_gcc.sh
+      - tests_py/test_l32_linux_boot_contract.py
+      - src/main/scala/aethercore/ElaborateOpenSbi.scala
+      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
+      - src/main/scala/aethercore/config/CoreConfig.scala
+      - src/main/scala/aethercore/core/**
+      - sim/opensbi_boot_main.cpp
+      - Makefile.l32-linux-boot
+      - .github/workflows/l32-linux-boot.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-linux-boot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-early-boot:
+    name: Pinned Linux 6.6.143 first real execution
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate L32 Linux boot contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_linux_build.sh
+          bash -n tools/ci/l32_linux_cache_key.sh
+          bash -n tools/ci/l32_linux_payload_build.sh
+          bash -n tools/ensure_l32_riscv32_linux_gcc.sh
+          python3 -m py_compile tools/ci/make_l32_dtb.py
+          python3 -m unittest \
+            tests_py.test_l32_opensbi_contract \
+            tests_py.test_l32_opensbi_exec_contract \
+            tests_py.test_l32_linux_build_contract \
+            tests_py.test_l32_linux_boot_contract -v
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Reuse or rebuild frozen Linux Image
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh tools/ci/l32_linux_build.sh
+          if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            echo 'L32 Linux cache miss: rebuilding the exact frozen software image.'
+            tools/ci/l32_linux_build.sh
+            tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+          fi
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+          sha256sum build/l32-linux/obj/arch/riscv/boot/Image
+
+      - name: Build OpenSBI with frozen Linux payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_payload_build.sh
+          tools/ci/l32_linux_payload_build.sh
+
+      - name: Provision fixed Verilator for L32 execution
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run real Linux early-boot probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            JOBS="$(nproc)" MAX_CYCLES=50000000 run-local
+
+      - name: Upload L32 Linux early-boot evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-linux-boot-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux/result.txt
+            build/l32-linux/evidence/
+            build/l32-linux-boot/result.txt
+            build/l32-linux-boot/opensbi-linux-build.log
+            build/l32-linux-boot/aethercore-rv32-linux.dtb
+            build/l32-linux-boot/evidence/
+            build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.elf
+            build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
+            build/l32-linux-probe/firmware.sha256
+            build/l32-linux-probe/logs/*.log
