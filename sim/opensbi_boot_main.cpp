@@ -82,9 +82,9 @@ void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& memory) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 6)
+    if (argc < 2 || argc > 8)
       throw std::runtime_error(
-          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP]");
+          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
@@ -94,6 +94,13 @@ int main(int argc, char** argv) {
         argc >= 5 ? std::stoull(argv[4], nullptr, 0) : 0ULL;
     const std::uint64_t minSeip =
         argc >= 6 ? std::stoull(argv[5], nullptr, 0) : 0ULL;
+    const std::string uartTrigger = argc >= 7 ? argv[6] : "";
+    const std::string uartCommand = argc >= 8 ? argv[7] : "";
+    std::string uartInput;
+    if (!uartCommand.empty()) {
+      uartInput = uartCommand;
+      if (uartInput.back() != '\n') uartInput.push_back('\n');
+    }
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
@@ -112,21 +119,38 @@ int main(int argc, char** argv) {
     std::string uart;
     bool sawOpenSbiBanner = false;
     bool sawMilestone = false;
+    bool inputStarted = !uartInput.empty() && uartTrigger.empty();
+    std::size_t inputIndex = 0;
+    std::uint64_t seipAtInputStart = 0;
+    bool sawRxInterrupt = false;
+    bool sawPostInputSeip = false;
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
 
     top.reset = 1;
     top.clock = 0;
+    top.io_rxValid = 0;
+    top.io_rxByte = 0;
     driveMemory(top, memory);
     top.eval();
 
+    if (inputStarted) {
+      std::cerr << "\nL32_UART_INPUT_START cycles=0 commits=0 bytes=" << uartInput.size()
+                << " trigger=<immediate> command=" << uartCommand << "\n";
+    }
+
     for (; cycles < maxCycles; ++cycles) {
+      const bool presentInput = inputStarted && inputIndex < uartInput.size();
+
       top.clock = 0;
+      top.io_rxValid = presentInput;
+      top.io_rxByte = presentInput ? static_cast<std::uint8_t>(uartInput[inputIndex]) : 0;
       driveMemory(top, memory);
       top.eval();
       driveMemory(top, memory);
       top.eval();
+      const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
       if (!top.reset && top.io_memValid && top.io_memWrite && top.io_memReady &&
           !top.io_memFault) {
@@ -143,6 +167,22 @@ int main(int argc, char** argv) {
       if (cycles == 3) top.reset = 0;
       if (top.reset) continue;
 
+      if (rxAccepted) {
+        ++inputIndex;
+        if (inputIndex == uartInput.size()) {
+          std::cerr << "\nL32_UART_INPUT_COMPLETE cycles=" << cycles
+                    << " commits=" << commits
+                    << " bytes=" << inputIndex << "\n";
+        }
+      }
+
+      if (inputStarted && top.io_uartRxInterrupt && !sawRxInterrupt) {
+        sawRxInterrupt = true;
+        std::cerr << "\nL32_UART_RX_INTERRUPT cycles=" << cycles
+                  << " commits=" << commits
+                  << " injected=" << inputIndex << '/' << uartInput.size() << "\n";
+      }
+
       if (top.io_uartValid) {
         const char byte = static_cast<char>(top.io_uartByte);
         uart.push_back(byte);
@@ -151,6 +191,17 @@ int main(int argc, char** argv) {
           sawOpenSbiBanner = true;
           std::cerr << "\nL32_OPENSBI_BANNER cycles=" << cycles
                     << " commits=" << commits << "\n";
+        }
+        if (!inputStarted && !uartInput.empty() && !uartTrigger.empty() &&
+            uart.find(uartTrigger) != std::string::npos) {
+          inputStarted = true;
+          seipAtInputStart = supervisorExternalInterrupts;
+          std::cerr << "\nL32_UART_INPUT_START cycles=" << cycles
+                    << " commits=" << commits
+                    << " bytes=" << uartInput.size()
+                    << " seip-before=" << seipAtInputStart
+                    << " trigger=" << uartTrigger
+                    << " command=" << uartCommand << "\n";
         }
         if (!sawMilestone && uart.find(milestone) != std::string::npos) {
           sawMilestone = true;
@@ -204,12 +255,22 @@ int main(int argc, char** argv) {
                         << " cause=0x" << interruptCause
                         << std::dec << "\n";
             }
+            if (inputStarted && supervisorExternalInterrupts > seipAtInputStart &&
+                !sawPostInputSeip) {
+              sawPostInputSeip = true;
+              std::cerr << "\nL32_UART_INPUT_SEIP cycles=" << cycles
+                        << " commits=" << commits
+                        << " seip-before=" << seipAtInputStart
+                        << " seip-now=" << supervisorExternalInterrupts << "\n";
+            }
           }
         }
       }
 
+      const bool inputSatisfied = uartInput.empty() ||
+          (inputStarted && inputIndex == uartInput.size() && sawRxInterrupt && sawPostInputSeip);
       if (sawMilestone && interrupts >= minInterrupts &&
-          supervisorExternalInterrupts >= minSeip) {
+          supervisorExternalInterrupts >= minSeip && inputSatisfied) {
         if (milestone == kDefaultMilestone) {
           std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
                     << " commits=" << commits
@@ -226,6 +287,9 @@ int main(int argc, char** argv) {
                   << " min-interrupts=" << minInterrupts
                   << " min-seip=" << minSeip
                   << " banner=" << (sawOpenSbiBanner ? 1 : 0)
+                  << " input-bytes=" << inputIndex << '/' << uartInput.size()
+                  << " rx-irq=" << (sawRxInterrupt ? 1 : 0)
+                  << " post-input-seip=" << (sawPostInputSeip ? 1 : 0)
                   << " marker=" << milestone << "\n";
         return sawOpenSbiBanner ? 0 : 5;
       }
@@ -238,6 +302,10 @@ int main(int argc, char** argv) {
               << " milestone=" << (sawMilestone ? 1 : 0)
               << " min-interrupts=" << minInterrupts
               << " min-seip=" << minSeip
+              << " input-started=" << (inputStarted ? 1 : 0)
+              << " input-bytes=" << inputIndex << '/' << uartInput.size()
+              << " rx-irq=" << (sawRxInterrupt ? 1 : 0)
+              << " post-input-seip=" << (sawPostInputSeip ? 1 : 0)
               << " exceptions=" << exceptions
               << " interrupts=" << interrupts
               << " seip=" << supervisorExternalInterrupts
