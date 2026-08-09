@@ -161,21 +161,58 @@ check_riscv_soft_float_elf "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl
 
 (
   cd "${BUSYBOX_BUILD_DIR}"
-  make ARCH=riscv defconfig
+
+  # This milestone is Linux /bin/sh bring-up, not a full rescue userspace.
+  # BusyBox defconfig pulls in console/network/storage applets that require a
+  # complete installed Linux UAPI header tree (for example linux/kd.h). Keep
+  # the first real userspace intentionally narrow: static ash plus a handful
+  # of header-light shell utilities. Expand applets only after shell boot is
+  # proven on AetherCore.
+  make ARCH=riscv allnoconfig
   python3 - <<'PY'
 from pathlib import Path
+
 path = Path('.config')
-text = path.read_text()
-if '# CONFIG_STATIC is not set' in text:
-    text = text.replace('# CONFIG_STATIC is not set', 'CONFIG_STATIC=y')
-elif 'CONFIG_STATIC=n' in text:
-    text = text.replace('CONFIG_STATIC=n', 'CONFIG_STATIC=y')
-elif 'CONFIG_STATIC=y' not in text:
-    raise SystemExit('BusyBox defconfig does not expose CONFIG_STATIC')
-if 'CONFIG_ASH=y' not in text:
-    raise SystemExit('BusyBox defconfig unexpectedly disabled ash')
-path.write_text(text)
+lines = path.read_text().splitlines()
+
+
+def set_symbol(symbol: str, enabled: bool) -> None:
+    assignment = f"{symbol}=y"
+    disabled = f"# {symbol} is not set"
+    for index, line in enumerate(lines):
+        if line.startswith(f"{symbol}=") or line == disabled:
+            lines[index] = assignment if enabled else disabled
+            return
+    lines.append(assignment if enabled else disabled)
+
+
+for symbol in (
+    'CONFIG_STATIC',
+    'CONFIG_ASH',
+    'CONFIG_SH_IS_ASH',
+    'CONFIG_ECHO',
+    'CONFIG_PRINTF',
+    'CONFIG_TEST',
+    'CONFIG_TRUE',
+    'CONFIG_FALSE',
+    'CONFIG_UNAME',
+):
+    set_symbol(symbol, True)
+
+# SH_IS_* is a Kconfig choice. allnoconfig selects NONE; switch the choice
+# explicitly so oldconfig/silentoldconfig cannot revert /bin/sh away from ash.
+set_symbol('CONFIG_SH_IS_HUSH', False)
+set_symbol('CONFIG_SH_IS_NONE', False)
+
+path.write_text('\n'.join(lines) + '\n')
 PY
+  make ARCH=riscv oldconfig </dev/null
+  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_ECHO|CONFIG_PRINTF|CONFIG_TEST|CONFIG_TRUE|CONFIG_FALSE|CONFIG_UNAME)=y$' .config
+  if grep -q '^CONFIG_KBD_MODE=y$' .config; then
+    echo "ERROR: minimal shell config unexpectedly enabled kbd_mode" >&2
+    exit 25
+  fi
+
   make ARCH=riscv \
     CROSS_COMPILE="${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
     CC="${MUSL_GCC}" \
