@@ -2,18 +2,21 @@ package aethercore.sim
 
 import aethercore.config.CoreProfiles
 
-/** First L32 execution shell for pinned RV32 OpenSBI v1.6.
+/** Frozen L32 OpenSBI/Linux simulation shell.
   *
-  * Keep the platform intentionally small. The embedded FDT describes only the
-  * RAM, NS16550 console and ACLINT MTIMER already present in the frozen N5
-  * platform. Add PLIC/MSIP or Linux-only devices only when real execution
-  * demonstrates the requirement.
+  * Keep the existing first-stage RAM, ACLINT mtime/mtimecmp and ns16550 UART,
+  * then add only the QEMU-virt-compatible Supervisor PLIC context required by
+  * Linux's real ttyS0 interrupt-driven transmit path. The UART remains source
+  * 10, matching the Linux/QEMU virt platform contract.
   */
 class AetherCoreOpenSbiSimTop
     extends AetherCoreSimTop(
       config = CoreProfiles.rv32imasuSv32Software,
       stopOnTrap = false,
       withMachineInterruptPlatform = false,
+      withSupervisorInterruptPlatform = true,
       stopOnWfi = false,
-      withNs16550Uart = true
+      withNs16550Uart = true,
+      supervisorPlicSourceCount = 52,
+      supervisorUartSourceId = 10
     )
