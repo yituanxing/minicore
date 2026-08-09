@@ -1,0 +1,87 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SUITE_PATH = ROOT / "tools/ci/l32_linux_runtime_suite.py"
+WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
+
+
+def load_suite():
+    spec = spec_from_file_location("l32_linux_runtime_suite", SUITE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class L32LinuxRuntimeSuiteContract(unittest.TestCase):
+    def test_vfs_case_is_self_checking_and_covers_common_file_paths(self):
+        suite = load_suite()
+        cases = {case_id: (marker, command) for case_id, marker, command in suite.CASES}
+        self.assertIn("vfs", cases)
+        marker, command = cases["vfs"]
+        self.assertEqual(marker, "L32 BUSYBOX VFS OK")
+        for required in (
+            "set -eu",
+            "/tmp/l32-vfs-runtime",
+            "mkdir -p",
+            "printf 'alpha\\nbeta\\n' >",
+            "/bin/busybox cat",
+            "/bin/busybox mv",
+            '[ ! -e "$d/a" ]',
+            '[ -f "$d/b" ]',
+            ">> \"$d/b\"",
+            "/bin/busybox rm",
+            'cat \"$d/missing\" >/dev/null 2>&1',
+            "L32 BUSYBOX VFS OK",
+        ):
+            self.assertIn(required, command)
+        self.assertTrue(command.index("set -eu") < command.index("L32 BUSYBOX VFS OK"))
+
+    def test_suite_rejects_kernel_health_failures_and_requires_every_case(self):
+        suite = load_suite()
+        lines = ["L32_FORKSERVER_READY cycles=1 commits=1 seip=1 cases=4"]
+        for case_id, marker, _ in suite.CASES:
+            lines.append(marker)
+            lines.append(f"L32_FORKSERVER_CASE_PASS id={case_id} delta-cycles=1 delta-commits=1 seip-delta=1")
+        lines.extend(
+            [
+                "L32 BUSYBOX PIPE CHILD OK",
+                "L32 BUSYBOX PIPE PARENT OK",
+                "L32_FORKSERVER_PASS cases=4 boot-cycles=1",
+            ]
+        )
+        good = "\n".join(lines) + "\n"
+        suite.verify_text(good)
+
+        for bad in suite.BAD_KERNEL_MARKERS:
+            with self.subTest(bad=bad):
+                with self.assertRaises(RuntimeError):
+                    suite.verify_text(good + bad + "\n")
+
+        with self.assertRaises(RuntimeError):
+            suite.verify_text(good.replace("L32_FORKSERVER_CASE_PASS id=vfs ", "L32_FORKSERVER_CASE_MISSING id=vfs "))
+
+    def test_batch_writer_preserves_one_case_per_tsv_line(self):
+        suite = load_suite()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "workloads.tsv"
+            suite.write_batch(path)
+            rows = path.read_text().splitlines()
+        self.assertEqual(len(rows), len(suite.CASES))
+        self.assertEqual([row.split("\t", 1)[0] for row in rows], [case[0] for case in suite.CASES])
+        self.assertTrue(all(row.count("\t") == 2 for row in rows))
+
+    def test_workflow_routes_warm_batch_through_runtime_suite(self):
+        text = WORKFLOW.read_text()
+        self.assertIn("tools/ci/l32_linux_runtime_suite.py", text)
+        self.assertIn('write-batch "$batch_file"', text)
+        self.assertIn('verify-log "$log"', text)
+        self.assertIn("tests_py.test_l32_linux_runtime_suite_contract", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
