@@ -53,6 +53,7 @@ class L32BusyBoxContract(unittest.TestCase):
         self.assertNotIn("make ARCH=riscv defconfig", text)
         for symbol in (
             "CONFIG_STATIC",
+            "CONFIG_LFS",
             "CONFIG_ASH",
             "CONFIG_SH_IS_ASH",
             "CONFIG_ECHO",
