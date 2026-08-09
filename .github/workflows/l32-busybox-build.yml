@@ -8,6 +8,7 @@ on:
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
       - tools/ci/l32_busybox_runtime_freeze.sh
+      - tools/ci/l32_software_artifact_cache.sh
       - tests_py/test_l32_busybox_contract.py
       - tests_py/test_l32_busybox_multiprocess_contract.py
       - tests_py/test_l32_forkserver_contract.py
@@ -47,19 +48,20 @@ jobs:
           bash -n tools/ci/l32_busybox_initramfs_build.sh
           bash -n tools/ci/l32_busybox_payload_build.sh
           bash -n tools/ci/l32_busybox_runtime_freeze.sh
+          bash -n tools/ci/l32_software_artifact_cache.sh
           python3 -m unittest \
             tests_py.test_l32_busybox_contract \
             tests_py.test_l32_busybox_multiprocess_contract \
             tests_py.test_l32_forkserver_contract -v
 
-      - name: Build soft-float musl and static BusyBox
+      - name: Reuse or build soft-float musl and static BusyBox
         shell: bash
         env:
           L32_USERSPACE_JOBS: "6"
           REALGCC: ${{ github.workspace }}/build/l32-busybox/l32-musl-real-gcc
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_busybox_build.sh
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_build.sh
           mkdir -p build/l32-busybox
           cat > build/l32-busybox/l32-musl-real-gcc <<'EOF'
           #!/usr/bin/env bash
@@ -129,7 +131,8 @@ jobs:
             "${MUSL_PREFIX}/lib/crtn.o"
           EOF
           chmod +x build/l32-busybox/l32-musl-real-gcc
-          bash tools/ci/l32_busybox_build.sh 2>&1 | tee build/l32-busybox/driver.log
+          tools/ci/l32_software_artifact_cache.sh busybox \
+            bash tools/ci/l32_busybox_build.sh 2>&1 | tee build/l32-busybox/driver.log
 
       - name: Provision pinned Bootlin RV32 Linux GCC
         shell: bash
@@ -148,23 +151,23 @@ jobs:
           fi
           tools/ci/l32_linux_cache_key.sh check build/l32-linux
 
-      - name: Build Linux Image with static BusyBox ash initramfs
+      - name: Reuse or build Linux Image with static BusyBox ash initramfs
         shell: bash
         env:
           L32_LINUX_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_busybox_initramfs_build.sh
-          tools/ci/l32_busybox_initramfs_build.sh
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_initramfs_build.sh
+          tools/ci/l32_software_artifact_cache.sh busybox-initramfs tools/ci/l32_busybox_initramfs_build.sh
 
-      - name: Build OpenSBI with BusyBox Linux payload
+      - name: Reuse or build OpenSBI with BusyBox Linux payload
         shell: bash
         env:
           L32_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_busybox_payload_build.sh
-          tools/ci/l32_busybox_payload_build.sh
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh busybox-payload tools/ci/l32_busybox_payload_build.sh
 
       - name: Verify exact BusyBox Linux runtime payload
         shell: bash
