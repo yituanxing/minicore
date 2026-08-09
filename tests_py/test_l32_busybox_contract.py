@@ -8,6 +8,9 @@ BUILD = ROOT / "tools/ci/l32_busybox_build.sh"
 INITRAMFS_BUILD = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
 PAYLOAD_BUILD = ROOT / "tools/ci/l32_busybox_payload_build.sh"
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
+SIM_TOP = ROOT / "src/main/scala/aethercore/sim/AetherCoreSimTop.scala"
+RUNNER = ROOT / "sim/opensbi_boot_main.cpp"
+LINUX_MAKEFILE = ROOT / "Makefile.l32-linux-boot"
 
 
 class L32BusyBoxContract(unittest.TestCase):
@@ -107,7 +110,48 @@ class L32BusyBoxContract(unittest.TestCase):
             self.assertIn(required, text)
         self.assertNotIn("src/main/scala", text)
 
-    def test_workflow_runs_busybox_through_real_linux_shell_startup(self):
+    def test_supervisor_ns16550_rx_is_architectural_not_host_side_shortcut(self):
+        text = SIM_TOP.read_text()
+        for required in (
+            "Some(Module(new Queue(UInt(8.W), 16)))",
+            "uartIer.get(0) && uartRxAvailable",
+            "uartRxPop",
+            "uartRxByte",
+            '"h60".U(8.W) | uartRxAvailable.asUInt',
+            "Mux(uartRxInterrupt, 4.U",
+            "uartCombinedInterrupt",
+            "io.uartRxInterrupt.get := uartRxInterrupt",
+        ):
+            self.assertIn(required, text)
+
+    def test_runner_requires_uart_rx_irq_and_post_input_seip(self):
+        runner = RUNNER.read_text()
+        for required in (
+            "top.io_rxValid",
+            "top.io_rxReady",
+            "top.io_uartRxInterrupt",
+            "L32_UART_INPUT_START",
+            "L32_UART_INPUT_COMPLETE",
+            "L32_UART_RX_INTERRUPT",
+            "L32_UART_INPUT_SEIP",
+            "sawPostInputSeip",
+            "inputSatisfied",
+        ):
+            self.assertIn(required, runner)
+
+        makefile = LINUX_MAKEFILE.read_text()
+        for required in (
+            "UART_TRIGGER ?=",
+            "UART_COMMAND ?=",
+            '"$(UART_TRIGGER)"',
+            '"$(UART_COMMAND)"',
+            "L32_UART_INPUT_COMPLETE",
+            "L32_UART_RX_INTERRUPT",
+            "L32_UART_INPUT_SEIP",
+        ):
+            self.assertIn(required, makefile)
+
+    def test_workflow_runs_real_ttys0_command_round_trip(self):
         text = WORKFLOW.read_text()
         for required in (
             "tools/ci/l32_busybox_initramfs_build.sh",
@@ -115,10 +159,12 @@ class L32BusyBoxContract(unittest.TestCase):
             "Provision pinned Bootlin RV32 Linux GCC",
             "Build Linux Image with static BusyBox ash initramfs",
             "Build OpenSBI with BusyBox Linux payload",
-            "Run real Linux BusyBox ash startup",
-            'MILESTONE="L32 BUSYBOX SHELL READY"',
+            "Run real Linux BusyBox ash command over ttyS0",
+            'MILESTONE="L32 BUSYBOX RX COMMAND OK"',
             "MIN_INTERRUPTS=1",
             "MIN_SEIP=1",
+            'UART_TRIGGER="L32 BUSYBOX SHELL READY"',
+            "UART_COMMAND=\"printf 'L32 BUSYBOX RX COMMAND %s\\n' OK\"",
         ):
             self.assertIn(required, text)
 
