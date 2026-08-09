@@ -5,13 +5,16 @@ on:
     paths:
       - software/l32_busybox/**
       - tools/ci/l32_busybox_build.sh
+      - tools/ci/l32_runtime_probe_build.sh
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
       - tools/ci/l32_busybox_runtime_freeze.sh
+      - tools/ci/l32_linux_runtime_suite.py
       - tools/ci/l32_software_artifact_cache.sh
       - tests_py/test_l32_busybox_contract.py
       - tests_py/test_l32_busybox_multiprocess_contract.py
       - tests_py/test_l32_forkserver_contract.py
+      - tests_py/test_l32_linux_runtime_suite_contract.py
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - sim/opensbi_forkserver_main.cpp
@@ -30,7 +33,7 @@ concurrency:
 
 jobs:
   busybox-shell:
-    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell/process
+    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 runtime
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
 
@@ -45,14 +48,17 @@ jobs:
         run: |
           set -euo pipefail
           bash -n tools/ci/l32_busybox_build.sh
+          bash -n tools/ci/l32_runtime_probe_build.sh
           bash -n tools/ci/l32_busybox_initramfs_build.sh
           bash -n tools/ci/l32_busybox_payload_build.sh
           bash -n tools/ci/l32_busybox_runtime_freeze.sh
           bash -n tools/ci/l32_software_artifact_cache.sh
+          python3 -m py_compile tools/ci/l32_linux_runtime_suite.py
           python3 -m unittest \
             tests_py.test_l32_busybox_contract \
             tests_py.test_l32_busybox_multiprocess_contract \
-            tests_py.test_l32_forkserver_contract -v
+            tests_py.test_l32_forkserver_contract \
+            tests_py.test_l32_linux_runtime_suite_contract -v
 
       - name: Reuse or build soft-float musl and static BusyBox
         shell: bash
@@ -134,6 +140,13 @@ jobs:
           tools/ci/l32_software_artifact_cache.sh busybox \
             bash tools/ci/l32_busybox_build.sh 2>&1 | tee build/l32-busybox/driver.log
 
+      - name: Reuse or build static Linux runtime probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_runtime_probe_build.sh
+          tools/ci/l32_software_artifact_cache.sh runtime-probe tools/ci/l32_runtime_probe_build.sh
+
       - name: Provision pinned Bootlin RV32 Linux GCC
         shell: bash
         run: bash tools/ensure_l32_riscv32_linux_gcc.sh
@@ -151,7 +164,7 @@ jobs:
           fi
           tools/ci/l32_linux_cache_key.sh check build/l32-linux
 
-      - name: Reuse or build Linux Image with static BusyBox ash initramfs
+      - name: Reuse or incrementally rebuild Linux Image with runtime initramfs
         shell: bash
         env:
           L32_LINUX_JOBS: "6"
@@ -180,7 +193,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run in-memory forkserver development batch
+      - name: Run cumulative Linux functional matrix from warm shell
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
         shell: bash
         run: |
@@ -189,21 +202,7 @@ jobs:
           batch_file="$probe_dir/workloads.tsv"
           rm -rf "$probe_dir"
           mkdir -p "$probe_dir"
-          python3 - "$batch_file" <<'PY'
-          from pathlib import Path
-          import sys
-
-          rows = [
-              ("builtin", "L32 FORKSERVER BUILTIN OK", r"printf 'L32 FORKSERVER BUILTIN OK\n'"),
-              ("subshell", "L32 FORKSERVER SUBSHELL OK", r'''/bin/sh -c 'printf "L32 FORKSERVER SUBSHELL OK\n"' '''),
-              (
-                  "pipeline",
-                  "L32 BUSYBOX PIPE PARENT OK",
-                  r'''printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK''',
-              ),
-          ]
-          Path(sys.argv[1]).write_text("\n".join("\t".join(row) for row in rows) + "\n")
-          PY
+          python3 tools/ci/l32_linux_runtime_suite.py write-batch "$batch_file"
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$probe_dir" \
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
@@ -215,18 +214,9 @@ jobs:
             PROGRESS_INTERVAL_CYCLES=25000000 \
             forkserver-local
           log="$probe_dir/logs/forkserver.log"
-          normalized_log="$probe_dir/logs/forkserver-normalized.log"
-          tr -d '\r' < "$log" > "$normalized_log"
-          grep -q '^L32_FORKSERVER_READY ' "$normalized_log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=builtin ' "$normalized_log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=subshell ' "$normalized_log"
-          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || \
-            grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
-          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=pipeline ' "$normalized_log"
-          grep -q '^L32_FORKSERVER_PASS cases=3 ' "$normalized_log"
+          python3 tools/ci/l32_linux_runtime_suite.py verify-log "$log"
 
-      - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
+      - name: Run canonical cold Linux BusyBox multiprocess pipeline over ttyS0
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
         shell: bash
         env:
@@ -260,7 +250,7 @@ jobs:
           grep -q '^L32_UART_INPUT_SEIP ' "$normalized_log"
           grep -q '^L32_RUNTIME_MILESTONE_PASS .*marker=L32 BUSYBOX PIPE PARENT OK$' "$normalized_log"
 
-      - name: Upload BusyBox shell/process evidence
+      - name: Upload BusyBox runtime evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -275,6 +265,10 @@ jobs:
             build/l32-busybox/musl-build.log
             build/l32-busybox/busybox-build.log
             build/l32-busybox/evidence/
+            build/l32-runtime-probe/result.txt
+            build/l32-runtime-probe/readelf.txt
+            build/l32-runtime-probe/file.txt
+            build/l32-runtime-probe/software-cache.txt
             build/l32-linux-busybox/result.txt
             build/l32-linux-busybox/config.log
             build/l32-linux-busybox/linux-build.log

@@ -81,6 +81,7 @@ class L32BusyBoxContract(unittest.TestCase):
             'BUILD_DIR="${ROOT_DIR}/build/l32-linux-busybox"',
             "nod /dev/console 0600 0 0 c 5 1",
             "file /bin/busybox",
+            "file /bin/l32-runtime-probe",
             "slink /bin/sh busybox",
             "slink /bin/uname busybox",
             "#!/bin/sh",
@@ -155,40 +156,28 @@ class L32BusyBoxContract(unittest.TestCase):
     def test_workflow_runs_real_ttys0_command_round_trip(self):
         text = WORKFLOW.read_text()
         for required in (
+            "tools/ci/l32_runtime_probe_build.sh",
             "tools/ci/l32_busybox_initramfs_build.sh",
             "tools/ci/l32_busybox_payload_build.sh",
-            "Provision pinned Bootlin RV32 Linux GCC",
-            "Reuse or build Linux Image with static BusyBox ash initramfs",
-            "Reuse or build OpenSBI with BusyBox Linux payload",
+            "l32_software_artifact_cache.sh runtime-probe",
             "l32_software_artifact_cache.sh busybox-initramfs",
             "l32_software_artifact_cache.sh busybox-payload",
             "MIN_INTERRUPTS=1",
             "MIN_SEIP=1",
             'UART_TRIGGER="L32 BUSYBOX SHELL READY"',
+            'MILESTONE="L32 BUSYBOX PIPE PARENT OK"',
+            'UART_COMMAND_FILE="$command_file"',
+            "L32 BUSYBOX PIPE CHILD OK",
         ):
             self.assertIn(required, text)
 
-        legacy_gate = all(
-            required in text
-            for required in (
-                "Run real Linux BusyBox ash command over ttyS0",
-                'MILESTONE="L32 BUSYBOX RX COMMAND OK"',
-                "UART_COMMAND=\"printf 'L32 BUSYBOX RX COMMAND %s\\n' OK\"",
-            )
-        )
-        multiprocess_gate = all(
-            required in text
-            for required in (
-                "Run real Linux BusyBox multiprocess pipeline over ttyS0",
-                'MILESTONE="L32 BUSYBOX PIPE PARENT OK"',
-                'UART_COMMAND_FILE="$command_file"',
-                "L32 BUSYBOX PIPE CHILD OK",
-            )
-        )
-        self.assertTrue(
-            legacy_gate or multiprocess_gate,
-            "workflow must retain a real ttyS0 shell command round-trip gate",
-        )
+        probe = text.index("l32_software_artifact_cache.sh runtime-probe")
+        initramfs = text.index("l32_software_artifact_cache.sh busybox-initramfs")
+        payload = text.index("l32_software_artifact_cache.sh busybox-payload")
+        runtime = text.index('MILESTONE="L32 BUSYBOX PIPE PARENT OK"')
+        self.assertLess(probe, initramfs)
+        self.assertLess(initramfs, payload)
+        self.assertLess(payload, runtime)
 
 
 if __name__ == "__main__":

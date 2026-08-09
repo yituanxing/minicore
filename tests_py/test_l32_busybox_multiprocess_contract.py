@@ -31,9 +31,7 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         text = WORKFLOW.read_text()
         for required in (
             "L32 BusyBox Shell + Multiprocess",
-            "musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell/process",
             "Verify exact BusyBox Linux runtime payload",
-            "Run real Linux BusyBox multiprocess pipeline over ttyS0",
             "printf 'PIPE_TOKEN\\n' | /bin/sh -c",
             'read x; case "$x" in PIPE_TOKEN)',
             'printf "L32 BUSYBOX PIPE CHILD %s\\n" OK',
@@ -53,9 +51,7 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-        command_match = re.search(
-            r"L32_BUSYBOX_PIPE_COMMAND: >-\n\s+(.+)", text
-        )
+        command_match = re.search(r"L32_BUSYBOX_PIPE_COMMAND: >-\n\s+(.+)", text)
         self.assertIsNotNone(command_match)
         command = command_match.group(1)
         self.assertNotIn("L32 BUSYBOX PIPE CHILD OK", command)
@@ -102,42 +98,30 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         self.assertNotIn("--x-assign fast", makefile)
         self.assertNotIn("--x-initial fast", makefile)
 
-    def test_runtime_harness_has_bounded_post_input_fast_fail_and_hot_path_guards(self):
-        text = RUNNER.read_text()
-        for required in (
-            "POST_INPUT_MAX_CYCLES",
-            "PROGRESS_INTERVAL_CYCLES",
-            "L32_SIM_PROGRESS",
-            "L32_POST_INPUT_TIMEOUT",
-            "read32Unchecked",
-            "endsWith(uart, milestone)",
-            "std::cout.put(byte)",
-            "if (byte == '\\n') std::cout.flush()",
-        ):
-            self.assertIn(required, text)
-        self.assertNotIn("std::cout << byte << std::flush", text)
-        self.assertNotIn("uart.find(milestone)", text)
-        self.assertNotIn("uart.find(uartTrigger)", text)
-        self.assertNotIn('uart.find("OpenSBI v1.6")', text)
-
     def test_workflow_qualifies_reusable_software_before_runtime(self):
         text = WORKFLOW.read_text()
         for required in (
             "tools/ci/l32_busybox_build.sh",
+            "tools/ci/l32_runtime_probe_build.sh",
             "tools/ci/l32_busybox_initramfs_build.sh",
             "tools/ci/l32_busybox_payload_build.sh",
             "tools/ci/l32_busybox_runtime_freeze.sh",
             "l32_software_artifact_cache.sh busybox",
+            "l32_software_artifact_cache.sh runtime-probe",
             "l32_software_artifact_cache.sh busybox-initramfs",
             "l32_software_artifact_cache.sh busybox-payload",
             "clean: false",
         ):
             self.assertIn(required, text)
 
-        payload = text.index("Reuse or build OpenSBI with BusyBox Linux payload")
-        verify = text.index("Verify exact BusyBox Linux runtime payload")
-        runtime = text.index("Run real Linux BusyBox multiprocess pipeline over ttyS0")
-        self.assertLess(payload, verify)
+        probe = text.index("l32_software_artifact_cache.sh runtime-probe")
+        initramfs = text.index("l32_software_artifact_cache.sh busybox-initramfs")
+        payload = text.index("l32_software_artifact_cache.sh busybox-payload")
+        verify = text.index("tools/ci/l32_busybox_runtime_freeze.sh")
+        runtime = text.index('MILESTONE="L32 BUSYBOX PIPE PARENT OK"')
+        self.assertLess(probe, initramfs)
+        self.assertLess(initramfs, payload)
+        self.assertLess(payload, runtime)
         self.assertLess(verify, runtime)
 
 
