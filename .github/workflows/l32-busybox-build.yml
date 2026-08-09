@@ -6,7 +6,6 @@ on:
       - software/l32_busybox/**
       - tools/ci/l32_busybox_build.sh
       - tests_py/test_l32_busybox_contract.py
-      - tools/ensure_l32_riscv32_linux_gcc.sh
       - .github/workflows/l32-busybox-build.yml
   workflow_dispatch:
 
@@ -36,10 +35,6 @@ jobs:
           bash -n tools/ci/l32_busybox_build.sh
           python3 -m unittest tests_py.test_l32_busybox_contract -v
 
-      - name: Provision pinned Bootlin RV32 Linux GCC
-        shell: bash
-        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
-
       - name: Build soft-float musl and static BusyBox
         shell: bash
         env:
@@ -59,6 +54,7 @@ jobs:
           if-no-files-found: warn
           path: |
             build/l32-busybox/result.txt
+            build/l32-busybox/toolchain-probe.log
             build/l32-busybox/musl-build.log
             build/l32-busybox/busybox-build.log
             build/l32-busybox/evidence/
