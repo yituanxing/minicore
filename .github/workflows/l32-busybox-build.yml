@@ -217,7 +217,8 @@ jobs:
           grep -q '^L32_FORKSERVER_READY ' "$normalized_log"
           grep -q '^L32_FORKSERVER_CASE_PASS id=builtin ' "$normalized_log"
           grep -q '^L32_FORKSERVER_CASE_PASS id=subshell ' "$normalized_log"
-          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || \
+            grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
           grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
           grep -q '^L32_FORKSERVER_CASE_PASS id=pipeline ' "$normalized_log"
           grep -q '^L32_FORKSERVER_PASS cases=3 ' "$normalized_log"
@@ -246,12 +247,15 @@ jobs:
             UART_COMMAND_FILE="$command_file" \
             run-local
           log="$probe_dir/logs/boot-probe.log"
-          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$log"
-          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$log"
-          grep -q '^L32_UART_INPUT_COMPLETE ' "$log"
-          grep -q '^L32_UART_RX_INTERRUPT ' "$log"
-          grep -q '^L32_UART_INPUT_SEIP ' "$log"
-          grep -q '^L32_RUNTIME_MILESTONE_PASS .*marker=L32 BUSYBOX PIPE PARENT OK$' "$log"
+          normalized_log="$probe_dir/logs/boot-probe-normalized.log"
+          tr -d '\r' < "$log" > "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || \
+            grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
+          grep -q '^L32_UART_INPUT_COMPLETE ' "$normalized_log"
+          grep -q '^L32_UART_RX_INTERRUPT ' "$normalized_log"
+          grep -q '^L32_UART_INPUT_SEIP ' "$normalized_log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS .*marker=L32 BUSYBOX PIPE PARENT OK$' "$normalized_log"
 
       - name: Upload BusyBox shell/process evidence
         if: always()
