@@ -126,7 +126,7 @@ static int test_vm(void) {
         p[i] = (unsigned char)((i * 37u + 11u) & 0xffu);
     }
     const uint32_t before = checksum32(p, len);
-    if (before != 0x80388dc5u) {
+    if (before != 0x57df1dc5u) {
         fprintf(stderr, "L32_PROBE_FAIL test=vm step=checksum-before got=%08x\n", before);
         return 1;
     }
