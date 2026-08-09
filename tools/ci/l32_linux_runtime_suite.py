@@ -24,7 +24,7 @@ CASES = [
     (
         "vfs",
         "L32 BUSYBOX VFS OK",
-        r'''set -eu; f=/tmp/l32-vfs-runtime-file; printf 'alpha\nbeta\n' > "$f"; { IFS= read -r a; IFS= read -r b; } < "$f"; [ "$a" = alpha ]; [ "$b" = beta ]; [ -f "$f" ]; [ ! -e /tmp/l32-vfs-runtime-missing ]; printf 'gamma\n' >> "$f"; n=0; last=; while IFS= read -r line; do n=$((n + 1)); last=$line; done < "$f"; [ "$n" -eq 3 ]; [ "$last" = gamma ]; printf 'L32 BUSYBOX VFS %s\n' OK''',
+        r'''set -eu; f=/tmp/l32-vfs-runtime-file; printf 'alpha\nbeta\n' > "$f"; { IFS= read -r a; IFS= read -r b; } < "$f"; [ "$a" = alpha ]; [ "$b" = beta ]; [ -f "$f" ]; [ ! -e /tmp/l32-vfs-runtime-missing ]; printf 'gamma\n' >> "$f"; { IFS= read -r a2; IFS= read -r b2; IFS= read -r c2; ! IFS= read -r extra; } < "$f"; [ "$a2" = alpha ]; [ "$b2" = beta ]; [ "$c2" = gamma ]; printf 'L32 BUSYBOX VFS %s\n' OK''',
     ),
 ]
 
