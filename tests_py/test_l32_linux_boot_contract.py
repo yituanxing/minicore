@@ -41,10 +41,16 @@ class L32LinuxBootContractTest(unittest.TestCase):
         self.assertIn("L32_OPENSBI_TEST_PAYLOAD_PASS", runner)
         self.assertIn("L32_RUNTIME_MILESTONE_PASS", runner)
         self.assertIn("UART_MILESTONE", runner)
+        self.assertIn("MIN_INTERRUPTS", runner)
+        self.assertIn("L32_FIRST_INTERRUPT", runner)
+        self.assertIn("min-interrupts=", runner)
 
         makefile = (ROOT / "Makefile.l32-linux-boot").read_text()
         self.assertIn("Linux version 6.6.143", makefile)
         self.assertIn("MAX_CYCLES ?= 50000000", makefile)
+        self.assertIn("MIN_INTERRUPTS ?= 0", makefile)
+        self.assertIn('"$(MIN_INTERRUPTS)"', makefile)
+        self.assertIn("L32_FIRST_INTERRUPT", makefile)
         self.assertIn("L32_RUNTIME_MILESTONE_PASS", makefile)
         self.assertIn("build/l32-linux-boot", makefile)
 
