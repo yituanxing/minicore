@@ -42,7 +42,7 @@ class L32LinuxBootContractTest(unittest.TestCase):
             "L32_LINUX_IMAGE_BYTES",
             "L32_OPENSBI_BUILD_DIR",
             "L32_FW_PAYLOAD_PATH",
-            'awk \'$2 == ".payload"',
+            "awk '$2 == \".payload\"'",
             "L32_LINUX_PHYS_ENTRY",
             "L32_LINUX_FW_PAYLOAD_RESULT: status=PASS",
         ):
