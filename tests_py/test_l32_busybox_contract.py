@@ -92,10 +92,10 @@ class L32BusyBoxContract(unittest.TestCase):
             'UART_COMMAND_FILE="$command_file"', "L32 BUSYBOX PIPE CHILD OK",
         ):
             self.assertIn(required, text)
-        probe = text.index("l32_software_artifact_cache.sh runtime-probe")
-        initramfs = text.index("tools/ci/l32_runtime_image_cache.sh")
-        payload = text.index("l32_software_artifact_cache.sh busybox-payload")
-        runtime = text.index('MILESTONE="L32 BUSYBOX PIPE PARENT OK"')
+        probe = text.index("          tools/ci/l32_software_artifact_cache.sh runtime-probe")
+        initramfs = text.index("          tools/ci/l32_runtime_image_cache.sh")
+        payload = text.index("          tools/ci/l32_software_artifact_cache.sh busybox-payload")
+        runtime = text.index('            MILESTONE="L32 BUSYBOX PIPE PARENT OK"')
         self.assertLess(probe, initramfs)
         self.assertLess(initramfs, payload)
         self.assertLess(payload, runtime)
