@@ -35,14 +35,26 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             '[ -f "$f" ]',
             "[ ! -e /tmp/l32-vfs-runtime-missing ]",
             "printf 'gamma\\n' >>",
-            "while IFS= read -r line",
-            '[ "$n" -eq 3 ]',
-            '[ "$last" = gamma ]',
+            "IFS= read -r a2",
+            "IFS= read -r b2",
+            "IFS= read -r c2",
+            "! IFS= read -r extra",
+            '[ "$a2" = alpha ]',
+            '[ "$b2" = beta ]',
+            '[ "$c2" = gamma ]',
             "L32 BUSYBOX VFS %s\\n",
         ):
             self.assertIn(required, command)
-        for forbidden_applet in ("/bin/busybox rm", "/bin/busybox mkdir", "/bin/busybox mv", "/bin/busybox cat", "/bin/busybox tail"):
-            self.assertNotIn(forbidden_applet, command)
+        for forbidden in (
+            "/bin/busybox rm",
+            "/bin/busybox mkdir",
+            "/bin/busybox mv",
+            "/bin/busybox cat",
+            "/bin/busybox tail",
+            "$(('",
+            "$((",
+        ):
+            self.assertNotIn(forbidden, command)
         self.assertNotIn(marker, command)
         self.assertTrue(command.index("set -eu") < command.index("L32 BUSYBOX VFS %s\\n"))
 
