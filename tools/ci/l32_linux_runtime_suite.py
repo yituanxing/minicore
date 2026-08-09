@@ -9,12 +9,12 @@ CASES = [
     (
         "builtin",
         "L32 FORKSERVER BUILTIN OK",
-        r"printf 'L32 FORKSERVER BUILTIN OK\n'",
+        r"printf 'L32 FORKSERVER BUILTIN %s\n' OK",
     ),
     (
         "subshell",
         "L32 FORKSERVER SUBSHELL OK",
-        r'''/bin/sh -c 'printf "L32 FORKSERVER SUBSHELL OK\n"' ''',
+        r'''/bin/sh -c 'printf "L32 FORKSERVER SUBSHELL %s\n" OK' ''',
     ),
     (
         "pipeline",
@@ -24,7 +24,7 @@ CASES = [
     (
         "vfs",
         "L32 BUSYBOX VFS OK",
-        r'''set -eu; d=/tmp/l32-vfs-runtime; /bin/busybox rm -rf "$d"; /bin/busybox mkdir -p "$d"; printf 'alpha\nbeta\n' > "$d/a"; a=$(/bin/busybox cat "$d/a"); [ "$a" = "$(printf 'alpha\nbeta')" ]; /bin/busybox mv "$d/a" "$d/b"; [ ! -e "$d/a" ]; [ -f "$d/b" ]; printf 'gamma\n' >> "$d/b"; b=$(/bin/busybox tail -n 1 "$d/b"); [ "$b" = gamma ]; /bin/busybox rm "$d/b"; [ ! -e "$d/b" ]; ! /bin/busybox cat "$d/missing" >/dev/null 2>&1; /bin/busybox rmdir "$d"; printf 'L32 BUSYBOX VFS OK\n' ''',
+        r'''set -eu; d=/tmp/l32-vfs-runtime; /bin/busybox rm -rf "$d"; /bin/busybox mkdir -p "$d"; printf 'alpha\nbeta\n' > "$d/a"; a=$(/bin/busybox cat "$d/a"); [ "$a" = "$(printf 'alpha\nbeta')" ]; /bin/busybox mv "$d/a" "$d/b"; [ ! -e "$d/a" ]; [ -f "$d/b" ]; printf 'gamma\n' >> "$d/b"; b=$(/bin/busybox tail -n 1 "$d/b"); [ "$b" = gamma ]; /bin/busybox rm "$d/b"; [ ! -e "$d/b" ]; ! /bin/busybox cat "$d/missing" >/dev/null 2>&1; /bin/busybox rmdir "$d"; printf 'L32 BUSYBOX VFS %s\n' OK''',
     ),
 ]
 
@@ -40,7 +40,8 @@ BAD_KERNEL_MARKERS = (
 
 
 def _line_present(text: str, marker: str) -> bool:
-    return marker in text.splitlines() or f"# {marker}" in text.splitlines()
+    lines = text.splitlines()
+    return marker in lines or f"# {marker}" in lines
 
 
 def write_batch(path: Path) -> None:
@@ -49,6 +50,12 @@ def write_batch(path: Path) -> None:
             # Commands carry guest newlines as the two characters "\\n"; literal
             # TSV newlines/tabs would corrupt the forkserver batch format.
             raise ValueError(f"runtime case {case_id!r} is not TSV-safe")
+        if marker in command:
+            # The interactive tty echoes injected input. A literal final marker
+            # in the command could therefore satisfy the simulator milestone
+            # before the command actually executes. Require every workload to
+            # construct its marker only after its semantic checks succeed.
+            raise ValueError(f"runtime case {case_id!r} embeds its final marker in input")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join("\t".join(row) for row in CASES) + "\n")
     print(f"L32_RUNTIME_SUITE_BATCH cases={len(CASES)} path={path}")
