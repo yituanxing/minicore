@@ -24,7 +24,7 @@ command -v "${L32_CROSS_COMPILE_PREFIX}gcc" >/dev/null 2>&1 || {
   exit 20
 }
 
-"${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh" check "${LINUX_BUILD_DIR}"
+bash "${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh" check "${LINUX_BUILD_DIR}"
 observed_cache_key="$(cat "${LINUX_BUILD_DIR}/evidence/input-key.txt")"
 [[ "${observed_cache_key}" == "${L32_LINUX_BUILD_CACHE_KEY}" ]] || {
   echo "ERROR: Linux build cache key drifted: ${observed_cache_key}" >&2
