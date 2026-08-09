@@ -1,0 +1,98 @@
+name: L32 Linux 6.6.143 Build
+
+on:
+  pull_request:
+    paths:
+      - software/l32/manifest.env
+      - tools/ci/l32_linux_build.sh
+      - tools/ci/l32_linux_cache_key.sh
+      - tools/ensure_l32_riscv32_linux_gcc.sh
+      - tests_py/test_l32_linux_build_contract.py
+      - .github/workflows/l32-linux-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-linux-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-rv32:
+    name: Pinned Linux 6.6.143 RV32 build and ISA audit
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate Linux build contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_linux_build.sh
+          bash -n tools/ci/l32_linux_cache_key.sh
+          bash -n tools/ensure_l32_riscv32_linux_gcc.sh
+          python3 -m unittest tests_py.test_l32_linux_build_contract -v
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Probe reusable Linux software build
+        id: linux_cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh
+          if tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+            echo 'L32 Linux build cache miss: build once and retain exact outputs.'
+          fi
+
+      - name: Build pinned Linux 6.6.143 RV32 Image
+        if: steps.linux_cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_build.sh
+          bash tools/ci/l32_linux_build.sh
+
+      - name: Mark reusable Linux software build
+        if: steps.linux_cache.outputs.hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+
+      - name: Verify cached or fresh Linux outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+          cat build/l32-linux/result.txt
+          cat build/l32-linux/evidence/sha256.txt
+
+      - name: Upload L32 Linux build evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-linux-build-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux/result.txt
+            build/l32-linux/config.log
+            build/l32-linux/linux-build.log
+            build/l32-linux/evidence/
+            build/l32-linux/obj/vmlinux
+            build/l32-linux/obj/arch/riscv/boot/Image
