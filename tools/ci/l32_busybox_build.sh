@@ -26,8 +26,36 @@ for tool in curl tar sha256sum file make python3 "${BASE_GCC}" "${READELF}"; do
   }
 done
 
+check_riscv_soft_float_elf() {
+  local elf="$1"
+  python3 - "${elf}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+if len(data) < 40 or data[:4] != b'\x7fELF':
+    raise SystemExit(f"ERROR: not an ELF file: {path}")
+if data[4] != 1:
+    raise SystemExit(f"ERROR: expected ELF32, got EI_CLASS={data[4]}: {path}")
+if data[5] != 1:
+    raise SystemExit(f"ERROR: expected little-endian ELF: {path}")
+e_machine = int.from_bytes(data[18:20], "little")
+if e_machine != 243:
+    raise SystemExit(f"ERROR: expected EM_RISCV=243, got {e_machine}: {path}")
+e_flags = int.from_bytes(data[36:40], "little")
+EF_RISCV_RVC = 0x0001
+EF_RISCV_FLOAT_ABI = 0x0006
+if e_flags & EF_RISCV_FLOAT_ABI:
+    raise SystemExit(f"ERROR: expected soft-float ABI, e_flags=0x{e_flags:x}: {path}")
+if e_flags & EF_RISCV_RVC:
+    raise SystemExit(f"ERROR: unexpected RVC flag, e_flags=0x{e_flags:x}: {path}")
+print(f"L32_ELF_ABI_OK path={path} e_flags=0x{e_flags:x} float_abi=soft rvc=0")
+PY
+}
+
 # The runner's riscv64-unknown-elf toolchain is multilib and is already used by
-# the frozen RV32 workload gates.  Wrap it so musl sees one compiler command
+# the frozen RV32 workload gates. Wrap it so musl sees one compiler command
 # whose target contract is always RV32IMA/ILP32; this also avoids accidentally
 # selecting an RV64 libgcc when musl probes the compiler runtime.
 L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
@@ -53,9 +81,7 @@ EOF
   "${L32_CC}" -Os -ffreestanding -c "${BUILD_DIR}/toolchain-probe.c" -o "${BUILD_DIR}/toolchain-probe.o"
   "${READELF}" -h -A "${BUILD_DIR}/toolchain-probe.o"
 } 2>&1 | tee "${BUILD_DIR}/toolchain-probe.log"
-"${READELF}" -h "${BUILD_DIR}/toolchain-probe.o" | grep -q 'Class:[[:space:]]*ELF32'
-"${READELF}" -h "${BUILD_DIR}/toolchain-probe.o" | grep -q 'Machine:[[:space:]]*RISC-V'
-"${READELF}" -h "${BUILD_DIR}/toolchain-probe.o" | grep -q 'soft-float ABI'
+check_riscv_soft_float_elf "${BUILD_DIR}/toolchain-probe.o" | tee -a "${BUILD_DIR}/toolchain-probe.log"
 probe_arch="$(${READELF} -A "${BUILD_DIR}/toolchain-probe.o" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
 [[ "${probe_arch}" == rv32i* && "${probe_arch}" == *"_m"* && "${probe_arch}" == *"_a"* ]] || {
   echo "ERROR: bootstrap compiler lost required RV32IMA ISA: ${probe_arch}" >&2
@@ -131,9 +157,7 @@ EOF
 "${READELF}" -h -A "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-readelf.txt"
 file "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-file.txt"
 file "${BUILD_DIR}/musl-probe" | grep -q 'statically linked'
-"${READELF}" -h "${BUILD_DIR}/musl-probe" | grep -q 'Class:[[:space:]]*ELF32'
-"${READELF}" -h "${BUILD_DIR}/musl-probe" | grep -q 'Machine:[[:space:]]*RISC-V'
-"${READELF}" -h "${BUILD_DIR}/musl-probe" | grep -q 'soft-float ABI'
+check_riscv_soft_float_elf "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-abi.txt"
 
 (
   cd "${BUSYBOX_BUILD_DIR}"
@@ -168,9 +192,7 @@ BUSYBOX_ELF="${BUSYBOX_BUILD_DIR}/busybox"
 "${READELF}" -h -l -A "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-readelf.txt"
 file "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-file.txt"
 file "${BUSYBOX_ELF}" | grep -q 'statically linked'
-"${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'Class:[[:space:]]*ELF32'
-"${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'Machine:[[:space:]]*RISC-V'
-"${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'soft-float ABI'
+check_riscv_soft_float_elf "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-abi.txt"
 
 busybox_arch="$(${READELF} -A "${BUSYBOX_ELF}" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
 [[ "${busybox_arch}" == rv32i* && "${busybox_arch}" == *"_m"* && "${busybox_arch}" == *"_a"* ]] || {
