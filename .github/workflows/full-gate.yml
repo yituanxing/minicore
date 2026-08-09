@@ -86,6 +86,10 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate_pmp.sh
 
+      - name: RV32IMU isolated preemptive scheduler
+        shell: bash
+        run: bash tools/ci/full_gate_isolated_scheduler.sh
+
       - name: RV64 compiler-produced corpus
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-compiled
@@ -124,6 +128,7 @@ jobs:
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
             echo '- PMP partitions kernel, user text and user data before any MMIO side effect'
+            echo '- timer, syscalls, context switching and dynamic PMP isolate two U-mode tasks'
             echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
           } >> "$GITHUB_STEP_SUMMARY"
 
