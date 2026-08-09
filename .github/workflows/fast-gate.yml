@@ -57,7 +57,8 @@ jobs:
             run_smode_v1=true
           fi
 
-          if grep -Eq '^(software/freertos/|Makefile\.freertos($|-)|sim/|tools/(make_freertos|ci/full_gate_freertos)|tools/ensure_(riscv_none_elf|rv32_nemu))' <<<"$changed"; then
+          freertos_changed="$(grep -Ev '^sim/(opensbi_boot_main|linux_handoff_main|linux_early_boot_main)\.cpp$' <<<"$changed" || true)"
+          if grep -Eq '^(software/freertos/|Makefile\.freertos($|-)|sim/|tools/(make_freertos|ci/full_gate_freertos)|tools/ensure_(riscv_none_elf|rv32_nemu))' <<<"$freertos_changed"; then
             run_freertos=true
           fi
 
@@ -211,6 +212,7 @@ jobs:
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
+            echo '- software-only OpenSBI/Linux simulator runners are excluded from FreeRTOS selection; other sim changes remain covered'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
