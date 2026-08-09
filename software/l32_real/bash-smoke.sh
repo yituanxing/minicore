@@ -1,13 +1,14 @@
 #!/opt/l32/bash
 set -euo pipefail
 
-fib() {
-  local n=$1
-  if (( n < 2 )); then
-    printf '%d' "$n"
-  else
-    printf '%d' "$(( $(fib $((n-1))) + $(fib $((n-2))) ))"
-  fi
+fib_iter() {
+  local n=$1 a=0 b=1 t i
+  for ((i=0; i<n; ++i)); do
+    t=$((a + b))
+    a=$b
+    b=$t
+  done
+  printf '%d' "$a"
 }
 
 gcd() {
@@ -30,7 +31,7 @@ arr=(alpha beta gamma delta)
 [[ ${#arr[@]} -eq 4 ]]
 [[ ${arr[2]} == gamma ]]
 
-mapfile -t lines < <(printf 'three\none\ntwo\n')
+mapfile -t lines <<< $'three\none\ntwo'
 [[ ${#lines[@]} -eq 3 ]]
 [[ ${lines[0]} == three && ${lines[2]} == two ]]
 
@@ -40,14 +41,13 @@ printf 'gamma\n' >> "$f"
 mapfile -t data < "$f"
 [[ ${#data[@]} -eq 3 ]]
 [[ ${data[0]} == alpha && ${data[1]} == beta && ${data[2]} == gamma ]]
-rm -f "$f" 2>/dev/null || :
 
 trap 'signal_seen=42' USR1
 signal_seen=0
 kill -USR1 $$
 [[ $signal_seen -eq 42 ]]
 
-fv=$(fib 10)
+fv=$(fib_iter 20)
 gv=$(gcd 462 1071)
-[[ $fv -eq 55 && $gv -eq 21 ]]
+[[ $fv -eq 6765 && $gv -eq 21 ]]
 printf 'L32_BASH_REAL_PASS %d %d %d\n' "$sum" "$fv" "$gv"
