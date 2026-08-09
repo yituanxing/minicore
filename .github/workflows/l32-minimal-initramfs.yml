@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/l32-minimal-initramfs.yml
+      - Makefile.l32-linux-boot
+      - sim/opensbi_boot_main.cpp
       - software/l32_userspace/**
       - src/main/scala/aethercore/core/AetherCore.scala
       - src/main/scala/aethercore/core/MachineCsrFile.scala
@@ -93,6 +95,7 @@ jobs:
             MAX_CYCLES=500000000 \
             MILESTONE="L32 USER UART IRQ OK" \
             MIN_INTERRUPTS=1 \
+            MIN_SEIP=1 \
             run-local
 
       - name: Upload minimal userspace evidence
