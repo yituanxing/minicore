@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${ROOT_DIR}/software/l32_userspace/manifest.env"
+source "${ROOT_DIR}/software/l32_busybox/manifest.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/userspace"
 DOWNLOAD_DIR="${CACHE_ROOT}/downloads"
