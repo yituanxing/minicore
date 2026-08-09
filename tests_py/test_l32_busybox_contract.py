@@ -2,7 +2,7 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "software/l32_userspace/manifest.env"
+MANIFEST = ROOT / "software/l32_busybox/manifest.env"
 FIRMWARE_MANIFEST = ROOT / "software/l32/manifest.env"
 BUILD = ROOT / "tools/ci/l32_busybox_build.sh"
 
@@ -23,12 +23,13 @@ class L32BusyBoxContract(unittest.TestCase):
             text,
         )
 
-    def test_userspace_freeze_isolated_from_firmware_manifest(self):
+    def test_userspace_freeze_isolated_from_firmware_and_minimal_init_paths(self):
         firmware = FIRMWARE_MANIFEST.read_text()
         self.assertNotIn("MUSL_VERSION=", firmware)
         self.assertNotIn("BUSYBOX_VERSION=", firmware)
         build = BUILD.read_text()
-        self.assertIn('software/l32_userspace/manifest.env', build)
+        self.assertIn('software/l32_busybox/manifest.env', build)
+        self.assertNotIn('software/l32_userspace/manifest.env', build)
         self.assertNotIn('source "${ROOT_DIR}/software/l32/manifest.env"', build)
 
     def test_musl_is_built_as_separate_soft_float_sysroot(self):
