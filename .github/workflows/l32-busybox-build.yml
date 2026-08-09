@@ -187,12 +187,11 @@ jobs:
 
       - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
         shell: bash
+        env:
+          L32_BUSYBOX_PIPE_COMMAND: >-
+            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && echo L32 BUSYBOX PIPE CHILD OK' && echo L32 BUSYBOX PIPE PARENT OK
         run: |
           set -euo pipefail
-          uart_command="$(cat <<'EOF'
-printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && echo L32 BUSYBOX PIPE CHILD OK' && echo L32 BUSYBOX PIPE PARENT OK
-EOF
-          )"
           make -f Makefile.l32-linux-boot \
             BUILD_DIR=build/l32-busybox-multiprocess-probe \
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
@@ -202,7 +201,7 @@ EOF
             MIN_INTERRUPTS=1 \
             MIN_SEIP=1 \
             UART_TRIGGER="L32 BUSYBOX SHELL READY" \
-            UART_COMMAND="$uart_command" \
+            UART_COMMAND="$L32_BUSYBOX_PIPE_COMMAND" \
             run-local
           grep -q 'L32 BUSYBOX PIPE CHILD OK' \
             build/l32-busybox-multiprocess-probe/logs/boot-probe.log
