@@ -6,14 +6,23 @@ source "${ROOT_DIR}/software/l32/manifest.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32"
 SOURCE_DIR="${CACHE_ROOT}/opensbi/${OPENSBI_COMMIT}"
-BUILD_DIR="${ROOT_DIR}/build/l32-opensbi"
+BUILD_DIR="${L32_OPENSBI_BUILD_DIR:-${ROOT_DIR}/build/l32-opensbi}"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 DTB="${BUILD_DIR}/aethercore-rv32.dtb"
 JOBS="${L32_JOBS:-$(nproc)}"
 FW_TEXT_START="0x80000000"
+FW_PAYLOAD_PATH="${L32_FW_PAYLOAD_PATH:-}"
 TOOLCHAIN_MODE="${L32_TOOLCHAIN_MODE:-llvm}"
 
 mkdir -p "${CACHE_ROOT}/opensbi" "${BUILD_DIR}" "${EVIDENCE_DIR}"
+
+if [[ -n "${FW_PAYLOAD_PATH}" ]]; then
+  FW_PAYLOAD_PATH="$(readlink -f "${FW_PAYLOAD_PATH}")"
+  [[ -s "${FW_PAYLOAD_PATH}" ]] || {
+    echo "ERROR: requested OpenSBI payload is missing: ${FW_PAYLOAD_PATH}" >&2
+    exit 19
+  }
+fi
 
 probe_gcc_prefix() {
   local prefix="$1"
@@ -91,6 +100,11 @@ else
   exit 20
 fi
 
+MAKE_PAYLOAD_ARGS=()
+if [[ -n "${FW_PAYLOAD_PATH}" ]]; then
+  MAKE_PAYLOAD_ARGS+=("FW_PAYLOAD_PATH=${FW_PAYLOAD_PATH}")
+fi
+
 python3 -m py_compile "${ROOT_DIR}/tools/ci/make_l32_dtb.py"
 python3 "${ROOT_DIR}/tools/ci/make_l32_dtb.py" \
   --output "${DTB}" \
@@ -127,6 +141,7 @@ mkdir -p "${BUILD_DIR}/build"
   echo "PLATFORM_RISCV_ABI=${OPENSBI_RV32_ABI}"
   echo "FW_TEXT_START=${FW_TEXT_START}"
   echo "FW_FDT_PATH=${DTB}"
+  echo "FW_PAYLOAD_PATH=${FW_PAYLOAD_PATH:-builtin-test-payload}"
   echo "TOOLCHAIN_MODE=${TOOLCHAIN_MODE}"
   echo "TOOLCHAIN=${TOOLCHAIN_SUMMARY}"
   if [[ "${TOOLCHAIN_MODE}" == "llvm" ]]; then
@@ -148,6 +163,7 @@ make -C "${SOURCE_DIR}" \
   PLATFORM_RISCV_ABI="${OPENSBI_RV32_ABI}" \
   FW_TEXT_START="${FW_TEXT_START}" \
   FW_FDT_PATH="${DTB}" \
+  "${MAKE_PAYLOAD_ARGS[@]}" \
   "${MAKE_TOOLCHAIN_ARGS[@]}" \
   -j"${JOBS}" 2>&1 | tee "${BUILD_DIR}/opensbi-build.log"
 
@@ -189,6 +205,7 @@ fi
   echo "firmware=${FW_ELF}"
   echo "firmware_bin=${FW_BIN}"
   echo "fdt=${DTB}"
+  echo "payload=${FW_PAYLOAD_PATH:-builtin-test-payload}"
   echo "entry=${entry}"
   echo "arch=${arch}"
   echo "commit=${OPENSBI_COMMIT}"
