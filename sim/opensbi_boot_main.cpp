@@ -15,6 +15,7 @@ constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
+constexpr std::uint64_t kSupervisorExternalInterruptCause = 0x80000009ULL;
 
 class Memory {
  public:
@@ -81,9 +82,9 @@ void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& memory) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 5)
+    if (argc < 2 || argc > 6)
       throw std::runtime_error(
-          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS]");
+          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
@@ -91,6 +92,8 @@ int main(int argc, char** argv) {
     const std::string milestone = argc >= 4 ? argv[3] : kDefaultMilestone;
     const std::uint64_t minInterrupts =
         argc >= 5 ? std::stoull(argv[4], nullptr, 0) : 0ULL;
+    const std::uint64_t minSeip =
+        argc >= 6 ? std::stoull(argv[5], nullptr, 0) : 0ULL;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
@@ -102,6 +105,7 @@ int main(int argc, char** argv) {
     std::uint64_t commits = 0;
     std::uint64_t exceptions = 0;
     std::uint64_t interrupts = 0;
+    std::uint64_t supervisorExternalInterrupts = 0;
     std::uint64_t lastExceptionCause = 0;
     std::uint64_t lastExceptionValue = 0;
     std::uint64_t lastExceptionPc = 0;
@@ -153,6 +157,7 @@ int main(int argc, char** argv) {
           std::cerr << "\nL32_UART_MILESTONE cycles=" << cycles
                     << " commits=" << commits
                     << " interrupts=" << interrupts
+                    << " seip=" << supervisorExternalInterrupts
                     << " marker=" << milestone << "\n";
         }
       }
@@ -179,31 +184,47 @@ int main(int argc, char** argv) {
         }
         if (top.io_commit_interrupt) {
           ++interrupts;
+          const auto interruptCause =
+              static_cast<std::uint64_t>(top.io_commit_interruptCause);
           if (interrupts == 1) {
             std::cerr << "\nL32_FIRST_INTERRUPT cycles=" << cycles
                       << " commits=" << commits
                       << " pc=0x" << std::hex
-                      << static_cast<std::uint64_t>(top.io_commit_pc)
-                      << " cause=0x"
-                      << static_cast<std::uint64_t>(top.io_commit_exceptionCause)
+                      << static_cast<std::uint64_t>(top.io_commit_interruptPc)
+                      << " cause=0x" << interruptCause
                       << std::dec << "\n";
+          }
+          if (interruptCause == kSupervisorExternalInterruptCause) {
+            ++supervisorExternalInterrupts;
+            if (supervisorExternalInterrupts == 1) {
+              std::cerr << "\nL32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT cycles=" << cycles
+                        << " commits=" << commits
+                        << " pc=0x" << std::hex
+                        << static_cast<std::uint64_t>(top.io_commit_interruptPc)
+                        << " cause=0x" << interruptCause
+                        << std::dec << "\n";
+            }
           }
         }
       }
 
-      if (sawMilestone && interrupts >= minInterrupts) {
+      if (sawMilestone && interrupts >= minInterrupts &&
+          supervisorExternalInterrupts >= minSeip) {
         if (milestone == kDefaultMilestone) {
           std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
                     << " commits=" << commits
                     << " exceptions=" << exceptions
                     << " interrupts=" << interrupts
+                    << " seip=" << supervisorExternalInterrupts
                     << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
         }
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
                   << " exceptions=" << exceptions
                   << " interrupts=" << interrupts
+                  << " seip=" << supervisorExternalInterrupts
                   << " min-interrupts=" << minInterrupts
+                  << " min-seip=" << minSeip
                   << " banner=" << (sawOpenSbiBanner ? 1 : 0)
                   << " marker=" << milestone << "\n";
         return sawOpenSbiBanner ? 0 : 5;
@@ -216,8 +237,10 @@ int main(int argc, char** argv) {
               << " banner=" << (sawOpenSbiBanner ? 1 : 0)
               << " milestone=" << (sawMilestone ? 1 : 0)
               << " min-interrupts=" << minInterrupts
+              << " min-seip=" << minSeip
               << " exceptions=" << exceptions
               << " interrupts=" << interrupts
+              << " seip=" << supervisorExternalInterrupts
               << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
               << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)
               << " last-exception-pc=0x" << lastExceptionPc

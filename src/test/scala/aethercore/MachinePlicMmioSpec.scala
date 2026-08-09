@@ -149,12 +149,27 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
     )) { dut =>
       initialize(dut)
 
-      // NuttX initializes priority entries through source 52.
+      // NuttX/Linux initialize priority entries through source 52.
       write(dut, MachinePlicMmioMap.priority(1), 1)
       write(dut, MachinePlicMmioMap.priority(31), 2)
       write(dut, MachinePlicMmioMap.priority(32), 3)
       write(dut, MachinePlicMmioMap.priority(52), 4)
       read(dut, MachinePlicMmioMap.priority(52)) shouldBe 4
+
+      // OpenSBI generic PLIC cold init clears context0 registers even when the
+      // FDT marks the Machine context absent. These addresses must be legal but
+      // inert: read zero and never mutate the active Supervisor context.
+      write(dut, MachinePlicMmioMap.Enable, BigInt("ffffffff", 16))
+      write(dut, MachinePlicMmioMap.Enable + 4, BigInt("ffffffff", 16))
+      write(dut, MachinePlicMmioMap.Threshold, 7)
+      write(dut, MachinePlicMmioMap.ClaimComplete, 10)
+      read(dut, MachinePlicMmioMap.Enable) shouldBe 0
+      read(dut, MachinePlicMmioMap.Enable + 4) shouldBe 0
+      read(dut, MachinePlicMmioMap.Threshold) shouldBe 0
+      read(dut, MachinePlicMmioMap.ClaimComplete) shouldBe 0
+      dut.io.enabled.expect(0.U)
+      dut.io.threshold.expect(0.U)
+      dut.io.inService.expect(0.U)
 
       // Word 0 exposes IDs 1..31 at architectural bits 1..31.
       write(dut, MachinePlicMmioMap.SupervisorEnable, BigInt("80000002", 16))
@@ -180,9 +195,13 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, MachinePlicMmioMap.SupervisorThreshold) shouldBe 2
       read(dut, MachinePlicMmioMap.SupervisorClaimComplete) shouldBe 52
 
-      // This instance intentionally exposes only the selected context window.
-      expectReadFault(dut, MachinePlicMmioMap.Enable)
-      expectReadFault(dut, MachinePlicMmioMap.Threshold)
+      // Context0 remains inert even after Supervisor state is live.
+      write(dut, MachinePlicMmioMap.Enable, 0)
+      write(dut, MachinePlicMmioMap.Threshold, 0)
+      read(dut, MachinePlicMmioMap.Enable) shouldBe 0
+      read(dut, MachinePlicMmioMap.Threshold) shouldBe 0
+      dut.io.enabled.expect(expectedEnabled.U)
+      dut.io.threshold.expect(2.U)
     }
   }
 }

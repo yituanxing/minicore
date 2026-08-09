@@ -11,6 +11,7 @@ FW_BIN ?= build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
 MAX_CYCLES ?= 50000000
 MILESTONE ?= Linux version 6.6.143
 MIN_INTERRUPTS ?= 0
+MIN_SEIP ?= 0
 
 .PHONY: all rtl sim run-local clean
 
@@ -45,7 +46,7 @@ run-local: sim
 	mkdir -p $(BUILD_DIR)/logs
 	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
 	set +e; \
-		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -61,6 +62,11 @@ run-local: sim
 	if [[ "$(MIN_INTERRUPTS)" -gt 0 ]]; then \
 		grep -q 'L32_FIRST_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
 			echo "ERROR: Linux reached UART marker without a real interrupt retirement"; exit 7; \
+		}; \
+	fi
+	if [[ "$(MIN_SEIP)" -gt 0 ]]; then \
+		grep -q 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux reached UART marker without a retired SEIP interrupt"; exit 8; \
 		}; \
 	fi
 

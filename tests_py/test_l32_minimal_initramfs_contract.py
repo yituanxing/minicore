@@ -11,8 +11,8 @@ class L32MinimalInitramfsContractTest(unittest.TestCase):
         self.assertIn("__NR_write", text)
         self.assertIn("__NR_sched_yield", text)
         self.assertIn("ecall", text)
-        self.assertIn("L32 USER OK", text)
-        self.assertIn("L32_INIT_MESSAGE_LEN 12", text)
+        self.assertIn("L32 USER UART IRQ OK", text)
+        self.assertIn("L32_INIT_MESSAGE_LEN 21", text)
         self.assertNotIn("libc", text.split(".section .text", 1)[-1].lower())
 
     def test_kernel_build_embeds_deterministic_initramfs_without_changing_frozen_image(self):
@@ -44,6 +44,19 @@ class L32MinimalInitramfsContractTest(unittest.TestCase):
             'FW_PAYLOAD_OFFSET="0x00400000"',
             'FW_PAYLOAD_FDT_ADDR="0x87f00000"',
             "L32_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS",
+        ):
+            self.assertIn(required, text)
+
+    def test_dtb_preserves_supervisor_plic_context_hole_and_uart_irq(self):
+        text = (ROOT / "tools/ci/make_l32_dtb.py").read_text()
+        for required in (
+            'b.prop("reg", cells(0, 0x0C000000, 0, 0x00400000))',
+            'b.prop("riscv,ndev", cells(52))',
+            "cells(CPU_INTC_PHANDLE, 0xFFFFFFFF, CPU_INTC_PHANDLE, 9)",
+            'b.prop("interrupt-parent", cells(PLIC_PHANDLE))',
+            'b.prop("interrupts", cells(10))',
+            '"plic_m_context=absent"',
+            '"plic_s_context=1"',
         ):
             self.assertIn(required, text)
 

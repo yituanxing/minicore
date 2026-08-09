@@ -4,7 +4,16 @@ on:
   pull_request:
     paths:
       - .github/workflows/l32-minimal-initramfs.yml
+      - Makefile.l32-linux-boot
+      - sim/opensbi_boot_main.cpp
       - software/l32_userspace/**
+      - src/main/scala/aethercore/core/AetherCore.scala
+      - src/main/scala/aethercore/core/MachineCsrFile.scala
+      - src/main/scala/aethercore/core/MachinePlic.scala
+      - src/main/scala/aethercore/core/MachinePlicMmio.scala
+      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
+      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
+      - tools/ci/make_l32_dtb.py
       - tools/ci/l32_minimal_initramfs_build.sh
       - tools/ci/l32_minimal_init_payload_build.sh
       - tests_py/test_l32_minimal_initramfs_contract.py
@@ -19,7 +28,7 @@ concurrency:
 
 jobs:
   minimal-initramfs:
-    name: Linux 6.6.143 minimal /init U-mode proof
+    name: Linux 6.6.143 /init UART IRQ proof
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 60
 
@@ -76,7 +85,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run real PID 1 userspace proof
+      - name: Run real PID 1 UART interrupt proof
         shell: bash
         run: |
           set -euo pipefail
@@ -84,8 +93,9 @@ jobs:
             FW_BIN=build/l32-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
-            MILESTONE="L32 USER OK" \
+            MILESTONE="L32 USER UART IRQ OK" \
             MIN_INTERRUPTS=1 \
+            MIN_SEIP=1 \
             run-local
 
       - name: Upload minimal userspace evidence
