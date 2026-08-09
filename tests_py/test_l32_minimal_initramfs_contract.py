@@ -11,7 +11,8 @@ class L32MinimalInitramfsContractTest(unittest.TestCase):
         self.assertIn("__NR_write", text)
         self.assertIn("__NR_sched_yield", text)
         self.assertIn("ecall", text)
-        self.assertIn("AetherCore L32 init running", text)
+        self.assertIn("L32 USER OK", text)
+        self.assertIn("L32_INIT_MESSAGE_LEN 12", text)
         self.assertNotIn("libc", text.split(".section .text", 1)[-1].lower())
 
     def test_kernel_build_embeds_deterministic_initramfs_without_changing_frozen_image(self):
