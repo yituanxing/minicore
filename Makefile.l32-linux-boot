@@ -19,10 +19,11 @@ UART_COMMAND ?=
 UART_COMMAND_FILE ?=
 POST_INPUT_MAX_CYCLES ?= 0
 PROGRESS_INTERVAL_CYCLES ?= 25000000
+RUN_DEPS ?= sim
 UART_INPUT_ENABLED := $(if $(strip $(UART_COMMAND)$(UART_COMMAND_FILE)),1,0)
 export AETHERCORE_UART_COMMAND := $(UART_COMMAND)
 
-.PHONY: all rtl sim run-local clean
+.PHONY: all rtl sim run-local run-existing clean
 
 all: run-local
 
@@ -50,7 +51,11 @@ sim: rtl
 	set -e; \
 	exit $$rc
 
-run-local: sim
+run-existing:
+	@test -x "$(OBJ_DIR)/V$(TOP)" || { echo "ERROR: missing existing L32 simulator $(OBJ_DIR)/V$(TOP); run run-local once first"; exit 3; }
+	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) RUN_DEPS= run-local
+
+run-local: $(RUN_DEPS)
 	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }
 	mkdir -p $(BUILD_DIR)/logs
 	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
