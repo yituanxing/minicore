@@ -18,7 +18,7 @@ def load_suite():
 
 
 class L32LinuxRuntimeSuiteContract(unittest.TestCase):
-    def test_vfs_case_is_self_checking_and_covers_common_file_paths(self):
+    def test_vfs_case_is_self_checking_and_stays_within_minimal_ash(self):
         suite = load_suite()
         cases = {case_id: (marker, command) for case_id, marker, command in suite.CASES}
         self.assertIn("vfs", cases)
@@ -26,19 +26,23 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual(marker, "L32 BUSYBOX VFS OK")
         for required in (
             "set -eu",
-            "/tmp/l32-vfs-runtime",
-            "mkdir -p",
+            "/tmp/l32-vfs-runtime-file",
             "printf 'alpha\\nbeta\\n' >",
-            "/bin/busybox cat",
-            "/bin/busybox mv",
-            '[ ! -e "$d/a" ]',
-            '[ -f "$d/b" ]',
-            ">> \"$d/b\"",
-            "/bin/busybox rm",
-            'cat \"$d/missing\" >/dev/null 2>&1',
+            "IFS= read -r a",
+            "IFS= read -r b",
+            '[ "$a" = alpha ]',
+            '[ "$b" = beta ]',
+            '[ -f "$f" ]',
+            "[ ! -e /tmp/l32-vfs-runtime-missing ]",
+            "printf 'gamma\\n' >>",
+            "while IFS= read -r line",
+            '[ "$n" -eq 3 ]',
+            '[ "$last" = gamma ]',
             "L32 BUSYBOX VFS %s\\n",
         ):
             self.assertIn(required, command)
+        for forbidden_applet in ("/bin/busybox rm", "/bin/busybox mkdir", "/bin/busybox mv", "/bin/busybox cat", "/bin/busybox tail"):
+            self.assertNotIn(forbidden_applet, command)
         self.assertNotIn(marker, command)
         self.assertTrue(command.index("set -eu") < command.index("L32 BUSYBOX VFS %s\\n"))
 
