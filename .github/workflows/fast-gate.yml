@@ -134,6 +134,7 @@ jobs:
             aethercore.MachineInterruptArbiterSpec \
             aethercore.MachineExternalCsrSpec \
             aethercore.MachineExternalInterruptCoreSpec \
+            aethercore.SupervisorExternalInterruptSpec \
             aethercore.AetherCoreInterruptPlatformSpec \
             aethercore.WaitForInterruptCoreSpec
 
@@ -207,7 +208,7 @@ jobs:
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
             echo '- the executable V1 workload builds a real RV32IM/Zicsr ELF and proves M->S, S/U ECALL delegation, SRET and WARL-zero mideleg at stall=0 and stall=3'
             echo '- DecoderSpec, RV32AtomicCoreSpec and Sv32AtomicCoreSpec cover RV32A decode, LR/SC reservation, AMO results, translated PA34 identity and memory backpressure/remap behavior'
-            echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, core platform mapping and WFI suites run for interrupt/core changes'
+            echo '- focused PLIC arbitration/MMIO, UART RX, integrated UART-to-PLIC, machine external CSR/core entry, supervisor external CSR qualification, core platform mapping and WFI suites run for interrupt/core changes'
             echo '- FreeRTOS UART RX is injected during masked Tickless WFI and qualified through PLIC claim/complete, FromISR queue wakeup and portYIELD_FROM_ISR'
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
