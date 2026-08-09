@@ -38,7 +38,7 @@ mkdir -p "${INIT_BUILD_DIR}"
   -nostdlib -static -no-pie \
   -Wl,--build-id=none -Wl,-e,_start -Wl,-Ttext=0x00010000 \
   -Wl,-z,max-page-size=4096 \
-  "${ROOT_DIR}/software/l32/minimal_init.S" -o "${INIT_ELF}"
+  "${ROOT_DIR}/software/l32_userspace/minimal_init.S" -o "${INIT_ELF}"
 
 "${L32_CROSS_COMPILE_PREFIX}readelf" -h -l -A "${INIT_ELF}" \
   | tee "${EVIDENCE_DIR}/init-readelf.txt"
