@@ -40,7 +40,7 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
             "MIN_INTERRUPTS=1",
             "MIN_SEIP=1",
             'UART_TRIGGER="L32 BUSYBOX SHELL READY"',
-            'UART_COMMAND="$uart_command"',
+            'UART_COMMAND="$L32_BUSYBOX_PIPE_COMMAND"',
         ):
             self.assertIn(required, text)
 
