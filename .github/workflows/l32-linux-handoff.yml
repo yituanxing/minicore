@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+          bash tools/ci/l32_linux_cache_key.sh check build/l32-linux
           source software/l32/linux-freeze.env
           echo "${L32_LINUX_IMAGE_SHA256}  build/l32-linux/obj/arch/riscv/boot/Image" | sha256sum -c -
 
@@ -64,7 +64,6 @@ jobs:
           L32_HANDOFF_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_linux_handoff_build.sh
           bash tools/ci/l32_linux_handoff_build.sh
 
       - name: Provision fixed Verilator
