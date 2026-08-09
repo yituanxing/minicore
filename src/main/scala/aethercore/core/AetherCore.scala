@@ -388,7 +388,12 @@ class AetherCore(
     is(CsrOp.Set) { csrWriteData := csrReadData | csrOperand }
     is(CsrOp.Clear) { csrWriteData := csrReadData & ~csrOperand }
   }
-  val canonicalCsrWriteData = MachineCsrWarl.canonicalize(config.isa, csrAddr, csrWriteData)
+  val canonicalCsrWriteData = MachineCsrWarl.canonicalize(
+    config.isa,
+    csrAddr,
+    csrWriteData,
+    withSupervisorExternalInterrupt
+  )
   val csrException = csrInstruction && !csrLegal
   val wfiException =
     idEx.ctrl.wfi && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
