@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${ROOT_DIR}/software/l32/manifest.env"
+source "${ROOT_DIR}/software/l32_userspace/manifest.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/userspace"
 DOWNLOAD_DIR="${CACHE_ROOT}/downloads"
@@ -14,12 +14,12 @@ MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
 BUSYBOX_BUILD_DIR="${BUILD_DIR}/busybox-src"
 JOBS="${L32_USERSPACE_JOBS:-$(nproc)}"
 
-BASE_GCC="${L32_CROSS_COMPILE_PREFIX}gcc"
-READELF="${L32_CROSS_COMPILE_PREFIX}readelf"
+BASE_GCC="${L32_USERSPACE_CROSS_COMPILE_PREFIX}gcc"
+READELF="${L32_USERSPACE_CROSS_COMPILE_PREFIX}readelf"
 
 mkdir -p "${DOWNLOAD_DIR}" "${SOURCE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
-for tool in curl tar sha256sum file make "${BASE_GCC}" "${READELF}"; do
+for tool in curl tar sha256sum file make python3 "${BASE_GCC}" "${READELF}"; do
   command -v "${tool}" >/dev/null 2>&1 || {
     echo "ERROR: missing required L32 userspace build tool: ${tool}" >&2
     exit 20
@@ -68,7 +68,7 @@ MUSL_CC="${BASE_GCC} -march=${L32_USERSPACE_ISA} -mabi=${L32_USERSPACE_ABI}"
     --enable-static \
     --enable-gcc-wrapper \
     "CC=${MUSL_CC}" \
-    "CROSS_COMPILE=${L32_CROSS_COMPILE_PREFIX}" \
+    "CROSS_COMPILE=${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
     "CFLAGS=-Os -pipe"
   make -j"${JOBS}"
   make install
@@ -116,7 +116,7 @@ if 'CONFIG_ASH=y' not in text:
 path.write_text(text)
 PY
   make ARCH=riscv \
-    CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
+    CROSS_COMPILE="${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
     CC="${MUSL_GCC} -march=${L32_USERSPACE_ISA} -mabi=${L32_USERSPACE_ABI}" \
     HOSTCC="${HOSTCC:-cc}" \
     -j"${JOBS}" busybox
