@@ -84,7 +84,7 @@ jobs:
             FW_BIN=build/l32-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
-            MILESTONE="AetherCore L32 init running" \
+            MILESTONE="L32 USER OK" \
             MIN_INTERRUPTS=1 \
             run-local
 
