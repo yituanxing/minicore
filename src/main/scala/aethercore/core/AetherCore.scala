@@ -67,7 +67,8 @@ class MemWb(
 
 class AetherCore(
     val config: CoreConfig = CoreProfiles.rv64imCurrent,
-    val withMachineExternalInterrupt: Boolean = false
+    val withMachineExternalInterrupt: Boolean = false,
+    val withSupervisorExternalInterrupt: Boolean = false
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
@@ -77,6 +78,8 @@ class AetherCore(
     (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorTimerInterrupt)
   private val machineTimerCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineTimer)
+  private val supervisorExternalCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorExternalInterrupt)
   private val machineExternalCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineExternal)
 
@@ -84,6 +87,8 @@ class AetherCore(
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
   require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!config.isa.hasSv32 || paddrBits >= 34, "Sv32 requires a PA width of at least 34 bits")
+  require(!withSupervisorExternalInterrupt || config.isa.hasS,
+    "supervisor external interrupt requires an S-mode profile")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
@@ -92,6 +97,8 @@ class AetherCore(
     val timerInterrupt = Input(Bool())
     val time = if (config.isa.hasSstc) Some(Input(UInt(64.W))) else None
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
+    val supervisorExternalInterrupt =
+      if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -110,7 +117,11 @@ class AetherCore(
   val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
-  val csrFile = Module(new MachineCsrFile(config.isa, withMachineExternalInterrupt))
+  val csrFile = Module(new MachineCsrFile(
+    config.isa,
+    withMachineExternalInterrupt,
+    withSupervisorExternalInterrupt
+  ))
   val instructionPmp = Module(new PmpChecker(xlen))
   val dataPmp = Module(new PmpChecker(xlen))
   val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
@@ -208,13 +219,19 @@ class AetherCore(
   if (withMachineExternalInterrupt) {
     csrFile.io.externalInterrupt.get := rawExternalInterrupt
   }
+  val rawSupervisorExternalInterrupt =
+    if (withSupervisorExternalInterrupt) io.supervisorExternalInterrupt.get else false.B
+  if (withSupervisorExternalInterrupt) {
+    csrFile.io.supervisorExternalInterruptPending.get := rawSupervisorExternalInterrupt
+  }
   csrFile.io.trapReturn := takingMret
   csrFile.io.trapReturnSupervisor := takingMret && memWb.inst === "h10200073".U
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
   val rawSupervisorTimerPending =
     if (config.isa.hasSstc) csrFile.io.supervisorTimerPending.get else false.B
-  val rawInterruptPending = io.timerInterrupt || rawExternalInterrupt || rawSupervisorTimerPending
+  val rawInterruptPending =
+    io.timerInterrupt || rawExternalInterrupt || rawSupervisorExternalInterrupt || rawSupervisorTimerPending
   val waitingForInterrupt = wfiRetiring && !rawInterruptPending
 
   val interruptPc = Mux(
@@ -225,10 +242,13 @@ class AetherCore(
   val takingExternalInterrupt =
     if (withMachineExternalInterrupt) csrFile.io.machineExternalInterrupt.get else false.B
   val takingTimerInterrupt = csrFile.io.machineTimerInterrupt
+  val takingSupervisorExternalInterrupt =
+    if (withSupervisorExternalInterrupt) csrFile.io.supervisorExternalInterrupt.get else false.B
   val takingSupervisorTimerInterrupt =
     if (config.isa.hasSstc) csrFile.io.supervisorTimerInterrupt.get else false.B
   val qualifiedInterrupt =
-    takingExternalInterrupt || takingTimerInterrupt || takingSupervisorTimerInterrupt
+    takingExternalInterrupt || takingTimerInterrupt ||
+      takingSupervisorExternalInterrupt || takingSupervisorTimerInterrupt
   val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret && qualifiedInterrupt
   val interruptCause = Mux(
     takingExternalInterrupt,
@@ -236,7 +256,11 @@ class AetherCore(
     Mux(
       takingTimerInterrupt,
       machineTimerCause.U(xlen.W),
-      supervisorTimerCause.U(xlen.W)
+      Mux(
+        takingSupervisorExternalInterrupt,
+        supervisorExternalCause.U(xlen.W),
+        supervisorTimerCause.U(xlen.W)
+      )
     )
   )
 
