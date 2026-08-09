@@ -87,7 +87,7 @@ if [[ ! -f "${BASH_SRC}/configure" ]]; then
   tar -xzf "${BASH_TARBALL}" -C "${SOURCE_DIR}"
 fi
 
-# Build Lua unchanged from upstream source.  Use the generic/POSIX path so the
+# Build Lua unchanged from upstream source. Use the generic/POSIX path so the
 # validation binary has no readline/dlopen dependency and remains fully static.
 LUA_BUILD="${BUILD_DIR}/lua-src"
 rm -rf "${LUA_BUILD}"
@@ -116,21 +116,23 @@ check_elf "${BUILD_DIR}/lua" > "${EVIDENCE_DIR}/lua-readelf.txt"
   2>&1 | tee "${BUILD_DIR}/sqlite-build.log"
 check_elf "${BUILD_DIR}/sqlite-smoke" > "${EVIDENCE_DIR}/sqlite-readelf.txt"
 
-# Bash is deliberately a separate real-program workload.  Disable optional
-# readline/NLS dependencies; keep its parser, arithmetic, functions, signals,
-# job/process machinery, redirection and builtins intact.
+# Bash is deliberately a separate real-program workload. Disable optional NLS
+# and keep a fully static target. Bash injects -rdynamic into its final link for
+# hosted systems; the bare-metal GCC underneath our musl wrapper does not accept
+# that driver option and static validation does not need exported dynamic symbols.
 BASH_BUILD="${BUILD_DIR}/bash-src"
 rm -rf "${BASH_BUILD}"
 cp -a "${BASH_SRC}" "${BASH_BUILD}"
 (
   cd "${BASH_BUILD}"
+  build_triplet="$(sh support/config.guess)"
   env \
     CC="${MUSL_CC}" \
     bash_cv_getcwd_malloc=yes \
     bash_cv_func_sigsetjmp=present \
     bash_cv_printf_a_format=yes \
     ./configure \
-      --build="$(support/config.guess)" \
+      --build="${build_triplet}" \
       --host=riscv32-linux-musl \
       --disable-nls \
       --without-bash-malloc \
@@ -138,6 +140,13 @@ cp -a "${BASH_SRC}" "${BASH_BUILD}"
       --enable-static-link \
       CFLAGS='-Os' \
       LDFLAGS='-static'
+  # Keep upstream sources untouched; adjust only the generated cross-build
+  # Makefile driver flag. Host-side build tools may still use their native gcc.
+  sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile
+  if grep -Eq '(^|[[:space:]])-rdynamic([[:space:]]|$)' Makefile; then
+    echo "ERROR: generated Bash target Makefile still contains -rdynamic" >&2
+    exit 32
+  fi
   make -j"${JOBS}" bash
 ) 2>&1 | tee "${BUILD_DIR}/bash-build.log"
 cp "${BASH_BUILD}/bash" "${BUILD_DIR}/bash"
