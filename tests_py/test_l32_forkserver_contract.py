@@ -37,17 +37,20 @@ class L32ForkserverContract(unittest.TestCase):
         self.assertIn("if (pid == 0)", text)
         self.assertIn("_exit(rc);", text)
 
-    def test_makefile_builds_forkserver_single_threaded(self):
+    def test_makefile_builds_forkserver_single_threaded_and_can_reuse_rtl(self):
         text = MAKEFILE.read_text()
         for required in (
+            "RTL_DIR ?= $(BUILD_DIR)/rtl",
             "FORKSERVER_OBJ_DIR := $(BUILD_DIR)/obj-forkserver",
+            "FORKSERVER_RUN_DEPS ?= forkserver-sim",
             "FORKSERVER_BATCH_FILE ?=",
             "FORKSERVER_TRIGGER ?= L32 BUSYBOX SHELL READY",
             "FORKSERVER_BOOT_MAX_CYCLES ?= 450000000",
             "FORKSERVER_CASE_MAX_CYCLES ?= 50000000",
-            "forkserver-sim: rtl",
+            "forkserver-sim: rtl forkserver-sim-existing-rtl",
+            "forkserver-sim-existing-rtl:",
             "sim/opensbi_forkserver_main.cpp",
-            "forkserver-local: forkserver-sim",
+            "forkserver-local: $(FORKSERVER_RUN_DEPS)",
             "L32_FORKSERVER_READY",
             "L32_FORKSERVER_PASS",
         ):
