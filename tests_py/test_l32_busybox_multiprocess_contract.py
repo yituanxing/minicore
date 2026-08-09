@@ -34,8 +34,9 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
             "Verify exact BusyBox Linux runtime payload",
             "Run real Linux BusyBox multiprocess pipeline over ttyS0",
             "printf 'PIPE_TOKEN\\n' | /bin/sh -c",
-            'read x; [ "$x" = PIPE_TOKEN ]',
+            'read x; case "$x" in PIPE_TOKEN)',
             'printf "L32 BUSYBOX PIPE CHILD %s\\n" OK',
+            "*) exit 1;; esac",
             "printf 'L32 BUSYBOX PIPE PARENT %s\\n' OK",
             'MILESTONE="L32 BUSYBOX PIPE PARENT OK"',
             "MIN_INTERRUPTS=1",
@@ -60,6 +61,8 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         self.assertNotIn("L32 BUSYBOX PIPE PARENT OK", command)
         self.assertIn("$x", command)
         self.assertNotIn("$$x", command)
+        self.assertNotIn('[ "$x" = PIPE_TOKEN ]', command)
+        self.assertIn('case "$x" in PIPE_TOKEN)', command)
 
         makefile = MAKEFILE.read_text()
         for required in (
