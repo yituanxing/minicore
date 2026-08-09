@@ -78,7 +78,6 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
             "POST_INPUT_MAX_CYCLES ?= 0",
             "PROGRESS_INTERVAL_CYCLES ?= 25000000",
             "RUN_DEPS ?= sim",
-            ".PHONY: all rtl sim run-local run-existing clean",
             "run-existing:",
             'missing existing L32 simulator $(OBJ_DIR)/V$(TOP); run run-local once first',
             "RUN_DEPS= run-local",
@@ -92,6 +91,13 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
             "L32_UART_INPUT_SEIP",
         ):
             self.assertIn(required, makefile)
+
+        phony_match = re.search(r"^\.PHONY:\s+(.+)$", makefile, re.MULTILINE)
+        self.assertIsNotNone(phony_match)
+        phony_targets = set(phony_match.group(1).split())
+        for target in ("all", "rtl", "sim", "run-local", "run-existing", "clean"):
+            self.assertIn(target, phony_targets)
+
         self.assertNotIn('"$(UART_COMMAND)" 2>&1', makefile)
         self.assertNotIn("--x-assign fast", makefile)
         self.assertNotIn("--x-initial fast", makefile)

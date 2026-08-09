@@ -2,8 +2,9 @@ SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
 BUILD_DIR ?= build/l32-linux-probe
-RTL_DIR := $(BUILD_DIR)/rtl
+RTL_DIR ?= $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
+FORKSERVER_OBJ_DIR := $(BUILD_DIR)/obj-forkserver
 TOP := AetherCoreOpenSbiSimTop
 VERILATOR ?= verilator
 VERILATOR_MODEL_OPT ?= -O3
@@ -23,10 +24,15 @@ UART_COMMAND_FILE ?=
 POST_INPUT_MAX_CYCLES ?= 0
 PROGRESS_INTERVAL_CYCLES ?= 25000000
 RUN_DEPS ?= sim
+FORKSERVER_RUN_DEPS ?= forkserver-sim
+FORKSERVER_BATCH_FILE ?=
+FORKSERVER_TRIGGER ?= L32 BUSYBOX SHELL READY
+FORKSERVER_BOOT_MAX_CYCLES ?= 450000000
+FORKSERVER_CASE_MAX_CYCLES ?= 50000000
 UART_INPUT_ENABLED := $(if $(strip $(UART_COMMAND)$(UART_COMMAND_FILE)),1,0)
 export AETHERCORE_UART_COMMAND := $(UART_COMMAND)
 
-.PHONY: all rtl sim run-local run-existing clean
+.PHONY: all rtl sim forkserver-sim forkserver-sim-existing-rtl run-local run-existing forkserver-local clean
 
 all: run-local
 
@@ -54,9 +60,51 @@ sim: rtl
 	set -e; \
 	exit $$rc
 
+forkserver-sim: rtl forkserver-sim-existing-rtl
+
+forkserver-sim-existing-rtl:
+	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no reusable L32 Linux RTL in $(RTL_DIR)"; exit 4; }
+	mkdir -p $(BUILD_DIR)/logs
+	set +e; \
+		$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_MAKE_OPT) --cc --exe --build -Wall -Wno-fatal \
+			--top-module $(TOP) -Mdir $(FORKSERVER_OBJ_DIR) \
+			-CFLAGS "$(SIM_CXXFLAGS)" \
+			$(RTL_DIR)/*.sv $(abspath sim/opensbi_forkserver_main.cpp) \
+			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-forkserver-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
 run-existing:
 	@test -x "$(OBJ_DIR)/V$(TOP)" || { echo "ERROR: missing existing L32 simulator $(OBJ_DIR)/V$(TOP); run run-local once first"; exit 3; }
 	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) RUN_DEPS= run-local
+
+forkserver-local: $(FORKSERVER_RUN_DEPS)
+	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }
+	@test -s "$(FORKSERVER_BATCH_FILE)" || { echo "ERROR: missing forkserver workload file $(FORKSERVER_BATCH_FILE)"; exit 3; }
+	mkdir -p $(BUILD_DIR)/logs
+	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
+	set +e; \
+		$(FORKSERVER_OBJ_DIR)/V$(TOP) \
+			"$(FW_BIN)" \
+			"$(FORKSERVER_BOOT_MAX_CYCLES)" \
+			"$(FORKSERVER_TRIGGER)" \
+			"$(FORKSERVER_BATCH_FILE)" \
+			"$(FORKSERVER_CASE_MAX_CYCLES)" \
+			"$(PROGRESS_INTERVAL_CYCLES)" \
+			2>&1 | tee $(BUILD_DIR)/logs/forkserver.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	if [[ $$rc -ne 0 ]]; then \
+		echo "ERROR: L32 Linux forkserver failed (runner rc=$$rc)"; \
+		exit $$rc; \
+	fi
+	grep -q '^L32_FORKSERVER_READY ' $(BUILD_DIR)/logs/forkserver.log || { \
+		echo "ERROR: forkserver did not reach the warm shell boundary"; exit 21; \
+	}
+	grep -q '^L32_FORKSERVER_PASS ' $(BUILD_DIR)/logs/forkserver.log || { \
+		echo "ERROR: forkserver returned without an all-pass result"; exit 22; \
+	}
 
 run-local: $(RUN_DEPS)
 	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }
