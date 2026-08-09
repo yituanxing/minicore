@@ -8,10 +8,12 @@ on:
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
       - tools/ci/l32_busybox_runtime_freeze.sh
+      - tools/ci/l32_linux_runtime_suite.py
       - tools/ci/l32_software_artifact_cache.sh
       - tests_py/test_l32_busybox_contract.py
       - tests_py/test_l32_busybox_multiprocess_contract.py
       - tests_py/test_l32_forkserver_contract.py
+      - tests_py/test_l32_linux_runtime_suite_contract.py
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - sim/opensbi_forkserver_main.cpp
@@ -49,10 +51,12 @@ jobs:
           bash -n tools/ci/l32_busybox_payload_build.sh
           bash -n tools/ci/l32_busybox_runtime_freeze.sh
           bash -n tools/ci/l32_software_artifact_cache.sh
+          python3 -m py_compile tools/ci/l32_linux_runtime_suite.py
           python3 -m unittest \
             tests_py.test_l32_busybox_contract \
             tests_py.test_l32_busybox_multiprocess_contract \
-            tests_py.test_l32_forkserver_contract -v
+            tests_py.test_l32_forkserver_contract \
+            tests_py.test_l32_linux_runtime_suite_contract -v
 
       - name: Reuse or build soft-float musl and static BusyBox
         shell: bash
@@ -189,21 +193,7 @@ jobs:
           batch_file="$probe_dir/workloads.tsv"
           rm -rf "$probe_dir"
           mkdir -p "$probe_dir"
-          python3 - "$batch_file" <<'PY'
-          from pathlib import Path
-          import sys
-
-          rows = [
-              ("builtin", "L32 FORKSERVER BUILTIN OK", r"printf 'L32 FORKSERVER BUILTIN OK\n'"),
-              ("subshell", "L32 FORKSERVER SUBSHELL OK", r'''/bin/sh -c 'printf "L32 FORKSERVER SUBSHELL OK\n"' '''),
-              (
-                  "pipeline",
-                  "L32 BUSYBOX PIPE PARENT OK",
-                  r'''printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK''',
-              ),
-          ]
-          Path(sys.argv[1]).write_text("\n".join("\t".join(row) for row in rows) + "\n")
-          PY
+          python3 tools/ci/l32_linux_runtime_suite.py write-batch "$batch_file"
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$probe_dir" \
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
@@ -215,16 +205,7 @@ jobs:
             PROGRESS_INTERVAL_CYCLES=25000000 \
             forkserver-local
           log="$probe_dir/logs/forkserver.log"
-          normalized_log="$probe_dir/logs/forkserver-normalized.log"
-          tr -d '\r' < "$log" > "$normalized_log"
-          grep -q '^L32_FORKSERVER_READY ' "$normalized_log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=builtin ' "$normalized_log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=subshell ' "$normalized_log"
-          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || \
-            grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
-          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=pipeline ' "$normalized_log"
-          grep -q '^L32_FORKSERVER_PASS cases=3 ' "$normalized_log"
+          python3 tools/ci/l32_linux_runtime_suite.py verify-log "$log"
 
       - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
