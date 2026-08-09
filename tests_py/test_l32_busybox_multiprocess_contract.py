@@ -58,12 +58,12 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
             "l32_software_artifact_cache.sh busybox", "l32_software_artifact_cache.sh runtime-probe", "l32_software_artifact_cache.sh busybox-payload", "clean: false",
         ):
             self.assertIn(required, text)
-        probe = text.index("l32_software_artifact_cache.sh runtime-probe")
-        real = text.index("tools/ci/l32_real_programs_cache.sh")
-        initramfs = text.index("tools/ci/l32_runtime_image_cache.sh")
-        payload = text.index("l32_software_artifact_cache.sh busybox-payload")
-        verify = text.index("tools/ci/l32_busybox_runtime_freeze.sh")
-        runtime = text.index('MILESTONE="L32 BUSYBOX PIPE PARENT OK"')
+        probe = text.index("          tools/ci/l32_software_artifact_cache.sh runtime-probe")
+        real = text.index("          tools/ci/l32_real_programs_cache.sh")
+        initramfs = text.index("          tools/ci/l32_runtime_image_cache.sh")
+        payload = text.index("          tools/ci/l32_software_artifact_cache.sh busybox-payload")
+        verify = text.index("          tools/ci/l32_busybox_runtime_freeze.sh")
+        runtime = text.index('            MILESTONE="L32 BUSYBOX PIPE PARENT OK"')
         self.assertLess(probe, real)
         self.assertLess(real, initramfs)
         self.assertLess(initramfs, payload)
