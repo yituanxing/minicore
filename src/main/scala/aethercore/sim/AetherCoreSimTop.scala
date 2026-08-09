@@ -4,19 +4,22 @@ import chisel3._
 import chisel3.util._
 import aethercore.common._
 import aethercore.config.{CoreConfig, CoreProfiles}
-import aethercore.core.{AetherCore, MachinePlicMmioMap}
+import aethercore.core.{AetherCore, MachinePlicMmio, MachinePlicMmioMap}
 
 class AetherCoreSimTop(
     val config: CoreConfig = CoreProfiles.rv64imCurrent,
     val stopOnTrap: Boolean = true,
     val withMachineInterruptPlatform: Boolean = false,
+    val withSupervisorInterruptPlatform: Boolean = false,
     val stopOnWfi: Boolean = true,
     val withNs16550Uart: Boolean = false,
     val interruptPlatformSourceCount: Int = 8,
     val interruptPlicEnableBase: Int = MachinePlicMmioMap.Enable,
     val interruptPlicThresholdOffset: Int = MachinePlicMmioMap.Threshold,
     val interruptPlicClaimCompleteOffset: Int = MachinePlicMmioMap.ClaimComplete,
-    val interruptUartSourceId: Int = 1
+    val interruptUartSourceId: Int = 1,
+    val supervisorPlicSourceCount: Int = 52,
+    val supervisorUartSourceId: Int = 10
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
@@ -28,9 +31,19 @@ class AetherCoreSimTop(
   private val uartRxLimit = uartRxBase + BigInt(0x10)
   private val ns16550Limit = config.platform.uartAddress + BigInt(8)
 
-  if (withMachineInterruptPlatform) {
+  require(!(withMachineInterruptPlatform && withSupervisorInterruptPlatform),
+    "machine and supervisor interrupt platforms are mutually exclusive in one simulation top")
+  if (withMachineInterruptPlatform || withSupervisorInterruptPlatform) {
     require(busDataBits == 32,
-      s"the first Machine interrupt platform requires a 32-bit data bus, got $busDataBits")
+      s"the interrupt platform requires a 32-bit data bus, got $busDataBits")
+  }
+  if (withSupervisorInterruptPlatform) {
+    require(withNs16550Uart,
+      "the first supervisor interrupt platform is driven by the ns16550 UART")
+    require(supervisorPlicSourceCount > 0 && supervisorPlicSourceCount <= 63,
+      s"supervisor PLIC supports 1..63 real sources, got $supervisorPlicSourceCount")
+    require(supervisorUartSourceId > 0 && supervisorUartSourceId <= supervisorPlicSourceCount,
+      s"supervisor UART PLIC source ID must be in 1..$supervisorPlicSourceCount")
   }
 
   val io = IO(new Bundle {
@@ -61,6 +74,10 @@ class AetherCoreSimTop(
     val rxReady = if (withMachineInterruptPlatform) Some(Output(Bool())) else None
     val externalInterrupt =
       if (withMachineInterruptPlatform) Some(Output(Bool())) else None
+    val supervisorExternalInterrupt =
+      if (withSupervisorInterruptPlatform) Some(Output(Bool())) else None
+    val uartInterrupt =
+      if (withSupervisorInterruptPlatform) Some(Output(Bool())) else None
     val exitValid = Output(Bool())
     val exitCode = Output(UInt(xlen.W))
 
@@ -80,7 +97,11 @@ class AetherCoreSimTop(
     })
   }
 
-  val core = Module(new AetherCore(config, withMachineExternalInterrupt = withMachineInterruptPlatform))
+  val core = Module(new AetherCore(
+    config,
+    withMachineExternalInterrupt = withMachineInterruptPlatform,
+    withSupervisorExternalInterrupt = withSupervisorInterruptPlatform
+  ))
   val interruptPlatform =
     if (withMachineInterruptPlatform) {
       Some(Module(new MachineInterruptPlatform(
@@ -91,6 +112,16 @@ class AetherCoreSimTop(
         plicThresholdOffset = interruptPlicThresholdOffset,
         plicClaimCompleteOffset = interruptPlicClaimCompleteOffset,
         uartSourceId = interruptUartSourceId
+      )))
+    } else None
+  val supervisorPlic =
+    if (withSupervisorInterruptPlatform) {
+      Some(Module(new MachinePlicMmio(
+        sourceCount = supervisorPlicSourceCount,
+        addressBits = 24,
+        enableBase = MachinePlicMmioMap.SupervisorEnable,
+        thresholdOffset = MachinePlicMmioMap.SupervisorThreshold,
+        claimCompleteOffset = MachinePlicMmioMap.SupervisorClaimComplete
       )))
     } else None
 
@@ -159,6 +190,13 @@ class AetherCoreSimTop(
     }
   }
 
+  // LSR.THRE/TEMT are already modeled as permanently ready. Once Linux enables
+  // IER.THRI, reflect that ready state as the architectural level-sensitive
+  // THRE interrupt. The existing PLIC then re-pends source 10 after completion
+  // until Linux drains its xmit buffer and clears IER.THRI.
+  val uartThreInterrupt =
+    if (withNs16550Uart && withSupervisorInterruptPlatform) uartIer.get(1) else false.B
+
   val uartReadData = WireDefault(0.U(busDataBits.W))
   if (withNs16550Uart) {
     switch(uartOffset(2, 0)) {
@@ -168,7 +206,10 @@ class AetherCoreSimTop(
       is(1.U) {
         uartReadData := Mux(uartLcr.get(7), uartDlm.get, uartIer.get).pad(busDataBits)
       }
-      is(2.U) { uartReadData := 1.U(busDataBits.W) }
+      is(2.U) {
+        // 16550 IIR: bit0=0 plus ID=001 means THRE pending; 0x01 means none.
+        uartReadData := Mux(uartThreInterrupt, 2.U, 1.U).pad(busDataBits)
+      }
       is(3.U) { uartReadData := uartLcr.get.pad(busDataBits) }
       is(4.U) { uartReadData := uartMcr.get.pad(busDataBits) }
       is(5.U) { uartReadData := "h60".U(busDataBits.W) }
@@ -176,7 +217,7 @@ class AetherCoreSimTop(
     }
   }
 
-  val isPlicAddress = if (withMachineInterruptPlatform) {
+  val isPlicAddress = if (withMachineInterruptPlatform || withSupervisorInterruptPlatform) {
     core.io.dmem.valid && core.io.dmem.addr >= plicBase.U(paddrBits.W) &&
       core.io.dmem.addr < plicLimit.U(paddrBits.W)
   } else false.B
@@ -200,6 +241,20 @@ class AetherCoreSimTop(
 
     core.io.externalInterrupt.get := platform.io.externalInterrupt
     io.externalInterrupt.get := platform.io.externalInterrupt
+  }
+
+  if (withSupervisorInterruptPlatform) {
+    val plic = supervisorPlic.get
+    plic.io.sources := (uartThreInterrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
+    plic.io.request := isPlicAddress
+    plic.io.write := core.io.dmem.write
+    plic.io.address := (core.io.dmem.addr - plicBase.U)(23, 0)
+    plic.io.wdata := core.io.dmem.wdata(31, 0)
+    plic.io.wmask := core.io.dmem.wmask(3, 0)
+
+    core.io.supervisorExternalInterrupt.get := plic.io.interrupt
+    io.supervisorExternalInterrupt.get := plic.io.interrupt
+    io.uartInterrupt.get := uartThreInterrupt
   }
 
   val isMtimeLow = core.io.dmem.addr === mtimeAddress
@@ -264,11 +319,17 @@ class AetherCoreSimTop(
   io.memSize := core.io.dmem.size
 
   val interruptReady =
-    if (withMachineInterruptPlatform) interruptPlatform.get.io.ready else false.B
+    if (withMachineInterruptPlatform) interruptPlatform.get.io.ready
+    else if (withSupervisorInterruptPlatform) supervisorPlic.get.io.ready
+    else false.B
   val interruptReadData =
-    if (withMachineInterruptPlatform) interruptPlatform.get.io.rdata else 0.U(32.W)
+    if (withMachineInterruptPlatform) interruptPlatform.get.io.rdata
+    else if (withSupervisorInterruptPlatform) supervisorPlic.get.io.rdata
+    else 0.U(32.W)
   val interruptFault =
-    if (withMachineInterruptPlatform) interruptPlatform.get.io.fault else false.B
+    if (withMachineInterruptPlatform) interruptPlatform.get.io.fault
+    else if (withSupervisorInterruptPlatform) supervisorPlic.get.io.fault
+    else false.B
 
   core.io.dmem.ready := Mux(
     isInterruptMmio,
