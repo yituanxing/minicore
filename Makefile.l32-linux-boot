@@ -1,0 +1,62 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/l32-linux-probe
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+TOP := AetherCoreOpenSbiSimTop
+VERILATOR ?= verilator
+JOBS ?= 6
+FW_BIN ?= build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
+MAX_CYCLES ?= 50000000
+MILESTONE ?= Linux version 6.6.143
+
+.PHONY: all rtl sim run-local clean
+
+all: run-local
+
+rtl:
+	mkdir -p $(RTL_DIR) $(BUILD_DIR)/logs
+	@test -f ./mill || { echo "ERROR: mill launcher is missing"; exit 4; }
+	chmod +x ./mill
+	set +e; \
+		./mill aethercore.runMain aethercore.ElaborateOpenSbi --target-dir $(RTL_DIR) \
+			2>&1 | tee $(BUILD_DIR)/logs/rtl-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+sim: rtl
+	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no L32 Linux RTL generated"; exit 4; }
+	mkdir -p $(BUILD_DIR)/logs
+	set +e; \
+		$(VERILATOR) --cc --exe --build -Wall -Wno-fatal \
+			--top-module $(TOP) -Mdir $(OBJ_DIR) \
+			-CFLAGS "-std=c++20 -O2" \
+			$(RTL_DIR)/*.sv $(abspath sim/opensbi_boot_main.cpp) \
+			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+run-local: sim
+	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }
+	mkdir -p $(BUILD_DIR)/logs
+	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
+	set +e; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	if [[ $$rc -ne 0 ]]; then \
+		echo "ERROR: L32 Linux early-boot probe failed (runner rc=$$rc)"; \
+		exit $$rc; \
+	fi
+	grep -q 'L32_RUNTIME_MILESTONE_PASS' $(BUILD_DIR)/logs/boot-probe.log || { \
+		echo "ERROR: Linux runner returned without requested UART milestone"; exit 5; \
+	}
+	grep -q 'Linux version 6\.6\.143' $(BUILD_DIR)/logs/boot-probe.log || { \
+		echo "ERROR: Linux version banner was not observed"; exit 6; \
+	}
+
+clean:
+	rm -rf $(BUILD_DIR)
