@@ -11,7 +11,9 @@ This checkpoint starts from the frozen RV32 OpenSBI S-mode milestone and keeps t
 
 ## Bounded ISA overlay
 
-The first kernel image must stay within the existing AetherCore baseline. Start from upstream `rv32_defconfig`, then disable compressed instructions and FPU support. Do not add CPU features merely to satisfy the compiler.
+The first kernel image must stay within the existing AetherCore baseline. Start from upstream `rv32_defconfig`, then disable UEFI runtime support, compressed instructions, and FPU support.
+
+Linux 6.6 RISC-V `CONFIG_EFI` selects `CONFIG_RISCV_ISA_C`, so disabling `RISCV_ISA_C` alone is not stable across `olddefconfig`. L32 already boots through OpenSBI with a direct FDT contract and does not need UEFI for this checkpoint; therefore the bounded overlay intentionally disables `EFI` before disabling `RISCV_ISA_C`. Do not add the C extension to the CPU merely to satisfy an unused default UEFI configuration.
 
 ## Acceptance
 
