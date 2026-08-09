@@ -1,0 +1,89 @@
+name: L32 BusyBox Multiprocess
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/l32-busybox-multiprocess.yml
+      - tools/ci/l32_busybox_runtime_freeze.sh
+      - tests_py/test_l32_busybox_multiprocess_contract.py
+      - Makefile.l32-linux-boot
+      - sim/opensbi_boot_main.cpp
+      - src/main/scala/aethercore/core/AetherCore.scala
+      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
+      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-busybox-multiprocess-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  busybox-multiprocess:
+    name: Linux 6.6.143 + BusyBox ash pipe/fork/exec/wait
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout without deleting frozen runtime outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate multiprocess runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_busybox_runtime_freeze.sh
+          python3 -m unittest tests_py.test_l32_busybox_multiprocess_contract -v
+
+      - name: Verify exact frozen BusyBox Linux payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_runtime_freeze.sh
+          tools/ci/l32_busybox_runtime_freeze.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run real BusyBox pipeline with child shell over ttyS0
+        shell: bash
+        run: |
+          set -euo pipefail
+          uart_command="$(cat <<'EOF'
+printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && echo L32 BUSYBOX PIPE CHILD OK' && echo L32 BUSYBOX PIPE PARENT OK
+EOF
+          )"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/l32-busybox-multiprocess-probe \
+            FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=500000000 \
+            MILESTONE="L32 BUSYBOX PIPE PARENT OK" \
+            MIN_INTERRUPTS=1 \
+            MIN_SEIP=1 \
+            UART_TRIGGER="L32 BUSYBOX SHELL READY" \
+            UART_COMMAND="$uart_command" \
+            run-local
+          grep -q 'L32 BUSYBOX PIPE CHILD OK' \
+            build/l32-busybox-multiprocess-probe/logs/boot-probe.log
+          grep -q 'L32 BUSYBOX PIPE PARENT OK' \
+            build/l32-busybox-multiprocess-probe/logs/boot-probe.log
+
+      - name: Upload multiprocess evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-busybox-multiprocess-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-busybox-shell-boot/runtime-freeze.txt
+            build/l32-busybox-shell-boot/evidence/sha256.txt
+            build/l32-busybox-multiprocess-probe/firmware.sha256
+            build/l32-busybox-multiprocess-probe/logs/*.log
