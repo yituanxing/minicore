@@ -4,8 +4,12 @@ on:
   pull_request:
     paths:
       - software/l32_busybox/**
+      - software/l32_real/**
       - tools/ci/l32_busybox_build.sh
       - tools/ci/l32_runtime_probe_build.sh
+      - tools/ci/l32_real_programs_build.sh
+      - tools/ci/l32_real_programs_cache.sh
+      - tools/ci/l32_runtime_image_cache.sh
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
       - tools/ci/l32_busybox_runtime_freeze.sh
@@ -49,6 +53,9 @@ jobs:
           set -euo pipefail
           bash -n tools/ci/l32_busybox_build.sh
           bash -n tools/ci/l32_runtime_probe_build.sh
+          bash -n tools/ci/l32_real_programs_build.sh
+          bash -n tools/ci/l32_real_programs_cache.sh
+          bash -n tools/ci/l32_runtime_image_cache.sh
           bash -n tools/ci/l32_busybox_initramfs_build.sh
           bash -n tools/ci/l32_busybox_payload_build.sh
           bash -n tools/ci/l32_busybox_runtime_freeze.sh
@@ -72,69 +79,36 @@ jobs:
           cat > build/l32-busybox/l32-musl-real-gcc <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-
           ROOT_DIR="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
           BUILD_DIR="${ROOT_DIR}/build/l32-busybox"
           L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
           MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
-
           filtered=()
           skip_next=0
           for arg in "$@"; do
-            if (( skip_next )); then
-              skip_next=0
-              continue
-            fi
+            if (( skip_next )); then skip_next=0; continue; fi
             case "${arg}" in
-              -specs)
-                skip_next=1
-                ;;
-              -specs=*)
-                ;;
-              *)
-                filtered+=("${arg}")
-                ;;
+              -specs) skip_next=1 ;;
+              -specs=*) ;;
+              *) filtered+=("${arg}") ;;
             esac
           done
-
           compile_only=0
           relocatable=0
           for arg in "${filtered[@]}"; do
             case "${arg}" in
-              -c|-S|-E|-M|-MM)
-                compile_only=1
-                ;;
-              -r|-Wl,-r|-Wl,--relocatable)
-                relocatable=1
-                ;;
+              -c|-S|-E|-M|-MM) compile_only=1 ;;
+              -r|-Wl,-r|-Wl,--relocatable) relocatable=1 ;;
             esac
           done
-
           gcc_include="$("${L32_CC}" -print-file-name=include)"
-          common=(
-            -nostdinc
-            -isystem "${MUSL_PREFIX}/include"
-            -isystem "${gcc_include}"
-          )
-
-          if (( compile_only )); then
-            exec "${L32_CC}" "${common[@]}" "${filtered[@]}"
-          fi
-
-          if (( relocatable )); then
-            exec "${L32_CC}" -nostdlib "${filtered[@]}"
-          fi
-
+          common=(-nostdinc -isystem "${MUSL_PREFIX}/include" -isystem "${gcc_include}")
+          if (( compile_only )); then exec "${L32_CC}" "${common[@]}" "${filtered[@]}"; fi
+          if (( relocatable )); then exec "${L32_CC}" -nostdlib "${filtered[@]}"; fi
           libgcc="$("${L32_CC}" -print-libgcc-file-name)"
-          exec "${L32_CC}" \
-            "${common[@]}" \
-            -nostdlib -static \
-            -L"${MUSL_PREFIX}/lib" \
-            "${MUSL_PREFIX}/lib/crt1.o" \
-            "${MUSL_PREFIX}/lib/crti.o" \
-            "${filtered[@]}" \
-            -Wl,--start-group -lc "${libgcc}" -Wl,--end-group \
-            "${MUSL_PREFIX}/lib/crtn.o"
+          exec "${L32_CC}" "${common[@]}" -nostdlib -static -L"${MUSL_PREFIX}/lib" \
+            "${MUSL_PREFIX}/lib/crt1.o" "${MUSL_PREFIX}/lib/crti.o" "${filtered[@]}" \
+            -Wl,--start-group -lc "${libgcc}" -Wl,--end-group "${MUSL_PREFIX}/lib/crtn.o"
           EOF
           chmod +x build/l32-busybox/l32-musl-real-gcc
           tools/ci/l32_software_artifact_cache.sh busybox \
@@ -146,6 +120,15 @@ jobs:
           set -euo pipefail
           chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_runtime_probe_build.sh
           tools/ci/l32_software_artifact_cache.sh runtime-probe tools/ci/l32_runtime_probe_build.sh
+
+      - name: Reuse or build real Linux programs
+        shell: bash
+        env:
+          L32_REAL_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_real_programs_build.sh tools/ci/l32_real_programs_cache.sh
+          tools/ci/l32_real_programs_cache.sh
 
       - name: Provision pinned Bootlin RV32 Linux GCC
         shell: bash
@@ -164,14 +147,14 @@ jobs:
           fi
           tools/ci/l32_linux_cache_key.sh check build/l32-linux
 
-      - name: Reuse or incrementally rebuild Linux Image with runtime initramfs
+      - name: Reuse or build Linux Image with static BusyBox ash initramfs
         shell: bash
         env:
           L32_LINUX_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_initramfs_build.sh
-          tools/ci/l32_software_artifact_cache.sh busybox-initramfs tools/ci/l32_busybox_initramfs_build.sh
+          chmod +x tools/ci/l32_runtime_image_cache.sh tools/ci/l32_busybox_initramfs_build.sh
+          tools/ci/l32_runtime_image_cache.sh
 
       - name: Reuse or build OpenSBI with BusyBox Linux payload
         shell: bash
@@ -210,13 +193,13 @@ jobs:
             FORKSERVER_BATCH_FILE="$batch_file" \
             FORKSERVER_TRIGGER="L32 BUSYBOX SHELL READY" \
             FORKSERVER_BOOT_MAX_CYCLES=430000000 \
-            FORKSERVER_CASE_MAX_CYCLES=50000000 \
+            FORKSERVER_CASE_MAX_CYCLES=150000000 \
             PROGRESS_INTERVAL_CYCLES=25000000 \
             forkserver-local
           log="$probe_dir/logs/forkserver.log"
           python3 tools/ci/l32_linux_runtime_suite.py verify-log "$log"
 
-      - name: Run canonical cold Linux BusyBox multiprocess pipeline over ttyS0
+      - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
         shell: bash
         env:
@@ -234,16 +217,13 @@ jobs:
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
             MILESTONE="L32 BUSYBOX PIPE PARENT OK" \
-            MIN_INTERRUPTS=1 \
-            MIN_SEIP=1 \
+            MIN_INTERRUPTS=1 MIN_SEIP=1 \
             UART_TRIGGER="L32 BUSYBOX SHELL READY" \
-            UART_COMMAND_FILE="$command_file" \
-            run-local
+            UART_COMMAND_FILE="$command_file" run-local
           log="$probe_dir/logs/boot-probe.log"
           normalized_log="$probe_dir/logs/boot-probe-normalized.log"
           tr -d '\r' < "$log" > "$normalized_log"
-          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || \
-            grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
           grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
           grep -q '^L32_UART_INPUT_COMPLETE ' "$normalized_log"
           grep -q '^L32_UART_RX_INTERRUPT ' "$normalized_log"
@@ -261,14 +241,12 @@ jobs:
           path: |
             build/l32-busybox/result.txt
             build/l32-busybox/driver.log
-            build/l32-busybox/toolchain-probe.log
-            build/l32-busybox/musl-build.log
-            build/l32-busybox/busybox-build.log
             build/l32-busybox/evidence/
-            build/l32-runtime-probe/result.txt
-            build/l32-runtime-probe/readelf.txt
-            build/l32-runtime-probe/file.txt
-            build/l32-runtime-probe/software-cache.txt
+            build/l32-runtime-probe/
+            build/l32-real-programs/result.txt
+            build/l32-real-programs/software-cache.txt
+            build/l32-real-programs/*-build.log
+            build/l32-real-programs/evidence/
             build/l32-linux-busybox/result.txt
             build/l32-linux-busybox/config.log
             build/l32-linux-busybox/linux-build.log
