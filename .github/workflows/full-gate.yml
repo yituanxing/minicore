@@ -5,6 +5,10 @@ on:
     branches:
       - main
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
 
 permissions:
@@ -26,17 +30,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Provision fixed Verilator
-        shell: bash
-        run: bash tools/ensure_verilator_5_024.sh
-
-      - name: Persistent toolchain and Mill
+      - name: Provision and validate toolchain
         shell: bash
         run: bash tools/ci/full_gate.sh toolchain
 
       - name: Fast source and image tests
         shell: bash
         run: bash tools/ci/full_gate.sh python
+
+      - name: Build both frozen RV32 NEMU references once
+        shell: bash
+        run: bash tools/ci/build_rv32_references.sh
 
       - name: Chisel unit tests
         shell: bash
@@ -49,10 +53,6 @@ jobs:
       - name: RV64 NEMU differential matrices
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-difftest
-
-      - name: Build both frozen RV32 NEMU references once
-        shell: bash
-        run: bash tools/ci/build_rv32_references.sh
 
       - name: RV32 GCC workload and 585-retirement DiffTest
         shell: bash
@@ -119,7 +119,9 @@ jobs:
             echo
             echo "- head: \`${GITHUB_SHA}\`"
             echo '- one checkout and one persistent toolchain setup'
-            echo '- one optimized plus one single-step deterministic RV32 NEMU build'
+            echo '- pinned NEMU sources use a validated persistent cache with retrying network bootstrap'
+            echo '- frozen RV32 references are built before expensive RTL work so source failures fail fast'
+            echo '- RV64 elaboration and Verilator output are reused across all same-job regression phases'
             echo '- fast architectural gates run before long software workloads'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
