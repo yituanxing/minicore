@@ -49,6 +49,22 @@ class Rv32SstcCsrSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
   }
 
+  it should "expose writable WARL-zero mcountinhibit for OpenSBI Priv v1.11 probing" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imasuSv32Software.isa)) { dut =>
+      initialize(dut)
+
+      dut.io.readAddr.poke(MachineCsrAddress.Mcountinhibit.U)
+      dut.io.readImplemented.expect(true.B)
+      dut.io.readWritable.expect(true.B)
+      dut.io.readData.expect(0.U)
+
+      write(dut, MachineCsrAddress.Mcountinhibit, BigInt("ffffffff", 16))
+      read(dut, MachineCsrAddress.Mcountinhibit) shouldBe 0
+      dut.io.readImplemented.expect(true.B)
+      dut.io.readWritable.expect(true.B)
+    }
+  }
+
   it should "fail closed in S-mode until firmware enables TM and STCE" in {
     simulate(new MachineCsrFile(CoreProfiles.rv32imasuSv32Software.isa)) { dut =>
       initialize(dut)

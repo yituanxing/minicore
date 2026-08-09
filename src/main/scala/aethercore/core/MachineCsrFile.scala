@@ -16,6 +16,7 @@ object MachineCsrAddress {
   val Mstatush: Int = 0x310
   val Menvcfg: Int = Rv32SstcCsrAddress.Menvcfg
   val Menvcfgh: Int = Rv32SstcCsrAddress.Menvcfgh
+  val Mcountinhibit: Int = 0x320
   val Mscratch: Int = 0x340
   val Mepc: Int = 0x341
   val Mcause: Int = 0x342
@@ -148,6 +149,7 @@ object MachineCsrWarl {
       is(MachineCsrAddress.Mcounteren.U) {
         result := data & timeCounterMask.U(xlen.W)
       }
+      is(MachineCsrAddress.Mcountinhibit.U) { result := 0.U }
       is(MachineCsrAddress.Menvcfg.U) { result := 0.U }
       is(MachineCsrAddress.Menvcfgh.U) {
         val mask = if (isa.hasSstc) BigInt(1) << Rv32SstcBit.MenvcfghStce else BigInt(0)
@@ -556,6 +558,15 @@ class MachineCsrFile(
         io.readImplemented := true.B
         io.readWritable := true.B
       }
+      is(MachineCsrAddress.Mcountinhibit.U) {
+        // This core currently implements no mcycle/minstret/HPM state to
+        // inhibit, so all implemented bits have the legal WARL value zero.
+        // Keep writes legal so OpenSBI can probe Priv v1.11 before it probes
+        // menvcfg/Priv v1.12 and enables Sstc STCE.
+        io.readData := 0.U
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
       is(MachineCsrAddress.Menvcfg.U) {
         io.readData := 0.U
         io.readImplemented := true.B
@@ -669,6 +680,10 @@ class MachineCsrFile(
       }
       is(MachineCsrAddress.Mie.U) { mie := canonicalWriteData }
       is(MachineCsrAddress.Mcounteren.U) { mcounteren := canonicalWriteData }
+      is(MachineCsrAddress.Mcountinhibit.U) {
+        // No implemented cycle/instret/HPM counter can currently be inhibited.
+        // Accept the write and retain the WARL-zero value.
+      }
       is(MachineCsrAddress.Menvcfg.U) {
         // The bounded RV32 profile currently implements only menvcfgh.STCE.
       }

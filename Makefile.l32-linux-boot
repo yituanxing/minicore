@@ -10,6 +10,7 @@ JOBS ?= 6
 FW_BIN ?= build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
 MAX_CYCLES ?= 50000000
 MILESTONE ?= Linux version 6.6.143
+MIN_INTERRUPTS ?= 0
 
 .PHONY: all rtl sim run-local clean
 
@@ -44,7 +45,7 @@ run-local: sim
 	mkdir -p $(BUILD_DIR)/logs
 	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
 	set +e; \
-		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -52,11 +53,16 @@ run-local: sim
 		exit $$rc; \
 	fi
 	grep -q 'L32_RUNTIME_MILESTONE_PASS' $(BUILD_DIR)/logs/boot-probe.log || { \
-		echo "ERROR: Linux runner returned without requested UART milestone"; exit 5; \
+		echo "ERROR: Linux runner returned without requested UART/interrupt milestone"; exit 5; \
 	}
 	grep -q 'Linux version 6\.6\.143' $(BUILD_DIR)/logs/boot-probe.log || { \
 		echo "ERROR: Linux version banner was not observed"; exit 6; \
 	}
+	if [[ "$(MIN_INTERRUPTS)" -gt 0 ]]; then \
+		grep -q 'L32_FIRST_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux reached UART marker without a real interrupt retirement"; exit 7; \
+		}; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)
