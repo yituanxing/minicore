@@ -21,6 +21,9 @@ object MachineCsrAddress {
   val Mcause: Int = 0x342
   val Mtval: Int = 0x343
   val Mip: Int = 0x344
+  val Mvendorid: Int = 0xf11
+  val Marchid: Int = 0xf12
+  val Mimpid: Int = 0xf13
   val Mhartid: Int = 0xf14
 }
 
@@ -457,6 +460,18 @@ class MachineCsrFile(
       io.readData := mipValue
       io.readImplemented := true.B
       io.readWritable := true.B
+    }
+    is(MachineCsrAddress.Mvendorid.U) {
+      io.readData := 0.U
+      io.readImplemented := true.B
+    }
+    is(MachineCsrAddress.Marchid.U) {
+      io.readData := 0.U
+      io.readImplemented := true.B
+    }
+    is(MachineCsrAddress.Mimpid.U) {
+      io.readData := 0.U
+      io.readImplemented := true.B
     }
     is(MachineCsrAddress.Mhartid.U) {
       io.readData := 0.U
