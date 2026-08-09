@@ -143,8 +143,9 @@ class L32BusyBoxContract(unittest.TestCase):
         for required in (
             "UART_TRIGGER ?=",
             "UART_COMMAND ?=",
+            "UART_COMMAND_FILE ?=",
             '"$(UART_TRIGGER)"',
-            '"$(UART_COMMAND)"',
+            '"$$uart_command"',
             "L32_UART_INPUT_COMPLETE",
             "L32_UART_RX_INTERRUPT",
             "L32_UART_INPUT_SEIP",
@@ -178,7 +179,7 @@ class L32BusyBoxContract(unittest.TestCase):
             for required in (
                 "Run real Linux BusyBox multiprocess pipeline over ttyS0",
                 'MILESTONE="L32 BUSYBOX PIPE PARENT OK"',
-                'UART_COMMAND="$L32_BUSYBOX_PIPE_COMMAND"',
+                'UART_COMMAND_FILE="$command_file"',
                 "L32 BUSYBOX PIPE CHILD OK",
             )
         )
