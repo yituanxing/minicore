@@ -188,6 +188,7 @@ def set_symbol(symbol: str, enabled: bool) -> None:
 
 for symbol in (
     'CONFIG_STATIC',
+    'CONFIG_LFS',
     'CONFIG_ASH',
     'CONFIG_SH_IS_ASH',
     'CONFIG_ECHO',
@@ -207,7 +208,7 @@ set_symbol('CONFIG_SH_IS_NONE', False)
 path.write_text('\n'.join(lines) + '\n')
 PY
   make ARCH=riscv oldconfig </dev/null
-  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_ECHO|CONFIG_PRINTF|CONFIG_TEST|CONFIG_TRUE|CONFIG_FALSE|CONFIG_UNAME)=y$' .config
+  grep -E '^(CONFIG_STATIC|CONFIG_LFS|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_ECHO|CONFIG_PRINTF|CONFIG_TEST|CONFIG_TRUE|CONFIG_FALSE|CONFIG_UNAME)=y$' .config
   if grep -q '^CONFIG_KBD_MODE=y$' .config; then
     echo "ERROR: minimal shell config unexpectedly enabled kbd_mode" >&2
     exit 25
