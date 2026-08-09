@@ -1,0 +1,119 @@
+name: L32 Linux Forkserver Benchmark
+
+on:
+  push:
+    branches:
+      - perf/l32-linux-forkserver
+    paths:
+      - sim/opensbi_forkserver_main.cpp
+      - Makefile.l32-linux-boot
+      - tests_py/test_l32_forkserver_contract.py
+      - .github/workflows/l32-linux-forkserver.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-linux-forkserver-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  forkserver:
+    name: boot once + fork BusyBox workloads
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate forkserver source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_l32_forkserver_contract -v
+
+      - name: Verify frozen BusyBox Linux payload from persistent workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          test -s "$payload" || {
+            echo "ERROR: frozen BusyBox payload is missing; run the full BusyBox build gate first"
+            exit 2
+          }
+          chmod +x tools/ci/l32_busybox_runtime_freeze.sh
+          tools/ci/l32_busybox_runtime_freeze.sh
+          sha256sum "$payload"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run three real workloads from one warm BusyBox shell
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir=build/l32-linux-forkserver
+          batch_file="$probe_dir/workloads.tsv"
+          mkdir -p "$probe_dir"
+          python3 - "$batch_file" <<'PY'
+          from pathlib import Path
+          import sys
+
+          rows = [
+              (
+                  "builtin",
+                  "L32 FORKSERVER BUILTIN OK",
+                  r"printf 'L32 FORKSERVER BUILTIN OK\n'",
+              ),
+              (
+                  "subshell",
+                  "L32 FORKSERVER SUBSHELL OK",
+                  r'''/bin/sh -c 'printf "L32 FORKSERVER SUBSHELL OK\n"' ''',
+              ),
+              (
+                  "pipeline",
+                  "L32 BUSYBOX PIPE PARENT OK",
+                  r'''printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK''',
+              ),
+          ]
+          Path(sys.argv[1]).write_text(
+              "\n".join("\t".join(row) for row in rows) + "\n"
+          )
+          PY
+          cat "$batch_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            FORKSERVER_BATCH_FILE="$batch_file" \
+            FORKSERVER_TRIGGER="L32 BUSYBOX SHELL READY" \
+            FORKSERVER_BOOT_MAX_CYCLES=430000000 \
+            FORKSERVER_CASE_MAX_CYCLES=50000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            forkserver-local
+          log="$probe_dir/logs/forkserver.log"
+          grep -q '^L32_FORKSERVER_READY ' "$log"
+          grep -q '^L32_FORKSERVER_CASE_PASS id=builtin ' "$log"
+          grep -q '^L32_FORKSERVER_CASE_PASS id=subshell ' "$log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$log"
+          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$log"
+          grep -q '^L32_FORKSERVER_CASE_PASS id=pipeline ' "$log"
+          grep -q '^L32_FORKSERVER_PASS cases=3 ' "$log"
+
+      - name: Upload forkserver evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-linux-forkserver-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux-forkserver/workloads.tsv
+            build/l32-linux-forkserver/firmware.sha256
+            build/l32-linux-forkserver/logs/*.log
