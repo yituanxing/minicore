@@ -139,7 +139,7 @@ class MachinePlicMmioSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "cover the N5 QEMU-virt supervisor context, both enable words and an inert context0 aperture" in {
+  it should "cover the N5 QEMU-virt supervisor context and both enable words" in {
     simulate(new MachinePlicMmio(
       sourceCount = 52,
       priorityBits = 3,
