@@ -67,6 +67,10 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
 
         makefile = MAKEFILE.read_text()
         for required in (
+            "VERILATOR_MODEL_OPT ?= -O3",
+            "SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native",
+            "$(VERILATOR) $(VERILATOR_MODEL_OPT) --cc --exe --build",
+            '-CFLAGS "$(SIM_CXXFLAGS)"',
             "UART_COMMAND_FILE ?=",
             "POST_INPUT_MAX_CYCLES ?= 0",
             "PROGRESS_INTERVAL_CYCLES ?= 25000000",
@@ -80,6 +84,8 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         ):
             self.assertIn(required, makefile)
         self.assertNotIn('"$(UART_COMMAND)" 2>&1', makefile)
+        self.assertNotIn("--x-assign fast", makefile)
+        self.assertNotIn("--x-initial fast", makefile)
 
     def test_runtime_harness_has_bounded_post_input_fast_fail_and_hot_path_guards(self):
         text = RUNNER.read_text()
