@@ -45,7 +45,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x tools/ci/l32_busybox_build.sh
-          bash tools/ci/l32_busybox_build.sh
+          mkdir -p build/l32-busybox
+          bash tools/ci/l32_busybox_build.sh 2>&1 | tee build/l32-busybox/driver.log
 
       - name: Upload BusyBox build evidence
         if: always()
@@ -57,6 +58,7 @@ jobs:
           if-no-files-found: warn
           path: |
             build/l32-busybox/result.txt
+            build/l32-busybox/driver.log
             build/l32-busybox/toolchain-probe.log
             build/l32-busybox/musl-build.log
             build/l32-busybox/busybox-build.log
