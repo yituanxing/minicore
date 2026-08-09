@@ -91,13 +91,20 @@ object MachineCsrWarl {
     }
   }
 
-  def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
+  def canonicalize(
+      isa: IsaConfig,
+      address: UInt,
+      data: UInt,
+      withSupervisorExternalInterrupt: Boolean = false
+  ): UInt = {
     val xlen = isa.xlen
     val allBits = (BigInt(1) << xlen) - 1
     val supervisorTimerMask =
       if (isa.hasSstc) BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt else BigInt(0)
     val supervisorExternalMask =
-      if (isa.hasS) BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt else BigInt(0)
+      if (isa.hasS && withSupervisorExternalInterrupt)
+        BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt
+      else BigInt(0)
     val supervisorInterruptMask = supervisorTimerMask | supervisorExternalMask
     val timeCounterMask =
       if (isa.hasSstc) BigInt(1) << Rv32SstcBit.McounterenTime else BigInt(0)
@@ -208,7 +215,9 @@ class MachineCsrFile(
   private val supervisorTimerMask =
     if (isa.hasSstc) BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt else BigInt(0)
   private val supervisorExternalMask =
-    if (isa.hasS) BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt else BigInt(0)
+    if (withSupervisorExternalInterrupt)
+      BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt
+    else BigInt(0)
   private val supervisorInterruptMask = supervisorTimerMask | supervisorExternalMask
   private val machineTimerMask = BigInt(1) << MachineCsrBit.MachineTimerInterrupt
   private val machineExternalMask = BigInt(1) << MachineCsrBit.MachineExternalInterrupt
@@ -305,7 +314,12 @@ class MachineCsrFile(
   io.pmpConfig := pmp.io.config
   io.pmpAddress := pmp.io.pmpAddress
 
-  val canonicalWriteData = MachineCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
+  val canonicalWriteData = MachineCsrWarl.canonicalize(
+    isa,
+    io.writeAddr,
+    io.writeData,
+    withSupervisorExternalInterrupt
+  )
   val ordinaryWrite = io.writeEnable
 
   val sstc = if (isa.hasSstc) Some(Module(new Rv32SstcTimer)) else None
