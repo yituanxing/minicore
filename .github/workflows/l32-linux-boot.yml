@@ -7,6 +7,7 @@ on:
       - tools/ci/l32_linux_build.sh
       - tools/ci/l32_linux_cache_key.sh
       - tools/ci/l32_linux_payload_build.sh
+      - tools/ci/l32_software_artifact_cache.sh
       - tools/ci/make_l32_dtb.py
       - tools/ensure_l32_riscv32_linux_gcc.sh
       - tests_py/test_l32_linux_boot_contract.py
@@ -45,6 +46,7 @@ jobs:
           bash -n tools/ci/l32_linux_build.sh
           bash -n tools/ci/l32_linux_cache_key.sh
           bash -n tools/ci/l32_linux_payload_build.sh
+          bash -n tools/ci/l32_software_artifact_cache.sh
           bash -n tools/ensure_l32_riscv32_linux_gcc.sh
           python3 -m py_compile tools/ci/make_l32_dtb.py
           python3 -m unittest \
@@ -72,14 +74,14 @@ jobs:
           tools/ci/l32_linux_cache_key.sh check build/l32-linux
           sha256sum build/l32-linux/obj/arch/riscv/boot/Image
 
-      - name: Build OpenSBI with frozen Linux payload
+      - name: Reuse qualified OpenSBI + frozen Linux payload
         shell: bash
         env:
           L32_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_linux_payload_build.sh
-          tools/ci/l32_linux_payload_build.sh
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_linux_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh
 
       - name: Provision fixed Verilator for L32 execution
         shell: bash

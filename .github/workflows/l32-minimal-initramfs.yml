@@ -16,6 +16,7 @@ on:
       - tools/ci/make_l32_dtb.py
       - tools/ci/l32_minimal_initramfs_build.sh
       - tools/ci/l32_minimal_init_payload_build.sh
+      - tools/ci/l32_software_artifact_cache.sh
       - tests_py/test_l32_minimal_initramfs_contract.py
   workflow_dispatch:
 
@@ -44,6 +45,7 @@ jobs:
           set -euo pipefail
           bash -n tools/ci/l32_minimal_initramfs_build.sh
           bash -n tools/ci/l32_minimal_init_payload_build.sh
+          bash -n tools/ci/l32_software_artifact_cache.sh
           python3 -m unittest tests_py.test_l32_minimal_initramfs_contract -v
 
       - name: Provision pinned Bootlin RV32 Linux GCC
@@ -63,23 +65,23 @@ jobs:
           fi
           tools/ci/l32_linux_cache_key.sh check build/l32-linux
 
-      - name: Build libc-free /init and Linux initramfs Image
+      - name: Reuse or build libc-free /init and Linux initramfs Image
         shell: bash
         env:
           L32_LINUX_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_minimal_initramfs_build.sh
-          tools/ci/l32_minimal_initramfs_build.sh
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_minimal_initramfs_build.sh
+          tools/ci/l32_software_artifact_cache.sh minimal-initramfs tools/ci/l32_minimal_initramfs_build.sh
 
-      - name: Build OpenSBI with minimal-init Linux payload
+      - name: Reuse or build OpenSBI with minimal-init Linux payload
         shell: bash
         env:
           L32_JOBS: "6"
         run: |
           set -euo pipefail
-          chmod +x tools/ci/l32_minimal_init_payload_build.sh
-          tools/ci/l32_minimal_init_payload_build.sh
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_minimal_init_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh minimal-payload tools/ci/l32_minimal_init_payload_build.sh
 
       - name: Provision fixed Verilator
         shell: bash

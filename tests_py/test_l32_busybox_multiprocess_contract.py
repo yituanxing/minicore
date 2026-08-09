@@ -120,18 +120,21 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         self.assertNotIn("uart.find(uartTrigger)", text)
         self.assertNotIn('uart.find("OpenSBI v1.6")', text)
 
-    def test_workflow_rebuilds_then_hash_qualifies_before_runtime(self):
+    def test_workflow_qualifies_reusable_software_before_runtime(self):
         text = WORKFLOW.read_text()
         for required in (
             "tools/ci/l32_busybox_build.sh",
             "tools/ci/l32_busybox_initramfs_build.sh",
             "tools/ci/l32_busybox_payload_build.sh",
             "tools/ci/l32_busybox_runtime_freeze.sh",
+            "l32_software_artifact_cache.sh busybox",
+            "l32_software_artifact_cache.sh busybox-initramfs",
+            "l32_software_artifact_cache.sh busybox-payload",
             "clean: false",
         ):
             self.assertIn(required, text)
 
-        payload = text.index("Build OpenSBI with BusyBox Linux payload")
+        payload = text.index("Reuse or build OpenSBI with BusyBox Linux payload")
         verify = text.index("Verify exact BusyBox Linux runtime payload")
         runtime = text.index("Run real Linux BusyBox multiprocess pipeline over ttyS0")
         self.assertLess(payload, verify)

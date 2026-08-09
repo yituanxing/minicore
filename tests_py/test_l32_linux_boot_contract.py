@@ -56,7 +56,11 @@ class L32LinuxBootContractTest(unittest.TestCase):
 
     def test_workflow_is_bounded_to_first_real_linux_console_milestone(self):
         text = (ROOT / ".github/workflows/l32-linux-boot.yml").read_text()
-        self.assertIn("Build OpenSBI with frozen Linux payload", text)
+        self.assertIn("Reuse qualified OpenSBI + frozen Linux payload", text)
+        self.assertIn(
+            "l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh",
+            text,
+        )
         self.assertIn("Run real Linux early-boot probe", text)
         self.assertIn("tools/ci/l32_linux_cache_key.sh check", text)
         self.assertIn("tools/ci/l32_linux_build.sh", text)
