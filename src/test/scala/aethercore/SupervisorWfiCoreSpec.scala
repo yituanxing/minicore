@@ -15,6 +15,7 @@ class SupervisorWfiCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
   private val lowerEntry = base + 0x80
   private val wfi = BigInt("10500073", 16)
   private val ebreak = BigInt("00100073", 16)
+  private val mret = BigInt("30200073", 16)
 
   private def iType(imm: Int, rs1: Int, funct3: Int, rd: Int, opcode: Int): BigInt =
     (BigInt(imm & 0xfff) << 20) |
@@ -35,15 +36,26 @@ class SupervisorWfiCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       (BigInt(rd & 0x1f) << 7) |
       BigInt(0x73)
 
-  private val mret = BigInt("30200073", 16)
-
-  private def bootstrap(mppValue: Int): Map[BigInt, BigInt] = Map(
+  private def commonBootstrap: Map[BigInt, BigInt] = Map(
     base -> uType(0x80000, 1),
     (base + 4) -> iType(0x80, 1, 0, 1, 0x13),
-    (base + 8) -> csr(0x341, 1, 1, 0), // csrw mepc, x1
-    (base + 12) -> iType(mppValue, 0, 0, 2, 0x13),
-    (base + 16) -> csr(0x300, 2, 1, 0), // csrw mstatus, x2
-    (base + 20) -> mret,
+    (base + 8) -> csr(0x341, 1, 1, 0) // csrw mepc, x1
+  )
+
+  private def supervisorBootstrap: Map[BigInt, BigInt] = commonBootstrap ++ Map(
+    // Build 0x800 without relying on an out-of-range positive ADDI immediate:
+    // 0x1000 + (-2048) = 0x800, which is mstatus.MPP=S (01b at bits 12:11).
+    (base + 12) -> uType(0x1, 2),
+    (base + 16) -> iType(-2048, 2, 0, 2, 0x13),
+    (base + 20) -> csr(0x300, 2, 1, 0), // csrw mstatus, x2
+    (base + 24) -> mret,
+    lowerEntry -> wfi,
+    (lowerEntry + 4) -> ebreak
+  )
+
+  private def userBootstrap: Map[BigInt, BigInt] = commonBootstrap ++ Map(
+    (base + 12) -> csr(0x300, 0, 1, 0), // csrw mstatus, x0: MPP=U
+    (base + 16) -> mret,
     lowerEntry -> wfi,
     (lowerEntry + 4) -> ebreak
   )
@@ -57,9 +69,6 @@ class SupervisorWfiCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
   }
 
   it should "allow Supervisor-mode WFI to enter the architectural wait state" in {
-    // mstatus.MPP=S is 01b at bits 12:11, i.e. 0x800.
-    val program = bootstrap(0x800)
-
     simulate(new AetherCore(CoreProfiles.rv32imsuSoftware)) { dut =>
       initialize(dut)
       var sawIllegalWfi = false
@@ -67,7 +76,7 @@ class SupervisorWfiCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
       while (!dut.io.halted.peek().litToBoolean && cycles < 160) {
         val pc = dut.io.imem.addr.peek().litValue
-        dut.io.imem.inst.poke(program.getOrElse(pc, ebreak).U)
+        dut.io.imem.inst.poke(supervisorBootstrap.getOrElse(pc, ebreak).U)
         dut.clock.step()
         cycles += 1
 
@@ -84,8 +93,6 @@ class SupervisorWfiCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
   }
 
   it should "keep User-mode WFI illegal when Supervisor mode is implemented" in {
-    val program = bootstrap(0x000)
-
     simulate(new AetherCore(CoreProfiles.rv32imsuSoftware)) { dut =>
       initialize(dut)
       var sawIllegalWfi = false
@@ -93,7 +100,7 @@ class SupervisorWfiCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
       while (!sawIllegalWfi && cycles < 160) {
         val pc = dut.io.imem.addr.peek().litValue
-        dut.io.imem.inst.poke(program.getOrElse(pc, ebreak).U)
+        dut.io.imem.inst.poke(userBootstrap.getOrElse(pc, ebreak).U)
         dut.clock.step()
         cycles += 1
 
