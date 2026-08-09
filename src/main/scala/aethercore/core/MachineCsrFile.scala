@@ -13,6 +13,7 @@ object MachineCsrAddress {
   val Mie: Int = 0x304
   val Mtvec: Int = 0x305
   val Mcounteren: Int = Rv32SstcCsrAddress.Mcounteren
+  val Mstatush: Int = 0x310
   val Menvcfg: Int = Rv32SstcCsrAddress.Menvcfg
   val Menvcfgh: Int = Rv32SstcCsrAddress.Menvcfgh
   val Mscratch: Int = 0x340
@@ -130,6 +131,7 @@ object MachineCsrWarl {
           (data & (machineStatusMask(isa) & ~(BigInt(3) << MachineCsrBit.MstatusMppLow)).U(xlen.W)) |
             (legalMpp << MachineCsrBit.MstatusMppLow)
       }
+      is(MachineCsrAddress.Mstatush.U) { result := 0.U }
       is(MachineCsrAddress.Medeleg.U) {
         result := data & delegableExceptionMask(isa).U(xlen.W)
       }
@@ -456,6 +458,16 @@ class MachineCsrFile(
     }
   }
 
+  if (xlen == 32) {
+    when(io.readAddr === MachineCsrAddress.Mstatush.U) {
+      // AetherCore is little-endian only and currently implements none of the
+      // other RV32 mstatush fields, so every writable field has the WARL set {0}.
+      io.readData := 0.U
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+  }
+
   if (isa.hasS) {
     switch(io.readAddr) {
       is(MachineCsrAddress.Medeleg.U) {
@@ -626,6 +638,9 @@ class MachineCsrFile(
   }.elsewhen(ordinaryWrite) {
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
+      is(MachineCsrAddress.Mstatush.U) {
+        // RV32 mstatush fields are implemented as WARL-zero in this profile.
+      }
       is(MachineCsrAddress.Mie.U) { mie := canonicalWriteData }
       is(MachineCsrAddress.Mcounteren.U) { mcounteren := canonicalWriteData }
       is(MachineCsrAddress.Menvcfg.U) {
