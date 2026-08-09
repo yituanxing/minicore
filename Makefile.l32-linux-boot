@@ -12,6 +12,8 @@ MAX_CYCLES ?= 50000000
 MILESTONE ?= Linux version 6.6.143
 MIN_INTERRUPTS ?= 0
 MIN_SEIP ?= 0
+UART_TRIGGER ?=
+UART_COMMAND ?=
 
 .PHONY: all rtl sim run-local clean
 
@@ -46,7 +48,7 @@ run-local: sim
 	mkdir -p $(BUILD_DIR)/logs
 	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
 	set +e; \
-		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$(UART_COMMAND)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -67,6 +69,17 @@ run-local: sim
 	if [[ "$(MIN_SEIP)" -gt 0 ]]; then \
 		grep -q 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
 			echo "ERROR: Linux reached UART marker without a retired SEIP interrupt"; exit 8; \
+		}; \
+	fi
+	if [[ -n "$(UART_COMMAND)" ]]; then \
+		grep -q 'L32_UART_INPUT_COMPLETE' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux runner did not deliver the complete UART command"; exit 9; \
+		}; \
+		grep -q 'L32_UART_RX_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: UART command completed without an RX interrupt"; exit 10; \
+		}; \
+		grep -q 'L32_UART_INPUT_SEIP' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: UART command completed without a post-input SEIP"; exit 11; \
 		}; \
 	fi
 
