@@ -136,9 +136,11 @@ def build_l32_dtb(bootargs: str | None = None) -> bytes:
     b.prop("compatible", string("simple-bus"))
     b.prop("ranges")
 
-    # QEMU-virt-compatible PLIC window. This L32 profile intentionally exposes
-    # only hart0's Supervisor external-interrupt context: OpenSBI continues to
-    # use ACLINT/Sstc for its M-mode duties, while Linux owns the PLIC S context.
+    # QEMU-virt-compatible PLIC window. Context 0 (hart0 M-mode) is explicitly
+    # absent using the standard 0xffffffff interrupt specifier, preserving the
+    # hardware context index. Context 1 is hart0 Supervisor external interrupt,
+    # so Linux maps enable/threshold/claim at 0x2080/0x201000/0x201004 while
+    # OpenSBI correctly skips the absent M-mode context.
     b.begin_node("interrupt-controller@c000000")
     b.prop("compatible", stringlist("sifive,plic-1.0.0", "riscv,plic0"))
     b.prop("reg", cells(0, 0x0C000000, 0, 0x00400000))
@@ -146,7 +148,10 @@ def build_l32_dtb(bootargs: str | None = None) -> bytes:
     b.prop("#interrupt-cells", cells(1))
     b.prop("interrupt-controller")
     b.prop("riscv,ndev", cells(52))
-    b.prop("interrupts-extended", cells(CPU_INTC_PHANDLE, 9))
+    b.prop(
+        "interrupts-extended",
+        cells(CPU_INTC_PHANDLE, 0xFFFFFFFF, CPU_INTC_PHANDLE, 9),
+    )
     b.prop("phandle", cells(PLIC_PHANDLE))
     b.end_node()
 
@@ -196,6 +201,8 @@ def main() -> int:
         "ram=0x80000000+0x10000000",
         "plic=0x0c000000+0x00400000",
         "plic_ndev=52",
+        "plic_m_context=absent",
+        "plic_s_context=1",
         "plic_s_ext_irq=9",
         "uart=ns16550a@0x10000000",
         "uart_irq=10",
