@@ -9,6 +9,7 @@ ARCHIVE="${CACHE_ROOT}/linux-${LINUX_VERSION}.tar.xz"
 SOURCE_DIR="${CACHE_ROOT}/linux-${LINUX_VERSION}"
 BUILD_DIR="${ROOT_DIR}/build/l32-linux"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
+OBJ_DIR="${BUILD_DIR}/obj"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
 
 mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
@@ -49,23 +50,37 @@ if [[ ! -f "${marker}" ]] || [[ "$(cat "${marker}" 2>/dev/null)" != "${LINUX_SHA
   trap - EXIT
 fi
 
-rm -rf "${BUILD_DIR}/obj" "${EVIDENCE_DIR}"
-mkdir -p "${BUILD_DIR}/obj" "${EVIDENCE_DIR}"
+# Preserve the Kbuild object tree across bounded configuration/script fixes.
+# Only discard it when the immutable source or compiler contract changes;
+# Kbuild itself tracks .config/header dependencies for incremental rebuilds.
+obj_inputs="${LINUX_SHA256}:${L32_TOOLCHAIN_VERSION}:${L32_CROSS_COMPILE_PREFIX}"
+obj_marker="${OBJ_DIR}/.aethercore-object-inputs"
+if [[ -d "${OBJ_DIR}" ]] && {
+  [[ ! -f "${obj_marker}" ]] || [[ "$(cat "${obj_marker}" 2>/dev/null)" != "${obj_inputs}" ]];
+}; then
+  rm -rf "${OBJ_DIR}"
+fi
+mkdir -p "${OBJ_DIR}"
+printf '%s\n' "${obj_inputs}" > "${obj_marker}"
+rm -rf "${EVIDENCE_DIR}"
+mkdir -p "${EVIDENCE_DIR}"
 
-make -C "${SOURCE_DIR}" O="${BUILD_DIR}/obj" \
+make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
   "${LINUX_RV32_DEFCONFIG}" \
   2>&1 | tee "${BUILD_DIR}/config.log"
 
-# Keep the first Linux workload inside the frozen AetherCore ISA. RISC-V EFI
-# selects RISCV_ISA_C in Linux 6.6, so disable the unused UEFI runtime path
-# before disabling compressed instructions. L32 boots through OpenSBI + FDT.
-"${SOURCE_DIR}/scripts/config" --file "${BUILD_DIR}/obj/.config" \
+# Keep the first Linux workload inside the frozen AetherCore ISA/platform.
+# RISC-V EFI selects RISCV_ISA_C in Linux 6.6, so disable the unused UEFI
+# runtime path first. AetherCore exposes only the NS16550 serial console in
+# this checkpoint, so the generic VGA text console is also intentionally off.
+"${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
   -d EFI \
   -d RISCV_ISA_C \
-  -d FPU
+  -d FPU \
+  -d VGA_CONSOLE
 
-make -C "${SOURCE_DIR}" O="${BUILD_DIR}/obj" \
+make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" olddefconfig \
   2>&1 | tee -a "${BUILD_DIR}/config.log"
 
@@ -73,28 +88,31 @@ for required in \
   'CONFIG_32BIT=y' \
   'CONFIG_MMU=y' \
   'CONFIG_RISCV=y'; do
-  grep -qx "${required}" "${BUILD_DIR}/obj/.config" || {
+  grep -qx "${required}" "${OBJ_DIR}/.config" || {
     echo "ERROR: resolved Linux config missing ${required}" >&2
     exit 22
   }
 done
-grep -qx '# CONFIG_EFI is not set' "${BUILD_DIR}/obj/.config" || {
+grep -qx '# CONFIG_EFI is not set' "${OBJ_DIR}/.config" || {
   echo "ERROR: Linux config retained EFI, which re-selects compressed ISA" >&2; exit 22;
 }
-grep -qx '# CONFIG_RISCV_ISA_C is not set' "${BUILD_DIR}/obj/.config" || {
+grep -qx '# CONFIG_RISCV_ISA_C is not set' "${OBJ_DIR}/.config" || {
   echo "ERROR: Linux config retained compressed ISA" >&2; exit 22;
 }
-grep -qx '# CONFIG_FPU is not set' "${BUILD_DIR}/obj/.config" || {
+grep -qx '# CONFIG_FPU is not set' "${OBJ_DIR}/.config" || {
   echo "ERROR: Linux config retained FPU" >&2; exit 22;
 }
+grep -qx '# CONFIG_VGA_CONSOLE is not set' "${OBJ_DIR}/.config" || {
+  echo "ERROR: Linux config retained unsupported VGA text console" >&2; exit 22;
+}
 
-make -C "${SOURCE_DIR}" O="${BUILD_DIR}/obj" \
+make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
   -j"${JOBS}" Image \
   2>&1 | tee "${BUILD_DIR}/linux-build.log"
 
-VMLINUX="${BUILD_DIR}/obj/vmlinux"
-IMAGE="${BUILD_DIR}/obj/arch/riscv/boot/Image"
+VMLINUX="${OBJ_DIR}/vmlinux"
+IMAGE="${OBJ_DIR}/arch/riscv/boot/Image"
 [[ -s "${VMLINUX}" && -s "${IMAGE}" ]] || {
   echo "ERROR: Linux RV32 build did not produce vmlinux and Image" >&2
   exit 23
@@ -103,7 +121,7 @@ IMAGE="${BUILD_DIR}/obj/arch/riscv/boot/Image"
 "${L32_CROSS_COMPILE_PREFIX}readelf" -h -A "${VMLINUX}" \
   | tee "${EVIDENCE_DIR}/vmlinux-readelf.txt"
 file "${VMLINUX}" "${IMAGE}" | tee "${EVIDENCE_DIR}/file.txt"
-cp "${BUILD_DIR}/obj/.config" "${EVIDENCE_DIR}/resolved.config"
+cp "${OBJ_DIR}/.config" "${EVIDENCE_DIR}/resolved.config"
 sha256sum "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
 
