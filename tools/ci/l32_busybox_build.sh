@@ -26,6 +26,46 @@ for tool in curl tar sha256sum file make python3 "${BASE_GCC}" "${READELF}"; do
   }
 done
 
+# The runner's riscv64-unknown-elf toolchain is multilib and is already used by
+# the frozen RV32 workload gates.  Wrap it so musl sees one compiler command
+# whose target contract is always RV32IMA/ILP32; this also avoids accidentally
+# selecting an RV64 libgcc when musl probes the compiler runtime.
+L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
+cat > "${L32_CC}" <<EOF
+#!/usr/bin/env bash
+exec "$(command -v "${BASE_GCC}")" -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" -mstrict-align "\$@"
+EOF
+chmod +x "${L32_CC}"
+
+cat > "${BUILD_DIR}/toolchain-probe.c" <<'EOF'
+#include <stdint.h>
+uint32_t l32_toolchain_probe(uint32_t a, uint32_t b) {
+  return (a * 33u) ^ b;
+}
+EOF
+{
+  echo "compiler=$(${BASE_GCC} --version | head -n 1)"
+  echo "dumpmachine=$(${BASE_GCC} -dumpmachine)"
+  echo "isa=${L32_USERSPACE_ISA}"
+  echo "abi=${L32_USERSPACE_ABI}"
+  echo "multilib=$(${BASE_GCC} -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" -print-multi-directory)"
+  echo "libgcc=$(${BASE_GCC} -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" -print-libgcc-file-name)"
+  "${L32_CC}" -Os -ffreestanding -c "${BUILD_DIR}/toolchain-probe.c" -o "${BUILD_DIR}/toolchain-probe.o"
+  "${READELF}" -h -A "${BUILD_DIR}/toolchain-probe.o"
+} 2>&1 | tee "${BUILD_DIR}/toolchain-probe.log"
+"${READELF}" -h "${BUILD_DIR}/toolchain-probe.o" | grep -q 'Class:[[:space:]]*ELF32'
+"${READELF}" -h "${BUILD_DIR}/toolchain-probe.o" | grep -q 'Machine:[[:space:]]*RISC-V'
+"${READELF}" -h "${BUILD_DIR}/toolchain-probe.o" | grep -q 'soft-float ABI'
+probe_arch="$(${READELF} -A "${BUILD_DIR}/toolchain-probe.o" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
+[[ "${probe_arch}" == rv32i* && "${probe_arch}" == *"_m"* && "${probe_arch}" == *"_a"* ]] || {
+  echo "ERROR: bootstrap compiler lost required RV32IMA ISA: ${probe_arch}" >&2
+  exit 24
+}
+if [[ "${probe_arch}" =~ _f[0-9] || "${probe_arch}" =~ _d[0-9] || "${probe_arch}" =~ _c[0-9] ]]; then
+  echo "ERROR: bootstrap compiler retained unsupported F/D/C extension: ${probe_arch}" >&2
+  exit 24
+fi
+
 fetch_verified() {
   local url="$1" sha="$2" output="$3" tmp
   if [[ -s "${output}" ]] && printf '%s  %s\n' "${sha}" "${output}" | sha256sum -c - >/dev/null 2>&1; then
@@ -58,7 +98,6 @@ rm -rf "${MUSL_BUILD_DIR}" "${MUSL_PREFIX}" "${BUSYBOX_BUILD_DIR}"
 cp -a "${MUSL_SOURCE_DIR}" "${MUSL_BUILD_DIR}"
 cp -a "${BUSYBOX_SOURCE_DIR}" "${BUSYBOX_BUILD_DIR}"
 
-MUSL_CC="${BASE_GCC} -march=${L32_USERSPACE_ISA} -mabi=${L32_USERSPACE_ABI}"
 (
   cd "${MUSL_BUILD_DIR}"
   ./configure \
@@ -67,7 +106,7 @@ MUSL_CC="${BASE_GCC} -march=${L32_USERSPACE_ISA} -mabi=${L32_USERSPACE_ABI}"
     --disable-shared \
     --enable-static \
     --enable-gcc-wrapper \
-    "CC=${MUSL_CC}" \
+    "CC=${L32_CC}" \
     "CROSS_COMPILE=${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
     "CFLAGS=-Os -pipe"
   make -j"${JOBS}"
@@ -87,9 +126,7 @@ int main(void) {
   return write(1, message, sizeof(message) - 1) < 0;
 }
 EOF
-"${MUSL_GCC}" \
-  -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" \
-  -Os -static "${BUILD_DIR}/musl-probe.c" -o "${BUILD_DIR}/musl-probe"
+"${MUSL_GCC}" -Os -static "${BUILD_DIR}/musl-probe.c" -o "${BUILD_DIR}/musl-probe"
 
 "${READELF}" -h -A "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-readelf.txt"
 file "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-file.txt"
@@ -117,7 +154,7 @@ path.write_text(text)
 PY
   make ARCH=riscv \
     CROSS_COMPILE="${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
-    CC="${MUSL_GCC} -march=${L32_USERSPACE_ISA} -mabi=${L32_USERSPACE_ABI}" \
+    CC="${MUSL_GCC}" \
     HOSTCC="${HOSTCC:-cc}" \
     -j"${JOBS}" busybox
 ) 2>&1 | tee "${BUILD_DIR}/busybox-build.log"
@@ -154,6 +191,7 @@ sha256sum \
 
 {
   echo "L32_BUSYBOX_BUILD_RESULT: status=PASS"
+  echo "bootstrap_compiler=$(${BASE_GCC} --version | head -n 1)"
   echo "musl_version=${MUSL_VERSION}"
   echo "busybox_version=${BUSYBOX_VERSION}"
   echo "isa=${L32_USERSPACE_ISA}"
