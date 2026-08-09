@@ -395,8 +395,10 @@ class AetherCore(
     withSupervisorExternalInterrupt
   )
   val csrException = csrInstruction && !csrLegal
+  // This core currently exposes mstatus.TW as read-only zero. WFI is therefore
+  // legal in S-mode; keep U-mode trapping when Supervisor mode is implemented.
   val wfiException =
-    idEx.ctrl.wfi && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
+    idEx.ctrl.wfi && csrFile.io.currentPrivilege === PrivilegeMode.User.U
   val mretInstruction = idEx.inst === "h30200073".U
   val sretInstruction = idEx.inst === "h10200073".U
   val xretException = idEx.ctrl.mret && (

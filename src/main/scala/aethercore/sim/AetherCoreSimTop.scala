@@ -69,14 +69,19 @@ class AetherCoreSimTop(
 
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
-    val rxValid = if (withMachineInterruptPlatform) Some(Input(Bool())) else None
-    val rxByte = if (withMachineInterruptPlatform) Some(Input(UInt(8.W))) else None
-    val rxReady = if (withMachineInterruptPlatform) Some(Output(Bool())) else None
+    val rxValid =
+      if (withMachineInterruptPlatform || withSupervisorInterruptPlatform) Some(Input(Bool())) else None
+    val rxByte =
+      if (withMachineInterruptPlatform || withSupervisorInterruptPlatform) Some(Input(UInt(8.W))) else None
+    val rxReady =
+      if (withMachineInterruptPlatform || withSupervisorInterruptPlatform) Some(Output(Bool())) else None
     val externalInterrupt =
       if (withMachineInterruptPlatform) Some(Output(Bool())) else None
     val supervisorExternalInterrupt =
       if (withSupervisorInterruptPlatform) Some(Output(Bool())) else None
     val uartInterrupt =
+      if (withSupervisorInterruptPlatform) Some(Output(Bool())) else None
+    val uartRxInterrupt =
       if (withSupervisorInterruptPlatform) Some(Output(Bool())) else None
     val exitValid = Output(Bool())
     val exitCode = Output(UInt(xlen.W))
@@ -124,6 +129,10 @@ class AetherCoreSimTop(
         claimCompleteOffset = MachinePlicMmioMap.SupervisorClaimComplete
       )))
     } else None
+  val supervisorUartRx =
+    if (withNs16550Uart && withSupervisorInterruptPlatform) {
+      Some(Module(new Queue(UInt(8.W), 16)))
+    } else None
 
   val uartAddress = config.platform.uartAddress.U(paddrBits.W)
   val exitAddress = config.platform.exitAddress.U(paddrBits.W)
@@ -142,6 +151,13 @@ class AetherCoreSimTop(
   val uartDlm = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
   val uartMcr = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
   val uartScr = if (withNs16550Uart) Some(RegInit(0.U(8.W))) else None
+
+  if (withNs16550Uart && withSupervisorInterruptPlatform) {
+    val rx = supervisorUartRx.get
+    rx.io.enq.valid := io.rxValid.get
+    rx.io.enq.bits := io.rxByte.get
+    io.rxReady.get := rx.io.enq.ready
+  }
 
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
@@ -170,6 +186,17 @@ class AetherCoreSimTop(
   val isUartMmio = if (withNs16550Uart) isNs16550Address else isUartTx
   val isExit = isWrite && core.io.dmem.addr === exitAddress
 
+  val uartRxAvailable =
+    if (withNs16550Uart && withSupervisorInterruptPlatform) supervisorUartRx.get.io.deq.valid else false.B
+  val uartRxByte =
+    if (withNs16550Uart && withSupervisorInterruptPlatform) supervisorUartRx.get.io.deq.bits else 0.U(8.W)
+  val uartRxPop = if (withNs16550Uart && withSupervisorInterruptPlatform) {
+    isNs16550Address && !core.io.dmem.write && uartOffset(2, 0) === 0.U && !uartDlab
+  } else false.B
+  if (withNs16550Uart && withSupervisorInterruptPlatform) {
+    supervisorUartRx.get.io.deq.ready := uartRxPop
+  }
+
   if (withNs16550Uart) {
     when(isNs16550Address && core.io.dmem.write) {
       switch(uartOffset(2, 0)) {
@@ -190,29 +217,35 @@ class AetherCoreSimTop(
     }
   }
 
-  // LSR.THRE/TEMT are already modeled as permanently ready. Once Linux enables
-  // IER.THRI, reflect that ready state as the architectural level-sensitive
-  // THRE interrupt. The existing PLIC then re-pends source 10 after completion
-  // until Linux drains its xmit buffer and clears IER.THRI.
+  // Linux uses IER.RDI for receive-data interrupts and IER.THRI for transmit
+  // holding-register-empty interrupts. Both are level-sensitive onto the same
+  // QEMU-virt-compatible PLIC source 10, with RDA taking priority in IIR.
+  val uartRxInterrupt =
+    if (withNs16550Uart && withSupervisorInterruptPlatform) uartIer.get(0) && uartRxAvailable else false.B
   val uartThreInterrupt =
     if (withNs16550Uart && withSupervisorInterruptPlatform) uartIer.get(1) else false.B
+  val uartCombinedInterrupt = uartRxInterrupt || uartThreInterrupt
 
   val uartReadData = WireDefault(0.U(busDataBits.W))
   if (withNs16550Uart) {
     switch(uartOffset(2, 0)) {
       is(0.U) {
-        uartReadData := Mux(uartLcr.get(7), uartDll.get, 0.U(8.W)).pad(busDataBits)
+        uartReadData := Mux(uartLcr.get(7), uartDll.get, uartRxByte).pad(busDataBits)
       }
       is(1.U) {
         uartReadData := Mux(uartLcr.get(7), uartDlm.get, uartIer.get).pad(busDataBits)
       }
       is(2.U) {
-        // 16550 IIR: bit0=0 plus ID=001 means THRE pending; 0x01 means none.
-        uartReadData := Mux(uartThreInterrupt, 2.U, 1.U).pad(busDataBits)
+        // 16550 IIR: RDA=0x04 has higher priority than THRE=0x02; 0x01 means none.
+        uartReadData := Mux(uartRxInterrupt, 4.U,
+          Mux(uartThreInterrupt, 2.U, 1.U)).pad(busDataBits)
       }
       is(3.U) { uartReadData := uartLcr.get.pad(busDataBits) }
       is(4.U) { uartReadData := uartMcr.get.pad(busDataBits) }
-      is(5.U) { uartReadData := "h60".U(busDataBits.W) }
+      is(5.U) {
+        // LSR.DR reports a queued receive byte; THRE/TEMT remain permanently ready.
+        uartReadData := ("h60".U(8.W) | uartRxAvailable.asUInt).pad(busDataBits)
+      }
       is(7.U) { uartReadData := uartScr.get.pad(busDataBits) }
     }
   }
@@ -245,7 +278,7 @@ class AetherCoreSimTop(
 
   if (withSupervisorInterruptPlatform) {
     val plic = supervisorPlic.get
-    plic.io.sources := (uartThreInterrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
+    plic.io.sources := (uartCombinedInterrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
     plic.io.request := isPlicAddress
     plic.io.write := core.io.dmem.write
     plic.io.address := (core.io.dmem.addr - plicBase.U)(23, 0)
@@ -254,7 +287,8 @@ class AetherCoreSimTop(
 
     core.io.supervisorExternalInterrupt.get := plic.io.interrupt
     io.supervisorExternalInterrupt.get := plic.io.interrupt
-    io.uartInterrupt.get := uartThreInterrupt
+    io.uartInterrupt.get := uartCombinedInterrupt
+    io.uartRxInterrupt.get := uartRxInterrupt
   }
 
   val isMtimeLow = core.io.dmem.addr === mtimeAddress

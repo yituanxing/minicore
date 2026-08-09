@@ -1,0 +1,215 @@
+name: L32 BusyBox Shell
+
+on:
+  pull_request:
+    paths:
+      - software/l32_busybox/**
+      - tools/ci/l32_busybox_build.sh
+      - tools/ci/l32_busybox_initramfs_build.sh
+      - tools/ci/l32_busybox_payload_build.sh
+      - tests_py/test_l32_busybox_contract.py
+      - Makefile.l32-linux-boot
+      - sim/opensbi_boot_main.cpp
+      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
+      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
+      - tools/ci/make_l32_dtb.py
+      - .github/workflows/l32-busybox-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-busybox-shell-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  busybox-shell:
+    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate BusyBox userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_busybox_build.sh
+          bash -n tools/ci/l32_busybox_initramfs_build.sh
+          bash -n tools/ci/l32_busybox_payload_build.sh
+          python3 -m unittest tests_py.test_l32_busybox_contract -v
+
+      - name: Build soft-float musl and static BusyBox
+        shell: bash
+        env:
+          L32_USERSPACE_JOBS: "6"
+          # musl-gcc assumes a Linux-hosted GCC. Our bootstrap compiler is the
+          # bare-metal multilib GCC, whose default specs inject crtbeginS and
+          # libgloss. Route musl-gcc through a wrapper that keeps the compiler
+          # backend but owns the Linux/musl start files and libraries itself.
+          REALGCC: ${{ github.workspace }}/build/l32-busybox/l32-musl-real-gcc
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_build.sh
+          mkdir -p build/l32-busybox
+          cat > build/l32-busybox/l32-musl-real-gcc <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          ROOT_DIR="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+          BUILD_DIR="${ROOT_DIR}/build/l32-busybox"
+          L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
+          MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
+
+          # musl-gcc adds its own -specs file. It is designed for a Linux GCC;
+          # with riscv64-unknown-elf-gcc it inherits bare-metal crt/libgloss
+          # defaults. Remove that specs layer and express the musl contract
+          # explicitly while retaining the frozen RV32IMA/ILP32 backend.
+          filtered=()
+          skip_next=0
+          for arg in "$@"; do
+            if (( skip_next )); then
+              skip_next=0
+              continue
+            fi
+            case "${arg}" in
+              -specs)
+                skip_next=1
+                ;;
+              -specs=*)
+                ;;
+              *)
+                filtered+=("${arg}")
+                ;;
+            esac
+          done
+
+          compile_only=0
+          relocatable=0
+          for arg in "${filtered[@]}"; do
+            case "${arg}" in
+              -c|-S|-E|-M|-MM)
+                compile_only=1
+                ;;
+              -r|-Wl,-r|-Wl,--relocatable)
+                relocatable=1
+                ;;
+            esac
+          done
+
+          gcc_include="$("${L32_CC}" -print-file-name=include)"
+          common=(
+            -nostdinc
+            -isystem "${MUSL_PREFIX}/include"
+            -isystem "${gcc_include}"
+          )
+
+          if (( compile_only )); then
+            exec "${L32_CC}" "${common[@]}" "${filtered[@]}"
+          fi
+
+          # BusyBox combines each applet directory with a relocatable link.
+          # It is not an executable link, so injecting musl crt1 here would
+          # place _start inside built-in.o and collide with the final crt1.
+          if (( relocatable )); then
+            exec "${L32_CC}" -nostdlib "${filtered[@]}"
+          fi
+
+          libgcc="$("${L32_CC}" -print-libgcc-file-name)"
+          exec "${L32_CC}" \
+            "${common[@]}" \
+            -nostdlib -static \
+            -L"${MUSL_PREFIX}/lib" \
+            "${MUSL_PREFIX}/lib/crt1.o" \
+            "${MUSL_PREFIX}/lib/crti.o" \
+            "${filtered[@]}" \
+            -Wl,--start-group -lc "${libgcc}" -Wl,--end-group \
+            "${MUSL_PREFIX}/lib/crtn.o"
+          EOF
+          chmod +x build/l32-busybox/l32-musl-real-gcc
+          bash tools/ci/l32_busybox_build.sh 2>&1 | tee build/l32-busybox/driver.log
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Ensure frozen Linux source and baseline cache
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh tools/ci/l32_linux_build.sh
+          if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            tools/ci/l32_linux_build.sh
+            tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+          fi
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+
+      - name: Build Linux Image with static BusyBox ash initramfs
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_initramfs_build.sh
+          tools/ci/l32_busybox_initramfs_build.sh
+
+      - name: Build OpenSBI with BusyBox Linux payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_payload_build.sh
+          tools/ci/l32_busybox_payload_build.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run real Linux BusyBox ash command over ttyS0
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/l32-busybox-shell-probe \
+            FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=500000000 \
+            MILESTONE="L32 BUSYBOX RX COMMAND OK" \
+            MIN_INTERRUPTS=1 \
+            MIN_SEIP=1 \
+            UART_TRIGGER="L32 BUSYBOX SHELL READY" \
+            UART_COMMAND="printf 'L32 BUSYBOX RX COMMAND %s\n' OK" \
+            run-local
+
+      - name: Upload BusyBox shell evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-busybox-shell-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-busybox/result.txt
+            build/l32-busybox/driver.log
+            build/l32-busybox/toolchain-probe.log
+            build/l32-busybox/musl-build.log
+            build/l32-busybox/busybox-build.log
+            build/l32-busybox/evidence/
+            build/l32-linux-busybox/result.txt
+            build/l32-linux-busybox/config.log
+            build/l32-linux-busybox/linux-build.log
+            build/l32-linux-busybox/evidence/
+            build/l32-busybox-shell-boot/result.txt
+            build/l32-busybox-shell-boot/opensbi-busybox-build.log
+            build/l32-busybox-shell-boot/evidence/
+            build/l32-busybox-shell-probe/firmware.sha256
+            build/l32-busybox-shell-probe/logs/*.log

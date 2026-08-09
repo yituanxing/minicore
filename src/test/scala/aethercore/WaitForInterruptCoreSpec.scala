@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import aethercore.common.MachineExceptionCode
 import aethercore.config.CoreProfiles
 import aethercore.core.AetherCore
 
@@ -250,6 +251,93 @@ class WaitForInterruptCoreSpec extends AnyFlatSpec with Matchers with ChiselSim 
       sawEpc shouldBe true
       sawMret shouldBe true
       sawSecondResume shouldBe true
+    }
+  }
+
+  it should "allow Supervisor-mode WFI when TW is zero" in {
+    val lowerEntry = base + 0x100
+    val ebreak = BigInt("00100073", 16)
+    val mret = BigInt("30200073", 16)
+    val program = Map(
+      base -> uType(0x80000, 1),
+      (base + 0x04) -> iType(0x100, 1, 0, 1, 0x13),
+      (base + 0x08) -> csr(0x341, 1, 1, 0), // csrw mepc, x1
+      // Build 0x800 without relying on an out-of-range positive ADDI:
+      // 0x1000 + (-2048) = 0x800 = mstatus.MPP=S.
+      (base + 0x0c) -> uType(0x1, 2),
+      (base + 0x10) -> iType(-2048, 2, 0, 2, 0x13),
+      (base + 0x14) -> csr(0x300, 2, 1, 0), // csrw mstatus, x2
+      (base + 0x18) -> mret,
+      lowerEntry -> wfi,
+      (lowerEntry + 4) -> ebreak
+    )
+
+    simulate(new AetherCore(CoreProfiles.rv32imsuSoftware)) { dut =>
+      dut.io.imem.fault.poke(false.B)
+      dut.io.dmem.ready.poke(true.B)
+      dut.io.dmem.rdata.poke(0.U)
+      dut.io.dmem.fault.poke(false.B)
+      dut.io.timerInterrupt.poke(false.B)
+
+      var sawIllegalWfi = false
+      var cycles = 0
+      while (!dut.io.halted.peek().litToBoolean && cycles < 160) {
+        val fetchPc = dut.io.imem.addr.peek().litValue
+        dut.io.imem.inst.poke(program.getOrElse(fetchPc, ebreak).U)
+        dut.clock.step()
+        cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean &&
+            dut.io.commit.exception.peek().litToBoolean &&
+            dut.io.commit.inst.peek().litValue == wfi) {
+          sawIllegalWfi = true
+        }
+      }
+
+      sawIllegalWfi shouldBe false
+      dut.io.halted.expect(true.B)
+    }
+  }
+
+  it should "keep User-mode WFI illegal when Supervisor mode is implemented" in {
+    val lowerEntry = base + 0x100
+    val ebreak = BigInt("00100073", 16)
+    val mret = BigInt("30200073", 16)
+    val program = Map(
+      base -> uType(0x80000, 1),
+      (base + 0x04) -> iType(0x100, 1, 0, 1, 0x13),
+      (base + 0x08) -> csr(0x341, 1, 1, 0), // csrw mepc, x1
+      (base + 0x0c) -> csr(0x300, 0, 1, 0), // csrw mstatus, x0: MPP=U
+      (base + 0x10) -> mret,
+      lowerEntry -> wfi,
+      (lowerEntry + 4) -> ebreak
+    )
+
+    simulate(new AetherCore(CoreProfiles.rv32imsuSoftware)) { dut =>
+      dut.io.imem.fault.poke(false.B)
+      dut.io.dmem.ready.poke(true.B)
+      dut.io.dmem.rdata.poke(0.U)
+      dut.io.dmem.fault.poke(false.B)
+      dut.io.timerInterrupt.poke(false.B)
+
+      var sawIllegalWfi = false
+      var cycles = 0
+      while (!sawIllegalWfi && cycles < 160) {
+        val fetchPc = dut.io.imem.addr.peek().litValue
+        dut.io.imem.inst.poke(program.getOrElse(fetchPc, ebreak).U)
+        dut.clock.step()
+        cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean &&
+            dut.io.commit.exception.peek().litToBoolean &&
+            dut.io.commit.inst.peek().litValue == wfi) {
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.IllegalInstruction.U)
+          dut.io.commit.exceptionValue.expect(wfi.U)
+          sawIllegalWfi = true
+        }
+      }
+
+      sawIllegalWfi shouldBe true
     }
   }
 }
