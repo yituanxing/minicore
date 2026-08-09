@@ -10,8 +10,10 @@ BUILD = ROOT / "tools/ci/l32_busybox_build.sh"
 class L32BusyBoxContract(unittest.TestCase):
     def test_frozen_userspace_inputs(self):
         text = MANIFEST.read_text()
+        self.assertIn("L32_USERSPACE_CROSS_COMPILE_PREFIX=riscv64-unknown-elf-", text)
         self.assertIn("L32_USERSPACE_ISA=rv32ima_zicsr_zifencei", text)
         self.assertIn("L32_USERSPACE_ABI=ilp32", text)
+        self.assertNotIn("riscv32-ilp32d", text)
         self.assertIn("MUSL_VERSION=1.2.5", text)
         self.assertIn(
             "MUSL_SHA256=a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
@@ -37,8 +39,11 @@ class L32BusyBoxContract(unittest.TestCase):
         self.assertIn("--target=riscv32-linux-musl", text)
         self.assertIn("--disable-shared", text)
         self.assertIn("--enable-static", text)
-        self.assertIn("-march=${L32_USERSPACE_ISA}", text)
-        self.assertIn("-mabi=${L32_USERSPACE_ABI}", text)
+        self.assertIn('L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"', text)
+        self.assertIn('-march="${L32_USERSPACE_ISA}"', text)
+        self.assertIn('-mabi="${L32_USERSPACE_ABI}"', text)
+        self.assertIn('"CC=${L32_CC}"', text)
+        self.assertIn("toolchain-probe.o", text)
         self.assertIn("soft-float ABI", text)
         self.assertNotIn("--sysroot=/", text)
 
