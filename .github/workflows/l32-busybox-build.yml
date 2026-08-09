@@ -81,10 +81,14 @@ jobs:
           done
 
           compile_only=0
+          relocatable=0
           for arg in "${filtered[@]}"; do
             case "${arg}" in
               -c|-S|-E|-M|-MM)
                 compile_only=1
+                ;;
+              -r|-Wl,-r|-Wl,--relocatable)
+                relocatable=1
                 ;;
             esac
           done
@@ -98,6 +102,13 @@ jobs:
 
           if (( compile_only )); then
             exec "${L32_CC}" "${common[@]}" "${filtered[@]}"
+          fi
+
+          # BusyBox combines each applet directory with a relocatable link.
+          # It is not an executable link, so injecting musl crt1 here would
+          # place _start inside built-in.o and collide with the final crt1.
+          if (( relocatable )); then
+            exec "${L32_CC}" -nostdlib "${filtered[@]}"
           fi
 
           libgcc="$("${L32_CC}" -print-libgcc-file-name)"
