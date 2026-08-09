@@ -178,7 +178,7 @@ jobs:
         shell: bash
         env:
           L32_BUSYBOX_PIPE_COMMAND: >-
-            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && printf "L32 BUSYBOX PIPE CHILD %s\n" OK' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
+            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
         run: |
           set -euo pipefail
           probe_dir=build/l32-busybox-multiprocess-probe
