@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   linux-deeper-boot:
-    name: Linux 6.6.143 post-banner execution
+    name: Linux 6.6.143 deeper generic initialization
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 50
 
@@ -83,14 +83,14 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Drive Linux beyond version banner
+      - name: Drive Linux through memory initialization
         shell: bash
         run: |
           set -euo pipefail
           make -f Makefile.l32-linux-boot \
             JOBS="$(nproc)" \
-            MAX_CYCLES=150000000 \
-            MILESTONE="Kernel command line:" \
+            MAX_CYCLES=300000000 \
+            MILESTONE="Memory:" \
             run-local
 
       - name: Upload deeper-boot evidence
