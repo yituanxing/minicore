@@ -6,7 +6,7 @@ TARGET="${1:-}"
 shift || true
 
 if [[ -z "${TARGET}" || "$#" -eq 0 ]]; then
-  echo "usage: $0 <busybox|minimal-initramfs|busybox-initramfs|linux-payload|minimal-payload|busybox-payload> <build-command...>" >&2
+  echo "usage: $0 <busybox|runtime-probe|minimal-initramfs|busybox-initramfs|linux-payload|minimal-payload|busybox-payload> <build-command...>" >&2
   exit 2
 fi
 
@@ -62,6 +62,21 @@ case "${TARGET}" in
       dynamic_inputs+=("$(hash_file_if_present "${REALGCC}")")
     fi
     ;;
+  runtime-probe)
+    result_file="${ROOT_DIR}/build/l32-runtime-probe/result.txt"
+    result_marker="L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS"
+    marker_file="${ROOT_DIR}/build/l32-runtime-probe/software-cache.txt"
+    inputs=(
+      "${ROOT_DIR}/software/l32_busybox/manifest.env"
+      "${ROOT_DIR}/software/l32_busybox/runtime_probe.c"
+      "${ROOT_DIR}/tools/ci/l32_runtime_probe_build.sh"
+    )
+    outputs=(
+      "${ROOT_DIR}/build/l32-runtime-probe/l32-runtime-probe"
+    )
+    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc")")
+    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-busybox/musl-prefix/lib/libc.a")")
+    ;;
   minimal-initramfs)
     result_file="${ROOT_DIR}/build/l32-linux-initramfs/result.txt"
     result_marker="L32_MINIMAL_INITRAMFS_BUILD_RESULT: status=PASS"
@@ -98,6 +113,7 @@ case "${TARGET}" in
     )
     dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-linux/obj/arch/riscv/boot/Image")")
     dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-busybox/busybox-src/busybox")")
+    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-runtime-probe/l32-runtime-probe")")
     ;;
   linux-payload)
     # shellcheck disable=SC1091
