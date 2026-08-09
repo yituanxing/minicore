@@ -212,13 +212,15 @@ jobs:
             PROGRESS_INTERVAL_CYCLES=25000000 \
             forkserver-local
           log="$probe_dir/logs/forkserver.log"
-          grep -q '^L32_FORKSERVER_READY ' "$log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=builtin ' "$log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=subshell ' "$log"
-          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$log"
-          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$log"
-          grep -q '^L32_FORKSERVER_CASE_PASS id=pipeline ' "$log"
-          grep -q '^L32_FORKSERVER_PASS cases=3 ' "$log"
+          normalized_log="$probe_dir/logs/forkserver-normalized.log"
+          tr -d '\r' < "$log" > "$normalized_log"
+          grep -q '^L32_FORKSERVER_READY ' "$normalized_log"
+          grep -q '^L32_FORKSERVER_CASE_PASS id=builtin ' "$normalized_log"
+          grep -q '^L32_FORKSERVER_CASE_PASS id=subshell ' "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
+          grep -q '^L32_FORKSERVER_CASE_PASS id=pipeline ' "$normalized_log"
+          grep -q '^L32_FORKSERVER_PASS cases=3 ' "$normalized_log"
 
       - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
