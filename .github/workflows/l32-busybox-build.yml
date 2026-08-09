@@ -53,10 +53,6 @@ jobs:
         shell: bash
         env:
           L32_USERSPACE_JOBS: "6"
-          # musl-gcc assumes a Linux-hosted GCC. Our bootstrap compiler is the
-          # bare-metal multilib GCC, whose default specs inject crtbeginS and
-          # libgloss. Route musl-gcc through a wrapper that keeps the compiler
-          # backend but owns the Linux/musl start files and libraries itself.
           REALGCC: ${{ github.workspace }}/build/l32-busybox/l32-musl-real-gcc
         run: |
           set -euo pipefail
@@ -71,10 +67,6 @@ jobs:
           L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
           MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
 
-          # musl-gcc adds its own -specs file. It is designed for a Linux GCC;
-          # with riscv64-unknown-elf-gcc it inherits bare-metal crt/libgloss
-          # defaults. Remove that specs layer and express the musl contract
-          # explicitly while retaining the frozen RV32IMA/ILP32 backend.
           filtered=()
           skip_next=0
           for arg in "$@"; do
@@ -118,9 +110,6 @@ jobs:
             exec "${L32_CC}" "${common[@]}" "${filtered[@]}"
           fi
 
-          # BusyBox combines each applet directory with a relocatable link.
-          # It is not an executable link, so injecting musl crt1 here would
-          # place _start inside built-in.o and collide with the final crt1.
           if (( relocatable )); then
             exec "${L32_CC}" -nostdlib "${filtered[@]}"
           fi
@@ -189,7 +178,7 @@ jobs:
         shell: bash
         env:
           L32_BUSYBOX_PIPE_COMMAND: >-
-            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && echo L32 BUSYBOX PIPE CHILD OK' && echo L32 BUSYBOX PIPE PARENT OK
+            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$$x" = PIPE_TOKEN ] && printf "L32 BUSYBOX PIPE CHILD %s\n" OK' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
         run: |
           set -euo pipefail
           make -f Makefile.l32-linux-boot \
@@ -203,10 +192,13 @@ jobs:
             UART_TRIGGER="L32 BUSYBOX SHELL READY" \
             UART_COMMAND="$L32_BUSYBOX_PIPE_COMMAND" \
             run-local
-          grep -q 'L32 BUSYBOX PIPE CHILD OK' \
-            build/l32-busybox-multiprocess-probe/logs/boot-probe.log
-          grep -q 'L32 BUSYBOX PIPE PARENT OK' \
-            build/l32-busybox-multiprocess-probe/logs/boot-probe.log
+          log=build/l32-busybox-multiprocess-probe/logs/boot-probe.log
+          grep -qx 'L32 BUSYBOX PIPE CHILD OK' "$log"
+          grep -qx 'L32 BUSYBOX PIPE PARENT OK' "$log"
+          grep -q '^L32_UART_INPUT_COMPLETE ' "$log"
+          grep -q '^L32_UART_RX_INTERRUPT ' "$log"
+          grep -q '^L32_UART_INPUT_SEIP ' "$log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS .*marker=L32 BUSYBOX PIPE PARENT OK$' "$log"
 
       - name: Upload BusyBox shell/process evidence
         if: always()
