@@ -6,6 +6,8 @@ RTL_DIR := $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 TOP := AetherCoreOpenSbiSimTop
 VERILATOR ?= verilator
+VERILATOR_MODEL_OPT ?= -O3
+SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native
 JOBS ?= 6
 FW_BIN ?= build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
 MAX_CYCLES ?= 50000000
@@ -39,9 +41,9 @@ sim: rtl
 	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no L32 Linux RTL generated"; exit 4; }
 	mkdir -p $(BUILD_DIR)/logs
 	set +e; \
-		$(VERILATOR) --cc --exe --build -Wall -Wno-fatal \
+		$(VERILATOR) $(VERILATOR_MODEL_OPT) --cc --exe --build -Wall -Wno-fatal \
 			--top-module $(TOP) -Mdir $(OBJ_DIR) \
-			-CFLAGS "-std=c++20 -O2" \
+			-CFLAGS "$(SIM_CXXFLAGS)" \
 			$(RTL_DIR)/*.sv $(abspath sim/opensbi_boot_main.cpp) \
 			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-build.log; \
 		rc=$${PIPESTATUS[0]}; \
