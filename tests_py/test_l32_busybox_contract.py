@@ -143,8 +143,9 @@ class L32BusyBoxContract(unittest.TestCase):
         for required in (
             "UART_TRIGGER ?=",
             "UART_COMMAND ?=",
+            "UART_COMMAND_FILE ?=",
             '"$(UART_TRIGGER)"',
-            '"$(UART_COMMAND)"',
+            '"$$uart_command"',
             "L32_UART_INPUT_COMPLETE",
             "L32_UART_RX_INTERRUPT",
             "L32_UART_INPUT_SEIP",
@@ -159,14 +160,33 @@ class L32BusyBoxContract(unittest.TestCase):
             "Provision pinned Bootlin RV32 Linux GCC",
             "Build Linux Image with static BusyBox ash initramfs",
             "Build OpenSBI with BusyBox Linux payload",
-            "Run real Linux BusyBox ash command over ttyS0",
-            'MILESTONE="L32 BUSYBOX RX COMMAND OK"',
             "MIN_INTERRUPTS=1",
             "MIN_SEIP=1",
             'UART_TRIGGER="L32 BUSYBOX SHELL READY"',
-            "UART_COMMAND=\"printf 'L32 BUSYBOX RX COMMAND %s\\n' OK\"",
         ):
             self.assertIn(required, text)
+
+        legacy_gate = all(
+            required in text
+            for required in (
+                "Run real Linux BusyBox ash command over ttyS0",
+                'MILESTONE="L32 BUSYBOX RX COMMAND OK"',
+                "UART_COMMAND=\"printf 'L32 BUSYBOX RX COMMAND %s\\n' OK\"",
+            )
+        )
+        multiprocess_gate = all(
+            required in text
+            for required in (
+                "Run real Linux BusyBox multiprocess pipeline over ttyS0",
+                'MILESTONE="L32 BUSYBOX PIPE PARENT OK"',
+                'UART_COMMAND_FILE="$command_file"',
+                "L32 BUSYBOX PIPE CHILD OK",
+            )
+        )
+        self.assertTrue(
+            legacy_gate or multiprocess_gate,
+            "workflow must retain a real ttyS0 shell command round-trip gate",
+        )
 
 
 if __name__ == "__main__":

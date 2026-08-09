@@ -1,4 +1,4 @@
-name: L32 BusyBox Shell
+name: L32 BusyBox Shell + Multiprocess
 
 on:
   pull_request:
@@ -7,7 +7,9 @@ on:
       - tools/ci/l32_busybox_build.sh
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
+      - tools/ci/l32_busybox_runtime_freeze.sh
       - tests_py/test_l32_busybox_contract.py
+      - tests_py/test_l32_busybox_multiprocess_contract.py
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
@@ -25,7 +27,7 @@ concurrency:
 
 jobs:
   busybox-shell:
-    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell
+    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 shell/process
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
 
@@ -42,16 +44,15 @@ jobs:
           bash -n tools/ci/l32_busybox_build.sh
           bash -n tools/ci/l32_busybox_initramfs_build.sh
           bash -n tools/ci/l32_busybox_payload_build.sh
-          python3 -m unittest tests_py.test_l32_busybox_contract -v
+          bash -n tools/ci/l32_busybox_runtime_freeze.sh
+          python3 -m unittest \
+            tests_py.test_l32_busybox_contract \
+            tests_py.test_l32_busybox_multiprocess_contract -v
 
       - name: Build soft-float musl and static BusyBox
         shell: bash
         env:
           L32_USERSPACE_JOBS: "6"
-          # musl-gcc assumes a Linux-hosted GCC. Our bootstrap compiler is the
-          # bare-metal multilib GCC, whose default specs inject crtbeginS and
-          # libgloss. Route musl-gcc through a wrapper that keeps the compiler
-          # backend but owns the Linux/musl start files and libraries itself.
           REALGCC: ${{ github.workspace }}/build/l32-busybox/l32-musl-real-gcc
         run: |
           set -euo pipefail
@@ -66,10 +67,6 @@ jobs:
           L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
           MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
 
-          # musl-gcc adds its own -specs file. It is designed for a Linux GCC;
-          # with riscv64-unknown-elf-gcc it inherits bare-metal crt/libgloss
-          # defaults. Remove that specs layer and express the musl contract
-          # explicitly while retaining the frozen RV32IMA/ILP32 backend.
           filtered=()
           skip_next=0
           for arg in "$@"; do
@@ -113,9 +110,6 @@ jobs:
             exec "${L32_CC}" "${common[@]}" "${filtered[@]}"
           fi
 
-          # BusyBox combines each applet directory with a relocatable link.
-          # It is not an executable link, so injecting musl crt1 here would
-          # place _start inside built-in.o and collide with the final crt1.
           if (( relocatable )); then
             exec "${L32_CC}" -nostdlib "${filtered[@]}"
           fi
@@ -169,27 +163,48 @@ jobs:
           chmod +x tools/ci/l32_busybox_payload_build.sh
           tools/ci/l32_busybox_payload_build.sh
 
+      - name: Verify exact BusyBox Linux runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_runtime_freeze.sh
+          tools/ci/l32_busybox_runtime_freeze.sh
+
       - name: Provision fixed Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run real Linux BusyBox ash command over ttyS0
+      - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
         shell: bash
+        env:
+          L32_BUSYBOX_PIPE_COMMAND: >-
+            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
         run: |
           set -euo pipefail
+          probe_dir=build/l32-busybox-multiprocess-probe
+          command_file="$probe_dir/uart-command.txt"
+          mkdir -p "$probe_dir"
+          printf '%s\n' "$L32_BUSYBOX_PIPE_COMMAND" > "$command_file"
           make -f Makefile.l32-linux-boot \
-            BUILD_DIR=build/l32-busybox-shell-probe \
+            BUILD_DIR="$probe_dir" \
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
-            MILESTONE="L32 BUSYBOX RX COMMAND OK" \
+            MILESTONE="L32 BUSYBOX PIPE PARENT OK" \
             MIN_INTERRUPTS=1 \
             MIN_SEIP=1 \
             UART_TRIGGER="L32 BUSYBOX SHELL READY" \
-            UART_COMMAND="printf 'L32 BUSYBOX RX COMMAND %s\n' OK" \
+            UART_COMMAND_FILE="$command_file" \
             run-local
+          log="$probe_dir/logs/boot-probe.log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$log"
+          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$log"
+          grep -q '^L32_UART_INPUT_COMPLETE ' "$log"
+          grep -q '^L32_UART_RX_INTERRUPT ' "$log"
+          grep -q '^L32_UART_INPUT_SEIP ' "$log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS .*marker=L32 BUSYBOX PIPE PARENT OK$' "$log"
 
-      - name: Upload BusyBox shell evidence
+      - name: Upload BusyBox shell/process evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -209,7 +224,9 @@ jobs:
             build/l32-linux-busybox/linux-build.log
             build/l32-linux-busybox/evidence/
             build/l32-busybox-shell-boot/result.txt
+            build/l32-busybox-shell-boot/runtime-freeze.txt
             build/l32-busybox-shell-boot/opensbi-busybox-build.log
             build/l32-busybox-shell-boot/evidence/
-            build/l32-busybox-shell-probe/firmware.sha256
-            build/l32-busybox-shell-probe/logs/*.log
+            build/l32-busybox-multiprocess-probe/uart-command.txt
+            build/l32-busybox-multiprocess-probe/firmware.sha256
+            build/l32-busybox-multiprocess-probe/logs/*.log

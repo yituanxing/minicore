@@ -14,6 +14,9 @@ MIN_INTERRUPTS ?= 0
 MIN_SEIP ?= 0
 UART_TRIGGER ?=
 UART_COMMAND ?=
+UART_COMMAND_FILE ?=
+UART_INPUT_ENABLED := $(if $(strip $(UART_COMMAND)$(UART_COMMAND_FILE)),1,0)
+export AETHERCORE_UART_COMMAND := $(UART_COMMAND)
 
 .PHONY: all rtl sim run-local clean
 
@@ -48,7 +51,11 @@ run-local: sim
 	mkdir -p $(BUILD_DIR)/logs
 	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
 	set +e; \
-		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$(UART_COMMAND)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		uart_command="$${AETHERCORE_UART_COMMAND-}"; \
+		if [[ -n "$(UART_COMMAND_FILE)" ]]; then \
+			uart_command="$$(cat "$(UART_COMMAND_FILE)")"; \
+		fi; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$$uart_command" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -71,7 +78,7 @@ run-local: sim
 			echo "ERROR: Linux reached UART marker without a retired SEIP interrupt"; exit 8; \
 		}; \
 	fi
-	if [[ -n "$(UART_COMMAND)" ]]; then \
+	if [[ "$(UART_INPUT_ENABLED)" == "1" ]]; then \
 		grep -q 'L32_UART_INPUT_COMPLETE' $(BUILD_DIR)/logs/boot-probe.log || { \
 			echo "ERROR: Linux runner did not deliver the complete UART command"; exit 9; \
 		}; \
