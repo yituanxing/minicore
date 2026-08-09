@@ -105,9 +105,13 @@ int main(int argc, char** argv) {
     std::uint64_t lastExceptionCause = 0;
     std::uint64_t lastExceptionValue = 0;
     std::uint64_t lastExceptionPc = 0;
+    std::uint64_t lastStimecmp = ~std::uint64_t{0};
     std::string uart;
     bool sawOpenSbiBanner = false;
     bool sawMilestone = false;
+    bool sawStimecmpUpdate = false;
+    bool sawSupervisorTimerPending = false;
+    bool sawSupervisorTimerQualified = false;
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
@@ -138,6 +142,35 @@ int main(int argc, char** argv) {
 
       if (cycles == 3) top.reset = 0;
       if (top.reset) continue;
+
+      const auto stimecmp = static_cast<std::uint64_t>(top.linuxTimerDebug_stimecmp);
+      if (stimecmp != lastStimecmp) {
+        lastStimecmp = stimecmp;
+        if (!sawStimecmpUpdate || stimecmp != ~std::uint64_t{0}) {
+          sawStimecmpUpdate = true;
+          std::cerr << "\nL32_STIMECMP_UPDATE cycles=" << cycles
+                    << " commits=" << commits
+                    << " privilege=" << static_cast<unsigned>(top.linuxTimerDebug_privilege)
+                    << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
+                    << " stimecmp=0x" << stimecmp << std::dec << "\n";
+        }
+      }
+      if (!sawSupervisorTimerPending && top.linuxTimerDebug_supervisorTimerPending) {
+        sawSupervisorTimerPending = true;
+        std::cerr << "\nL32_STIP_PENDING cycles=" << cycles
+                  << " commits=" << commits
+                  << " privilege=" << static_cast<unsigned>(top.linuxTimerDebug_privilege)
+                  << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
+                  << " stimecmp=0x" << stimecmp << std::dec << "\n";
+      }
+      if (!sawSupervisorTimerQualified && top.linuxTimerDebug_supervisorTimerInterrupt) {
+        sawSupervisorTimerQualified = true;
+        std::cerr << "\nL32_STIP_QUALIFIED cycles=" << cycles
+                  << " commits=" << commits
+                  << " privilege=" << static_cast<unsigned>(top.linuxTimerDebug_privilege)
+                  << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
+                  << " stimecmp=0x" << stimecmp << std::dec << "\n";
+      }
 
       if (top.io_uartValid) {
         const char byte = static_cast<char>(top.io_uartByte);
@@ -218,8 +251,12 @@ int main(int argc, char** argv) {
               << " min-interrupts=" << minInterrupts
               << " exceptions=" << exceptions
               << " interrupts=" << interrupts
+              << " privilege=" << static_cast<unsigned>(top.linuxTimerDebug_privilege)
+              << " stip-pending=" << (top.linuxTimerDebug_supervisorTimerPending ? 1 : 0)
+              << " stip-qualified=" << (top.linuxTimerDebug_supervisorTimerInterrupt ? 1 : 0)
               << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
               << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)
+              << " stimecmp=0x" << static_cast<std::uint64_t>(top.linuxTimerDebug_stimecmp)
               << " last-exception-pc=0x" << lastExceptionPc
               << " last-exception-cause=0x" << lastExceptionCause
               << " last-exception-value=0x" << lastExceptionValue
