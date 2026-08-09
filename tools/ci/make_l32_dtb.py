@@ -16,6 +16,7 @@ FDT_END = 9
 FDT_VERSION = 17
 FDT_LAST_COMP_VERSION = 16
 CPU_INTC_PHANDLE = 1
+PLIC_PHANDLE = 2
 
 
 def be32(value: int) -> bytes:
@@ -135,6 +136,20 @@ def build_l32_dtb(bootargs: str | None = None) -> bytes:
     b.prop("compatible", string("simple-bus"))
     b.prop("ranges")
 
+    # QEMU-virt-compatible PLIC window. This L32 profile intentionally exposes
+    # only hart0's Supervisor external-interrupt context: OpenSBI continues to
+    # use ACLINT/Sstc for its M-mode duties, while Linux owns the PLIC S context.
+    b.begin_node("interrupt-controller@c000000")
+    b.prop("compatible", stringlist("sifive,plic-1.0.0", "riscv,plic0"))
+    b.prop("reg", cells(0, 0x0C000000, 0, 0x00400000))
+    b.prop("#address-cells", cells(0))
+    b.prop("#interrupt-cells", cells(1))
+    b.prop("interrupt-controller")
+    b.prop("riscv,ndev", cells(52))
+    b.prop("interrupts-extended", cells(CPU_INTC_PHANDLE, 9))
+    b.prop("phandle", cells(PLIC_PHANDLE))
+    b.end_node()
+
     b.begin_node("serial@10000000")
     b.prop("compatible", string("ns16550a"))
     b.prop("reg", cells(0, 0x10000000, 0, 0x8))
@@ -142,6 +157,8 @@ def build_l32_dtb(bootargs: str | None = None) -> bytes:
     b.prop("current-speed", cells(115_200))
     b.prop("reg-shift", cells(0))
     b.prop("reg-io-width", cells(1))
+    b.prop("interrupt-parent", cells(PLIC_PHANDLE))
+    b.prop("interrupts", cells(10))
     b.prop("status", string("okay"))
     b.end_node()
 
@@ -177,7 +194,11 @@ def main() -> int:
         "isa=rv32ima_zicsr_zifencei_sstc",
         "mmu=sv32",
         "ram=0x80000000+0x10000000",
+        "plic=0x0c000000+0x00400000",
+        "plic_ndev=52",
+        "plic_s_ext_irq=9",
         "uart=ns16550a@0x10000000",
+        "uart_irq=10",
         "mtime=0x0200bff8",
         "mtimecmp=0x02004000",
         "mtime_irq=7",
