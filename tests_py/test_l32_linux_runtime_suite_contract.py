@@ -36,10 +36,17 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             ">> \"$d/b\"",
             "/bin/busybox rm",
             'cat \"$d/missing\" >/dev/null 2>&1',
-            "L32 BUSYBOX VFS OK",
+            "L32 BUSYBOX VFS %s\\n",
         ):
             self.assertIn(required, command)
-        self.assertTrue(command.index("set -eu") < command.index("L32 BUSYBOX VFS OK"))
+        self.assertNotIn(marker, command)
+        self.assertTrue(command.index("set -eu") < command.index("L32 BUSYBOX VFS %s\\n"))
+
+    def test_final_markers_cannot_be_satisfied_by_tty_command_echo(self):
+        suite = load_suite()
+        for case_id, marker, command in suite.CASES:
+            with self.subTest(case_id=case_id):
+                self.assertNotIn(marker, command)
 
     def test_suite_rejects_kernel_health_failures_and_requires_every_case(self):
         suite = load_suite()
