@@ -14,6 +14,7 @@ constexpr std::uint64_t kRamBase = 0x80000000ULL;
 constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
+constexpr const char* kDefaultMilestone = "Test payload running";
 
 class Memory {
  public:
@@ -80,12 +81,14 @@ void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& memory) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 3)
-      throw std::runtime_error("usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES]");
+    if (argc < 2 || argc > 4)
+      throw std::runtime_error(
+          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
-        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 10000000ULL;
+        argc >= 3 ? std::stoull(argv[2], nullptr, 0) : 10000000ULL;
+    const std::string milestone = argc >= 4 ? argv[3] : kDefaultMilestone;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
@@ -142,12 +145,20 @@ int main(int argc, char** argv) {
           std::cerr << "\nL32_OPENSBI_BANNER cycles=" << cycles
                     << " commits=" << commits << "\n";
         }
-        if (uart.find("Test payload running") != std::string::npos) {
-          std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
+        if (uart.find(milestone) != std::string::npos) {
+          if (milestone == kDefaultMilestone) {
+            std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
+                      << " commits=" << commits
+                      << " exceptions=" << exceptions
+                      << " interrupts=" << interrupts
+                      << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
+          }
+          std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                     << " commits=" << commits
                     << " exceptions=" << exceptions
                     << " interrupts=" << interrupts
-                    << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
+                    << " banner=" << (sawOpenSbiBanner ? 1 : 0)
+                    << " marker=" << milestone << "\n";
           return sawOpenSbiBanner ? 0 : 5;
         }
       }
