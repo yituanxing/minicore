@@ -81,14 +81,16 @@ void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& memory) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 4)
+    if (argc < 2 || argc > 5)
       throw std::runtime_error(
-          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE]");
+          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
         argc >= 3 ? std::stoull(argv[2], nullptr, 0) : 10000000ULL;
     const std::string milestone = argc >= 4 ? argv[3] : kDefaultMilestone;
+    const std::uint64_t minInterrupts =
+        argc >= 5 ? std::stoull(argv[4], nullptr, 0) : 0ULL;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
@@ -105,6 +107,7 @@ int main(int argc, char** argv) {
     std::uint64_t lastExceptionPc = 0;
     std::string uart;
     bool sawOpenSbiBanner = false;
+    bool sawMilestone = false;
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
@@ -145,21 +148,12 @@ int main(int argc, char** argv) {
           std::cerr << "\nL32_OPENSBI_BANNER cycles=" << cycles
                     << " commits=" << commits << "\n";
         }
-        if (uart.find(milestone) != std::string::npos) {
-          if (milestone == kDefaultMilestone) {
-            std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
-                      << " commits=" << commits
-                      << " exceptions=" << exceptions
-                      << " interrupts=" << interrupts
-                      << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
-          }
-          std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
+        if (!sawMilestone && uart.find(milestone) != std::string::npos) {
+          sawMilestone = true;
+          std::cerr << "\nL32_UART_MILESTONE cycles=" << cycles
                     << " commits=" << commits
-                    << " exceptions=" << exceptions
                     << " interrupts=" << interrupts
-                    << " banner=" << (sawOpenSbiBanner ? 1 : 0)
                     << " marker=" << milestone << "\n";
-          return sawOpenSbiBanner ? 0 : 5;
         }
       }
 
@@ -183,7 +177,36 @@ int main(int argc, char** argv) {
                       << " value=0x" << lastExceptionValue << std::dec << "\n";
           }
         }
-        if (top.io_commit_interrupt) ++interrupts;
+        if (top.io_commit_interrupt) {
+          ++interrupts;
+          if (interrupts == 1) {
+            std::cerr << "\nL32_FIRST_INTERRUPT cycles=" << cycles
+                      << " commits=" << commits
+                      << " pc=0x" << std::hex
+                      << static_cast<std::uint64_t>(top.io_commit_pc)
+                      << " cause=0x"
+                      << static_cast<std::uint64_t>(top.io_commit_exceptionCause)
+                      << std::dec << "\n";
+          }
+        }
+      }
+
+      if (sawMilestone && interrupts >= minInterrupts) {
+        if (milestone == kDefaultMilestone) {
+          std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
+                    << " commits=" << commits
+                    << " exceptions=" << exceptions
+                    << " interrupts=" << interrupts
+                    << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
+        }
+        std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
+                  << " commits=" << commits
+                  << " exceptions=" << exceptions
+                  << " interrupts=" << interrupts
+                  << " min-interrupts=" << minInterrupts
+                  << " banner=" << (sawOpenSbiBanner ? 1 : 0)
+                  << " marker=" << milestone << "\n";
+        return sawOpenSbiBanner ? 0 : 5;
       }
     }
 
@@ -191,6 +214,8 @@ int main(int argc, char** argv) {
               << " commits=" << commits
               << " uart-bytes=" << uart.size()
               << " banner=" << (sawOpenSbiBanner ? 1 : 0)
+              << " milestone=" << (sawMilestone ? 1 : 0)
+              << " min-interrupts=" << minInterrupts
               << " exceptions=" << exceptions
               << " interrupts=" << interrupts
               << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
