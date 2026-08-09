@@ -10,6 +10,8 @@ on:
       - tests_py/test_l32_busybox_contract.py
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
+      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
+      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
       - tools/ci/make_l32_dtb.py
       - .github/workflows/l32-busybox-build.yml
   workflow_dispatch:
@@ -171,7 +173,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run real Linux BusyBox ash startup
+      - name: Run real Linux BusyBox ash command over ttyS0
         shell: bash
         run: |
           set -euo pipefail
@@ -180,9 +182,11 @@ jobs:
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
-            MILESTONE="L32 BUSYBOX SHELL READY" \
+            MILESTONE="L32 BUSYBOX RX COMMAND OK" \
             MIN_INTERRUPTS=1 \
             MIN_SEIP=1 \
+            UART_TRIGGER="L32 BUSYBOX SHELL READY" \
+            UART_COMMAND="printf 'L32 BUSYBOX RX COMMAND %s\n' OK" \
             run-local
 
       - name: Upload BusyBox shell evidence
