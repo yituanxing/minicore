@@ -39,6 +39,9 @@ jobs:
         shell: bash
         env:
           L32_USERSPACE_JOBS: "6"
+          # musl-gcc defaults to the runner's host gcc. Point it back at the
+          # RV32IMA/ILP32 compiler wrapper created by l32_busybox_build.sh.
+          REALGCC: ${{ github.workspace }}/build/l32-busybox/l32-rv32ima-ilp32-gcc
         run: |
           set -euo pipefail
           chmod +x tools/ci/l32_busybox_build.sh
