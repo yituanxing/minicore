@@ -178,11 +178,15 @@ jobs:
         shell: bash
         env:
           L32_BUSYBOX_PIPE_COMMAND: >-
-            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$$x" = PIPE_TOKEN ] && printf "L32 BUSYBOX PIPE CHILD %s\n" OK' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
+            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; [ "$x" = PIPE_TOKEN ] && printf "L32 BUSYBOX PIPE CHILD %s\n" OK' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
         run: |
           set -euo pipefail
+          probe_dir=build/l32-busybox-multiprocess-probe
+          command_file="$probe_dir/uart-command.txt"
+          mkdir -p "$probe_dir"
+          printf '%s\n' "$L32_BUSYBOX_PIPE_COMMAND" > "$command_file"
           make -f Makefile.l32-linux-boot \
-            BUILD_DIR=build/l32-busybox-multiprocess-probe \
+            BUILD_DIR="$probe_dir" \
             FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=500000000 \
@@ -190,11 +194,11 @@ jobs:
             MIN_INTERRUPTS=1 \
             MIN_SEIP=1 \
             UART_TRIGGER="L32 BUSYBOX SHELL READY" \
-            UART_COMMAND="$L32_BUSYBOX_PIPE_COMMAND" \
+            UART_COMMAND_FILE="$command_file" \
             run-local
-          log=build/l32-busybox-multiprocess-probe/logs/boot-probe.log
-          grep -qx 'L32 BUSYBOX PIPE CHILD OK' "$log"
-          grep -qx 'L32 BUSYBOX PIPE PARENT OK' "$log"
+          log="$probe_dir/logs/boot-probe.log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$log"
+          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$log"
           grep -q '^L32_UART_INPUT_COMPLETE ' "$log"
           grep -q '^L32_UART_RX_INTERRUPT ' "$log"
           grep -q '^L32_UART_INPUT_SEIP ' "$log"
@@ -223,5 +227,6 @@ jobs:
             build/l32-busybox-shell-boot/runtime-freeze.txt
             build/l32-busybox-shell-boot/opensbi-busybox-build.log
             build/l32-busybox-shell-boot/evidence/
+            build/l32-busybox-multiprocess-probe/uart-command.txt
             build/l32-busybox-multiprocess-probe/firmware.sha256
             build/l32-busybox-multiprocess-probe/logs/*.log
