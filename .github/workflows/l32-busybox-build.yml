@@ -1,0 +1,64 @@
+name: L32 BusyBox Soft-Float Build
+
+on:
+  pull_request:
+    paths:
+      - software/l32_busybox/**
+      - tools/ci/l32_busybox_build.sh
+      - tests_py/test_l32_busybox_contract.py
+      - tools/ensure_l32_riscv32_linux_gcc.sh
+      - .github/workflows/l32-busybox-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-busybox-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  busybox-soft-float:
+    name: musl 1.2.5 + BusyBox 1.36.1 RV32IMA/ILP32
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate BusyBox userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_busybox_build.sh
+          python3 -m unittest tests_py.test_l32_busybox_contract -v
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Build soft-float musl and static BusyBox
+        shell: bash
+        env:
+          L32_USERSPACE_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_build.sh
+          bash tools/ci/l32_busybox_build.sh
+
+      - name: Upload BusyBox build evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-busybox-build-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-busybox/result.txt
+            build/l32-busybox/musl-build.log
+            build/l32-busybox/busybox-build.log
+            build/l32-busybox/evidence/
