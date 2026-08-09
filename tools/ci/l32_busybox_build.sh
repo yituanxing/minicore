@@ -132,7 +132,8 @@ BUSYBOX_ELF="${BUSYBOX_BUILD_DIR}/busybox"
 file "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-file.txt"
 file "${BUSYBOX_ELF}" | grep -q 'statically linked'
 "${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'Class:[[:space:]]*ELF32'
-"${READELF}" -h "${BUSYBOX_ELF" 2>/dev/null || true
+"${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'Machine:[[:space:]]*RISC-V'
+"${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'soft-float ABI'
 
 busybox_arch="$(${READELF} -A "${BUSYBOX_ELF}" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
 [[ "${busybox_arch}" == rv32i* && "${busybox_arch}" == *"_m"* && "${busybox_arch}" == *"_a"* ]] || {
@@ -143,7 +144,6 @@ if [[ "${busybox_arch}" =~ _f[0-9] || "${busybox_arch}" =~ _d[0-9] || "${busybox
   echo "ERROR: BusyBox retained unsupported F/D/C extension: ${busybox_arch}" >&2
   exit 23
 fi
-"${READELF}" -h "${BUSYBOX_ELF}" | grep -q 'soft-float ABI'
 
 sha256sum \
   "${MUSL_TARBALL}" \
