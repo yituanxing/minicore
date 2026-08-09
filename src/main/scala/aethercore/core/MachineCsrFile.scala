@@ -28,6 +28,7 @@ object SupervisorCsrAddress {
   val Sstatus: Int = 0x100
   val Sie: Int = 0x104
   val Stvec: Int = 0x105
+  val Scounteren: Int = 0x106
   val Sscratch: Int = 0x140
   val Sepc: Int = 0x141
   val Scause: Int = 0x142
@@ -90,6 +91,8 @@ object MachineCsrWarl {
     val allBits = (BigInt(1) << xlen) - 1
     val supervisorTimerMask =
       if (isa.hasSstc) BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt else BigInt(0)
+    val timeCounterMask =
+      if (isa.hasSstc) BigInt(1) << Rv32SstcBit.McounterenTime else BigInt(0)
     val machineInterruptMask =
       supervisorTimerMask |
         (BigInt(1) << MachineCsrBit.MachineTimerInterrupt) |
@@ -140,8 +143,7 @@ object MachineCsrWarl {
       }
       is(MachineCsrAddress.Mie.U) { result := data & machineInterruptMask.U(xlen.W) }
       is(MachineCsrAddress.Mcounteren.U) {
-        val mask = if (isa.hasSstc) BigInt(1) << Rv32SstcBit.McounterenTime else BigInt(0)
-        result := data & mask.U(xlen.W)
+        result := data & timeCounterMask.U(xlen.W)
       }
       is(MachineCsrAddress.Menvcfg.U) { result := 0.U }
       is(MachineCsrAddress.Menvcfgh.U) {
@@ -152,6 +154,7 @@ object MachineCsrWarl {
       is(MachineCsrAddress.Mepc.U) { result := data & epcMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sstatus.U) { result := data & sstatusMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sie.U) { result := data & supervisorTimerMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Scounteren.U) { result := data & timeCounterMask.U(xlen.W) }
       is(SupervisorCsrAddress.Stvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sepc.U) { result := data & epcMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sip.U) { result := 0.U }
@@ -262,6 +265,7 @@ class MachineCsrFile(
   val mideleg = RegInit(0.U(xlen.W))
   val mie = RegInit(0.U(xlen.W))
   val mcounteren = RegInit(0.U(xlen.W))
+  val scounteren = RegInit(0.U(xlen.W))
   val menvcfgh = RegInit(0.U(xlen.W))
   val mtvec = RegInit(0.U(xlen.W))
   val mscratch = RegInit(0.U(xlen.W))
@@ -288,7 +292,9 @@ class MachineCsrFile(
   val sstc = if (isa.hasSstc) Some(Module(new Rv32SstcTimer)) else None
   val timeAccessAllowed = if (isa.hasSstc) {
     privilege === PrivilegeMode.Machine.U ||
-      (privilege === PrivilegeMode.Supervisor.U && mcounteren(Rv32SstcBit.McounterenTime))
+      (privilege === PrivilegeMode.Supervisor.U && mcounteren(Rv32SstcBit.McounterenTime)) ||
+      (privilege === PrivilegeMode.User.U &&
+        mcounteren(Rv32SstcBit.McounterenTime) && scounteren(Rv32SstcBit.McounterenTime))
   } else false.B
   val stimecmpAccessAllowed = if (isa.hasSstc) {
     privilege === PrivilegeMode.Machine.U ||
@@ -495,6 +501,11 @@ class MachineCsrFile(
         io.readImplemented := true.B
         io.readWritable := true.B
       }
+      is(SupervisorCsrAddress.Scounteren.U) {
+        io.readData := scounteren
+        io.readImplemented := true.B
+        io.readWritable := true.B
+      }
       is(SupervisorCsrAddress.Sscratch.U) {
         io.readData := sscratch
         io.readImplemented := true.B
@@ -660,6 +671,7 @@ class MachineCsrFile(
         is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
         is(SupervisorCsrAddress.Sstatus.U) { mstatus := sstatusWriteValue }
         is(SupervisorCsrAddress.Sie.U) { mie := sieWriteValue }
+        is(SupervisorCsrAddress.Scounteren.U) { scounteren := canonicalWriteData }
         is(SupervisorCsrAddress.Stvec.U) { stvec := canonicalWriteData }
         is(SupervisorCsrAddress.Sscratch.U) { sscratch := canonicalWriteData }
         is(SupervisorCsrAddress.Sepc.U) { sepc := canonicalWriteData }
