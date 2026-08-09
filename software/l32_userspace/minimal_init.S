@@ -6,13 +6,15 @@
  * beyond the frozen soft-float ILP32 ISA contract.
  */
 
+#define L32_INIT_MESSAGE_LEN 28
+
 .section .text
 .globl _start
 .type _start, @function
 _start:
     li      a0, 1
     la      a1, l32_init_message
-    li      a2, l32_init_message_end - l32_init_message
+    li      a2, L32_INIT_MESSAGE_LEN
     li      a7, 64              /* __NR_write */
     ecall
 
@@ -26,6 +28,5 @@ _start:
 .align 2
 l32_init_message:
     .ascii  "AetherCore L32 init running\n"
-l32_init_message_end:
 
 .section .note.GNU-stack,"",@progbits
