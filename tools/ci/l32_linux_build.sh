@@ -57,10 +57,11 @@ make -C "${SOURCE_DIR}" O="${BUILD_DIR}/obj" \
   "${LINUX_RV32_DEFCONFIG}" \
   2>&1 | tee "${BUILD_DIR}/config.log"
 
-# Keep the first Linux workload inside the already-frozen AetherCore ISA. The
-# upstream rv32_defconfig is the starting point; this bounded overlay removes
-# instruction-set features that the current CPU intentionally does not expose.
+# Keep the first Linux workload inside the frozen AetherCore ISA. RISC-V EFI
+# selects RISCV_ISA_C in Linux 6.6, so disable the unused UEFI runtime path
+# before disabling compressed instructions. L32 boots through OpenSBI + FDT.
 "${SOURCE_DIR}/scripts/config" --file "${BUILD_DIR}/obj/.config" \
+  -d EFI \
   -d RISCV_ISA_C \
   -d FPU
 
@@ -77,6 +78,9 @@ for required in \
     exit 22
   }
 done
+grep -qx '# CONFIG_EFI is not set' "${BUILD_DIR}/obj/.config" || {
+  echo "ERROR: Linux config retained EFI, which re-selects compressed ISA" >&2; exit 22;
+}
 grep -qx '# CONFIG_RISCV_ISA_C is not set' "${BUILD_DIR}/obj/.config" || {
   echo "ERROR: Linux config retained compressed ISA" >&2; exit 22;
 }
