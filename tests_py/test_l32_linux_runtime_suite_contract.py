@@ -66,6 +66,9 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         for required in (
             "lua-${LUA_VERSION}", "sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}", "bash-${BASH_VERSION}",
             "SQLITE_THREADSAFE=0", "--enable-static-link", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            'build_triplet="$(sh support/config.guess)"',
+            "sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile",
+            "generated Bash target Makefile still contains -rdynamic",
         ):
             self.assertIn(required, build)
         initramfs = INITRAMFS_BUILD.read_text()
