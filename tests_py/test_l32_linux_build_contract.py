@@ -14,25 +14,36 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         )
         self.assertIn("LINUX_RV32_DEFCONFIG=rv32_defconfig", manifest)
 
-    def test_build_starts_from_upstream_rv32_defconfig_and_stays_inside_frozen_isa(self):
+    def test_build_starts_from_upstream_rv32_defconfig_and_stays_inside_frozen_platform(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
         self.assertIn('"${LINUX_RV32_DEFCONFIG}"', text)
         self.assertIn("-d EFI", text)
         self.assertIn("-d RISCV_ISA_C", text)
         self.assertIn("-d FPU", text)
+        self.assertIn("-d VGA_CONSOLE", text)
         self.assertIn("RISC-V EFI", text)
+        self.assertIn("NS16550 serial console", text)
         self.assertIn("CONFIG_32BIT=y", text)
         self.assertIn("CONFIG_MMU=y", text)
         self.assertIn("# CONFIG_EFI is not set", text)
         self.assertIn("# CONFIG_RISCV_ISA_C is not set", text)
         self.assertIn("# CONFIG_FPU is not set", text)
+        self.assertIn("# CONFIG_VGA_CONSOLE is not set", text)
         self.assertIn("-j\"${JOBS}\" Image", text)
         self.assertIn("vmlinux", text)
         self.assertIn("arch/riscv/boot/Image", text)
         self.assertIn("retained unsupported F/D/C extension", text)
         self.assertIn("L32_LINUX_BUILD_RESULT: status=PASS", text)
 
-    def test_linux_build_does_not_touch_opensbi_or_rtl(self):
+    def test_build_preserves_objects_only_for_same_source_and_toolchain(self):
+        text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
+        self.assertIn(".aethercore-object-inputs", text)
+        self.assertIn("LINUX_SHA256", text)
+        self.assertIn("L32_TOOLCHAIN_VERSION", text)
+        self.assertIn("Kbuild itself tracks .config/header dependencies", text)
+        self.assertNotIn('rm -rf "${BUILD_DIR}/obj"', text)
+
+    def test_linux_build_does_not_touch_rtl(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
         self.assertNotIn("Verilator", text)
         self.assertNotIn("mill ", text)
