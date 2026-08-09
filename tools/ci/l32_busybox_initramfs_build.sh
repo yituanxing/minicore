@@ -67,6 +67,7 @@ file /bin/busybox ${BUSYBOX_ELF} 0755 0 0
 slink /bin/sh busybox 0777 0 0
 slink /bin/uname busybox 0777 0 0
 slink /bin/echo busybox 0777 0 0
+slink /bin/printf busybox 0777 0 0
 file /init ${INIT_SCRIPT} 0755 0 0
 EOF
 
