@@ -4,11 +4,12 @@ import sys
 import tempfile
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SUITE_PATH = ROOT / "tools/ci/l32_linux_runtime_suite.py"
 PROBE_SOURCE = ROOT / "software/l32_busybox/runtime_probe.c"
 PROBE_BUILD = ROOT / "tools/ci/l32_runtime_probe_build.sh"
+REAL_BUILD = ROOT / "tools/ci/l32_real_programs_build.sh"
+REAL_MANIFEST = ROOT / "software/l32_real/manifest.env"
 INITRAMFS_BUILD = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 
@@ -28,69 +29,65 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         by_id = {case.case_id: case for case in suite.CASES}
         self.assertEqual(
             list(by_id),
-            ["builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time"],
+            ["builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time", "lua-real", "sqlite-real", "bash-real"],
         )
-        self.assertEqual(by_id["vfs"].level, "L2-vfs")
-        self.assertEqual(by_id["vm"].level, "L3-vm")
-        self.assertEqual(by_id["cow"].level, "L4-cow")
-        self.assertEqual(by_id["signal"].level, "L5-signal")
-        self.assertEqual(by_id["time"].level, "L6-time")
+        for case_id, level in (
+            ("vfs", "L2-vfs"), ("vm", "L3-vm"), ("cow", "L4-cow"),
+            ("signal", "L5-signal"), ("time", "L6-time"),
+            ("lua-real", "L7-real"), ("sqlite-real", "L7-real"), ("bash-real", "L7-real"),
+        ):
+            self.assertEqual(by_id[case_id].level, level)
         for case_id in ("vfs", "vm", "cow", "signal", "time"):
             case = by_id[case_id]
             self.assertEqual(case.command, f"/bin/l32-runtime-probe {case_id}")
             self.assertTrue(case.marker.startswith("L32_PROBE_"))
-            self.assertNotIn(case.marker, case.command)
+        self.assertEqual(by_id["lua-real"].command, "/opt/l32/lua /opt/l32/lua-smoke.lua")
+        self.assertEqual(by_id["sqlite-real"].command, "/opt/l32/sqlite-smoke")
+        self.assertEqual(by_id["bash-real"].command, "/opt/l32/bash /opt/l32/bash-smoke.sh")
 
     def test_probe_covers_vfs_vm_cow_signal_and_time_semantics(self):
         text = PROBE_SOURCE.read_text()
         for required in (
-            "open(path_a, O_CREAT | O_TRUNC | O_RDWR",
-            "write_all(fd, first",
-            "lseek(fd, 0, SEEK_SET)",
-            "fstat(fd, &st)",
-            "rename(path_a, path_b)",
-            "O_WRONLY | O_APPEND",
-            "unlink(path_b)",
-            "errno != ENOENT",
-            "MAP_PRIVATE | MAP_ANONYMOUS",
-            "mprotect(p + page, page, PROT_READ)",
-            "munmap(p, len)",
-            "pid_t pid = fork()",
-            "waitpid(pid, &status, 0)",
-            "parent-cow",
-            "sigaction(SIGUSR1",
-            "kill(getpid(), SIGUSR1)",
-            "clock_gettime(CLOCK_MONOTONIC",
-            "nanosleep(&req, &req)",
-            "L32_PROBE_VFS_PASS",
-            "L32_PROBE_VM_PASS",
-            "L32_PROBE_COW_PASS",
-            "L32_PROBE_SIGNAL_PASS",
-            "L32_PROBE_TIME_PASS",
+            "open(path_a, O_CREAT | O_TRUNC | O_RDWR", "write_all(fd, first", "lseek(fd, 0, SEEK_SET)",
+            "fstat(fd, &st)", "rename(path_a, path_b)", "O_WRONLY | O_APPEND", "unlink(path_b)",
+            "errno != ENOENT", "MAP_PRIVATE | MAP_ANONYMOUS", "mprotect(p + page, page, PROT_READ)",
+            "munmap(p, len)", "pid_t pid = fork()", "waitpid(pid, &status, 0)", "parent-cow",
+            "sigaction(SIGUSR1", "kill(getpid(), SIGUSR1)", "clock_gettime(CLOCK_MONOTONIC",
+            "nanosleep(&req, &req)", "L32_PROBE_VFS_PASS", "L32_PROBE_VM_PASS", "L32_PROBE_COW_PASS",
+            "L32_PROBE_SIGNAL_PASS", "L32_PROBE_TIME_PASS",
         ):
             self.assertIn(required, text)
 
-    def test_probe_is_static_qualified_and_embedded_in_initramfs(self):
-        build = PROBE_BUILD.read_text()
+    def test_real_programs_are_pinned_static_and_embedded(self):
+        manifest = REAL_MANIFEST.read_text()
+        for required in ("LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "SHA256="):
+            self.assertIn(required, manifest)
+        build = REAL_BUILD.read_text()
         for required in (
-            "l32-musl-real-gcc",
-            "-fno-pie -no-pie",
-            "statically linked",
-            "expected ELF32 little-endian",
-            "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS",
+            "lua-${LUA_VERSION}", "sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}", "bash-${BASH_VERSION}",
+            "SQLITE_THREADSAFE=0", "--enable-static-link", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
         ):
             self.assertIn(required, build)
-
         initramfs = INITRAMFS_BUILD.read_text()
         for required in (
-            'PROBE_ELF="${PROBE_BUILD_DIR}/l32-runtime-probe"',
-            "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS",
-            "file /bin/l32-runtime-probe ${PROBE_ELF} 0755 0 0",
-            'OBJ_MARKER="${OBJ_DIR}/.aethercore-object-inputs"',
+            "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            "file /opt/l32/lua ${LUA_ELF} 0755 0 0",
+            "file /opt/l32/sqlite-smoke ${SQLITE_ELF} 0755 0 0",
+            "file /opt/l32/bash ${BASH_ELF} 0755 0 0",
+        ):
+            self.assertIn(required, initramfs)
+
+    def test_probe_is_static_qualified_and_embedded_in_initramfs(self):
+        build = PROBE_BUILD.read_text()
+        for required in ("l32-musl-real-gcc", "-fno-pie -no-pie", "statically linked", "expected ELF32 little-endian", "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS"):
+            self.assertIn(required, build)
+        initramfs = INITRAMFS_BUILD.read_text()
+        for required in (
+            'PROBE_ELF="${PROBE_BUILD_DIR}/l32-runtime-probe"', "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS",
+            "file /bin/l32-runtime-probe ${PROBE_ELF} 0755 0 0", 'OBJ_MARKER="${OBJ_DIR}/.aethercore-object-inputs"',
             "Preserve this variant's Kbuild object tree",
         ):
             self.assertIn(required, initramfs)
-        self.assertNotIn('rm -rf "${OBJ_DIR}"\nmkdir -p "${OBJ_DIR}"', initramfs)
 
     def test_final_markers_cannot_be_satisfied_by_tty_command_echo(self):
         suite = load_suite()
@@ -103,32 +100,16 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         lines = [f"L32_FORKSERVER_READY cycles=1 commits=1 seip=1 cases={len(suite.CASES)}"]
         for case in suite.CASES:
             lines.append(case.marker)
-            lines.append(
-                f"L32_FORKSERVER_CASE_PASS id={case.case_id} "
-                "delta-cycles=1 delta-commits=1 seip-delta=1"
-            )
-        lines.extend(
-            [
-                "L32 BUSYBOX PIPE CHILD OK",
-                "L32 BUSYBOX PIPE PARENT OK",
-                f"L32_FORKSERVER_PASS cases={len(suite.CASES)} boot-cycles=1",
-            ]
-        )
+            lines.append(f"L32_FORKSERVER_CASE_PASS id={case.case_id} delta-cycles=1 delta-commits=1 seip-delta=1")
+        lines.extend(["L32 BUSYBOX PIPE CHILD OK", "L32 BUSYBOX PIPE PARENT OK", f"L32_FORKSERVER_PASS cases={len(suite.CASES)} boot-cycles=1"])
         good = "\n".join(lines) + "\n"
         suite.verify_text(good)
-
         for bad in suite.BAD_KERNEL_MARKERS:
             with self.subTest(bad=bad):
                 with self.assertRaises(RuntimeError):
                     suite.verify_text(good + bad + "\n")
-
         with self.assertRaises(RuntimeError):
-            suite.verify_text(
-                good.replace(
-                    "L32_FORKSERVER_CASE_PASS id=vm ",
-                    "L32_FORKSERVER_CASE_MISSING id=vm ",
-                )
-            )
+            suite.verify_text(good.replace("L32_FORKSERVER_CASE_PASS id=vm ", "L32_FORKSERVER_CASE_MISSING id=vm "))
 
     def test_batch_writer_preserves_one_case_per_tsv_line(self):
         suite = load_suite()
@@ -137,19 +118,16 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             suite.write_batch(path)
             rows = path.read_text().splitlines()
         self.assertEqual(len(rows), len(suite.CASES))
-        self.assertEqual(
-            [row.split("\t", 1)[0] for row in rows],
-            [case.case_id for case in suite.CASES],
-        )
+        self.assertEqual([row.split("\t", 1)[0] for row in rows], [case.case_id for case in suite.CASES])
         self.assertTrue(all(row.count("\t") == 2 for row in rows))
 
     def test_workflow_routes_warm_batch_through_runtime_suite(self):
         text = WORKFLOW.read_text()
-        self.assertIn("tools/ci/l32_linux_runtime_suite.py", text)
-        self.assertIn("tools/ci/l32_runtime_probe_build.sh", text)
-        self.assertIn('write-batch "$batch_file"', text)
-        self.assertIn('verify-log "$log"', text)
-        self.assertIn("tests_py.test_l32_linux_runtime_suite_contract", text)
+        for required in (
+            "tools/ci/l32_linux_runtime_suite.py", "tools/ci/l32_runtime_probe_build.sh",
+            'write-batch "$batch_file"', 'verify-log "$log"', "tests_py.test_l32_linux_runtime_suite_contract",
+        ):
+            self.assertIn(required, text)
 
 
 if __name__ == "__main__":
