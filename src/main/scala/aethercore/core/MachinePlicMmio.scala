@@ -27,8 +27,15 @@ object MachinePlicMmioMap {
   * two architectural pending/enable words (sources 1..63) so the real NuttX
   * QEMU-virt profile can initialize its 52 PLIC sources without a synthetic
   * bus fault. Context offsets are constructor parameters: existing users keep
-  * the historical machine-context defaults, while N5 can select hart0's
-  * Supervisor context at 0x2080 / 0x201000 / 0x201004.
+  * the historical machine-context defaults, while N5 and Linux can select
+  * hart0's Supervisor context at 0x2080 / 0x201000 / 0x201004.
+  *
+  * A QEMU-virt-style Supervisor-only instance also preserves the preceding
+  * hart0 Machine-context MMIO aperture as read-zero/write-ignore. OpenSBI's
+  * generic PLIC cold init clears context0 enable/threshold registers even when
+  * the FDT marks that context absent with interrupt specifier 0xffffffff. The
+  * aperture therefore exists for firmware compatibility but has no enable,
+  * claim, pending, or interrupt-delivery state of its own.
   */
 class MachinePlicMmio(
     val sourceCount: Int = 8,
@@ -47,6 +54,10 @@ class MachinePlicMmio(
 
   private val sourceIdBits = log2Ceil(sourceCount + 1)
   private val wordCount = sourceCount / 32 + 1
+  private val supervisorContextProfile =
+    enableBase == MachinePlicMmioMap.SupervisorEnable &&
+      thresholdOffset == MachinePlicMmioMap.SupervisorThreshold &&
+      claimCompleteOffset == MachinePlicMmioMap.SupervisorClaimComplete
 
   val io = IO(new Bundle {
     val sources = Input(UInt(sourceCount.W))
@@ -125,7 +136,29 @@ class MachinePlicMmio(
   val enableHit = enableHits.reduce(_ || _)
   val thresholdHit = io.address === thresholdOffset.U(addressBits.W)
   val claimCompleteHit = io.address === claimCompleteOffset.U(addressBits.W)
-  val implemented = priorityZeroHit || priorityHit || pendingHit || enableHit || thresholdHit || claimCompleteHit
+
+  // The Supervisor-context profile keeps context0's canonical register
+  // aperture legal but inert. This is not a second PLIC context: no write here
+  // mutates the active Supervisor context, and reads always return zero.
+  val absentMachineEnableHit = if (supervisorContextProfile) {
+    (0 until wordCount)
+      .map(word => io.address === MachinePlicMmioMap.enableWord(MachinePlicMmioMap.Enable, word).U(addressBits.W))
+      .reduce(_ || _)
+  } else false.B
+  val absentMachineThresholdHit =
+    if (supervisorContextProfile)
+      io.address === MachinePlicMmioMap.Threshold.U(addressBits.W)
+    else false.B
+  val absentMachineClaimCompleteHit =
+    if (supervisorContextProfile)
+      io.address === MachinePlicMmioMap.ClaimComplete.U(addressBits.W)
+    else false.B
+  val absentMachineContextHit =
+    absentMachineEnableHit || absentMachineThresholdHit || absentMachineClaimCompleteHit
+
+  val implemented =
+    priorityZeroHit || priorityHit || pendingHit || enableHit || thresholdHit ||
+      claimCompleteHit || absentMachineContextHit
   val aligned = io.address(1, 0) === 0.U
   val accepted = io.request && aligned && implemented
 
@@ -146,6 +179,7 @@ class MachinePlicMmio(
   }
   when(thresholdHit) { readData := thresholdReadData }
   when(claimCompleteHit) { readData := claimReadData }
+  // absentMachineContextHit deliberately leaves readData at zero.
   io.rdata := Mux(accepted && !io.write, readData, 0.U)
 
   val priorityMerged = mergeBytes(priorityReadData, io.wdata, io.wmask)
