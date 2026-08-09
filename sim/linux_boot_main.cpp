@@ -235,10 +235,6 @@ int main(int argc, char** argv) {
             std::cerr << std::dec << "\n";
             return 3;
           }
-        } else {
-          // Only consecutive repetitions of the same fault count as livelock.
-          repeatedExceptionCount = 0;
-          havePreviousException = false;
         }
         if (top.io_commit_interrupt) ++interrupts;
       }
