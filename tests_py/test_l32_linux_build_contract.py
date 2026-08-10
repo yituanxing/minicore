@@ -23,6 +23,7 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn("L32_LINUX_BUILD_HOST=DESKTOP-O76BLPL", freeze)
         self.assertIn("L32_LINUX_BUILD_VERSION=1", freeze)
         self.assertIn("L32_LINUX_BUILD_TIMESTAMP='Sun Aug  9 10:34:43 CST 2026'", freeze)
+        self.assertIn("L32_LINUX_BUILD_TZ=Asia/Shanghai", freeze)
         self.assertIn("L32_LINUX_FREEZE_RUN_ID=31290514249", freeze)
         self.assertIn("L32_LINUX_FREEZE_ARTIFACT_ID=9031239454", freeze)
 
@@ -54,8 +55,10 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn('export KBUILD_BUILD_HOST="${L32_LINUX_BUILD_HOST}"', text)
         self.assertIn('export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"', text)
         self.assertIn('export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"', text)
+        self.assertIn('export TZ="${L32_LINUX_BUILD_TZ}"', text)
         self.assertIn("kbuild_user=${KBUILD_BUILD_USER}", text)
         self.assertIn("kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}", text)
+        self.assertIn("kbuild_tz=${TZ}", text)
 
     def test_build_preserves_objects_only_for_same_source_and_toolchain(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
@@ -91,6 +94,7 @@ class L32LinuxBuildContractTest(unittest.TestCase):
     def test_workflow_is_software_only_and_reuses_persistent_build(self):
         text = (ROOT / ".github/workflows/l32-linux-build.yml").read_text()
         self.assertIn("L32 Linux 6.6.143 Build", text)
+        self.assertIn("software/l32/linux-freeze.env", text)
         self.assertIn("tools/ci/l32_linux_cache_key.sh check", text)
         self.assertIn("tools/ci/l32_linux_cache_key.sh mark", text)
         self.assertIn("tools/ci/l32_linux_build.sh", text)
