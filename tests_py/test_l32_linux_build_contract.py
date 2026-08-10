@@ -49,13 +49,19 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertNotIn("mill ", text)
         self.assertNotIn("src/main/scala", text)
 
-    def test_cache_requires_exact_build_inputs_and_real_outputs(self):
+    def test_cache_requires_exact_build_inputs_and_frozen_output_identity(self):
         text = (ROOT / "tools/ci/l32_linux_cache_key.sh").read_text()
         self.assertIn("software/l32/manifest.env", text)
+        self.assertIn("software/l32/linux-freeze.env", text)
         self.assertIn("tools/ci/l32_linux_build.sh", text)
         self.assertIn("tools/ensure_l32_riscv32_linux_gcc.sh", text)
         self.assertIn("obj/vmlinux", text)
         self.assertIn("arch/riscv/boot/Image", text)
+        self.assertIn("evidence/resolved.config", text)
+        self.assertIn("L32_LINUX_VMLINUX_SHA256", text)
+        self.assertIn("L32_LINUX_IMAGE_SHA256", text)
+        self.assertIn("L32_LINUX_CONFIG_SHA256", text)
+        self.assertIn("frozen %s SHA drift", text)
         self.assertIn("L32_LINUX_BUILD_RESULT: status=PASS", text)
         self.assertIn("input-key.txt", text)
 
