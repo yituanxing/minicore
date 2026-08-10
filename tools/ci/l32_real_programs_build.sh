@@ -182,7 +182,7 @@ def set_value(symbol: str, value: str) -> None:
 for symbol in (
     'CONFIG_STATIC', 'CONFIG_LFS',
     'CONFIG_AWK', 'CONFIG_GZIP', 'CONFIG_GUNZIP', 'CONFIG_TAR', 'CONFIG_FEATURE_TAR_CREATE',
-    'CONFIG_ED', 'CONFIG_VI', 'CONFIG_FEATURE_VI_COLON',
+    'CONFIG_ED', 'CONFIG_VI', 'CONFIG_FEATURE_VI_COLON', 'CONFIG_FEATURE_VI_SEARCH',
     'CONFIG_CAT', 'CONFIG_CMP', 'CONFIG_MKDIR', 'CONFIG_RM',
 ):
     set_symbol(symbol)
@@ -193,7 +193,7 @@ PY
   # If an enabled applet exposes another unset non-default Kconfig value, fail
   # immediately instead of silently accepting interactive host input.
   make ARCH=riscv oldconfig </dev/null
-  for symbol in CONFIG_STATIC CONFIG_AWK CONFIG_GZIP CONFIG_GUNZIP CONFIG_TAR CONFIG_FEATURE_TAR_CREATE CONFIG_ED CONFIG_VI CONFIG_FEATURE_VI_COLON CONFIG_CAT CONFIG_CMP CONFIG_MKDIR CONFIG_RM; do
+  for symbol in CONFIG_STATIC CONFIG_AWK CONFIG_GZIP CONFIG_GUNZIP CONFIG_TAR CONFIG_FEATURE_TAR_CREATE CONFIG_ED CONFIG_VI CONFIG_FEATURE_VI_COLON CONFIG_FEATURE_VI_SEARCH CONFIG_CAT CONFIG_CMP CONFIG_MKDIR CONFIG_RM; do
     grep -qx "${symbol}=y" .config || { echo "ERROR: workload BusyBox lost ${symbol}" >&2; exit 33; }
   done
   grep -qx 'CONFIG_FEATURE_VI_MAX_LEN=4096' .config || {
