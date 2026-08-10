@@ -37,6 +37,16 @@ CASES = [
         "open/create/write/read/lseek/fstat/stat/rename/append/unlink/ENOENT",
     ),
     RuntimeCase(
+        "L2-fd", "fd", "L32_PROBE_FD_PASS",
+        r"/bin/l32-runtime-probe fd",
+        "dup, dup2, shared open-file offset, fcntl FD_CLOEXEC, descriptor lifetime",
+    ),
+    RuntimeCase(
+        "L2-vfs", "dir", "L32_PROBE_DIR_PASS",
+        r"/bin/l32-runtime-probe dir",
+        "mkdir/openat/fstatat/renameat/opendir/readdir/unlinkat/rmdir and namei directory paths",
+    ),
+    RuntimeCase(
         "L3-vm", "vm", "L32_PROBE_VM_PASS",
         r"/bin/l32-runtime-probe vm",
         "anonymous mmap, first-touch zero-fill, multi-page R/W, mprotect, munmap",
@@ -55,6 +65,21 @@ CASES = [
         "L6-time", "time", "L32_PROBE_TIME_PASS",
         r"/bin/l32-runtime-probe time",
         "clock_gettime, nanosleep, timer interrupt and scheduler return",
+    ),
+    RuntimeCase(
+        "L6-ipc", "unix", "L32_PROBE_UNIX_PASS",
+        r"/bin/l32-runtime-probe unix",
+        "AF_UNIX socketpair, forked bidirectional stream I/O, blocking wakeup, waitpid",
+    ),
+    RuntimeCase(
+        "L6-blocking", "poll", "L32_PROBE_POLL_PASS",
+        r"/bin/l32-runtime-probe poll",
+        "pipe, poll blocking, timer-delayed child wakeup, scheduler return and data transfer",
+    ),
+    RuntimeCase(
+        "L6-futex", "futex", "L32_PROBE_FUTEX_PASS",
+        r"/bin/l32-runtime-probe futex",
+        "shared anonymous mapping, RV32A atomic publication, futex wait/wake, process scheduling",
     ),
     RuntimeCase(
         "L7-real", "lua-real", "L32_LUA_REAL_PASS 6765 21 2870",
