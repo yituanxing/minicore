@@ -6,7 +6,8 @@ source "${ROOT_DIR}/software/l32_busybox/manifest.env"
 source "${ROOT_DIR}/software/l32_real/manifest.env"
 
 BUILD_DIR="${ROOT_DIR}/build/l32-real-programs"
-COMPONENT_CACHE_DIR="${BUILD_DIR}/component-cache"
+CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"
+COMPONENT_CACHE_DIR="${CACHE_ROOT}/components"
 MARKER="${BUILD_DIR}/software-cache.txt"
 RESULT="${BUILD_DIR}/result.txt"
 BUILD_SCRIPT="${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"
@@ -14,7 +15,7 @@ MUSL_WRAPPER="${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc"
 MUSL_LIBC="${ROOT_DIR}/build/l32-busybox/musl-prefix/lib/libc.a"
 components=(lua sqlite bash busybox zlib libpng)
 
-mkdir -p "${COMPONENT_CACHE_DIR}"
+mkdir -p "${BUILD_DIR}" "${COMPONENT_CACHE_DIR}"
 
 hash_or_missing() {
   if [[ -f "$1" ]]; then
@@ -80,34 +81,63 @@ component_key() {
   component_identity "$1" | sha256sum | awk '{print $1}'
 }
 
+component_cache_entry() {
+  printf '%s/%s/%s\n' "${COMPONENT_CACHE_DIR}" "$1" "$2"
+}
+
 component_hit() {
   local component="$1" key="$2"
-  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"
+  local entry marker
+  entry="$(component_cache_entry "${component}" "${key}")"
+  marker="${entry}/marker.txt"
   [[ -f "${marker}" ]] || return 1
   [[ "$(awk '$1=="input_key" {print $2; exit}' "${marker}" 2>/dev/null)" == "${key}" ]] || return 1
+
   while IFS= read -r output; do
-    local rel expected actual
-    rel="${output#${ROOT_DIR}/}"
+    local rel cached expected actual
+    rel="${output#${BUILD_DIR}/}"
+    cached="${entry}/outputs/${rel}"
     expected="$(awk -v p="${rel}" '$1=="sha256" && $3==p {print $2; exit}' "${marker}")"
-    [[ -n "${expected}" && -s "${output}" ]] || return 1
-    actual="$(sha256sum "${output}" | awk '{print $1}')"
+    [[ -n "${expected}" && -s "${cached}" ]] || return 1
+    actual="$(sha256sum "${cached}" | awk '{print $1}')"
     [[ "${actual}" == "${expected}" ]] || return 1
+  done < <(component_outputs "${component}")
+
+  while IFS= read -r output; do
+    local rel cached tmp
+    rel="${output#${BUILD_DIR}/}"
+    cached="${entry}/outputs/${rel}"
+    mkdir -p "$(dirname "${output}")"
+    tmp="${output}.restore.$$"
+    cp -p "${cached}" "${tmp}"
+    mv "${tmp}" "${output}"
   done < <(component_outputs "${component}")
 }
 
 mark_component() {
   local component="$1" key="$2"
-  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"
-  local tmp="${marker}.tmp.$$"
+  local entry parent tmp_dir marker
+  entry="$(component_cache_entry "${component}" "${key}")"
+  parent="$(dirname "${entry}")"
+  tmp_dir="${parent}/.${key}.tmp.$$"
+  marker="${tmp_dir}/marker.txt"
+  rm -rf "${tmp_dir}"
+  mkdir -p "${tmp_dir}/outputs"
   {
     echo "input_key ${key}"
     echo "component ${component}"
     while IFS= read -r output; do
+      local rel cached
       [[ -s "${output}" ]] || { echo "ERROR: component ${component} did not produce ${output}" >&2; exit 40; }
-      echo "sha256 $(sha256sum "${output}" | awk '{print $1}') ${output#${ROOT_DIR}/}"
+      rel="${output#${BUILD_DIR}/}"
+      cached="${tmp_dir}/outputs/${rel}"
+      mkdir -p "$(dirname "${cached}")"
+      cp -p "${output}" "${cached}"
+      echo "sha256 $(sha256sum "${cached}" | awk '{print $1}') ${rel}"
     done < <(component_outputs "${component}")
-  } > "${tmp}"
-  mv "${tmp}" "${marker}"
+  } > "${marker}"
+  rm -rf "${entry}"
+  mv "${tmp_dir}" "${entry}"
   echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK component=${component} key=${key}"
 }
 
