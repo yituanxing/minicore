@@ -243,24 +243,19 @@ recipe_hash() {
 }
 
 finalize() {
-  local lua_tarball="${DOWNLOAD_DIR}/lua-${LUA_VERSION}.tar.gz"
-  local sqlite_zip="${DOWNLOAD_DIR}/sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}.zip"
-  local bash_tarball="${DOWNLOAD_DIR}/bash-${BASH_VERSION}.tar.gz"
-  local busybox_tarball="${DOWNLOAD_DIR}/busybox-${BUSYBOX_VERSION}.tar.bz2"
-  local zlib_tarball="${DOWNLOAD_DIR}/zlib-${ZLIB_VERSION}.tar.gz"
-
-  fetch_verified "${LUA_ARCHIVE}" "${LUA_SHA256}" "${lua_tarball}"
-  fetch_verified "${SQLITE_ARCHIVE}" "${SQLITE_SHA256}" "${sqlite_zip}"
-  fetch_verified "${BASH_ARCHIVE}" "${BASH_SHA256}" "${bash_tarball}"
-  fetch_verified "${BUSYBOX_ARCHIVE}" "${BUSYBOX_SHA256}" "${busybox_tarball}"
-  fetch_verified "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}" "${zlib_tarball}"
-
   for output in lua lua-smoke.lua sqlite-smoke bash bash-smoke.sh busybox-real zlib-smoke; do
     [[ -s "${BUILD_DIR}/${output}" ]] || { echo "ERROR: missing real-program output ${output}" >&2; exit 35; }
   done
 
+  {
+    printf 'lua %s %s\n' "${LUA_SHA256}" "${LUA_ARCHIVE}"
+    printf 'sqlite %s %s\n' "${SQLITE_SHA256}" "${SQLITE_ARCHIVE}"
+    printf 'bash %s %s\n' "${BASH_SHA256}" "${BASH_ARCHIVE}"
+    printf 'busybox %s %s\n' "${BUSYBOX_SHA256}" "${BUSYBOX_ARCHIVE}"
+    printf 'zlib %s %s\n' "${ZLIB_SHA256}" "${ZLIB_ARCHIVE}"
+  } | tee "${EVIDENCE_DIR}/source-sha256.txt"
+
   sha256sum \
-    "${lua_tarball}" "${sqlite_zip}" "${bash_tarball}" "${busybox_tarball}" "${zlib_tarball}" \
     "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" "${BUILD_DIR}/busybox-real" "${BUILD_DIR}/zlib-smoke" \
     "${BUILD_DIR}/lua-smoke.lua" "${BUILD_DIR}/bash-smoke.sh" "${ROOT_DIR}/software/l32_real/zlib-smoke.c" \
     | tee "${EVIDENCE_DIR}/sha256.txt"
