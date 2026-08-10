@@ -160,6 +160,7 @@ cp -a "${BUSYBOX_REAL_SRC}" "${BUSYBOX_REAL_BUILD}"
 from pathlib import Path
 path = Path('.config')
 lines = path.read_text().splitlines()
+
 def set_symbol(symbol: str, enabled: bool = True) -> None:
     yes = f"{symbol}=y"
     no = f"# {symbol} is not set"
@@ -168,19 +169,37 @@ def set_symbol(symbol: str, enabled: bool = True) -> None:
             lines[i] = yes if enabled else no
             return
     lines.append(yes if enabled else no)
+
+def set_value(symbol: str, value: str) -> None:
+    no = f"# {symbol} is not set"
+    wanted = f"{symbol}={value}"
+    for i, line in enumerate(lines):
+        if line.startswith(f"{symbol}=") or line == no:
+            lines[i] = wanted
+            return
+    lines.append(wanted)
+
 for symbol in (
     'CONFIG_STATIC', 'CONFIG_LFS',
-    'CONFIG_AWK', 'CONFIG_GZIP', 'CONFIG_GUNZIP', 'CONFIG_TAR',
+    'CONFIG_AWK', 'CONFIG_GZIP', 'CONFIG_GUNZIP', 'CONFIG_TAR', 'CONFIG_FEATURE_TAR_CREATE',
     'CONFIG_ED', 'CONFIG_VI', 'CONFIG_FEATURE_VI_COLON',
     'CONFIG_CAT', 'CONFIG_CMP', 'CONFIG_MKDIR', 'CONFIG_RM',
 ):
     set_symbol(symbol)
+set_value('CONFIG_FEATURE_VI_MAX_LEN', '4096')
 path.write_text('\n'.join(lines) + '\n')
 PY
+  # The frozen workload config must be self-contained: EOF is intentional here.
+  # If an enabled applet exposes another unset non-default Kconfig value, fail
+  # immediately instead of silently accepting interactive host input.
   make ARCH=riscv oldconfig </dev/null
-  for symbol in CONFIG_STATIC CONFIG_AWK CONFIG_GZIP CONFIG_GUNZIP CONFIG_TAR CONFIG_ED CONFIG_VI CONFIG_FEATURE_VI_COLON CONFIG_CAT CONFIG_CMP CONFIG_MKDIR CONFIG_RM; do
+  for symbol in CONFIG_STATIC CONFIG_AWK CONFIG_GZIP CONFIG_GUNZIP CONFIG_TAR CONFIG_FEATURE_TAR_CREATE CONFIG_ED CONFIG_VI CONFIG_FEATURE_VI_COLON CONFIG_CAT CONFIG_CMP CONFIG_MKDIR CONFIG_RM; do
     grep -qx "${symbol}=y" .config || { echo "ERROR: workload BusyBox lost ${symbol}" >&2; exit 33; }
   done
+  grep -qx 'CONFIG_FEATURE_VI_MAX_LEN=4096' .config || {
+    echo "ERROR: workload BusyBox lost CONFIG_FEATURE_VI_MAX_LEN=4096" >&2
+    exit 33
+  }
   make ARCH=riscv CROSS_COMPILE="${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
     CC="${MUSL_CC}" HOSTCC="${HOSTCC:-cc}" -j"${JOBS}" busybox
 ) 2>&1 | tee "${BUILD_DIR}/busybox-real-build.log"
