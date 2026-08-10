@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32/manifest.env"
+source "${ROOT_DIR}/software/l32/linux-freeze.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/linux"
 ARCHIVE="${CACHE_ROOT}/linux-${LINUX_VERSION}.tar.xz"
@@ -11,6 +12,13 @@ BUILD_DIR="${ROOT_DIR}/build/l32-linux"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 OBJ_DIR="${BUILD_DIR}/obj"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
+
+# L32-C was qualified with these values embedded by Kbuild. They are part of
+# the frozen software input contract, not properties of the current runner.
+export KBUILD_BUILD_VERSION="${L32_LINUX_KBUILD_BUILD_VERSION}"
+export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_KBUILD_BUILD_TIMESTAMP}"
+export KBUILD_BUILD_USER="${L32_LINUX_KBUILD_BUILD_USER}"
+export KBUILD_BUILD_HOST="${L32_LINUX_KBUILD_BUILD_HOST}"
 
 mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
@@ -51,9 +59,19 @@ if [[ ! -f "${marker}" ]] || [[ "$(cat "${marker}" 2>/dev/null)" != "${LINUX_SHA
 fi
 
 # Preserve the Kbuild object tree across bounded configuration/script fixes.
-# Only discard it when the immutable source or compiler contract changes;
-# Kbuild itself tracks .config/header dependencies for incremental rebuilds.
-obj_inputs="${LINUX_SHA256}:${L32_TOOLCHAIN_VERSION}:${L32_CROSS_COMPILE_PREFIX}"
+# Only discard it when an immutable source, compiler, or frozen build-identity
+# input changes; Kbuild itself tracks .config/header dependencies for
+# incremental rebuilds inside one exact contract.
+obj_inputs="$({
+  printf '%s\n' \
+    "linux_sha256=${LINUX_SHA256}" \
+    "toolchain_version=${L32_TOOLCHAIN_VERSION}" \
+    "cross_compile=${L32_CROSS_COMPILE_PREFIX}" \
+    "kbuild_version=${KBUILD_BUILD_VERSION}" \
+    "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}" \
+    "kbuild_user=${KBUILD_BUILD_USER}" \
+    "kbuild_host=${KBUILD_BUILD_HOST}"
+} | sha256sum | awk '{print $1}')"
 obj_marker="${OBJ_DIR}/.aethercore-object-inputs"
 if [[ -d "${OBJ_DIR}" ]] && {
   [[ ! -f "${obj_marker}" ]] || [[ "$(cat "${obj_marker}" 2>/dev/null)" != "${obj_inputs}" ]];
@@ -134,12 +152,35 @@ if [[ -n "${arch}" && ( "${arch}" =~ _f[0-9] || "${arch}" =~ _d[0-9] || "${arch}
   exit 24
 fi
 
+actual_vmlinux_sha="$(sha256sum "${VMLINUX}" | awk '{print $1}')"
+actual_image_sha="$(sha256sum "${IMAGE}" | awk '{print $1}')"
+actual_config_sha="$(sha256sum "${EVIDENCE_DIR}/resolved.config" | awk '{print $1}')"
+[[ "${actual_vmlinux_sha}" == "${L32_LINUX_VMLINUX_SHA256}" ]] || {
+  echo "ERROR: vmlinux SHA256 ${actual_vmlinux_sha} != frozen ${L32_LINUX_VMLINUX_SHA256}" >&2
+  exit 25
+}
+[[ "${actual_image_sha}" == "${L32_LINUX_IMAGE_SHA256}" ]] || {
+  echo "ERROR: Linux Image SHA256 ${actual_image_sha} != frozen ${L32_LINUX_IMAGE_SHA256}" >&2
+  exit 25
+}
+[[ "${actual_config_sha}" == "${L32_LINUX_CONFIG_SHA256}" ]] || {
+  echo "ERROR: Linux config SHA256 ${actual_config_sha} != frozen ${L32_LINUX_CONFIG_SHA256}" >&2
+  exit 25
+}
+
 {
   echo "L32_LINUX_BUILD_RESULT: status=PASS"
   echo "linux_version=${LINUX_VERSION}"
   echo "source_sha256=${LINUX_SHA256}"
   echo "defconfig=${LINUX_RV32_DEFCONFIG}"
+  echo "kbuild_build_version=${KBUILD_BUILD_VERSION}"
+  echo "kbuild_build_timestamp=${KBUILD_BUILD_TIMESTAMP}"
+  echo "kbuild_build_user=${KBUILD_BUILD_USER}"
+  echo "kbuild_build_host=${KBUILD_BUILD_HOST}"
   echo "vmlinux=${VMLINUX}"
+  echo "vmlinux_sha256=${actual_vmlinux_sha}"
   echo "image=${IMAGE}"
+  echo "image_sha256=${actual_image_sha}"
+  echo "config_sha256=${actual_config_sha}"
   echo "arch=${arch:-not-emitted}"
 } | tee "${BUILD_DIR}/result.txt"
