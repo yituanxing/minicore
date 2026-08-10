@@ -61,7 +61,7 @@ class MemWb(
   val csrAddr = UInt(12.W)
   val csrData = UInt(xlen.W)
   val wfi = Bool()
-  val mret = Bool()
+  val xret = XRetOp()
   val trap = new TrapInfo(xlen)
 }
 
@@ -133,7 +133,7 @@ class AetherCore(
   val memWbSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(memWb.inst) else false.B
 
   val takingTrap = memWb.valid && memWb.trap.valid
-  val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
+  val takingXret = memWb.valid && memWb.xret =/= XRetOp.None && !memWb.trap.valid
   val takingSfence = memWb.valid && memWbSfenceVma && !memWb.trap.valid
 
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
@@ -224,8 +224,8 @@ class AetherCore(
   if (withSupervisorExternalInterrupt) {
     csrFile.io.supervisorExternalInterruptPending.get := rawSupervisorExternalInterrupt
   }
-  csrFile.io.trapReturn := takingMret
-  csrFile.io.trapReturnSupervisor := takingMret && memWb.inst === "h10200073".U
+  csrFile.io.trapReturn := takingXret
+  csrFile.io.trapReturnSupervisor := takingXret && memWb.xret === XRetOp.Supervisor
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
   val rawSupervisorTimerPending =
@@ -249,7 +249,8 @@ class AetherCore(
   val qualifiedInterrupt =
     takingExternalInterrupt || takingTimerInterrupt ||
       takingSupervisorExternalInterrupt || takingSupervisorTimerInterrupt
-  val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret && qualifiedInterrupt
+  val takingInterrupt =
+    memWb.valid && !memWb.trap.valid && memWb.xret === XRetOp.None && qualifiedInterrupt
   val interruptCause = Mux(
     takingExternalInterrupt,
     machineExternalCause.U(xlen.W),
@@ -399,12 +400,11 @@ class AetherCore(
   // legal in S-mode; keep U-mode trapping when Supervisor mode is implemented.
   val wfiException =
     idEx.ctrl.wfi && csrFile.io.currentPrivilege === PrivilegeMode.User.U
-  val mretInstruction = idEx.inst === "h30200073".U
-  val sretInstruction = idEx.inst === "h10200073".U
-  val xretException = idEx.ctrl.mret && (
-    (mretInstruction && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U) ||
-      (sretInstruction && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U)
-  )
+  val machineXretException =
+    idEx.ctrl.xret === XRetOp.Machine && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
+  val supervisorXretException =
+    idEx.ctrl.xret === XRetOp.Supervisor && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U
+  val xretException = machineXretException || supervisorXretException
   val sfencePrivilegeException = idExSfenceVma &&
     csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U
 
@@ -468,7 +468,7 @@ class AetherCore(
 
   val ordinaryDataAccess = !atomicInstruction && (exMem.ctrl.memRead || exMem.ctrl.memWrite)
   val memoryBoundaryOpen = !exMem.trap.valid && !takingTrap && !takingInterrupt &&
-    !takingMret && !takingSfence && !waitingForInterrupt
+    !takingXret && !takingSfence && !waitingForInterrupt
   val candidateDataAccess = exMem.valid && (ordinaryDataAccess || atomicInstruction) && memoryBoundaryOpen
   val atomicNeedsWritePermission = atomicSc || atomicRmw
 
@@ -615,9 +615,9 @@ class AetherCore(
   val memoryFaultIsLoad = atomicLr || (!atomicInstruction && exMem.ctrl.memRead)
 
   val fetchContextChange = vmCsrHazard
-  fetchKill := takingTrap || takingInterrupt || takingMret || takingSfence || waitingForInterrupt ||
+  fetchKill := takingTrap || takingInterrupt || takingXret || takingSfence || waitingForInterrupt ||
     redirect || fetchContextChange
-  val frontendAdvance = !takingTrap && !takingInterrupt && !takingMret && !takingSfence &&
+  val frontendAdvance = !takingTrap && !takingInterrupt && !takingXret && !takingSfence &&
     !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
   if (config.isa.hasSv32) {
     fetchResponseReady := frontendAdvance && fetchResponseValid
@@ -650,7 +650,7 @@ class AetherCore(
     memWb.valid := false.B
     reservationValid := false.B
     atomicWritePhase := false.B
-  }.elsewhen(takingMret) {
+  }.elsewhen(takingXret) {
     pc := csrFile.io.returnPc
     ifId.valid := false.B
     idEx.valid := false.B
@@ -717,7 +717,7 @@ class AetherCore(
     memWb.csrAddr := exMem.csrAddr
     memWb.csrData := exMem.csrData
     memWb.wfi := exMem.ctrl.wfi
-    memWb.mret := exMem.ctrl.mret
+    memWb.xret := exMem.ctrl.xret
     memWb.trap := exMem.trap
     when((memoryPageFault || memoryFault) && !exMem.trap.valid) {
       memWb.trap.valid := true.B
