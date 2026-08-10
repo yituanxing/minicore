@@ -20,10 +20,13 @@ on:
       - tools/ci/l32_busybox_runtime_freeze.sh
       - tools/ci/l32_linux_runtime_suite.py
       - tools/ci/l32_software_artifact_cache.sh
+      - tools/ensure_verilator_5_024.sh
       - tests_py/test_l32_busybox_contract.py
       - tests_py/test_l32_busybox_multiprocess_contract.py
       - tests_py/test_l32_forkserver_contract.py
       - tests_py/test_l32_linux_runtime_suite_contract.py
+      - build.mill
+      - mill
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - sim/opensbi_forkserver_main.cpp
