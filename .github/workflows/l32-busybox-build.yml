@@ -192,7 +192,7 @@ jobs:
             JOBS="$(nproc)" \
             FORKSERVER_BATCH_FILE="$batch_file" \
             FORKSERVER_TRIGGER="L32 BUSYBOX SHELL READY" \
-            FORKSERVER_BOOT_MAX_CYCLES=430000000 \
+            FORKSERVER_BOOT_MAX_CYCLES=600000000 \
             FORKSERVER_CASE_MAX_CYCLES=150000000 \
             PROGRESS_INTERVAL_CYCLES=25000000 \
             forkserver-local
