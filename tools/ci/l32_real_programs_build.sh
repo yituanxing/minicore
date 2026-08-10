@@ -61,10 +61,12 @@ LUA_TARBALL="${DOWNLOAD_DIR}/lua-${LUA_VERSION}.tar.gz"
 SQLITE_ZIP="${DOWNLOAD_DIR}/sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}.zip"
 BASH_TARBALL="${DOWNLOAD_DIR}/bash-${BASH_VERSION}.tar.gz"
 BUSYBOX_REAL_TARBALL="${DOWNLOAD_DIR}/busybox-${BUSYBOX_VERSION}.tar.bz2"
+ZLIB_TARBALL="${DOWNLOAD_DIR}/zlib-${ZLIB_VERSION}.tar.gz"
 fetch_verified "${LUA_ARCHIVE}" "${LUA_SHA256}" "${LUA_TARBALL}"
 fetch_verified "${SQLITE_ARCHIVE}" "${SQLITE_SHA256}" "${SQLITE_ZIP}"
 fetch_verified "${BASH_ARCHIVE}" "${BASH_SHA256}" "${BASH_TARBALL}"
 fetch_verified "${BUSYBOX_ARCHIVE}" "${BUSYBOX_SHA256}" "${BUSYBOX_REAL_TARBALL}"
+fetch_verified "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}" "${ZLIB_TARBALL}"
 
 LUA_SRC="${SOURCE_DIR}/lua-${LUA_VERSION}"
 if [[ ! -f "${LUA_SRC}/src/lua.c" ]]; then
@@ -93,6 +95,11 @@ if [[ ! -f "${BUSYBOX_REAL_SRC}/Makefile" ]]; then
   rm -rf "${BUSYBOX_REAL_SRC}"
   mkdir -p "${BUSYBOX_REAL_SRC}"
   tar -xjf "${BUSYBOX_REAL_TARBALL}" -C "${BUSYBOX_REAL_SRC}" --strip-components=1
+fi
+ZLIB_SRC="${SOURCE_DIR}/zlib-${ZLIB_VERSION}"
+if [[ ! -f "${ZLIB_SRC}/zlib.h" ]]; then
+  rm -rf "${ZLIB_SRC}"
+  tar -xzf "${ZLIB_TARBALL}" -C "${SOURCE_DIR}"
 fi
 
 # Build Lua unchanged from upstream source. Use the generic/POSIX path so the
@@ -180,14 +187,34 @@ PY
 cp "${BUSYBOX_REAL_BUILD}/busybox" "${BUILD_DIR}/busybox-real"
 check_elf "${BUILD_DIR}/busybox-real" > "${EVIDENCE_DIR}/busybox-real-readelf.txt"
 
+# Build unchanged upstream zlib as a static library, then link a deterministic
+# stress driver that exposes memory, streaming, checksum and gz* VFS paths as
+# separately localizable warm-Linux cases.
+ZLIB_BUILD="${BUILD_DIR}/zlib-src"
+rm -rf "${ZLIB_BUILD}"
+cp -a "${ZLIB_SRC}" "${ZLIB_BUILD}"
+(
+  cd "${ZLIB_BUILD}"
+  env CC="${MUSL_CC}" AR="${AR}" RANLIB="${RANLIB}" CFLAGS='-Os' ./configure --static
+  make -j"${JOBS}" libz.a
+) 2>&1 | tee "${BUILD_DIR}/zlib-build.log"
+[[ -s "${ZLIB_BUILD}/libz.a" ]] || { echo "ERROR: zlib build did not produce libz.a" >&2; exit 34; }
+"${MUSL_CC}" -Os -static \
+  -I"${ZLIB_BUILD}" \
+  "${ROOT_DIR}/software/l32_real/zlib-smoke.c" \
+  "${ZLIB_BUILD}/libz.a" \
+  -o "${BUILD_DIR}/zlib-smoke" \
+  2>&1 | tee "${BUILD_DIR}/zlib-smoke-build.log"
+check_elf "${BUILD_DIR}/zlib-smoke" > "${EVIDENCE_DIR}/zlib-readelf.txt"
+
 cp "${ROOT_DIR}/software/l32_real/lua-smoke.lua" "${BUILD_DIR}/lua-smoke.lua"
 cp "${ROOT_DIR}/software/l32_real/bash-smoke.sh" "${BUILD_DIR}/bash-smoke.sh"
 chmod 0755 "${BUILD_DIR}/bash-smoke.sh"
 
 sha256sum \
-  "${LUA_TARBALL}" "${SQLITE_ZIP}" "${BASH_TARBALL}" "${BUSYBOX_REAL_TARBALL}" \
-  "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" "${BUILD_DIR}/busybox-real" \
-  "${BUILD_DIR}/lua-smoke.lua" "${BUILD_DIR}/bash-smoke.sh" \
+  "${LUA_TARBALL}" "${SQLITE_ZIP}" "${BASH_TARBALL}" "${BUSYBOX_REAL_TARBALL}" "${ZLIB_TARBALL}" \
+  "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" "${BUILD_DIR}/busybox-real" "${BUILD_DIR}/zlib-smoke" \
+  "${BUILD_DIR}/lua-smoke.lua" "${BUILD_DIR}/bash-smoke.sh" "${ROOT_DIR}/software/l32_real/zlib-smoke.c" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
 
 {
@@ -196,8 +223,10 @@ sha256sum \
   echo "sqlite_version=${SQLITE_VERSION}"
   echo "bash_version=${BASH_VERSION}"
   echo "busybox_real_version=${BUSYBOX_VERSION}"
+  echo "zlib_version=${ZLIB_VERSION}"
   echo "lua=${BUILD_DIR}/lua"
   echo "sqlite_smoke=${BUILD_DIR}/sqlite-smoke"
   echo "bash=${BUILD_DIR}/bash"
   echo "busybox_real=${BUILD_DIR}/busybox-real"
+  echo "zlib_smoke=${BUILD_DIR}/zlib-smoke"
 } | tee "${BUILD_DIR}/result.txt"
