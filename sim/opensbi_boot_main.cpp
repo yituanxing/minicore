@@ -1,88 +1,26 @@
 #include "VAetherCoreOpenSbiSimTop.h"
+#include "l32_opensbi_runtime.h"
 #include "verilated.h"
 
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace {
-constexpr std::uint64_t kRamBase = 0x80000000ULL;
-constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
 constexpr std::uint64_t kSupervisorExternalInterruptCause = 0x80000009ULL;
 
+using aethercore::l32sim::Memory;
+using aethercore::l32sim::initialize;
+using aethercore::l32sim::step;
+
 bool endsWith(const std::string& text, const std::string& suffix) {
   return !suffix.empty() && text.size() >= suffix.size() &&
       text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-class Memory {
- public:
-  Memory() : bytes_(kRamSize, 0) {}
-
-  void loadAtBase(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("cannot open image: " + path);
-    input.read(reinterpret_cast<char*>(bytes_.data()),
-               static_cast<std::streamsize>(bytes_.size()));
-    if (input.bad()) throw std::runtime_error("failed while reading image: " + path);
-  }
-
-  bool contains(std::uint64_t address, std::size_t size = 1) const {
-    return address >= kRamBase && address - kRamBase <= bytes_.size() - size;
-  }
-
-  std::uint32_t read32Unchecked(std::uint64_t address) const {
-    const auto offset = static_cast<std::size_t>(address - kRamBase);
-    return std::uint32_t(bytes_[offset]) |
-        (std::uint32_t(bytes_[offset + 1]) << 8) |
-        (std::uint32_t(bytes_[offset + 2]) << 16) |
-        (std::uint32_t(bytes_[offset + 3]) << 24);
-  }
-
-  void write32Masked(std::uint64_t address, std::uint32_t data, std::uint8_t mask) {
-    const auto offset = checkedOffset(address, 4);
-    for (unsigned i = 0; i < 4; ++i) {
-      if ((mask >> i) & 1U)
-        bytes_[offset + i] = static_cast<std::uint8_t>(data >> (8 * i));
-    }
-  }
-
- private:
-  std::size_t checkedOffset(std::uint64_t address, std::size_t size) const {
-    if (!contains(address, size)) throw std::runtime_error("memory access outside RAM");
-    return static_cast<std::size_t>(address - kRamBase);
-  }
-
-  std::vector<std::uint8_t> bytes_;
-};
-
-void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& memory) {
-  const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
-  const bool ifault = !memory.contains(iaddr, 4);
-  top.io_imemFault = ifault;
-  top.io_imemInst = ifault ? kEbreak : memory.read32Unchecked(iaddr);
-
-  const bool dvalid = top.io_memValid;
-  const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
-  const bool dfault = dvalid && !memory.contains(daddr, 4);
-  top.io_memReady = true;
-  top.io_memFault = dfault;
-  top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read32Unchecked(daddr);
-
-  const bool ptwValid = top.io_ptwValid;
-  const auto ptwAddr = static_cast<std::uint64_t>(top.io_ptwAddr);
-  const bool ptwFault = ptwValid && !memory.contains(ptwAddr, 4);
-  top.io_ptwReady = true;
-  top.io_ptwFault = ptwFault;
-  top.io_ptwRdata = (!ptwValid || ptwFault) ? 0 : memory.read32Unchecked(ptwAddr);
 }
 }  // namespace
 
@@ -143,12 +81,7 @@ int main(int argc, char** argv) {
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
 
-    top.reset = 1;
-    top.clock = 0;
-    top.io_rxValid = 0;
-    top.io_rxByte = 0;
-    driveMemory(top, memory);
-    top.eval();
+    initialize(top, memory);
 
     if (inputStarted) {
       std::cerr << "\nL32_UART_INPUT_START cycles=0 commits=0 bytes=" << uartInput.size()
@@ -157,27 +90,12 @@ int main(int argc, char** argv) {
 
     for (; cycles < maxCycles; ++cycles) {
       const bool presentInput = inputStarted && inputIndex < uartInput.size();
-
-      top.clock = 0;
-      top.io_rxValid = presentInput;
-      top.io_rxByte = presentInput ? static_cast<std::uint8_t>(uartInput[inputIndex]) : 0;
-      driveMemory(top, memory);
-      top.eval();
-      driveMemory(top, memory);
-      top.eval();
-      const bool rxAccepted = top.io_rxValid && top.io_rxReady;
-
-      if (!top.reset && top.io_memValid && top.io_memWrite && top.io_memReady &&
-          !top.io_memFault) {
-        memory.write32Masked(
-            static_cast<std::uint64_t>(top.io_memAddr),
-            static_cast<std::uint32_t>(top.io_memWdata),
-            static_cast<std::uint8_t>(top.io_memWmask));
-      }
-
-      top.clock = 1;
-      top.eval();
-      context.timeInc(1);
+      const bool rxAccepted = step(
+          top,
+          context,
+          memory,
+          presentInput,
+          presentInput ? static_cast<std::uint8_t>(uartInput[inputIndex]) : 0);
 
       if (cycles == 3) top.reset = 0;
       if (top.reset) continue;

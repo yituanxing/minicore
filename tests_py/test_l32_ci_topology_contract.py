@@ -30,8 +30,10 @@ class L32CiTopologyContractTest(unittest.TestCase):
             "mill",
             "tools/ensure_verilator_5_024.sh",
             "Makefile.l32-linux-boot",
+            "sim/l32_opensbi_runtime.h",
             "sim/opensbi_boot_main.cpp",
             "sim/opensbi_forkserver_main.cpp",
+            "tests_py/test_l32_sim_runtime_contract.py",
             ".github/workflows/l32-busybox-build.yml",
         ):
             self.assertIn(required, paths)
