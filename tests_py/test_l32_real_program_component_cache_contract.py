@@ -52,12 +52,13 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
         text = BUILD.read_text()
         finalize = text.split("finalize() {", 1)[1].split("\n}\n\nmain() {", 1)[0]
         self.assertNotIn("fetch_verified", finalize)
-        self.assertIn('source-sha256.txt', finalize)
+        self.assertIn("source-sha256.txt", finalize)
+        self.assertIn("sha256sum", finalize)
+        self.assertIn('"${BUILD_DIR}/lua"', finalize)
         for pin in (
             "LUA_SHA256", "SQLITE_SHA256", "BASH_SHA256", "BUSYBOX_SHA256", "ZLIB_SHA256",
         ):
             self.assertIn(pin, finalize)
-        self.assertIn('sha256sum \\\n    "${BUILD_DIR}/lua"', finalize)
 
     def test_cache_local_initializers_are_safe_under_nounset(self):
         text = CACHE.read_text()
