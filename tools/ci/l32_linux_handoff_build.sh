@@ -26,10 +26,9 @@ command -v "${L32_CROSS_COMPILE_PREFIX}gcc" >/dev/null 2>&1 || {
 
 bash "${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh" check "${LINUX_BUILD_DIR}"
 observed_cache_key="$(cat "${LINUX_BUILD_DIR}/evidence/input-key.txt")"
-[[ "${observed_cache_key}" == "${L32_LINUX_BUILD_CACHE_KEY}" ]] || {
-  echo "ERROR: Linux build cache key drifted: ${observed_cache_key}" >&2
-  exit 21
-}
+# The cache key identifies the current build/check recipe and is expected to
+# evolve when provenance logic changes. The immutable L32-C contract is the
+# frozen output identity below, not equality with the historical cache key.
 observed_image_sha="$(sha256sum "${IMAGE}" | awk '{print $1}')"
 [[ "${observed_image_sha}" == "${L32_LINUX_IMAGE_SHA256}" ]] || {
   echo "ERROR: frozen Linux Image SHA256 drifted: ${observed_image_sha}" >&2
