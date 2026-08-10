@@ -10,6 +10,7 @@ PAYLOAD_BUILD = ROOT / "tools/ci/l32_busybox_payload_build.sh"
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 SIM_TOP = ROOT / "src/main/scala/aethercore/sim/AetherCoreSimTop.scala"
 RUNNER = ROOT / "sim/opensbi_boot_main.cpp"
+RUNTIME = ROOT / "sim/l32_opensbi_runtime.h"
 LINUX_MAKEFILE = ROOT / "Makefile.l32-linux-boot"
 
 
@@ -77,8 +78,25 @@ class L32BusyBoxContract(unittest.TestCase):
 
     def test_runner_requires_uart_rx_irq_and_post_input_seip(self):
         runner = RUNNER.read_text()
-        for required in ("top.io_rxValid", "top.io_rxReady", "top.io_uartRxInterrupt", "L32_UART_INPUT_START", "L32_UART_INPUT_COMPLETE", "L32_UART_RX_INTERRUPT", "L32_UART_INPUT_SEIP", "sawPostInputSeip", "inputSatisfied"):
+        runtime = RUNTIME.read_text()
+        for required in (
+            "const bool rxAccepted = step(",
+            "top.io_uartRxInterrupt",
+            "L32_UART_INPUT_START",
+            "L32_UART_INPUT_COMPLETE",
+            "L32_UART_RX_INTERRUPT",
+            "L32_UART_INPUT_SEIP",
+            "sawPostInputSeip",
+            "inputSatisfied",
+        ):
             self.assertIn(required, runner)
+        for required in (
+            "top.io_rxValid = rxValid;",
+            "top.io_rxByte = rxValid ? rxByte : 0;",
+            "const bool rxAccepted = top.io_rxValid && top.io_rxReady;",
+            "return rxAccepted;",
+        ):
+            self.assertIn(required, runtime)
         makefile = LINUX_MAKEFILE.read_text()
         for required in ("UART_TRIGGER ?=", "UART_COMMAND ?=", "UART_COMMAND_FILE ?=", '"$(UART_TRIGGER)"', '"$$uart_command"', "L32_UART_INPUT_COMPLETE", "L32_UART_RX_INTERRUPT", "L32_UART_INPUT_SEIP"):
             self.assertIn(required, makefile)
