@@ -24,6 +24,7 @@ dynamic=(
   "${ROOT_DIR}/build/l32-real-programs/bash"
   "${ROOT_DIR}/build/l32-real-programs/bash-smoke.sh"
   "${ROOT_DIR}/build/l32-real-programs/busybox-real"
+  "${ROOT_DIR}/build/l32-real-programs/zlib-smoke"
 )
 
 hash_or_missing() {
