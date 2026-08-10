@@ -11,6 +11,7 @@ inputs=(
   "${ROOT_DIR}/software/l32_real/lua-smoke.lua"
   "${ROOT_DIR}/software/l32_real/sqlite-smoke.c"
   "${ROOT_DIR}/software/l32_real/bash-smoke.sh"
+  "${ROOT_DIR}/software/l32_real/zlib-smoke.c"
   "${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"
 )
 outputs=(
@@ -19,6 +20,7 @@ outputs=(
   "${BUILD_DIR}/sqlite-smoke"
   "${BUILD_DIR}/bash"
   "${BUILD_DIR}/bash-smoke.sh"
+  "${BUILD_DIR}/zlib-smoke"
 )
 
 hash_or_missing() {
