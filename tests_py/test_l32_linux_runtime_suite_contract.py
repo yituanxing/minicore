@@ -29,12 +29,19 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         by_id = {case.case_id: case for case in suite.CASES}
         self.assertEqual(
             list(by_id),
-            ["builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time", "lua-real", "sqlite-real", "bash-real"],
+            [
+                "builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time",
+                "lua-real", "sqlite-real", "bash-real",
+                "busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi",
+            ],
         )
         for case_id, level in (
             ("vfs", "L2-vfs"), ("vm", "L3-vm"), ("cow", "L4-cow"),
             ("signal", "L5-signal"), ("time", "L6-time"),
             ("lua-real", "L7-real"), ("sqlite-real", "L7-real"), ("bash-real", "L7-real"),
+            ("busybox-awk", "L8-busybox-real"), ("busybox-gzip", "L8-busybox-real"),
+            ("busybox-tar", "L8-busybox-real"), ("busybox-ed", "L8-busybox-real"),
+            ("busybox-vi", "L8-busybox-real"),
         ):
             self.assertEqual(by_id[case_id].level, level)
         for case_id in ("vfs", "vm", "cow", "signal", "time"):
@@ -44,6 +51,8 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual(by_id["lua-real"].command, "/opt/l32/lua /opt/l32/lua-smoke.lua")
         self.assertEqual(by_id["sqlite-real"].command, "/opt/l32/sqlite-smoke")
         self.assertEqual(by_id["bash-real"].command, "/opt/l32/bash /opt/l32/bash-smoke.sh")
+        for case_id in ("busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi"):
+            self.assertIn("/opt/l32/busybox-real", by_id[case_id].command)
 
     def test_probe_covers_vfs_vm_cow_signal_and_time_semantics(self):
         text = PROBE_SOURCE.read_text()
@@ -69,6 +78,8 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             'build_triplet="$(sh support/config.guess)"',
             "sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile",
             "generated Bash target Makefile still contains -rdynamic",
+            "CONFIG_AWK", "CONFIG_GZIP", "CONFIG_GUNZIP", "CONFIG_TAR", "CONFIG_ED", "CONFIG_VI",
+            'cp "${BUSYBOX_REAL_BUILD}/busybox" "${BUILD_DIR}/busybox-real"',
         ):
             self.assertIn(required, build)
         initramfs = INITRAMFS_BUILD.read_text()
@@ -77,6 +88,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             "file /opt/l32/lua ${LUA_ELF} 0755 0 0",
             "file /opt/l32/sqlite-smoke ${SQLITE_ELF} 0755 0 0",
             "file /opt/l32/bash ${BASH_ELF} 0755 0 0",
+            "file /opt/l32/busybox-real ${BUSYBOX_REAL_ELF} 0755 0 0",
         ):
             self.assertIn(required, initramfs)
 
