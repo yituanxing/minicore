@@ -6,15 +6,16 @@ source "${ROOT_DIR}/software/l32_busybox/manifest.env"
 source "${ROOT_DIR}/software/l32_real/manifest.env"
 
 BUILD_DIR="${ROOT_DIR}/build/l32-real-programs"
-COMPONENT_CACHE_DIR="${BUILD_DIR}/component-cache"
+CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"
+COMPONENT_CACHE_DIR="${CACHE_ROOT}/components"
 MARKER="${BUILD_DIR}/software-cache.txt"
 RESULT="${BUILD_DIR}/result.txt"
 BUILD_SCRIPT="${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"
 MUSL_WRAPPER="${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc"
 MUSL_LIBC="${ROOT_DIR}/build/l32-busybox/musl-prefix/lib/libc.a"
-components=(lua sqlite bash busybox zlib)
+components=(lua sqlite bash busybox zlib libpng)
 
-mkdir -p "${COMPONENT_CACHE_DIR}"
+mkdir -p "${BUILD_DIR}" "${COMPONENT_CACHE_DIR}"
 
 hash_or_missing() {
   if [[ -f "$1" ]]; then
@@ -31,6 +32,7 @@ component_outputs() {
     bash) printf '%s\n' "${BUILD_DIR}/bash" "${BUILD_DIR}/bash-smoke.sh" ;;
     busybox) printf '%s\n' "${BUILD_DIR}/busybox-real" ;;
     zlib) printf '%s\n' "${BUILD_DIR}/zlib-smoke" ;;
+    libpng) printf '%s\n' "${BUILD_DIR}/libpng-smoke" ;;
     *) echo "ERROR: unknown real-program component: $1" >&2; return 2 ;;
   esac
 }
@@ -67,6 +69,11 @@ component_identity() {
       printf 'version=%s\narchive=%s\nsha256=%s\n' "${ZLIB_VERSION}" "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"
       hash_or_missing "${ROOT_DIR}/software/l32_real/zlib-smoke.c"
       ;;
+    libpng)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${LIBPNG_VERSION}" "${LIBPNG_ARCHIVE}" "${LIBPNG_SHA256}"
+      printf 'zlib_version=%s\nzlib_archive=%s\nzlib_sha256=%s\n' "${ZLIB_VERSION}" "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/libpng-smoke.c"
+      ;;
   esac
 }
 
@@ -74,48 +81,80 @@ component_key() {
   component_identity "$1" | sha256sum | awk '{print $1}'
 }
 
+component_cache_entry() {
+  printf '%s/%s/%s\n' "${COMPONENT_CACHE_DIR}" "$1" "$2"
+}
+
 component_hit() {
   local component="$1" key="$2"
-  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"
+  local entry marker
+  entry="$(component_cache_entry "${component}" "${key}")"
+  marker="${entry}/marker.txt"
   [[ -f "${marker}" ]] || return 1
   [[ "$(awk '$1=="input_key" {print $2; exit}' "${marker}" 2>/dev/null)" == "${key}" ]] || return 1
+
   while IFS= read -r output; do
-    local rel expected actual
-    rel="${output#${ROOT_DIR}/}"
+    local rel cached expected actual
+    rel="${output#${BUILD_DIR}/}"
+    cached="${entry}/outputs/${rel}"
     expected="$(awk -v p="${rel}" '$1=="sha256" && $3==p {print $2; exit}' "${marker}")"
-    [[ -n "${expected}" && -s "${output}" ]] || return 1
-    actual="$(sha256sum "${output}" | awk '{print $1}')"
+    [[ -n "${expected}" && -s "${cached}" ]] || return 1
+    actual="$(sha256sum "${cached}" | awk '{print $1}')"
     [[ "${actual}" == "${expected}" ]] || return 1
+  done < <(component_outputs "${component}")
+
+  while IFS= read -r output; do
+    local rel cached tmp
+    rel="${output#${BUILD_DIR}/}"
+    cached="${entry}/outputs/${rel}"
+    mkdir -p "$(dirname "${output}")"
+    tmp="${output}.restore.$$"
+    cp -p "${cached}" "${tmp}"
+    mv "${tmp}" "${output}"
   done < <(component_outputs "${component}")
 }
 
 mark_component() {
   local component="$1" key="$2"
-  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"
-  local tmp="${marker}.tmp.$$"
+  local entry parent tmp_dir marker
+  entry="$(component_cache_entry "${component}" "${key}")"
+  parent="$(dirname "${entry}")"
+  tmp_dir="${parent}/.${key}.tmp.$$"
+  marker="${tmp_dir}/marker.txt"
+  rm -rf "${tmp_dir}"
+  mkdir -p "${tmp_dir}/outputs"
   {
     echo "input_key ${key}"
     echo "component ${component}"
     while IFS= read -r output; do
+      local rel cached
       [[ -s "${output}" ]] || { echo "ERROR: component ${component} did not produce ${output}" >&2; exit 40; }
-      echo "sha256 $(sha256sum "${output}" | awk '{print $1}') ${output#${ROOT_DIR}/}"
+      rel="${output#${BUILD_DIR}/}"
+      cached="${tmp_dir}/outputs/${rel}"
+      mkdir -p "$(dirname "${cached}")"
+      cp -p "${output}" "${cached}"
+      echo "sha256 $(sha256sum "${cached}" | awk '{print $1}') ${rel}"
     done < <(component_outputs "${component}")
-  } > "${tmp}"
-  mv "${tmp}" "${marker}"
+  } > "${marker}"
+  rm -rf "${entry}"
+  mv "${tmp_dir}" "${entry}"
   echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK component=${component} key=${key}"
 }
 
 declare -A keys
+declare -A decisions
 all_hits=1
 for component in "${components[@]}"; do
   key="$(component_key "${component}")"
   keys["${component}"]="${key}"
   if component_hit "${component}" "${key}"; then
+    decisions["${component}"]="hit"
     echo "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT component=${component} key=${key}"
     continue
   fi
 
   all_hits=0
+  decisions["${component}"]="miss"
   echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS component=${component} key=${key}"
   "${BUILD_SCRIPT}" "${component}"
   mark_component "${component}" "${key}"
@@ -131,6 +170,9 @@ tmp="${MARKER}.tmp.$$"
   echo "input_key ${aggregate_key}"
   for component in "${components[@]}"; do
     echo "component ${component} ${keys[${component}]}"
+  done
+  for component in "${components[@]}"; do
+    echo "decision ${component} ${decisions[${component}]} ${keys[${component}]}"
   done
   for component in "${components[@]}"; do
     while IFS= read -r output; do

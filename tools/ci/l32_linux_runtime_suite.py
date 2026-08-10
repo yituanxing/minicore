@@ -136,6 +136,11 @@ CASES = [
         r"/opt/l32/zlib-smoke gzfile",
         "unchanged zlib gz* API: create/write/flush/close/reopen/read/unlink through Linux VFS",
     ),
+    RuntimeCase(
+        "L10-libpng", "libpng-real", "L32_LIBPNG_REAL_PASS 37 29 CRC_OK",
+        r"/opt/l32/libpng-smoke",
+        "unchanged libpng + zlib: filtered RGB PNG write/read roundtrip, heap buffers, stdio/VFS, chunk CRC validation and corrupted-IDAT rejection",
+    ),
 ]
 
 BAD_KERNEL_MARKERS = (
