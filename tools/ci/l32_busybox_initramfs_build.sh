@@ -101,6 +101,7 @@ printf '%s\n' "${obj_inputs}" > "${OBJ_MARKER}"
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" "${LINUX_RV32_DEFCONFIG}" 2>&1 | tee "${BUILD_DIR}/config.log"
 "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
   -d EFI -d RISCV_ISA_C -d FPU -d VGA_CONSOLE -e BLK_DEV_INITRD \
+  -d INITRAMFS_COMPRESSION_GZIP -e INITRAMFS_COMPRESSION_NONE \
   --set-str INITRAMFS_SOURCE "${INIT_SPEC}"
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" olddefconfig 2>&1 | tee -a "${BUILD_DIR}/config.log"
 
@@ -109,6 +110,8 @@ grep -qx 'CONFIG_MMU=y' "${OBJ_DIR}/.config"
 grep -qx '# CONFIG_RISCV_ISA_C is not set' "${OBJ_DIR}/.config"
 grep -qx '# CONFIG_FPU is not set' "${OBJ_DIR}/.config"
 grep -qx 'CONFIG_BLK_DEV_INITRD=y' "${OBJ_DIR}/.config"
+grep -qx 'CONFIG_INITRAMFS_COMPRESSION_NONE=y' "${OBJ_DIR}/.config"
+grep -qx '# CONFIG_INITRAMFS_COMPRESSION_GZIP is not set' "${OBJ_DIR}/.config"
 grep -Fqx "CONFIG_INITRAMFS_SOURCE=\"${INIT_SPEC}\"" "${OBJ_DIR}/.config" || { echo "ERROR: Linux config did not retain the BusyBox initramfs source" >&2; exit 24; }
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" -j"${JOBS}" Image 2>&1 | tee "${BUILD_DIR}/linux-build.log"
