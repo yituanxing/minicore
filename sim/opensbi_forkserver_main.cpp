@@ -1,4 +1,5 @@
 #include "VAetherCoreOpenSbiSimTop.h"
+#include "l32_opensbi_runtime.h"
 #include "verilated.h"
 
 #include <cerrno>
@@ -14,10 +15,11 @@
 #include <unistd.h>
 
 namespace {
-constexpr std::uint64_t kRamBase = 0x80000000ULL;
-constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::uint64_t kSeipCause = 0x80000009ULL;
+
+using aethercore::l32sim::Memory;
+using aethercore::l32sim::initialize;
+using aethercore::l32sim::step;
 
 bool endsWith(const std::string& text, const std::string& suffix) {
   return !suffix.empty() && text.size() >= suffix.size() &&
@@ -49,54 +51,6 @@ std::vector<Workload> loadWorkloads(const std::string& path) {
   return out;
 }
 
-class Memory {
- public:
-  Memory() : bytes_(kRamSize, 0) {}
-  void load(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("cannot open image: " + path);
-    in.read(reinterpret_cast<char*>(bytes_.data()), static_cast<std::streamsize>(bytes_.size()));
-    if (in.bad()) throw std::runtime_error("failed while reading image: " + path);
-  }
-  bool contains(std::uint64_t addr, std::size_t size = 1) const {
-    return size <= bytes_.size() && addr >= kRamBase && addr - kRamBase <= bytes_.size() - size;
-  }
-  std::uint32_t read32(std::uint64_t addr) const {
-    const auto o = static_cast<std::size_t>(addr - kRamBase);
-    return std::uint32_t(bytes_[o]) | (std::uint32_t(bytes_[o + 1]) << 8) |
-           (std::uint32_t(bytes_[o + 2]) << 16) | (std::uint32_t(bytes_[o + 3]) << 24);
-  }
-  void write32(std::uint64_t addr, std::uint32_t data, std::uint8_t mask) {
-    if (!contains(addr, 4)) throw std::runtime_error("memory write outside RAM");
-    const auto o = static_cast<std::size_t>(addr - kRamBase);
-    for (unsigned i = 0; i < 4; ++i)
-      if ((mask >> i) & 1U) bytes_[o + i] = static_cast<std::uint8_t>(data >> (8 * i));
-  }
- private:
-  std::vector<std::uint8_t> bytes_;
-};
-
-void driveMemory(VAetherCoreOpenSbiSimTop& top, const Memory& mem) {
-  const auto ia = static_cast<std::uint64_t>(top.io_imemAddr);
-  const bool ifault = !mem.contains(ia, 4);
-  top.io_imemFault = ifault;
-  top.io_imemInst = ifault ? kEbreak : mem.read32(ia);
-
-  const bool dv = top.io_memValid;
-  const auto da = static_cast<std::uint64_t>(top.io_memAddr);
-  const bool dfault = dv && !mem.contains(da, 4);
-  top.io_memReady = true;
-  top.io_memFault = dfault;
-  top.io_memRdata = (!dv || dfault) ? 0 : mem.read32(da);
-
-  const bool pv = top.io_ptwValid;
-  const auto pa = static_cast<std::uint64_t>(top.io_ptwAddr);
-  const bool pfault = pv && !mem.contains(pa, 4);
-  top.io_ptwReady = true;
-  top.io_ptwFault = pfault;
-  top.io_ptwRdata = (!pv || pfault) ? 0 : mem.read32(pa);
-}
-
 void record(VAetherCoreOpenSbiSimTop& top, Counts& c) {
   if (!top.io_commit_valid) return;
   ++c.commits;
@@ -109,21 +63,7 @@ void record(VAetherCoreOpenSbiSimTop& top, Counts& c) {
 
 bool cycle(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
            std::uint64_t& cycles, Counts& c, bool rxValid, std::uint8_t rxByte) {
-  top.clock = 0;
-  top.io_rxValid = rxValid;
-  top.io_rxByte = rxValid ? rxByte : 0;
-  driveMemory(top, mem);
-  top.eval();
-  driveMemory(top, mem);
-  top.eval();
-  const bool accepted = top.io_rxValid && top.io_rxReady;
-  if (!top.reset && top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault)
-    mem.write32(static_cast<std::uint64_t>(top.io_memAddr),
-                static_cast<std::uint32_t>(top.io_memWdata),
-                static_cast<std::uint8_t>(top.io_memWmask));
-  top.clock = 1;
-  top.eval();
-  ctx.timeInc(1);
+  const bool accepted = step(top, ctx, mem, rxValid, rxByte);
   ++cycles;
   record(top, c);
   return accepted;
@@ -217,19 +157,14 @@ int main(int argc, char** argv) {
     ctx.commandArgs(argc, argv);
     VAetherCoreOpenSbiSimTop top{&ctx};
     Memory mem;
-    mem.load(image);
+    mem.loadAtBase(image);
     Counts counts;
     std::uint64_t cycles = 0, nextProgress = progressEvery;
     std::string uart;
     bool banner = false, ready = false;
     const auto hostStart = std::chrono::steady_clock::now();
 
-    top.reset = 1;
-    top.clock = 0;
-    top.io_rxValid = 0;
-    top.io_rxByte = 0;
-    driveMemory(top, mem);
-    top.eval();
+    initialize(top, mem);
 
     while (cycles < bootMax && !ready) {
       cycle(top, ctx, mem, cycles, counts, false, 0);
