@@ -60,12 +60,17 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn("kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}", text)
         self.assertIn("kbuild_tz=${TZ}", text)
 
-    def test_build_preserves_objects_only_for_same_source_and_toolchain(self):
+    def test_build_preserves_objects_only_for_same_source_toolchain_and_identity(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
         self.assertIn(".aethercore-object-inputs", text)
         self.assertIn("LINUX_SHA256", text)
         self.assertIn("L32_TOOLCHAIN_VERSION", text)
-        self.assertIn("Kbuild itself tracks .config/header dependencies", text)
+        self.assertIn("kbuild_user=${KBUILD_BUILD_USER}", text)
+        self.assertIn("kbuild_host=${KBUILD_BUILD_HOST}", text)
+        self.assertIn("kbuild_version=${KBUILD_BUILD_VERSION}", text)
+        self.assertIn("kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}", text)
+        self.assertIn("kbuild_tz=${TZ}", text)
+        self.assertIn("changing any of it must force a clean object tree", text)
         self.assertNotIn('rm -rf "${BUILD_DIR}/obj"', text)
 
     def test_linux_build_does_not_touch_rtl(self):
