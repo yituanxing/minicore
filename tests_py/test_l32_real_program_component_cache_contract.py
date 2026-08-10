@@ -48,6 +48,13 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
         self.assertNotIn('hash_or_missing "${ROOT_DIR}/software/l32_real/manifest.env"', text)
         self.assertNotIn('hash_or_missing "${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"', text)
 
+    def test_cache_local_initializers_are_safe_under_nounset(self):
+        text = CACHE.read_text()
+        self.assertIn('local component="$1" key="$2"\n  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"', text)
+        self.assertIn('local marker="${COMPONENT_CACHE_DIR}/${component}.txt"\n  local tmp="${marker}.tmp.$$"', text)
+        self.assertNotIn('key="$2" marker="${COMPONENT_CACHE_DIR}/${component}.txt"', text)
+        self.assertNotIn('marker="${COMPONENT_CACHE_DIR}/${component}.txt" tmp="${marker}.tmp.$$"', text)
+
     def test_busybox_vi_contract_keeps_search_replace_enabled(self):
         text = BUILD.read_text()
         self.assertIn("'CONFIG_FEATURE_VI_SEARCH'", text)

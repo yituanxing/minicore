@@ -75,7 +75,8 @@ component_key() {
 }
 
 component_hit() {
-  local component="$1" key="$2" marker="${COMPONENT_CACHE_DIR}/${component}.txt"
+  local component="$1" key="$2"
+  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"
   [[ -f "${marker}" ]] || return 1
   [[ "$(awk '$1=="input_key" {print $2; exit}' "${marker}" 2>/dev/null)" == "${key}" ]] || return 1
   while IFS= read -r output; do
@@ -89,7 +90,9 @@ component_hit() {
 }
 
 mark_component() {
-  local component="$1" key="$2" marker="${COMPONENT_CACHE_DIR}/${component}.txt" tmp="${marker}.tmp.$$"
+  local component="$1" key="$2"
+  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"
+  local tmp="${marker}.tmp.$$"
   {
     echo "input_key ${key}"
     echo "component ${component}"
