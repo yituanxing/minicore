@@ -16,6 +16,7 @@ REAL_BUILD_DIR="${ROOT_DIR}/build/l32-real-programs"
 LUA_ELF="${REAL_BUILD_DIR}/lua"
 SQLITE_ELF="${REAL_BUILD_DIR}/sqlite-smoke"
 BASH_ELF="${REAL_BUILD_DIR}/bash"
+ZLIB_ELF="${REAL_BUILD_DIR}/zlib-smoke"
 LUA_SMOKE="${REAL_BUILD_DIR}/lua-smoke.lua"
 BASH_SMOKE="${REAL_BUILD_DIR}/bash-smoke.sh"
 BUILD_DIR="${ROOT_DIR}/build/l32-linux-busybox"
@@ -49,7 +50,7 @@ recorded_probe_sha="$(sed -n 's/^probe_sha256=//p' "${PROBE_BUILD_DIR}/result.tx
 [[ -n "${recorded_probe_sha}" && "${actual_probe_sha}" == "${recorded_probe_sha}" ]] || { echo "ERROR: qualified runtime probe ELF hash drifted" >&2; exit 23; }
 
 grep -qx 'L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS' "${REAL_BUILD_DIR}/result.txt" || { echo "ERROR: qualified L32 real programs are required" >&2; exit 23; }
-for real in "${LUA_ELF}" "${SQLITE_ELF}" "${BASH_ELF}" "${LUA_SMOKE}" "${BASH_SMOKE}"; do
+for real in "${LUA_ELF}" "${SQLITE_ELF}" "${BASH_ELF}" "${ZLIB_ELF}" "${LUA_SMOKE}" "${BASH_SMOKE}"; do
   [[ -s "${real}" ]] || { echo "ERROR: missing qualified real-program input ${real}" >&2; exit 23; }
 done
 
@@ -82,6 +83,7 @@ file /opt/l32/lua-smoke.lua ${LUA_SMOKE} 0644 0 0
 file /opt/l32/sqlite-smoke ${SQLITE_ELF} 0755 0 0
 file /opt/l32/bash ${BASH_ELF} 0755 0 0
 file /opt/l32/bash-smoke.sh ${BASH_SMOKE} 0755 0 0
+file /opt/l32/zlib-smoke ${ZLIB_ELF} 0755 0 0
 slink /bin/sh busybox 0777 0 0
 slink /bin/uname busybox 0777 0 0
 slink /bin/echo busybox 0777 0 0
@@ -123,7 +125,7 @@ cp "${OBJ_DIR}/.config" "${EVIDENCE_DIR}/resolved.config"
 cp "${INIT_SPEC}" "${EVIDENCE_DIR}/initramfs.list"
 cp "${INIT_SCRIPT}" "${EVIDENCE_DIR}/init"
 sha256sum \
-  "${BUSYBOX_ELF}" "${PROBE_ELF}" "${LUA_ELF}" "${SQLITE_ELF}" "${BASH_ELF}" \
+  "${BUSYBOX_ELF}" "${PROBE_ELF}" "${LUA_ELF}" "${SQLITE_ELF}" "${BASH_ELF}" "${ZLIB_ELF}" \
   "${LUA_SMOKE}" "${BASH_SMOKE}" "${INIT_SCRIPT}" "${INIT_SPEC}" \
   "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" | tee "${EVIDENCE_DIR}/sha256.txt"
 
@@ -138,6 +140,7 @@ sha256sum \
   echo "lua_sha256=$(sha256sum "${LUA_ELF}" | awk '{print $1}')"
   echo "sqlite_sha256=$(sha256sum "${SQLITE_ELF}" | awk '{print $1}')"
   echo "bash_sha256=$(sha256sum "${BASH_ELF}" | awk '{print $1}')"
+  echo "zlib_sha256=$(sha256sum "${ZLIB_ELF}" | awk '{print $1}')"
   echo "init=${INIT_SCRIPT}"
   echo "initramfs_spec=${INIT_SPEC}"
   echo "vmlinux=${VMLINUX}"
