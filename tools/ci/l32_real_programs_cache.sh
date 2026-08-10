@@ -12,7 +12,7 @@ RESULT="${BUILD_DIR}/result.txt"
 BUILD_SCRIPT="${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"
 MUSL_WRAPPER="${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc"
 MUSL_LIBC="${ROOT_DIR}/build/l32-busybox/musl-prefix/lib/libc.a"
-components=(lua sqlite bash busybox zlib)
+components=(lua sqlite bash busybox zlib libpng)
 
 mkdir -p "${COMPONENT_CACHE_DIR}"
 
@@ -31,6 +31,7 @@ component_outputs() {
     bash) printf '%s\n' "${BUILD_DIR}/bash" "${BUILD_DIR}/bash-smoke.sh" ;;
     busybox) printf '%s\n' "${BUILD_DIR}/busybox-real" ;;
     zlib) printf '%s\n' "${BUILD_DIR}/zlib-smoke" ;;
+    libpng) printf '%s\n' "${BUILD_DIR}/libpng-smoke" ;;
     *) echo "ERROR: unknown real-program component: $1" >&2; return 2 ;;
   esac
 }
@@ -66,6 +67,11 @@ component_identity() {
     zlib)
       printf 'version=%s\narchive=%s\nsha256=%s\n' "${ZLIB_VERSION}" "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"
       hash_or_missing "${ROOT_DIR}/software/l32_real/zlib-smoke.c"
+      ;;
+    libpng)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${LIBPNG_VERSION}" "${LIBPNG_ARCHIVE}" "${LIBPNG_SHA256}"
+      printf 'zlib_version=%s\nzlib_archive=%s\nzlib_sha256=%s\n' "${ZLIB_VERSION}" "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/libpng-smoke.c"
       ;;
   esac
 }
