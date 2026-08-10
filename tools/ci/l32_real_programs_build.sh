@@ -226,6 +226,53 @@ build_zlib() {
   check_elf "${BUILD_DIR}/zlib-smoke" > "${EVIDENCE_DIR}/zlib-readelf.txt"
 }
 
+build_libpng() {
+  local png_tarball="${DOWNLOAD_DIR}/libpng-${LIBPNG_VERSION}.tar.gz"
+  local png_src="${SOURCE_DIR}/libpng-${LIBPNG_VERSION}"
+  local png_build="${BUILD_DIR}/libpng-src"
+  local zlib_tarball="${DOWNLOAD_DIR}/zlib-${ZLIB_VERSION}.tar.gz"
+  local zlib_src="${SOURCE_DIR}/zlib-${ZLIB_VERSION}"
+  local zlib_build="${BUILD_DIR}/libpng-zlib-src"
+
+  fetch_verified "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}" "${zlib_tarball}"
+  if [[ ! -f "${zlib_src}/zlib.h" ]]; then
+    rm -rf "${zlib_src}"
+    tar -xzf "${zlib_tarball}" -C "${SOURCE_DIR}"
+  fi
+  rm -rf "${zlib_build}"
+  cp -a "${zlib_src}" "${zlib_build}"
+  (
+    cd "${zlib_build}"
+    env CC="${MUSL_CC}" AR="${AR}" RANLIB="${RANLIB}" CFLAGS='-Os' ./configure --static
+    make -j"${JOBS}" libz.a
+  ) 2>&1 | tee "${BUILD_DIR}/libpng-zlib-build.log"
+  [[ -s "${zlib_build}/libz.a" ]] || { echo "ERROR: libpng dependency build did not produce libz.a" >&2; exit 36; }
+
+  fetch_verified "${LIBPNG_ARCHIVE}" "${LIBPNG_SHA256}" "${png_tarball}"
+  if [[ ! -f "${png_src}/configure" ]]; then
+    rm -rf "${png_src}"
+    tar -xzf "${png_tarball}" -C "${SOURCE_DIR}"
+  fi
+  rm -rf "${png_build}"
+  cp -a "${png_src}" "${png_build}"
+  (
+    cd "${png_build}"
+    env CC="${MUSL_CC}" AR="${AR}" RANLIB="${RANLIB}" \
+      CPPFLAGS="-I${zlib_build}" LDFLAGS="-static -L${zlib_build}" LIBS='-lz' \
+      CFLAGS='-Os' ./configure --host=riscv32-linux-musl --disable-shared --enable-static
+    make -j"${JOBS}" libpng16.la
+  ) 2>&1 | tee "${BUILD_DIR}/libpng-build.log"
+  [[ -s "${png_build}/.libs/libpng16.a" ]] || { echo "ERROR: libpng build did not produce libpng16.a" >&2; exit 36; }
+
+  "${MUSL_CC}" -Os -static \
+    -I"${png_build}" -I"${zlib_build}" \
+    "${ROOT_DIR}/software/l32_real/libpng-smoke.c" \
+    "${png_build}/.libs/libpng16.a" "${zlib_build}/libz.a" -lm \
+    -o "${BUILD_DIR}/libpng-smoke" \
+    2>&1 | tee "${BUILD_DIR}/libpng-smoke-build.log"
+  check_elf "${BUILD_DIR}/libpng-smoke" > "${EVIDENCE_DIR}/libpng-readelf.txt"
+}
+
 recipe_hash() {
   local component="$1"
   {
@@ -237,13 +284,14 @@ recipe_hash() {
       bash) declare -f build_bash ;;
       busybox) declare -f build_busybox ;;
       zlib) declare -f build_zlib ;;
+      libpng) declare -f build_libpng ;;
       *) echo "ERROR: unknown real-program component: ${component}" >&2; return 2 ;;
     esac
   } | sha256sum | awk '{print $1}'
 }
 
 finalize() {
-  for output in lua lua-smoke.lua sqlite-smoke bash bash-smoke.sh busybox-real zlib-smoke; do
+  for output in lua lua-smoke.lua sqlite-smoke bash bash-smoke.sh busybox-real zlib-smoke libpng-smoke; do
     [[ -s "${BUILD_DIR}/${output}" ]] || { echo "ERROR: missing real-program output ${output}" >&2; exit 35; }
   done
 
@@ -253,11 +301,12 @@ finalize() {
     printf 'bash %s %s\n' "${BASH_SHA256}" "${BASH_ARCHIVE}"
     printf 'busybox %s %s\n' "${BUSYBOX_SHA256}" "${BUSYBOX_ARCHIVE}"
     printf 'zlib %s %s\n' "${ZLIB_SHA256}" "${ZLIB_ARCHIVE}"
+    printf 'libpng %s %s\n' "${LIBPNG_SHA256}" "${LIBPNG_ARCHIVE}"
   } | tee "${EVIDENCE_DIR}/source-sha256.txt"
 
   sha256sum \
-    "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" "${BUILD_DIR}/busybox-real" "${BUILD_DIR}/zlib-smoke" \
-    "${BUILD_DIR}/lua-smoke.lua" "${BUILD_DIR}/bash-smoke.sh" "${ROOT_DIR}/software/l32_real/zlib-smoke.c" \
+    "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" "${BUILD_DIR}/busybox-real" "${BUILD_DIR}/zlib-smoke" "${BUILD_DIR}/libpng-smoke" \
+    "${BUILD_DIR}/lua-smoke.lua" "${BUILD_DIR}/bash-smoke.sh" "${ROOT_DIR}/software/l32_real/zlib-smoke.c" "${ROOT_DIR}/software/l32_real/libpng-smoke.c" \
     | tee "${EVIDENCE_DIR}/sha256.txt"
 
   {
@@ -267,25 +316,27 @@ finalize() {
     echo "bash_version=${BASH_VERSION}"
     echo "busybox_real_version=${BUSYBOX_VERSION}"
     echo "zlib_version=${ZLIB_VERSION}"
+    echo "libpng_version=${LIBPNG_VERSION}"
     echo "lua=${BUILD_DIR}/lua"
     echo "sqlite_smoke=${BUILD_DIR}/sqlite-smoke"
     echo "bash=${BUILD_DIR}/bash"
     echo "busybox_real=${BUILD_DIR}/busybox-real"
     echo "zlib_smoke=${BUILD_DIR}/zlib-smoke"
+    echo "libpng_smoke=${BUILD_DIR}/libpng-smoke"
   } | tee "${BUILD_DIR}/result.txt"
 }
 
 main() {
   local mode="${1:-all}"
   if [[ "${mode}" == "recipe-hash" ]]; then
-    [[ $# -eq 2 ]] || { echo "usage: $0 recipe-hash lua|sqlite|bash|busybox|zlib" >&2; return 2; }
+    [[ $# -eq 2 ]] || { echo "usage: $0 recipe-hash lua|sqlite|bash|busybox|zlib|libpng" >&2; return 2; }
     recipe_hash "$2"
     return
   fi
 
   case "${mode}" in
-    all|lua|sqlite|bash|busybox|zlib|finalize) ;;
-    *) echo "usage: $0 [all|lua|sqlite|bash|busybox|zlib|finalize|recipe-hash COMPONENT]" >&2; return 2 ;;
+    all|lua|sqlite|bash|busybox|zlib|libpng|finalize) ;;
+    *) echo "usage: $0 [all|lua|sqlite|bash|busybox|zlib|libpng|finalize|recipe-hash COMPONENT]" >&2; return 2 ;;
   esac
 
   ensure_environment
@@ -296,6 +347,7 @@ main() {
       build_bash
       build_busybox
       build_zlib
+      build_libpng
       finalize
       ;;
     lua) build_lua ;;
@@ -303,6 +355,7 @@ main() {
     bash) build_bash ;;
     busybox) build_busybox ;;
     zlib) build_zlib ;;
+    libpng) build_libpng ;;
     finalize) finalize ;;
   esac
 }
