@@ -166,7 +166,11 @@ static int run_stream(void) {
             }
             decoded_off += out_chunk - zs.avail_out;
         }
-        if (zs.avail_in == 0 && in_off == compressed_off && zr == Z_OK && decoded_off < DATA_SIZE) {
+        /* If the last input chunk filled the output buffer, inflate can still
+         * have decoded bytes buffered internally. Only call the stream
+         * truncated when it consumed all input and also left output room. */
+        if (zs.avail_in == 0 && in_off == compressed_off && zr == Z_OK &&
+            zs.avail_out != 0 && decoded_off < DATA_SIZE) {
             inflateEnd(&zs);
             rc = fail("inflate-truncated", Z_DATA_ERROR);
             goto out;
