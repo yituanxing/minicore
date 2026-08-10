@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - software/l32/manifest.env
+      - software/l32/linux-freeze.env
       - tools/ci/l32_linux_build.sh
       - tools/ci/l32_linux_cache_key.sh
       - tools/ensure_l32_riscv32_linux_gcc.sh
