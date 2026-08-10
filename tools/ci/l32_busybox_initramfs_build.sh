@@ -77,6 +77,7 @@ dir /tmp 1777 0 0
 dir /opt 0755 0 0
 dir /opt/l32 0755 0 0
 nod /dev/console 0600 0 0 c 5 1
+nod /dev/null 0666 0 0 c 1 3
 file /bin/busybox ${BUSYBOX_ELF} 0755 0 0
 file /bin/l32-runtime-probe ${PROBE_ELF} 0755 0 0
 file /opt/l32/lua ${LUA_ELF} 0755 0 0
