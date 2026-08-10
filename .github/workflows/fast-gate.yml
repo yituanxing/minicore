@@ -12,19 +12,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fast-gate:
-    name: Incremental source, VM, privilege, interrupt and FreeRTOS checks
-    runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 20
-    env:
-      AETHERCORE_MILL_NO_DAEMON: "1"
-      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
-
+  classify:
+    name: Classify fast-gate paths
+    runs-on: ubuntu-latest
+    outputs:
+      run_chisel: ${{ steps.changes.outputs.run_chisel }}
+      run_smode_v1: ${{ steps.changes.outputs.run_smode_v1 }}
+      run_freertos: ${{ steps.changes.outputs.run_freertos }}
+      run_hardware: ${{ steps.changes.outputs.run_hardware }}
+      classified_base: ${{ steps.changes.outputs.classified_base }}
     steps:
-      - name: Checkout without deleting incremental outputs
+      - name: Checkout for path classification
         uses: actions/checkout@v4
         with:
-          clean: false
           fetch-depth: 0
 
       - name: Classify changed paths
@@ -61,10 +61,55 @@ jobs:
             run_freertos=true
           fi
 
-          echo "CLASSIFIED_BASE_SHA=${classified_base}" >> "$GITHUB_ENV"
+          run_hardware=false
+          if [[ "$run_chisel" == true || "$run_smode_v1" == true || "$run_freertos" == true ]]; then
+            run_hardware=true
+          fi
+
+          echo "classified_base=${classified_base}" >> "$GITHUB_OUTPUT"
           echo "run_chisel=$run_chisel" >> "$GITHUB_OUTPUT"
           echo "run_smode_v1=$run_smode_v1" >> "$GITHUB_OUTPUT"
           echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
+          echo "run_hardware=$run_hardware" >> "$GITHUB_OUTPUT"
+
+  source-contract:
+    name: Fast source contract tests
+    needs: classify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run source contracts
+        shell: bash
+        run: python3 -m unittest discover -s tests_py -v
+      - name: Write contract summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore fast source contracts'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo "- classified base: \`${{ needs.classify.outputs.classified_base }}\`"
+            echo "- hardware gate selected: \`${{ needs.classify.outputs.run_hardware }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fast-gate:
+    name: Incremental VM, privilege, interrupt and FreeRTOS checks
+    needs: [classify, source-contract]
+    if: needs.classify.outputs.run_hardware == 'true'
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 20
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+
+    steps:
+      - name: Checkout without deleting incremental outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
 
       - name: Configure persistent fast cache
         shell: bash
@@ -83,21 +128,17 @@ jobs:
           echo "parallel_jobs=$(nproc)"
 
       - name: Provision fixed Verilator
-        if: steps.changes.outputs.run_chisel == 'true' || steps.changes.outputs.run_smode_v1 == 'true' || steps.changes.outputs.run_freertos == 'true'
+        if: needs.classify.outputs.run_chisel == 'true' || needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
       - name: Provision pinned RISC-V newlib sysroot
-        if: steps.changes.outputs.run_smode_v1 == 'true' || steps.changes.outputs.run_freertos == 'true'
+        if: needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
 
-      - name: Fast source contract tests
-        shell: bash
-        run: python3 -m unittest discover -s tests_py -v
-
       - name: Focused VM, configuration, privilege, RV32A, interrupt and WFI Chisel tests
-        if: steps.changes.outputs.run_chisel == 'true'
+        if: needs.classify.outputs.run_chisel == 'true'
         shell: bash
         run: |
           ./mill aethercore.test.testOnly \
@@ -139,7 +180,7 @@ jobs:
             aethercore.WaitForInterruptCoreSpec
 
       - name: Executable Supervisor V1 M-S-U workload
-        if: steps.changes.outputs.run_smode_v1 == 'true'
+        if: needs.classify.outputs.run_smode_v1 == 'true'
         shell: bash
         run: |
           make -j"$AETHERCORE_JOBS" -f Makefile.rv32im-supervisor-v1 \
@@ -147,7 +188,7 @@ jobs:
             JOBS="$AETHERCORE_JOBS" run-local
 
       - name: Incremental FreeRTOS WFI workload
-        if: steps.changes.outputs.run_freertos == 'true'
+        if: needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: |
           make -j"$AETHERCORE_JOBS" -f Makefile.freertos \
@@ -155,7 +196,7 @@ jobs:
             JOBS="$AETHERCORE_JOBS" TRACE=0 run-local
 
       - name: FreeRTOS UART ISR and Tickless early-wake workload
-        if: steps.changes.outputs.run_freertos == 'true'
+        if: needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: |
           make -j"$AETHERCORE_JOBS" -f Makefile.freertos-irq \
@@ -163,7 +204,7 @@ jobs:
             JOBS="$AETHERCORE_JOBS" TRACE=0 run-irq-local
 
       - name: Incremental FreeRTOS WFI exact DiffTest
-        if: steps.changes.outputs.run_freertos == 'true'
+        if: needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -193,13 +234,13 @@ jobs:
         shell: bash
         run: |
           {
-            echo '## AetherCore fast gate'
+            echo '## AetherCore hardware fast gate'
             echo
             echo "- head: \`${GITHUB_SHA}\`"
-            echo "- classified range: \`${CLASSIFIED_BASE_SHA:-HEAD^1}..${GITHUB_SHA}\`"
-            echo "- chisel selected: \`${{ steps.changes.outputs.run_chisel }}\`"
-            echo "- Supervisor V1 executable selected: \`${{ steps.changes.outputs.run_smode_v1 }}\`"
-            echo "- FreeRTOS selected: \`${{ steps.changes.outputs.run_freertos }}\`"
+            echo "- classified range: \`${{ needs.classify.outputs.classified_base }}..${GITHUB_SHA}\`"
+            echo "- chisel selected: \`${{ needs.classify.outputs.run_chisel }}\`"
+            echo "- Supervisor V1 executable selected: \`${{ needs.classify.outputs.run_smode_v1 }}\`"
+            echo "- FreeRTOS selected: \`${{ needs.classify.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
             echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, translated RV32A reservation/remap semantics, and deterministic shared PTW arbitration'
             echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34/Sstc profile and fail-closed configuration boundaries'
@@ -213,5 +254,6 @@ jobs:
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
+            echo '- source-only contract tests run independently on a GitHub-hosted runner so they do not occupy the Linux simulation runner'
             echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
