@@ -112,16 +112,19 @@ mark_component() {
 }
 
 declare -A keys
+declare -A decisions
 all_hits=1
 for component in "${components[@]}"; do
   key="$(component_key "${component}")"
   keys["${component}"]="${key}"
   if component_hit "${component}" "${key}"; then
+    decisions["${component}"]="hit"
     echo "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT component=${component} key=${key}"
     continue
   fi
 
   all_hits=0
+  decisions["${component}"]="miss"
   echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS component=${component} key=${key}"
   "${BUILD_SCRIPT}" "${component}"
   mark_component "${component}" "${key}"
@@ -137,6 +140,9 @@ tmp="${MARKER}.tmp.$$"
   echo "input_key ${aggregate_key}"
   for component in "${components[@]}"; do
     echo "component ${component} ${keys[${component}]}"
+  done
+  for component in "${components[@]}"; do
+    echo "decision ${component} ${decisions[${component}]} ${keys[${component}]}"
   done
   for component in "${components[@]}"; do
     while IFS= read -r output; do
