@@ -19,6 +19,7 @@ outputs=(
   "${BUILD_DIR}/sqlite-smoke"
   "${BUILD_DIR}/bash"
   "${BUILD_DIR}/bash-smoke.sh"
+  "${BUILD_DIR}/busybox-real"
 )
 
 hash_or_missing() {
