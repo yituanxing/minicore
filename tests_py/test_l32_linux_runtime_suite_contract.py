@@ -10,6 +10,7 @@ PROBE_SOURCE = ROOT / "software/l32_busybox/runtime_probe.c"
 PROBE_BUILD = ROOT / "tools/ci/l32_runtime_probe_build.sh"
 REAL_BUILD = ROOT / "tools/ci/l32_real_programs_build.sh"
 REAL_MANIFEST = ROOT / "software/l32_real/manifest.env"
+ZLIB_SOURCE = ROOT / "software/l32_real/zlib-smoke.c"
 INITRAMFS_BUILD = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 
@@ -29,12 +30,17 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         by_id = {case.case_id: case for case in suite.CASES}
         self.assertEqual(
             list(by_id),
-            ["builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time", "lua-real", "sqlite-real", "bash-real"],
+            [
+                "builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time",
+                "lua-real", "sqlite-real", "bash-real", "zlib-mem", "zlib-stream", "zlib-gzfile",
+            ],
         )
         for case_id, level in (
             ("vfs", "L2-vfs"), ("vm", "L3-vm"), ("cow", "L4-cow"),
             ("signal", "L5-signal"), ("time", "L6-time"),
             ("lua-real", "L7-real"), ("sqlite-real", "L7-real"), ("bash-real", "L7-real"),
+            ("zlib-mem", "L8-compression"), ("zlib-stream", "L8-compression"),
+            ("zlib-gzfile", "L8-compression"),
         ):
             self.assertEqual(by_id[case_id].level, level)
         for case_id in ("vfs", "vm", "cow", "signal", "time"):
@@ -44,6 +50,9 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual(by_id["lua-real"].command, "/opt/l32/lua /opt/l32/lua-smoke.lua")
         self.assertEqual(by_id["sqlite-real"].command, "/opt/l32/sqlite-smoke")
         self.assertEqual(by_id["bash-real"].command, "/opt/l32/bash /opt/l32/bash-smoke.sh")
+        self.assertEqual(by_id["zlib-mem"].command, "/opt/l32/zlib-smoke mem")
+        self.assertEqual(by_id["zlib-stream"].command, "/opt/l32/zlib-smoke stream")
+        self.assertEqual(by_id["zlib-gzfile"].command, "/opt/l32/zlib-smoke gzfile")
 
     def test_probe_covers_vfs_vm_cow_signal_and_time_semantics(self):
         text = PROBE_SOURCE.read_text()
@@ -60,12 +69,17 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
 
     def test_real_programs_are_pinned_static_and_embedded(self):
         manifest = REAL_MANIFEST.read_text()
-        for required in ("LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "SHA256="):
+        for required in (
+            "LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "ZLIB_VERSION=1.3.2",
+            "ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+            "SHA256=",
+        ):
             self.assertIn(required, manifest)
         build = REAL_BUILD.read_text()
         for required in (
             "lua-${LUA_VERSION}", "sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}", "bash-${BASH_VERSION}",
-            "SQLITE_THREADSAFE=0", "--enable-static-link", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            "zlib-${ZLIB_VERSION}", "SQLITE_THREADSAFE=0", "--enable-static-link", "./configure --static",
+            "libz.a", "zlib-smoke.c", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
             'build_triplet="$(sh support/config.guess)"',
             "sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile",
             "generated Bash target Makefile still contains -rdynamic",
@@ -77,8 +91,19 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             "file /opt/l32/lua ${LUA_ELF} 0755 0 0",
             "file /opt/l32/sqlite-smoke ${SQLITE_ELF} 0755 0 0",
             "file /opt/l32/bash ${BASH_ELF} 0755 0 0",
+            "file /opt/l32/zlib-smoke ${ZLIB_ELF} 0755 0 0",
         ):
             self.assertIn(required, initramfs)
+
+    def test_zlib_workload_exercises_memory_streaming_and_gz_vfs_paths(self):
+        text = ZLIB_SOURCE.read_text()
+        for required in (
+            "compress2(", "uncompress(", "compressBound(", "crc32(", "adler32(",
+            "deflateInit(", "deflate(", "inflateInit(", "inflate(",
+            'gzopen(path, "wb6")', "gzwrite(", "gzflush(", 'gzopen(path, "rb")', "gzread(",
+            "unlink(path)", "L32_ZLIB_MEM_PASS", "L32_ZLIB_STREAM_PASS", "L32_ZLIB_GZFILE_PASS",
+        ):
+            self.assertIn(required, text)
 
     def test_probe_is_static_qualified_and_embedded_in_initramfs(self):
         build = PROBE_BUILD.read_text()
