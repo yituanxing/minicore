@@ -10,6 +10,7 @@ PROBE_SOURCE = ROOT / "software/l32_busybox/runtime_probe.c"
 PROBE_BUILD = ROOT / "tools/ci/l32_runtime_probe_build.sh"
 REAL_BUILD = ROOT / "tools/ci/l32_real_programs_build.sh"
 REAL_MANIFEST = ROOT / "software/l32_real/manifest.env"
+ZLIB_SOURCE = ROOT / "software/l32_real/zlib-smoke.c"
 INITRAMFS_BUILD = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 
@@ -33,6 +34,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
                 "builtin", "subshell", "pipeline", "vfs", "fd", "dir", "vm", "cow", "signal", "time",
                 "unix", "poll", "futex", "lua-real", "sqlite-real", "bash-real",
                 "busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi",
+                "zlib-mem", "zlib-stream", "zlib-gzfile",
             ],
         )
         for case_id, level in (
@@ -43,6 +45,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             ("busybox-awk", "L8-busybox-real"), ("busybox-gzip", "L8-busybox-real"),
             ("busybox-tar", "L8-busybox-real"), ("busybox-ed", "L8-busybox-real"),
             ("busybox-vi", "L8-busybox-real"),
+            ("zlib-mem", "L9-zlib"), ("zlib-stream", "L9-zlib"), ("zlib-gzfile", "L9-zlib"),
         ):
             self.assertEqual(by_id[case_id].level, level)
         for case_id in ("vfs", "fd", "dir", "vm", "cow", "signal", "time", "unix", "poll", "futex"):
@@ -54,6 +57,9 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual(by_id["bash-real"].command, "/opt/l32/bash /opt/l32/bash-smoke.sh")
         for case_id in ("busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi"):
             self.assertIn("/opt/l32/busybox-real", by_id[case_id].command)
+        self.assertEqual(by_id["zlib-mem"].command, "/opt/l32/zlib-smoke mem")
+        self.assertEqual(by_id["zlib-stream"].command, "/opt/l32/zlib-smoke stream")
+        self.assertEqual(by_id["zlib-gzfile"].command, "/opt/l32/zlib-smoke gzfile")
 
     def test_probe_covers_linux_common_runtime_semantics(self):
         text = PROBE_SOURCE.read_text()
@@ -75,12 +81,17 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
 
     def test_real_programs_are_pinned_static_and_embedded(self):
         manifest = REAL_MANIFEST.read_text()
-        for required in ("LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "SHA256="):
+        for required in (
+            "LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "ZLIB_VERSION=1.3.2",
+            "ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+            "SHA256=",
+        ):
             self.assertIn(required, manifest)
         build = REAL_BUILD.read_text()
         for required in (
             "lua-${LUA_VERSION}", "sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}", "bash-${BASH_VERSION}",
-            "SQLITE_THREADSAFE=0", "--enable-static-link", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            "zlib-${ZLIB_VERSION}", "SQLITE_THREADSAFE=0", "--enable-static-link", "./configure --static",
+            "libz.a", "zlib-smoke.c", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
             'build_triplet="$(sh support/config.guess)"',
             "sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile",
             "generated Bash target Makefile still contains -rdynamic",
@@ -95,8 +106,19 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             "file /opt/l32/sqlite-smoke ${SQLITE_ELF} 0755 0 0",
             "file /opt/l32/bash ${BASH_ELF} 0755 0 0",
             "file /opt/l32/busybox-real ${BUSYBOX_REAL_ELF} 0755 0 0",
+            "file /opt/l32/zlib-smoke ${ZLIB_ELF} 0755 0 0",
         ):
             self.assertIn(required, initramfs)
+
+    def test_zlib_workload_exercises_memory_streaming_and_gz_vfs_paths(self):
+        text = ZLIB_SOURCE.read_text()
+        for required in (
+            "compress2(", "uncompress(", "compressBound(", "crc32(", "adler32(",
+            "deflateInit(", "deflate(", "inflateInit(", "inflate(",
+            'gzopen(path, "wb6")', "gzwrite(", "gzflush(", 'gzopen(path, "rb")', "gzread(",
+            "unlink(path)", "L32_ZLIB_MEM_PASS", "L32_ZLIB_STREAM_PASS", "L32_ZLIB_GZFILE_PASS",
+        ):
+            self.assertIn(required, text)
 
     def test_probe_is_static_qualified_and_embedded_in_initramfs(self):
         build = PROBE_BUILD.read_text()
