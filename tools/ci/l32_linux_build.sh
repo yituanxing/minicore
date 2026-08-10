@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32/manifest.env"
+source "${ROOT_DIR}/software/l32/linux-freeze.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/linux"
 ARCHIVE="${CACHE_ROOT}/linux-${LINUX_VERSION}.tar.xz"
@@ -11,6 +12,16 @@ BUILD_DIR="${ROOT_DIR}/build/l32-linux"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 OBJ_DIR="${BUILD_DIR}/obj"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
+
+# Kbuild embeds the build user, host, version and timestamp in vmlinux/Image.
+# L32-C originally froze the output hashes but not these inputs, so a later
+# rebuild of the same source/config could produce different executable bytes.
+# Preserve the exact qualified L32-C identity recovered from its original
+# artifact so a cache repair remains a byte-for-byte rebuild of the checkpoint.
+export KBUILD_BUILD_USER="${L32_LINUX_BUILD_USER}"
+export KBUILD_BUILD_HOST="${L32_LINUX_BUILD_HOST}"
+export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"
+export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
 
 mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
@@ -142,4 +153,8 @@ fi
   echo "vmlinux=${VMLINUX}"
   echo "image=${IMAGE}"
   echo "arch=${arch:-not-emitted}"
+  echo "kbuild_user=${KBUILD_BUILD_USER}"
+  echo "kbuild_host=${KBUILD_BUILD_HOST}"
+  echo "kbuild_version=${KBUILD_BUILD_VERSION}"
+  echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
 } | tee "${BUILD_DIR}/result.txt"
