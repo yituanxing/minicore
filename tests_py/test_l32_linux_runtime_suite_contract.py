@@ -30,21 +30,22 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual(
             list(by_id),
             [
-                "builtin", "subshell", "pipeline", "vfs", "vm", "cow", "signal", "time",
-                "lua-real", "sqlite-real", "bash-real",
+                "builtin", "subshell", "pipeline", "vfs", "fd", "dir", "vm", "cow", "signal", "time",
+                "unix", "poll", "futex", "lua-real", "sqlite-real", "bash-real",
                 "busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi",
             ],
         )
         for case_id, level in (
-            ("vfs", "L2-vfs"), ("vm", "L3-vm"), ("cow", "L4-cow"),
-            ("signal", "L5-signal"), ("time", "L6-time"),
+            ("vfs", "L2-vfs"), ("fd", "L2-fd"), ("dir", "L2-vfs"),
+            ("vm", "L3-vm"), ("cow", "L4-cow"), ("signal", "L5-signal"), ("time", "L6-time"),
+            ("unix", "L6-ipc"), ("poll", "L6-blocking"), ("futex", "L6-futex"),
             ("lua-real", "L7-real"), ("sqlite-real", "L7-real"), ("bash-real", "L7-real"),
             ("busybox-awk", "L8-busybox-real"), ("busybox-gzip", "L8-busybox-real"),
             ("busybox-tar", "L8-busybox-real"), ("busybox-ed", "L8-busybox-real"),
             ("busybox-vi", "L8-busybox-real"),
         ):
             self.assertEqual(by_id[case_id].level, level)
-        for case_id in ("vfs", "vm", "cow", "signal", "time"):
+        for case_id in ("vfs", "fd", "dir", "vm", "cow", "signal", "time", "unix", "poll", "futex"):
             case = by_id[case_id]
             self.assertEqual(case.command, f"/bin/l32-runtime-probe {case_id}")
             self.assertTrue(case.marker.startswith("L32_PROBE_"))
@@ -54,16 +55,21 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         for case_id in ("busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi"):
             self.assertIn("/opt/l32/busybox-real", by_id[case_id].command)
 
-    def test_probe_covers_vfs_vm_cow_signal_and_time_semantics(self):
+    def test_probe_covers_linux_common_runtime_semantics(self):
         text = PROBE_SOURCE.read_text()
         for required in (
             "open(path_a, O_CREAT | O_TRUNC | O_RDWR", "write_all(fd, first", "lseek(fd, 0, SEEK_SET)",
             "fstat(fd, &st)", "rename(path_a, path_b)", "O_WRONLY | O_APPEND", "unlink(path_b)",
-            "errno != ENOENT", "MAP_PRIVATE | MAP_ANONYMOUS", "mprotect(p + page, page, PROT_READ)",
-            "munmap(p, len)", "pid_t pid = fork()", "waitpid(pid, &status, 0)", "parent-cow",
-            "sigaction(SIGUSR1", "kill(getpid(), SIGUSR1)", "clock_gettime(CLOCK_MONOTONIC",
-            "nanosleep(&req, &req)", "L32_PROBE_VFS_PASS", "L32_PROBE_VM_PASS", "L32_PROBE_COW_PASS",
-            "L32_PROBE_SIGNAL_PASS", "L32_PROBE_TIME_PASS",
+            "errno != ENOENT", "dup(fd)", "dup2(dupfd, target)", "FD_CLOEXEC",
+            "openat(dfd, \"a\"", "fstatat(dfd, \"a\"", "renameat(dfd, \"a\", dfd, \"b\")",
+            "opendir(dirpath)", "readdir(dir)", "unlinkat(dfd, \"b\", 0)",
+            "MAP_PRIVATE | MAP_ANONYMOUS", "mprotect(p + page, page, PROT_READ)", "munmap(p, len)",
+            "pid_t pid = fork()", "waitpid(pid, &status, 0)", "parent-cow", "sigaction(SIGUSR1",
+            "kill(getpid(), SIGUSR1)", "clock_gettime(CLOCK_MONOTONIC", "nanosleep(&req, &req)",
+            "socketpair(AF_UNIX, SOCK_STREAM", "poll(&fds, 1, 1000)", "SYS_futex", "L32_FUTEX_WAIT", "L32_FUTEX_WAKE",
+            "L32_PROBE_VFS_PASS", "L32_PROBE_FD_PASS", "L32_PROBE_DIR_PASS", "L32_PROBE_VM_PASS",
+            "L32_PROBE_COW_PASS", "L32_PROBE_SIGNAL_PASS", "L32_PROBE_TIME_PASS", "L32_PROBE_UNIX_PASS",
+            "L32_PROBE_POLL_PASS", "L32_PROBE_FUTEX_PASS",
         ):
             self.assertIn(required, text)
 
