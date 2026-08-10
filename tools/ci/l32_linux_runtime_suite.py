@@ -23,12 +23,12 @@ CASES = [
     ),
     RuntimeCase(
         "L1-process", "subshell", "L32 FORKSERVER SUBSHELL OK",
-        r'''/bin/sh -c 'printf "L32 FORKSERVER SUBSHELL %s\n" OK' ''',
+        r'''/bin/sh -c 'printf \"L32 FORKSERVER SUBSHELL %s\\n\" OK' ''',
         "fork/exec/wait and child userspace return",
     ),
     RuntimeCase(
         "L1-process", "pipeline", "L32 BUSYBOX PIPE PARENT OK",
-        r'''printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK''',
+        r'''printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case \"$x\" in PIPE_TOKEN) printf \"L32 BUSYBOX PIPE CHILD %s\\n\" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK''',
         "pipe, fd redirection, fork/exec/wait, parent resume",
     ),
     RuntimeCase(
@@ -70,6 +70,21 @@ CASES = [
         "L7-real", "bash-real", "L32_BASH_REAL_PASS 5050 6765 21",
         r"/opt/l32/bash /opt/l32/bash-smoke.sh",
         "unchanged Bash: parser, functions, arithmetic, arrays, redirection, mapfile, signal/trap, command substitution",
+    ),
+    RuntimeCase(
+        "L8-compression", "zlib-mem", "L32_ZLIB_MEM_PASS",
+        r"/opt/l32/zlib-smoke mem",
+        "unchanged zlib: compress2/uncompress, 64 KiB heap buffers, CRC-32 and Adler-32",
+    ),
+    RuntimeCase(
+        "L8-compression", "zlib-stream", "L32_ZLIB_STREAM_PASS",
+        r"/opt/l32/zlib-smoke stream",
+        "unchanged zlib: fragmented deflate/inflate streams across odd input/output boundaries",
+    ),
+    RuntimeCase(
+        "L8-compression", "zlib-gzfile", "L32_ZLIB_GZFILE_PASS",
+        r"/opt/l32/zlib-smoke gzfile",
+        "unchanged zlib gz* API: create/write/flush/close/reopen/read/unlink through Linux VFS",
     ),
 ]
 
