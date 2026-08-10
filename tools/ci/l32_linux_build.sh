@@ -22,6 +22,7 @@ export KBUILD_BUILD_USER="${L32_LINUX_BUILD_USER}"
 export KBUILD_BUILD_HOST="${L32_LINUX_BUILD_HOST}"
 export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"
 export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
+export TZ="${L32_LINUX_BUILD_TZ}"
 
 mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
@@ -157,4 +158,5 @@ fi
   echo "kbuild_host=${KBUILD_BUILD_HOST}"
   echo "kbuild_version=${KBUILD_BUILD_VERSION}"
   echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
+  echo "kbuild_tz=${TZ}"
 } | tee "${BUILD_DIR}/result.txt"
