@@ -33,17 +33,25 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
     def test_cache_qualifies_and_rebuilds_components_independently(self):
         text = CACHE.read_text()
         for required in (
-            'COMPONENT_CACHE_DIR="${BUILD_DIR}/component-cache"',
+            'CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"',
+            'COMPONENT_CACHE_DIR="${CACHE_ROOT}/components"',
             "components=(lua sqlite bash busybox zlib libpng)",
-            "component_outputs()", "component_identity()", "component_key()", "component_hit()", "mark_component()",
+            "component_outputs()", "component_identity()", "component_key()", "component_cache_entry()",
+            "component_hit()", "mark_component()",
             "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT", "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS",
             "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK", '"${BUILD_SCRIPT}" "${component}"',
-            '"${BUILD_SCRIPT}" finalize', "declare -A keys", "input_key", "sha256",
+            '"${BUILD_SCRIPT}" finalize', "declare -A keys", "declare -A decisions", "input_key", "sha256",
+            'echo "decision ${component} ${decisions[${component}]} ${keys[${component}]}"',
+            'cached="${entry}/outputs/${rel}"', 'cp -p "${cached}" "${tmp}"',
             "software/l32_real/lua-smoke.lua", "software/l32_real/sqlite-smoke.c",
             "software/l32_real/bash-smoke.sh", "software/l32_real/zlib-smoke.c", "software/l32_real/libpng-smoke.c",
             'libpng) printf', "LIBPNG_VERSION", "LIBPNG_SHA256", "zlib_sha256",
         ):
             self.assertIn(required, text)
+
+        # Component artifacts must survive clean checkouts on the self-hosted
+        # runner; build/ is workspace-local and cannot be the durable cache.
+        self.assertNotIn('COMPONENT_CACHE_DIR="${BUILD_DIR}/component-cache"', text)
 
         # A whole-file recipe/manifest hash would make an unrelated component
         # change invalidate every output, defeating the component cache.
@@ -83,10 +91,16 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
 
     def test_cache_local_initializers_are_safe_under_nounset(self):
         text = CACHE.read_text()
-        self.assertIn('local component="$1" key="$2"\n  local marker="${COMPONENT_CACHE_DIR}/${component}.txt"', text)
-        self.assertIn('local marker="${COMPONENT_CACHE_DIR}/${component}.txt"\n  local tmp="${marker}.tmp.$$"', text)
-        self.assertNotIn('key="$2" marker="${COMPONENT_CACHE_DIR}/${component}.txt"', text)
-        self.assertNotIn('marker="${COMPONENT_CACHE_DIR}/${component}.txt" tmp="${marker}.tmp.$$"', text)
+        self.assertIn(
+            'local component="$1" key="$2"\n  local entry marker\n  entry="$(component_cache_entry "${component}" "${key}")"',
+            text,
+        )
+        self.assertIn(
+            'local component="$1" key="$2"\n  local entry parent tmp_dir marker\n  entry="$(component_cache_entry "${component}" "${key}")"',
+            text,
+        )
+        self.assertNotIn('local entry="$(component_cache_entry "${component}" "${key}")" marker=', text)
+        self.assertNotIn('local entry="$(component_cache_entry "${component}" "${key}")" parent=', text)
 
     def test_busybox_vi_contract_keeps_search_replace_enabled(self):
         text = BUILD.read_text()
