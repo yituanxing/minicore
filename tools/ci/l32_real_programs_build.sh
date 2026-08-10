@@ -60,9 +60,11 @@ PY
 LUA_TARBALL="${DOWNLOAD_DIR}/lua-${LUA_VERSION}.tar.gz"
 SQLITE_ZIP="${DOWNLOAD_DIR}/sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}.zip"
 BASH_TARBALL="${DOWNLOAD_DIR}/bash-${BASH_VERSION}.tar.gz"
+BUSYBOX_REAL_TARBALL="${DOWNLOAD_DIR}/busybox-${BUSYBOX_VERSION}.tar.bz2"
 fetch_verified "${LUA_ARCHIVE}" "${LUA_SHA256}" "${LUA_TARBALL}"
 fetch_verified "${SQLITE_ARCHIVE}" "${SQLITE_SHA256}" "${SQLITE_ZIP}"
 fetch_verified "${BASH_ARCHIVE}" "${BASH_SHA256}" "${BASH_TARBALL}"
+fetch_verified "${BUSYBOX_ARCHIVE}" "${BUSYBOX_SHA256}" "${BUSYBOX_REAL_TARBALL}"
 
 LUA_SRC="${SOURCE_DIR}/lua-${LUA_VERSION}"
 if [[ ! -f "${LUA_SRC}/src/lua.c" ]]; then
@@ -86,6 +88,12 @@ if [[ ! -f "${BASH_SRC}/configure" ]]; then
   rm -rf "${BASH_SRC}"
   tar -xzf "${BASH_TARBALL}" -C "${SOURCE_DIR}"
 fi
+BUSYBOX_REAL_SRC="${SOURCE_DIR}/busybox-${BUSYBOX_VERSION}-real"
+if [[ ! -f "${BUSYBOX_REAL_SRC}/Makefile" ]]; then
+  rm -rf "${BUSYBOX_REAL_SRC}"
+  mkdir -p "${BUSYBOX_REAL_SRC}"
+  tar -xjf "${BUSYBOX_REAL_TARBALL}" -C "${BUSYBOX_REAL_SRC}" --strip-components=1
+fi
 
 # Build Lua unchanged from upstream source. Use the generic/POSIX path so the
 # validation binary has no readline/dlopen dependency and remains fully static.
@@ -94,59 +102,33 @@ rm -rf "${LUA_BUILD}"
 cp -a "${LUA_SRC}" "${LUA_BUILD}"
 make -C "${LUA_BUILD}/src" clean >/dev/null 2>&1 || true
 make -C "${LUA_BUILD}/src" -j"${JOBS}" \
-  CC="${MUSL_CC}" \
-  AR="${AR} rcu" \
-  RANLIB="${RANLIB}" \
-  MYCFLAGS="-Os -DLUA_USE_POSIX" \
-  MYLDFLAGS="-static" \
-  MYLIBS="-lm" \
-  all 2>&1 | tee "${BUILD_DIR}/lua-build.log"
+  CC="${MUSL_CC}" AR="${AR} rcu" RANLIB="${RANLIB}" \
+  MYCFLAGS="-Os -DLUA_USE_POSIX" MYLDFLAGS="-static" MYLIBS="-lm" all \
+  2>&1 | tee "${BUILD_DIR}/lua-build.log"
 cp "${LUA_BUILD}/src/lua" "${BUILD_DIR}/lua"
 check_elf "${BUILD_DIR}/lua" > "${EVIDENCE_DIR}/lua-readelf.txt"
 
 # SQLite's upstream amalgamation plus a deterministic transaction/VFS harness.
 "${MUSL_CC}" -Os -static \
-  -DSQLITE_THREADSAFE=0 \
-  -DSQLITE_OMIT_LOAD_EXTENSION \
-  -DSQLITE_DEFAULT_MEMSTATUS=0 \
-  -I"${SQLITE_SRC}" \
-  "${SQLITE_SRC}/sqlite3.c" \
-  "${ROOT_DIR}/software/l32_real/sqlite-smoke.c" \
-  -lm -o "${BUILD_DIR}/sqlite-smoke" \
-  2>&1 | tee "${BUILD_DIR}/sqlite-build.log"
+  -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 \
+  -I"${SQLITE_SRC}" "${SQLITE_SRC}/sqlite3.c" "${ROOT_DIR}/software/l32_real/sqlite-smoke.c" \
+  -lm -o "${BUILD_DIR}/sqlite-smoke" 2>&1 | tee "${BUILD_DIR}/sqlite-build.log"
 check_elf "${BUILD_DIR}/sqlite-smoke" > "${EVIDENCE_DIR}/sqlite-readelf.txt"
 
-# Bash is deliberately a separate real-program workload. Disable optional NLS
-# and keep a fully static target. Bash injects -rdynamic into its final link for
-# hosted systems; the bare-metal GCC underneath our musl wrapper does not accept
-# that driver option and static validation does not need exported dynamic symbols.
-#
-# Bash/readline/termcap still contain traditional tentative globals such as
-# PC/BC/UP. GCC 10+ defaults to -fno-common, which turns those compatible common
-# symbols into duplicate-definition link failures. Keep upstream sources intact
-# and restore the historical common-symbol ABI at the compiler-flag boundary.
+# Bash is deliberately a separate real-program workload. Keep upstream sources
+# unchanged and solve cross-build-only compatibility at the generated build
+# boundary. -fcommon preserves traditional readline/termcap tentative globals.
 BASH_BUILD="${BUILD_DIR}/bash-src"
 rm -rf "${BASH_BUILD}"
 cp -a "${BASH_SRC}" "${BASH_BUILD}"
 (
   cd "${BASH_BUILD}"
   build_triplet="$(sh support/config.guess)"
-  env \
-    CC="${MUSL_CC}" \
-    bash_cv_getcwd_malloc=yes \
-    bash_cv_func_sigsetjmp=present \
-    bash_cv_printf_a_format=yes \
-    ./configure \
-      --build="${build_triplet}" \
-      --host=riscv32-linux-musl \
-      --disable-nls \
-      --without-bash-malloc \
-      --without-installed-readline \
-      --enable-static-link \
-      CFLAGS='-Os -fcommon' \
-      LDFLAGS='-static'
-  # Keep upstream sources untouched; adjust only the generated cross-build
-  # Makefile driver flag. Host-side build tools may still use their native gcc.
+  env CC="${MUSL_CC}" \
+    bash_cv_getcwd_malloc=yes bash_cv_func_sigsetjmp=present bash_cv_printf_a_format=yes \
+    ./configure --build="${build_triplet}" --host=riscv32-linux-musl \
+      --disable-nls --without-bash-malloc --without-installed-readline --enable-static-link \
+      CFLAGS='-Os -fcommon' LDFLAGS='-static'
   sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile
   if grep -Eq '(^|[[:space:]])-rdynamic([[:space:]]|$)' Makefile; then
     echo "ERROR: generated Bash target Makefile still contains -rdynamic" >&2
@@ -157,13 +139,54 @@ cp -a "${BASH_SRC}" "${BASH_BUILD}"
 cp "${BASH_BUILD}/bash" "${BUILD_DIR}/bash"
 check_elf "${BUILD_DIR}/bash" > "${EVIDENCE_DIR}/bash-readelf.txt"
 
+# Build a second, workload-only BusyBox from the same frozen upstream release.
+# /bin/busybox remains the tiny PID1/shell bootstrap. This independent binary
+# intentionally exercises larger unchanged editor/archive/text-processing paths
+# without changing the boot contract.
+BUSYBOX_REAL_BUILD="${BUILD_DIR}/busybox-real-src"
+rm -rf "${BUSYBOX_REAL_BUILD}"
+cp -a "${BUSYBOX_REAL_SRC}" "${BUSYBOX_REAL_BUILD}"
+(
+  cd "${BUSYBOX_REAL_BUILD}"
+  make ARCH=riscv allnoconfig
+  python3 - <<'PY'
+from pathlib import Path
+path = Path('.config')
+lines = path.read_text().splitlines()
+def set_symbol(symbol: str, enabled: bool = True) -> None:
+    yes = f"{symbol}=y"
+    no = f"# {symbol} is not set"
+    for i, line in enumerate(lines):
+        if line.startswith(f"{symbol}=") or line == no:
+            lines[i] = yes if enabled else no
+            return
+    lines.append(yes if enabled else no)
+for symbol in (
+    'CONFIG_STATIC', 'CONFIG_LFS',
+    'CONFIG_AWK', 'CONFIG_GZIP', 'CONFIG_GUNZIP', 'CONFIG_TAR',
+    'CONFIG_ED', 'CONFIG_VI', 'CONFIG_FEATURE_VI_COLON',
+    'CONFIG_CAT', 'CONFIG_CMP', 'CONFIG_MKDIR', 'CONFIG_RM',
+):
+    set_symbol(symbol)
+path.write_text('\n'.join(lines) + '\n')
+PY
+  make ARCH=riscv oldconfig </dev/null
+  for symbol in CONFIG_STATIC CONFIG_AWK CONFIG_GZIP CONFIG_GUNZIP CONFIG_TAR CONFIG_ED CONFIG_VI CONFIG_FEATURE_VI_COLON CONFIG_CAT CONFIG_CMP CONFIG_MKDIR CONFIG_RM; do
+    grep -qx "${symbol}=y" .config || { echo "ERROR: workload BusyBox lost ${symbol}" >&2; exit 33; }
+  done
+  make ARCH=riscv CROSS_COMPILE="${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
+    CC="${MUSL_CC}" HOSTCC="${HOSTCC:-cc}" -j"${JOBS}" busybox
+) 2>&1 | tee "${BUILD_DIR}/busybox-real-build.log"
+cp "${BUSYBOX_REAL_BUILD}/busybox" "${BUILD_DIR}/busybox-real"
+check_elf "${BUILD_DIR}/busybox-real" > "${EVIDENCE_DIR}/busybox-real-readelf.txt"
+
 cp "${ROOT_DIR}/software/l32_real/lua-smoke.lua" "${BUILD_DIR}/lua-smoke.lua"
 cp "${ROOT_DIR}/software/l32_real/bash-smoke.sh" "${BUILD_DIR}/bash-smoke.sh"
 chmod 0755 "${BUILD_DIR}/bash-smoke.sh"
 
 sha256sum \
-  "${LUA_TARBALL}" "${SQLITE_ZIP}" "${BASH_TARBALL}" \
-  "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" \
+  "${LUA_TARBALL}" "${SQLITE_ZIP}" "${BASH_TARBALL}" "${BUSYBOX_REAL_TARBALL}" \
+  "${BUILD_DIR}/lua" "${BUILD_DIR}/sqlite-smoke" "${BUILD_DIR}/bash" "${BUILD_DIR}/busybox-real" \
   "${BUILD_DIR}/lua-smoke.lua" "${BUILD_DIR}/bash-smoke.sh" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
 
@@ -172,7 +195,9 @@ sha256sum \
   echo "lua_version=${LUA_VERSION}"
   echo "sqlite_version=${SQLITE_VERSION}"
   echo "bash_version=${BASH_VERSION}"
+  echo "busybox_real_version=${BUSYBOX_VERSION}"
   echo "lua=${BUILD_DIR}/lua"
   echo "sqlite_smoke=${BUILD_DIR}/sqlite-smoke"
   echo "bash=${BUILD_DIR}/bash"
+  echo "busybox_real=${BUILD_DIR}/busybox-real"
 } | tee "${BUILD_DIR}/result.txt"
