@@ -11,6 +11,7 @@ PROBE_BUILD = ROOT / "tools/ci/l32_runtime_probe_build.sh"
 REAL_BUILD = ROOT / "tools/ci/l32_real_programs_build.sh"
 REAL_MANIFEST = ROOT / "software/l32_real/manifest.env"
 ZLIB_SOURCE = ROOT / "software/l32_real/zlib-smoke.c"
+LIBPNG_SOURCE = ROOT / "software/l32_real/libpng-smoke.c"
 INITRAMFS_BUILD = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
 WORKFLOW = ROOT / ".github/workflows/l32-busybox-build.yml"
 
@@ -34,7 +35,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
                 "builtin", "subshell", "pipeline", "vfs", "fd", "dir", "vm", "cow", "signal", "time",
                 "unix", "poll", "futex", "lua-real", "sqlite-real", "bash-real",
                 "busybox-awk", "busybox-gzip", "busybox-tar", "busybox-ed", "busybox-vi",
-                "zlib-mem", "zlib-stream", "zlib-gzfile",
+                "zlib-mem", "zlib-stream", "zlib-gzfile", "libpng-real",
             ],
         )
         for case_id, level in (
@@ -46,6 +47,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             ("busybox-tar", "L8-busybox-real"), ("busybox-ed", "L8-busybox-real"),
             ("busybox-vi", "L8-busybox-real"),
             ("zlib-mem", "L9-zlib"), ("zlib-stream", "L9-zlib"), ("zlib-gzfile", "L9-zlib"),
+            ("libpng-real", "L10-libpng"),
         ):
             self.assertEqual(by_id[case_id].level, level)
         for case_id in ("vfs", "fd", "dir", "vm", "cow", "signal", "time", "unix", "poll", "futex"):
@@ -60,6 +62,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual(by_id["zlib-mem"].command, "/opt/l32/zlib-smoke mem")
         self.assertEqual(by_id["zlib-stream"].command, "/opt/l32/zlib-smoke stream")
         self.assertEqual(by_id["zlib-gzfile"].command, "/opt/l32/zlib-smoke gzfile")
+        self.assertEqual(by_id["libpng-real"].command, "/opt/l32/libpng-smoke")
 
     def test_probe_covers_linux_common_runtime_semantics(self):
         text = PROBE_SOURCE.read_text()
@@ -84,14 +87,17 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         for required in (
             "LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "ZLIB_VERSION=1.3.2",
             "ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+            "LIBPNG_VERSION=1.6.58",
+            "LIBPNG_SHA256=8c9b05b675ca7301a458df2c2e46f26e1d41ff36b8863f8c33530bc58c2e6225",
             "SHA256=",
         ):
             self.assertIn(required, manifest)
         build = REAL_BUILD.read_text()
         for required in (
             "lua-${LUA_VERSION}", "sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}", "bash-${BASH_VERSION}",
-            "zlib-${ZLIB_VERSION}", "SQLITE_THREADSAFE=0", "--enable-static-link", "./configure --static",
-            "libz.a", "zlib-smoke.c", "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            "zlib-${ZLIB_VERSION}", "libpng-${LIBPNG_VERSION}", "SQLITE_THREADSAFE=0", "--enable-static-link", "./configure --static",
+            "libz.a", "zlib-smoke.c", "libpng16.la", ".libs/libpng16.a", "libpng-smoke.c",
+            "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
             'build_triplet="$(sh support/config.guess)"',
             "sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile",
             "generated Bash target Makefile still contains -rdynamic",
@@ -107,6 +113,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             "file /opt/l32/bash ${BASH_ELF} 0755 0 0",
             "file /opt/l32/busybox-real ${BUSYBOX_REAL_ELF} 0755 0 0",
             "file /opt/l32/zlib-smoke ${ZLIB_ELF} 0755 0 0",
+            "file /opt/l32/libpng-smoke ${LIBPNG_ELF} 0755 0 0",
         ):
             self.assertIn(required, initramfs)
 
@@ -117,6 +124,15 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             "deflateInit(", "deflate(", "inflateInit(", "inflate(",
             'gzopen(path, "wb6")', "gzwrite(", "gzflush(", 'gzopen(path, "rb")', "gzread(",
             "unlink(path)", "L32_ZLIB_MEM_PASS", "L32_ZLIB_STREAM_PASS", "L32_ZLIB_GZFILE_PASS",
+        ):
+            self.assertIn(required, text)
+
+    def test_libpng_workload_exercises_png_roundtrip_filters_crc_and_error_path(self):
+        text = LIBPNG_SOURCE.read_text()
+        for required in (
+            "png_create_write_struct", "png_set_IHDR", "PNG_ALL_FILTERS", "png_write_row",
+            "png_create_read_struct", "png_read_info", "png_read_row", "crc32(",
+            'memcmp(type, "IDAT", 4)', "png_longjmp", "unlink(path)", "L32_LIBPNG_REAL_PASS",
         ):
             self.assertIn(required, text)
 
