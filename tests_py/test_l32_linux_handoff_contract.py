@@ -39,13 +39,18 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
         self.assertIn("L32_LINUX_ENTRY_PASS", text)
         self.assertIn("MAX_CYCLES ?= 12000000", text)
 
-    def test_workflow_does_not_rebuild_linux(self):
+    def test_workflow_repairs_invalid_frozen_linux_cache_before_handoff(self):
         text = (ROOT / ".github/workflows/l32-linux-handoff.yml").read_text()
         self.assertIn("L32 OpenSBI to Linux Handoff", text)
-        self.assertIn("l32_linux_cache_key.sh check", text)
+        self.assertIn("Restore or verify exact frozen Linux software image", text)
+        self.assertIn("if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux", text)
+        self.assertIn("tools/ci/l32_linux_build.sh", text)
+        self.assertIn("tools/ci/l32_linux_cache_key.sh mark build/l32-linux", text)
+        self.assertIn("L32_LINUX_IMAGE_SHA256", text)
+        self.assertIn("L32_LINUX_VMLINUX_SHA256", text)
+        self.assertIn("L32_LINUX_CONFIG_SHA256", text)
         self.assertIn("l32_linux_handoff_build.sh", text)
         self.assertIn("Makefile.l32-linux-handoff", text)
-        self.assertNotIn("l32_linux_build.sh", text)
 
 
 if __name__ == "__main__":
