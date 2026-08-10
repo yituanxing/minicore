@@ -7,35 +7,19 @@ EARLY = ROOT / ".github/workflows/l32-linux-boot.yml"
 DEEPER = ROOT / ".github/workflows/l32-linux-deeper-boot.yml"
 MINIMAL = ROOT / ".github/workflows/l32-minimal-initramfs.yml"
 BUSYBOX = ROOT / ".github/workflows/l32-busybox-build.yml"
+RUNTIME_IMAGE_CACHE = ROOT / "tools/ci/l32_runtime_image_cache.sh"
 
 
 class L32SoftwareArtifactCacheContract(unittest.TestCase):
     def test_cache_fails_closed_on_inputs_pass_marker_and_output_hashes(self):
         text = CACHE.read_text()
         for required in (
-            "L32_SOFTWARE_CACHE_HIT",
-            "L32_SOFTWARE_CACHE_MISS",
-            "L32_SOFTWARE_CACHE_MARK",
-            "software-cache.txt",
-            "input_key",
-            "result_marker",
-            "grep -qx",
-            "sha256sum",
-            "expected=",
-            "actual=",
-            "build did not produce its qualified PASS result",
-            "build is missing qualified output",
+            "L32_SOFTWARE_CACHE_HIT", "L32_SOFTWARE_CACHE_MISS", "L32_SOFTWARE_CACHE_MARK",
+            "software-cache.txt", "input_key", "result_marker", "grep -qx", "sha256sum", "expected=", "actual=",
+            "build did not produce its qualified PASS result", "build is missing qualified output",
         ):
             self.assertIn(required, text)
-
-        for target in (
-            "busybox)",
-            "minimal-initramfs)",
-            "busybox-initramfs)",
-            "linux-payload)",
-            "minimal-payload)",
-            "busybox-payload)",
-        ):
+        for target in ("busybox)", "minimal-initramfs)", "busybox-initramfs)", "linux-payload)", "minimal-payload)", "busybox-payload)"):
             self.assertIn(target, text)
 
     def test_cpu_validation_workflows_reuse_qualified_software(self):
@@ -48,34 +32,21 @@ class L32SoftwareArtifactCacheContract(unittest.TestCase):
             self.assertIn("tools/ci/l32_software_artifact_cache.sh", text)
             self.assertIn("bash -n tools/ci/l32_software_artifact_cache.sh", text)
 
-        self.assertIn(
-            "l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh",
-            early,
-        )
-        self.assertIn(
-            "l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh",
-            deeper,
-        )
-        self.assertIn(
-            "l32_software_artifact_cache.sh minimal-initramfs tools/ci/l32_minimal_initramfs_build.sh",
-            minimal,
-        )
-        self.assertIn(
-            "l32_software_artifact_cache.sh minimal-payload tools/ci/l32_minimal_init_payload_build.sh",
-            minimal,
-        )
-        self.assertIn(
-            "l32_software_artifact_cache.sh busybox \\\n            bash tools/ci/l32_busybox_build.sh",
-            busybox,
-        )
-        self.assertIn(
-            "l32_software_artifact_cache.sh busybox-initramfs tools/ci/l32_busybox_initramfs_build.sh",
-            busybox,
-        )
-        self.assertIn(
-            "l32_software_artifact_cache.sh busybox-payload tools/ci/l32_busybox_payload_build.sh",
-            busybox,
-        )
+        self.assertIn("l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh", early)
+        self.assertIn("l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh", deeper)
+        self.assertIn("l32_software_artifact_cache.sh minimal-initramfs tools/ci/l32_minimal_initramfs_build.sh", minimal)
+        self.assertIn("l32_software_artifact_cache.sh minimal-payload tools/ci/l32_minimal_init_payload_build.sh", minimal)
+        self.assertIn("l32_software_artifact_cache.sh busybox \\\n            bash tools/ci/l32_busybox_build.sh", busybox)
+        self.assertIn("tools/ci/l32_runtime_image_cache.sh", busybox)
+        self.assertIn("l32_software_artifact_cache.sh busybox-payload tools/ci/l32_busybox_payload_build.sh", busybox)
+
+        runtime_cache = RUNTIME_IMAGE_CACHE.read_text()
+        for required in (
+            "L32_RUNTIME_IMAGE_CACHE_HIT", "L32_RUNTIME_IMAGE_CACHE_MISS", "L32_RUNTIME_IMAGE_CACHE_MARK",
+            "l32-runtime-probe", "l32-real-programs/lua", "l32-real-programs/sqlite-smoke", "l32-real-programs/bash",
+            "l32-real-programs/busybox-real", "l32-real-programs/zlib-smoke", "sha256sum", "input_key",
+        ):
+            self.assertIn(required, runtime_cache)
 
 
 if __name__ == "__main__":
