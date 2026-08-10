@@ -7,10 +7,10 @@ MODE="${1:-key}"
 FREEZE_ENV="${ROOT_DIR}/software/l32/linux-freeze.env"
 
 # The L32-C base kernel is a frozen executable input for every later Linux
-# milestone.  A self-hosted runner keeps build/ between jobs, so an input-key
+# milestone. A self-hosted runner keeps build/ between jobs, so an input-key
 # marker alone is not sufficient: another workflow can leave files in the same
 # object tree even while the marker still describes the original build.
-# Validate the frozen output identity as well as the build inputs so cache hits
+# Validate both the frozen build identity and its output hashes so cache hits
 # are independent of workflow execution order.
 # shellcheck disable=SC1090
 source "${FREEZE_ENV}"
@@ -23,6 +23,7 @@ RESULT="${BUILD_DIR}/result.txt"
 key="$({
   sha256sum \
     "${ROOT_DIR}/software/l32/manifest.env" \
+    "${FREEZE_ENV}" \
     "${ROOT_DIR}/tools/ci/l32_linux_build.sh" \
     "${ROOT_DIR}/tools/ensure_l32_riscv32_linux_gcc.sh"
 } | sha256sum | awk '{print $1}')"
