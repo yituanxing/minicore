@@ -25,9 +25,11 @@ on:
       - tests_py/test_l32_busybox_multiprocess_contract.py
       - tests_py/test_l32_forkserver_contract.py
       - tests_py/test_l32_linux_runtime_suite_contract.py
+      - tests_py/test_l32_sim_runtime_contract.py
       - build.mill
       - mill
       - Makefile.l32-linux-boot
+      - sim/l32_opensbi_runtime.h
       - sim/opensbi_boot_main.cpp
       - sim/opensbi_forkserver_main.cpp
       - src/main/scala/aethercore/**
@@ -72,7 +74,8 @@ jobs:
             tests_py.test_l32_busybox_contract \
             tests_py.test_l32_busybox_multiprocess_contract \
             tests_py.test_l32_forkserver_contract \
-            tests_py.test_l32_linux_runtime_suite_contract -v
+            tests_py.test_l32_linux_runtime_suite_contract \
+            tests_py.test_l32_sim_runtime_contract -v
 
       - name: Reuse or build soft-float musl and static BusyBox
         shell: bash
