@@ -71,6 +71,31 @@ CASES = [
         r"/opt/l32/bash /opt/l32/bash-smoke.sh",
         "unchanged Bash: parser, functions, arithmetic, arrays, redirection, mapfile, signal/trap, command substitution",
     ),
+    RuntimeCase(
+        "L8-busybox-real", "busybox-awk", "L32_BB_AWK_PASS",
+        r'''printf '1 2\n3 4\n' | /opt/l32/busybox-real awk '{s += $1 + $2} END { if (s == 10) printf "L32_BB_AWK_%s\n", "PASS"; else exit 1 }' ''',
+        "unchanged BusyBox awk: parser/interpreter, integer arithmetic, stdio pipeline",
+    ),
+    RuntimeCase(
+        "L8-busybox-real", "busybox-gzip", "L32_BB_GZIP_PASS",
+        r'''b=/opt/l32/busybox-real; printf 'alpha\nbeta\ngamma\n' > /tmp/l32-gzip.in; $b gzip -c /tmp/l32-gzip.in > /tmp/l32-gzip.gz; out=$($b gzip -dc /tmp/l32-gzip.gz); case "$out" in "$(printf 'alpha\nbeta\ngamma')") printf 'L32_BB_GZIP_%s\n' PASS;; *) exit 1;; esac''',
+        "unchanged BusyBox gzip/deflate/inflate: file I/O, compression, decompression, byte comparison",
+    ),
+    RuntimeCase(
+        "L8-busybox-real", "busybox-tar", "L32_BB_TAR_PASS",
+        r'''b=/opt/l32/busybox-real; d=/tmp/l32-tar; $b rm -rf "$d"; $b mkdir -p "$d/in" "$d/out"; printf 'tar-data\n' > "$d/in/a.txt"; $b tar -cf "$d/a.tar" -C "$d/in" a.txt; $b tar -xf "$d/a.tar" -C "$d/out"; out=$($b cat "$d/out/a.txt"); case "$out" in tar-data) printf 'L32_BB_TAR_%s\n' PASS;; *) exit 1;; esac''',
+        "unchanged BusyBox tar: directory lookup, metadata, archive write/read, create/extract",
+    ),
+    RuntimeCase(
+        "L8-busybox-real", "busybox-ed", "L32_BB_ED_PASS",
+        r'''b=/opt/l32/busybox-real; f=/tmp/l32-ed.txt; printf 'alpha\nbeta\n' > "$f"; printf '2s/beta/BETA/\nw\nq\n' | $b ed -s "$f"; out=$($b cat "$f"); case "$out" in "$(printf 'alpha\nBETA')") printf 'L32_BB_ED_%s\n' PASS;; *) exit 1;; esac''',
+        "unchanged BusyBox ed: parser, buffered editing, stdin command stream, VFS rewrite",
+    ),
+    RuntimeCase(
+        "L8-busybox-real", "busybox-vi", "L32_BB_VI_PASS",
+        r'''b=/opt/l32/busybox-real; f=/tmp/l32-vi.txt; printf 'alpha\nbeta\n' > "$f"; TERM=xterm $b vi -c 's/alpha/BETA/' -c 'wq' "$f" </dev/null >/dev/null 2>&1; out=$($b cat "$f"); case "$out" in "$(printf 'BETA\nbeta')") printf 'L32_BB_VI_%s\n' PASS;; *) exit 1;; esac''',
+        "unchanged BusyBox vi: editor state machine, colon commands, signals/terminal setup, VFS rewrite",
+    ),
 ]
 
 BAD_KERNEL_MARKERS = (
