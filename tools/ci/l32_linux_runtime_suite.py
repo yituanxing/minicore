@@ -121,6 +121,21 @@ CASES = [
         r'''b=/opt/l32/busybox-real; f=/tmp/l32-vi.txt; printf 'alpha\nbeta\n' > "$f"; TERM=xterm $b vi -c 's/alpha/BETA/' -c 'wq' "$f" </dev/null >/dev/null 2>&1; out=$($b cat "$f"); case "$out" in "$(printf 'BETA\nbeta')") printf 'L32_BB_VI_%s\n' PASS;; *) exit 1;; esac''',
         "unchanged BusyBox vi: editor state machine, colon commands, signals/terminal setup, VFS rewrite",
     ),
+    RuntimeCase(
+        "L9-zlib", "zlib-mem", "L32_ZLIB_MEM_PASS",
+        r"/opt/l32/zlib-smoke mem",
+        "unchanged zlib: compress2/uncompress, 64 KiB heap buffers, CRC-32 and Adler-32",
+    ),
+    RuntimeCase(
+        "L9-zlib", "zlib-stream", "L32_ZLIB_STREAM_PASS",
+        r"/opt/l32/zlib-smoke stream",
+        "unchanged zlib: fragmented deflate/inflate streams across odd input/output boundaries",
+    ),
+    RuntimeCase(
+        "L9-zlib", "zlib-gzfile", "L32_ZLIB_GZFILE_PASS",
+        r"/opt/l32/zlib-smoke gzfile",
+        "unchanged zlib gz* API: create/write/flush/close/reopen/read/unlink through Linux VFS",
+    ),
 ]
 
 BAD_KERNEL_MARKERS = (
