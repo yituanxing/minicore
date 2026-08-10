@@ -40,6 +40,10 @@ object MemSize extends ChiselEnum {
   val Byte, Half, Word, DWord = Value
 }
 
+object XRetOp extends ChiselEnum {
+  val None, Machine, Supervisor = Value
+}
+
 object PrivilegeMode {
   val User: Int = 0
   val Supervisor: Int = 1
@@ -149,6 +153,7 @@ class ControlSignals extends Bundle {
   val branch = BranchType()
   val atomicOp = AtomicOp()
   val memSize = MemSize()
+  val xret = XRetOp()
 
   val regWrite = Bool()
   val memRead = Bool()
@@ -161,7 +166,6 @@ class ControlSignals extends Bundle {
   val usesRs2 = Bool()
   val csrUseImm = Bool()
   val wfi = Bool()
-  val mret = Bool()
   val trap = Bool()
   val illegal = Bool()
 }
