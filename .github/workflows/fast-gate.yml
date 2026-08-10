@@ -14,7 +14,7 @@ concurrency:
 jobs:
   classify:
     name: Classify fast-gate paths
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, minicore]
     outputs:
       run_chisel: ${{ steps.changes.outputs.run_chisel }}
       run_smode_v1: ${{ steps.changes.outputs.run_smode_v1 }}
@@ -75,7 +75,7 @@ jobs:
   source-contract:
     name: Fast source contract tests
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, minicore]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -254,6 +254,6 @@ jobs:
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
-            echo '- source-only contract tests run independently on a GitHub-hosted runner so they do not occupy the Linux simulation runner'
+            echo '- source-only contract tests run on the persistent self-hosted runner so private-repository hosted-runner availability cannot block classification'
             echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
