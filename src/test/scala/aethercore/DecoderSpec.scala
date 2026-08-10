@@ -86,7 +86,7 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.inst.poke("h10500073".U)
       dut.io.ctrl.illegal.expect(false.B)
       dut.io.ctrl.wfi.expect(true.B)
-      dut.io.ctrl.mret.expect(false.B)
+      dut.io.ctrl.xret.expect(XRetOp.None)
       dut.io.ctrl.trap.expect(false.B)
       dut.io.ctrl.regWrite.expect(false.B)
       dut.io.ctrl.memWrite.expect(false.B)
@@ -94,10 +94,22 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.inst.poke("h30200073".U)
       dut.io.ctrl.illegal.expect(false.B)
       dut.io.ctrl.wfi.expect(false.B)
-      dut.io.ctrl.mret.expect(true.B)
+      dut.io.ctrl.xret.expect(XRetOp.Machine)
       dut.io.ctrl.trap.expect(false.B)
       dut.io.ctrl.regWrite.expect(false.B)
       dut.io.ctrl.memWrite.expect(false.B)
+    }
+  }
+
+  it should "distinguish MRET and SRET as typed return operations" in {
+    simulate(new Decoder(CoreProfiles.rv32imsuSoftware.isa)) { dut =>
+      dut.io.inst.poke("h30200073".U)
+      dut.io.ctrl.illegal.expect(false.B)
+      dut.io.ctrl.xret.expect(XRetOp.Machine)
+
+      dut.io.inst.poke("h10200073".U)
+      dut.io.ctrl.illegal.expect(false.B)
+      dut.io.ctrl.xret.expect(XRetOp.Supervisor)
     }
   }
 
@@ -137,10 +149,11 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.inst.poke("h10500073".U)
       dut.io.ctrl.illegal.expect(true.B)
       dut.io.ctrl.wfi.expect(false.B)
+      dut.io.ctrl.xret.expect(XRetOp.None)
 
       dut.io.inst.poke("h30200073".U)
       dut.io.ctrl.illegal.expect(true.B)
-      dut.io.ctrl.mret.expect(false.B)
+      dut.io.ctrl.xret.expect(XRetOp.None)
     }
   }
 
