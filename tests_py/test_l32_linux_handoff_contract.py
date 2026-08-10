@@ -15,6 +15,8 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
             "L32_LINUX_BUILD_CACHE_KEY=e91bff604ed9d93d2fcb2f6049fd104281e2c05ae9e2756af69e6af477c68822",
             text,
         )
+        self.assertIn("L32_LINUX_FREEZE_RUN_ID=31290514249", text)
+        self.assertIn("L32_LINUX_FREEZE_ARTIFACT_ID=9031239454", text)
         self.assertIn("L32_LINUX_PHYS_ENTRY=0x80400000", text)
 
     def test_builder_reuses_frozen_linux_and_explicit_payload_offset(self):
@@ -24,6 +26,8 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
         self.assertIn("FW_PAYLOAD_PATH", text)
         self.assertIn("FW_PAYLOAD_OFFSET=0x400000", text)
         self.assertIn("L32_LINUX_PHYS_ENTRY", text)
+        self.assertIn("cache key identifies the current build/check recipe", text)
+        self.assertNotIn('observed_cache_key}" == "${L32_LINUX_BUILD_CACHE_KEY}', text)
         self.assertNotIn("l32_linux_build.sh", text)
 
     def test_runner_requires_real_linux_physical_entry(self):
