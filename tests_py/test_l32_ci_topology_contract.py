@@ -26,6 +26,9 @@ class L32CiTopologyContractTest(unittest.TestCase):
 
         for required in (
             "src/main/scala/aethercore/**",
+            "build.mill",
+            "mill",
+            "tools/ensure_verilator_5_024.sh",
             "Makefile.l32-linux-boot",
             "sim/opensbi_boot_main.cpp",
             "sim/opensbi_forkserver_main.cpp",
