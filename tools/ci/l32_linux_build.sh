@@ -62,10 +62,21 @@ if [[ ! -f "${marker}" ]] || [[ "$(cat "${marker}" 2>/dev/null)" != "${LINUX_SHA
   trap - EXIT
 fi
 
-# Preserve the Kbuild object tree across bounded configuration/script fixes.
-# Only discard it when the immutable source or compiler contract changes;
-# Kbuild itself tracks .config/header dependencies for incremental rebuilds.
-obj_inputs="${LINUX_SHA256}:${L32_TOOLCHAIN_VERSION}:${L32_CROSS_COMPILE_PREFIX}"
+# Preserve the Kbuild object tree only inside one exact frozen build contract.
+# The embedded build identity is part of that contract just like the source and
+# compiler: changing any of it must force a clean object tree rather than a
+# partial relink of objects produced under a different identity.
+obj_inputs="$({
+  printf '%s\n' \
+    "linux_sha256=${LINUX_SHA256}" \
+    "toolchain_version=${L32_TOOLCHAIN_VERSION}" \
+    "cross_compile=${L32_CROSS_COMPILE_PREFIX}" \
+    "kbuild_user=${KBUILD_BUILD_USER}" \
+    "kbuild_host=${KBUILD_BUILD_HOST}" \
+    "kbuild_version=${KBUILD_BUILD_VERSION}" \
+    "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}" \
+    "kbuild_tz=${TZ}"
+} | sha256sum | awk '{print $1}')"
 obj_marker="${OBJ_DIR}/.aethercore-object-inputs"
 if [[ -d "${OBJ_DIR}" ]] && {
   [[ ! -f "${obj_marker}" ]] || [[ "$(cat "${obj_marker}" 2>/dev/null)" != "${obj_inputs}" ]];
