@@ -13,18 +13,16 @@ EVIDENCE_DIR="${BUILD_DIR}/evidence"
 OBJ_DIR="${BUILD_DIR}/obj"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
 
-# Kbuild embeds the build user, host, version and timestamp in vmlinux/Image.
-# L32-C originally froze the output hashes but not these inputs, so a later
-# rebuild of the same source/config could produce different executable bytes.
-# Preserve the exact qualified L32-C identity recovered from its original
-# artifact so a cache repair remains a byte-for-byte rebuild of the checkpoint.
+# The canonical base is a recipe-derived artifact, not an incremental Kbuild
+# checkpoint. Fixed neutral metadata plus a clean object tree keep a cache
+# repair independent of whatever a self-hosted runner built previously.
 export KBUILD_BUILD_USER="${L32_LINUX_BUILD_USER}"
 export KBUILD_BUILD_HOST="${L32_LINUX_BUILD_HOST}"
 export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"
 export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
 export TZ="${L32_LINUX_BUILD_TZ}"
 
-mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
+mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}"
 
 command -v "${L32_CROSS_COMPILE_PREFIX}gcc" >/dev/null 2>&1 || {
   echo "ERROR: provision the pinned L32 Linux toolchain first" >&2
@@ -62,41 +60,32 @@ if [[ ! -f "${marker}" ]] || [[ "$(cat "${marker}" 2>/dev/null)" != "${LINUX_SHA
   trap - EXIT
 fi
 
-# Preserve the Kbuild object tree only inside one exact frozen build contract.
-# The embedded build identity is part of that contract just like the source and
-# compiler: changing any of it must force a clean object tree rather than a
-# partial relink of objects produced under a different identity.
-obj_inputs="$({
-  printf '%s\n' \
-    "linux_sha256=${LINUX_SHA256}" \
-    "toolchain_version=${L32_TOOLCHAIN_VERSION}" \
-    "cross_compile=${L32_CROSS_COMPILE_PREFIX}" \
-    "kbuild_user=${KBUILD_BUILD_USER}" \
-    "kbuild_host=${KBUILD_BUILD_HOST}" \
-    "kbuild_version=${KBUILD_BUILD_VERSION}" \
-    "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}" \
-    "kbuild_tz=${TZ}"
-} | sha256sum | awk '{print $1}')"
-obj_marker="${OBJ_DIR}/.aethercore-object-inputs"
-if [[ -d "${OBJ_DIR}" ]] && {
-  [[ ! -f "${obj_marker}" ]] || [[ "$(cat "${obj_marker}" 2>/dev/null)" != "${obj_inputs}" ]];
-}; then
-  rm -rf "${OBJ_DIR}"
-fi
-mkdir -p "${OBJ_DIR}"
-printf '%s\n' "${obj_inputs}" > "${obj_marker}"
-rm -rf "${EVIDENCE_DIR}"
-mkdir -p "${EVIDENCE_DIR}"
+# A validated cache avoids this build entirely. Once a rebuild is required,
+# start from a clean Kbuild tree; never try to repair the canonical root by
+# relinking stale objects from a previous workflow or build identity.
+rm -rf "${OBJ_DIR}" "${EVIDENCE_DIR}"
+mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}"
+{
+  echo "recipe_version=${L32_LINUX_RECIPE_VERSION}"
+  echo "linux_sha256=${LINUX_SHA256}"
+  echo "toolchain_version=${L32_TOOLCHAIN_VERSION}"
+  echo "cross_compile=${L32_CROSS_COMPILE_PREFIX}"
+  echo "kbuild_user=${KBUILD_BUILD_USER}"
+  echo "kbuild_host=${KBUILD_BUILD_HOST}"
+  echo "kbuild_version=${KBUILD_BUILD_VERSION}"
+  echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
+  echo "kbuild_tz=${TZ}"
+} > "${EVIDENCE_DIR}/build-inputs.txt"
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
   "${LINUX_RV32_DEFCONFIG}" \
   2>&1 | tee "${BUILD_DIR}/config.log"
 
-# Keep the first Linux workload inside the frozen AetherCore ISA/platform.
+# Keep the canonical Linux base inside the AetherCore ISA/platform contract.
 # RISC-V EFI selects RISCV_ISA_C in Linux 6.6, so disable the unused UEFI
 # runtime path first. AetherCore exposes only the NS16550 serial console in
-# this checkpoint, so the generic VGA text console is also intentionally off.
+# this checkpoint, so the generic VGA text console is intentionally off.
 "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
   -d EFI \
   -d RISCV_ISA_C \
@@ -159,6 +148,7 @@ fi
 
 {
   echo "L32_LINUX_BUILD_RESULT: status=PASS"
+  echo "recipe_version=${L32_LINUX_RECIPE_VERSION}"
   echo "linux_version=${LINUX_VERSION}"
   echo "source_sha256=${LINUX_SHA256}"
   echo "defconfig=${LINUX_RV32_DEFCONFIG}"
