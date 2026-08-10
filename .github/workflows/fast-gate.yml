@@ -53,6 +53,12 @@ jobs:
             run_freertos=true
           fi
 
+          # Changes to the fast-gate definition must exercise the Chisel path
+          # they are modifying, but should not pull unrelated software gates in.
+          if grep -Eq '^\.github/workflows/fast-gate\.yml$' <<<"$changed"; then
+            run_chisel=true
+          fi
+
           if grep -Eq '^(software/rv32/supervisor_v1_workload\.S|Makefile\.rv32im-supervisor-v1$|tools/build_rv32im_supervisor_v1\.sh$)' <<<"$changed"; then
             run_smode_v1=true
           fi
@@ -95,7 +101,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   fast-gate:
-    name: Incremental VM, privilege, interrupt and FreeRTOS checks
+    name: Incremental cross-XLEN, VM, privilege, interrupt and FreeRTOS checks
     needs: [classify, source-contract]
     if: needs.classify.outputs.run_hardware == 'true'
     runs-on: [self-hosted, Linux, X64, minicore]
@@ -131,6 +137,17 @@ jobs:
         if: needs.classify.outputs.run_chisel == 'true' || needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Cross-XLEN shared integer-core Chisel guard
+        if: needs.classify.outputs.run_chisel == 'true'
+        shell: bash
+        run: |
+          ./mill aethercore.test.testOnly \
+            aethercore.DatapathWidthSpec \
+            aethercore.RV32CoreSpec \
+            aethercore.CoreSmokeSpec \
+            aethercore.RV64MDecoderSpec \
+            aethercore.RV64MALUSpec
 
       - name: Provision pinned RISC-V newlib sysroot
         if: needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
@@ -242,6 +259,7 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ needs.classify.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ needs.classify.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
+            echo '- cross-XLEN shared-core guard reuses existing RV32 whole-core, RV64 whole-core, parameterized datapath, RV64M decoder and RV64M ALU tests before the RV32 frontier-specific suite'
             echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, translated RV32A reservation/remap semantics, and deterministic shared PTW arbitration'
             echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34/Sstc profile and fail-closed configuration boundaries'
             echo '- Sstc tests cover RV32 stimecmp split writes, TM/STCE access gates, time/timeh, full M-to-S execution, delegated STIP visibility and local/global interrupt qualification'
