@@ -120,6 +120,11 @@ check_elf "${BUILD_DIR}/sqlite-smoke" > "${EVIDENCE_DIR}/sqlite-readelf.txt"
 # and keep a fully static target. Bash injects -rdynamic into its final link for
 # hosted systems; the bare-metal GCC underneath our musl wrapper does not accept
 # that driver option and static validation does not need exported dynamic symbols.
+#
+# Bash/readline/termcap still contain traditional tentative globals such as
+# PC/BC/UP. GCC 10+ defaults to -fno-common, which turns those compatible common
+# symbols into duplicate-definition link failures. Keep upstream sources intact
+# and restore the historical common-symbol ABI at the compiler-flag boundary.
 BASH_BUILD="${BUILD_DIR}/bash-src"
 rm -rf "${BASH_BUILD}"
 cp -a "${BASH_SRC}" "${BASH_BUILD}"
@@ -138,7 +143,7 @@ cp -a "${BASH_SRC}" "${BASH_BUILD}"
       --without-bash-malloc \
       --without-installed-readline \
       --enable-static-link \
-      CFLAGS='-Os' \
+      CFLAGS='-Os -fcommon' \
       LDFLAGS='-static'
   # Keep upstream sources untouched; adjust only the generated cross-build
   # Makefile driver flag. Host-side build tools may still use their native gcc.
