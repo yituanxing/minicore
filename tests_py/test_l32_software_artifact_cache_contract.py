@@ -44,7 +44,8 @@ class L32SoftwareArtifactCacheContract(unittest.TestCase):
         for required in (
             "L32_RUNTIME_IMAGE_CACHE_HIT", "L32_RUNTIME_IMAGE_CACHE_MISS", "L32_RUNTIME_IMAGE_CACHE_MARK",
             "l32-runtime-probe", "l32-real-programs/lua", "l32-real-programs/sqlite-smoke", "l32-real-programs/bash",
-            "l32-real-programs/busybox-real", "l32-real-programs/zlib-smoke", "sha256sum", "input_key",
+            "l32-real-programs/busybox-real", "l32-real-programs/zlib-smoke", "l32-real-programs/libpng-smoke",
+            "sha256sum", "input_key",
         ):
             self.assertIn(required, runtime_cache)
 
