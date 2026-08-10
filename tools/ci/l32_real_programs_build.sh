@@ -9,6 +9,7 @@ CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-program
 DOWNLOAD_DIR="${CACHE_ROOT}/downloads"
 SOURCE_DIR="${CACHE_ROOT}/sources"
 BUILD_DIR="${ROOT_DIR}/build/l32-real-programs"
+BUSYBOX_REAL_BUILD="${BUILD_DIR}/busybox-real-src"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 MUSL_CC="${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc"
 READELF="${L32_USERSPACE_CROSS_COMPILE_PREFIX}readelf"
@@ -139,7 +140,7 @@ build_bash() {
 build_busybox() {
   local tarball="${DOWNLOAD_DIR}/busybox-${BUSYBOX_VERSION}.tar.bz2"
   local src="${SOURCE_DIR}/busybox-${BUSYBOX_VERSION}-real"
-  local build="${BUILD_DIR}/busybox-real-src"
+  local build="${BUSYBOX_REAL_BUILD}"
   fetch_verified "${BUSYBOX_ARCHIVE}" "${BUSYBOX_SHA256}" "${tarball}"
   if [[ ! -f "${src}/Makefile" ]]; then
     rm -rf "${src}"
@@ -195,7 +196,7 @@ PY
     make ARCH=riscv CROSS_COMPILE="${L32_USERSPACE_CROSS_COMPILE_PREFIX}" \
       CC="${MUSL_CC}" HOSTCC="${HOSTCC:-cc}" -j"${JOBS}" busybox
   ) 2>&1 | tee "${BUILD_DIR}/busybox-real-build.log"
-  cp "${build}/busybox" "${BUILD_DIR}/busybox-real"
+  cp "${BUSYBOX_REAL_BUILD}/busybox" "${BUILD_DIR}/busybox-real"
   check_elf "${BUILD_DIR}/busybox-real" > "${EVIDENCE_DIR}/busybox-real-readelf.txt"
 }
 
