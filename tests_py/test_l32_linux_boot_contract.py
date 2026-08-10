@@ -11,15 +11,19 @@ _spec.loader.exec_module(_dtb)
 
 
 class L32LinuxBootContractTest(unittest.TestCase):
-    def test_payload_build_reuses_exact_frozen_linux_image(self):
+    def test_payload_build_reuses_validated_canonical_linux_image(self):
         text = (ROOT / "tools/ci/l32_linux_payload_build.sh").read_text()
+        self.assertIn("software/l32/linux-freeze.env", text)
         self.assertIn("l32_linux_cache_key.sh", text)
-        self.assertIn("5a3c7e2579330b4277e664391c74f966146188a2da07d3bd37fbd99aa7761048", text)
+        self.assertIn("L32_LINUX_IMAGE_SHA256", text)
+        self.assertIn("canonical Linux Image is missing", text)
+        self.assertNotIn("5a3c7e2579330b4277e664391c74f966146188a2da07d3bd37fbd99aa7761048", text)
         self.assertIn('FW_PAYLOAD_PATH="${LINUX_IMAGE}"', text)
         self.assertIn('FW_PAYLOAD_OFFSET="${FW_PAYLOAD_OFFSET}"', text)
         self.assertIn('FW_PAYLOAD_FDT_ADDR="${FW_PAYLOAD_FDT_ADDR}"', text)
         self.assertIn('FW_PAYLOAD_OFFSET="0x00400000"', text)
         self.assertIn('FW_PAYLOAD_FDT_ADDR="0x87f00000"', text)
+        self.assertIn("linux_recipe=${L32_LINUX_RECIPE_VERSION}", text)
         self.assertIn("next_addr=0x80400000", text)
         self.assertIn("next_mode=S-mode", text)
         self.assertIn("L32_LINUX_PAYLOAD_BUILD_RESULT: status=PASS", text)
