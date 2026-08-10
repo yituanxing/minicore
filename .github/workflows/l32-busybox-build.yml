@@ -20,15 +20,17 @@ on:
       - tools/ci/l32_busybox_runtime_freeze.sh
       - tools/ci/l32_linux_runtime_suite.py
       - tools/ci/l32_software_artifact_cache.sh
+      - tools/ensure_verilator_5_024.sh
       - tests_py/test_l32_busybox_contract.py
       - tests_py/test_l32_busybox_multiprocess_contract.py
       - tests_py/test_l32_forkserver_contract.py
       - tests_py/test_l32_linux_runtime_suite_contract.py
+      - build.mill
+      - mill
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - sim/opensbi_forkserver_main.cpp
-      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
-      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
+      - src/main/scala/aethercore/**
       - tools/ci/make_l32_dtb.py
       - .github/workflows/l32-busybox-build.yml
   workflow_dispatch:
@@ -182,7 +184,7 @@ jobs:
         run: bash tools/ensure_verilator_5_024.sh
 
       - name: Run cumulative Linux functional matrix from warm shell
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+        if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -205,7 +207,7 @@ jobs:
           python3 tools/ci/l32_linux_runtime_suite.py verify-log "$log"
 
       - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
-        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
           L32_BUSYBOX_PIPE_COMMAND: >-
