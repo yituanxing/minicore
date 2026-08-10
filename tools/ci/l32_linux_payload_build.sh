@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32/manifest.env"
+source "${ROOT_DIR}/software/l32/linux-freeze.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32"
 SOURCE_DIR="${CACHE_ROOT}/opensbi/${OPENSBI_COMMIT}"
@@ -16,16 +17,15 @@ JOBS="${L32_JOBS:-$(nproc)}"
 FW_TEXT_START="0x80000000"
 FW_PAYLOAD_OFFSET="0x00400000"
 FW_PAYLOAD_FDT_ADDR="0x87f00000"
-EXPECTED_LINUX_IMAGE_SHA256="5a3c7e2579330b4277e664391c74f966146188a2da07d3bd37fbd99aa7761048"
 BOOTARGS="earlycon=uart8250,mmio,0x10000000 console=ttyS0,115200"
 
 mkdir -p "${CACHE_ROOT}/opensbi" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
 "${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh" check "${LINUX_BUILD_DIR}" >/dev/null
-[[ -s "${LINUX_IMAGE}" ]] || { echo "ERROR: frozen Linux Image is missing" >&2; exit 20; }
+[[ -s "${LINUX_IMAGE}" ]] || { echo "ERROR: canonical Linux Image is missing" >&2; exit 20; }
 actual_image_sha="$(sha256sum "${LINUX_IMAGE}" | awk '{print $1}')"
-[[ "${actual_image_sha}" == "${EXPECTED_LINUX_IMAGE_SHA256}" ]] || {
-  echo "ERROR: Linux Image SHA256 ${actual_image_sha} != frozen ${EXPECTED_LINUX_IMAGE_SHA256}" >&2
+[[ "${actual_image_sha}" == "${L32_LINUX_IMAGE_SHA256}" ]] || {
+  echo "ERROR: Linux Image SHA256 ${actual_image_sha} != canonical ${L32_LINUX_IMAGE_SHA256}" >&2
   exit 21
 }
 
@@ -64,6 +64,7 @@ mkdir -p "${OPENSBI_BUILD_DIR}"
 {
   echo "L32_LINUX_PAYLOAD_INPUT: status=READY"
   echo "linux_version=${LINUX_VERSION}"
+  echo "linux_recipe=${L32_LINUX_RECIPE_VERSION}"
   echo "linux_image=${LINUX_IMAGE}"
   echo "linux_image_sha256=${actual_image_sha}"
   echo "opensbi_commit=${OPENSBI_COMMIT}"
@@ -117,6 +118,7 @@ entry="$(${READELF} -h "${FW_ELF}" | awk '/Entry point address:/{print $4; exit}
   echo "firmware=${FW_ELF}"
   echo "firmware_bin=${FW_BIN}"
   echo "fdt=${DTB}"
+  echo "linux_recipe=${L32_LINUX_RECIPE_VERSION}"
   echo "linux_image=${LINUX_IMAGE}"
   echo "linux_image_sha256=${actual_image_sha}"
   echo "entry=${entry}"

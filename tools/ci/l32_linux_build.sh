@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32/manifest.env"
+source "${ROOT_DIR}/software/l32/linux-freeze.env"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/linux"
 ARCHIVE="${CACHE_ROOT}/linux-${LINUX_VERSION}.tar.xz"
@@ -12,7 +13,16 @@ EVIDENCE_DIR="${BUILD_DIR}/evidence"
 OBJ_DIR="${BUILD_DIR}/obj"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
 
-mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
+# The canonical base is a recipe-derived artifact, not an incremental Kbuild
+# checkpoint. Fixed neutral metadata plus a clean object tree keep a cache
+# repair independent of whatever a self-hosted runner built previously.
+export KBUILD_BUILD_USER="${L32_LINUX_BUILD_USER}"
+export KBUILD_BUILD_HOST="${L32_LINUX_BUILD_HOST}"
+export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"
+export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
+export TZ="${L32_LINUX_BUILD_TZ}"
+
+mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}"
 
 command -v "${L32_CROSS_COMPILE_PREFIX}gcc" >/dev/null 2>&1 || {
   echo "ERROR: provision the pinned L32 Linux toolchain first" >&2
@@ -50,30 +60,32 @@ if [[ ! -f "${marker}" ]] || [[ "$(cat "${marker}" 2>/dev/null)" != "${LINUX_SHA
   trap - EXIT
 fi
 
-# Preserve the Kbuild object tree across bounded configuration/script fixes.
-# Only discard it when the immutable source or compiler contract changes;
-# Kbuild itself tracks .config/header dependencies for incremental rebuilds.
-obj_inputs="${LINUX_SHA256}:${L32_TOOLCHAIN_VERSION}:${L32_CROSS_COMPILE_PREFIX}"
-obj_marker="${OBJ_DIR}/.aethercore-object-inputs"
-if [[ -d "${OBJ_DIR}" ]] && {
-  [[ ! -f "${obj_marker}" ]] || [[ "$(cat "${obj_marker}" 2>/dev/null)" != "${obj_inputs}" ]];
-}; then
-  rm -rf "${OBJ_DIR}"
-fi
-mkdir -p "${OBJ_DIR}"
-printf '%s\n' "${obj_inputs}" > "${obj_marker}"
-rm -rf "${EVIDENCE_DIR}"
-mkdir -p "${EVIDENCE_DIR}"
+# A validated cache avoids this build entirely. Once a rebuild is required,
+# start from a clean Kbuild tree; never try to repair the canonical root by
+# relinking stale objects from a previous workflow or build identity.
+rm -rf "${OBJ_DIR}" "${EVIDENCE_DIR}"
+mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}"
+{
+  echo "recipe_version=${L32_LINUX_RECIPE_VERSION}"
+  echo "linux_sha256=${LINUX_SHA256}"
+  echo "toolchain_version=${L32_TOOLCHAIN_VERSION}"
+  echo "cross_compile=${L32_CROSS_COMPILE_PREFIX}"
+  echo "kbuild_user=${KBUILD_BUILD_USER}"
+  echo "kbuild_host=${KBUILD_BUILD_HOST}"
+  echo "kbuild_version=${KBUILD_BUILD_VERSION}"
+  echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
+  echo "kbuild_tz=${TZ}"
+} > "${EVIDENCE_DIR}/build-inputs.txt"
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
   "${LINUX_RV32_DEFCONFIG}" \
   2>&1 | tee "${BUILD_DIR}/config.log"
 
-# Keep the first Linux workload inside the frozen AetherCore ISA/platform.
+# Keep the canonical Linux base inside the AetherCore ISA/platform contract.
 # RISC-V EFI selects RISCV_ISA_C in Linux 6.6, so disable the unused UEFI
 # runtime path first. AetherCore exposes only the NS16550 serial console in
-# this checkpoint, so the generic VGA text console is also intentionally off.
+# this checkpoint, so the generic VGA text console is intentionally off.
 "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
   -d EFI \
   -d RISCV_ISA_C \
@@ -136,10 +148,16 @@ fi
 
 {
   echo "L32_LINUX_BUILD_RESULT: status=PASS"
+  echo "recipe_version=${L32_LINUX_RECIPE_VERSION}"
   echo "linux_version=${LINUX_VERSION}"
   echo "source_sha256=${LINUX_SHA256}"
   echo "defconfig=${LINUX_RV32_DEFCONFIG}"
   echo "vmlinux=${VMLINUX}"
   echo "image=${IMAGE}"
   echo "arch=${arch:-not-emitted}"
+  echo "kbuild_user=${KBUILD_BUILD_USER}"
+  echo "kbuild_host=${KBUILD_BUILD_HOST}"
+  echo "kbuild_version=${KBUILD_BUILD_VERSION}"
+  echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
+  echo "kbuild_tz=${TZ}"
 } | tee "${BUILD_DIR}/result.txt"

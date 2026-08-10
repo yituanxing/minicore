@@ -5,10 +5,12 @@ on:
     paths:
       - software/l32/linux-freeze.env
       - software/l32/manifest.env
+      - tools/ci/l32_linux_build.sh
       - tools/ci/l32_linux_handoff_build.sh
       - tools/ci/l32_linux_cache_key.sh
       - tools/ci/make_l32_dtb.py
       - tools/ensure_l32_riscv32_linux_gcc.sh
+      - tests_py/test_l32_linux_build_contract.py
       - tests_py/test_l32_linux_handoff_contract.py
       - src/main/scala/aethercore/config/CoreConfig.scala
       - src/main/scala/aethercore/core/**
@@ -28,7 +30,7 @@ concurrency:
 
 jobs:
   handoff:
-    name: Frozen OpenSBI to Linux 6.6.143 physical entry
+    name: Validated OpenSBI to Linux 6.6.143 physical entry
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 30
 
@@ -42,21 +44,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash -n tools/ci/l32_linux_build.sh
           bash -n tools/ci/l32_linux_handoff_build.sh
           bash -n tools/ci/l32_linux_cache_key.sh
-          python3 -m unittest tests_py.test_l32_linux_handoff_contract -v
+          python3 -m unittest \
+            tests_py.test_l32_linux_build_contract \
+            tests_py.test_l32_linux_handoff_contract -v
 
       - name: Provision pinned Bootlin RV32 Linux GCC
         shell: bash
         run: bash tools/ensure_l32_riscv32_linux_gcc.sh
 
-      - name: Verify exact frozen Linux software image
+      - name: Restore or verify canonical Linux software image
         shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
         run: |
           set -euo pipefail
-          bash tools/ci/l32_linux_cache_key.sh check build/l32-linux
+          chmod +x tools/ci/l32_linux_build.sh tools/ci/l32_linux_cache_key.sh
+          if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            echo 'L32 canonical Linux cache is stale or absent: rebuilding from the pinned clean recipe.'
+            tools/ci/l32_linux_build.sh
+            tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+          fi
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
           source software/l32/linux-freeze.env
           echo "${L32_LINUX_IMAGE_SHA256}  build/l32-linux/obj/arch/riscv/boot/Image" | sha256sum -c -
+          echo "${L32_LINUX_VMLINUX_SHA256}  build/l32-linux/obj/vmlinux" | sha256sum -c -
+          echo "${L32_LINUX_CONFIG_SHA256}  build/l32-linux/evidence/resolved.config" | sha256sum -c -
 
       - name: Build Linux-bearing OpenSBI payload
         shell: bash
@@ -85,8 +100,11 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: |
+            build/l32-linux/result.txt
+            build/l32-linux/evidence/
             build/l32-linux-handoff/result.txt
             build/l32-linux-handoff/opensbi-linux-build.log
+            build/l32-linux-handoff/aethercore-rv32.dtb
             build/l32-linux-handoff/evidence/
             build/l32-linux-handoff/opensbi/platform/generic/firmware/fw_payload.elf
             build/l32-linux-handoff/opensbi/platform/generic/firmware/fw_payload.bin
