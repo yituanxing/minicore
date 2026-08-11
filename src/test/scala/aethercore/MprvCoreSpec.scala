@@ -60,33 +60,27 @@ class MprvCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "keep MPRV read-only zero when no lower privilege mode exists" in {
-    simulate(new MachineCsrFile(CoreProfiles.rv32imSoftware.isa)) { dut =>
-      initializeCsr(dut)
-      val mprv = BigInt(1) << MachineCsrBit.MstatusMprv
-      write(dut, MachineCsrAddress.Mstatus, mprv)
-      (read(dut, MachineCsrAddress.Mstatus) & mprv) shouldBe 0
-      dut.io.effectiveDataPrivilege.expect(PrivilegeMode.Machine.U)
-    }
-  }
-
-  it should "support MPRV with MPP=S even when U mode is not implemented" in {
-    val msOnly = IsaConfig(
-      xlen = 32,
-      extensions = Set('I', 'M'),
-      privilegeModes = Set('M', 'S'),
-      zExtensions = Set("Zicsr")
+  it should "keep MPRV read-only zero when U mode is not implemented" in {
+    val noUProfiles = Seq(
+      CoreProfiles.rv32imSoftware.isa,
+      IsaConfig(
+        xlen = 32,
+        extensions = Set('I', 'M'),
+        privilegeModes = Set('M', 'S'),
+        zExtensions = Set("Zicsr")
+      )
     )
 
-    simulate(new MachineCsrFile(msOnly)) { dut =>
-      initializeCsr(dut)
-      val mprv = BigInt(1) << MachineCsrBit.MstatusMprv
-      val mppS = BigInt(PrivilegeMode.Supervisor) << MachineCsrBit.MstatusMppLow
-
-      write(dut, MachineCsrAddress.Mstatus, mprv | mppS)
-      (read(dut, MachineCsrAddress.Mstatus) & mprv) shouldBe mprv
-      dut.io.currentPrivilege.expect(PrivilegeMode.Machine.U)
-      dut.io.effectiveDataPrivilege.expect(PrivilegeMode.Supervisor.U)
+    noUProfiles.foreach { isa =>
+      simulate(new MachineCsrFile(isa)) { dut =>
+        initializeCsr(dut)
+        val mprv = BigInt(1) << MachineCsrBit.MstatusMprv
+        val mppS = BigInt(PrivilegeMode.Supervisor) << MachineCsrBit.MstatusMppLow
+        write(dut, MachineCsrAddress.Mstatus, mprv | mppS)
+        (read(dut, MachineCsrAddress.Mstatus) & mprv) shouldBe 0
+        dut.io.currentPrivilege.expect(PrivilegeMode.Machine.U)
+        dut.io.effectiveDataPrivilege.expect(PrivilegeMode.Machine.U)
+      }
     }
   }
 
