@@ -310,4 +310,72 @@ class Sv32DataPathCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       physicalRequests shouldBe 0
     }
   }
+
+  it should "raise data-address-misaligned before Sv32 translation or physical data access" in {
+    val misalignedVa = va + 2
+    val leaf = pte(leafPpn, read = true, write = true, accessed = true, dirty = true)
+    val loadProgram = machineSetup(Map(
+      supervisorEntry -> uType(0x40403, 5),
+      (supervisorEntry + 0x04) -> iType(0x26, 5, 0, 5, 0x13),
+      (supervisorEntry + 0x08) -> iType(0, 5, 2, 6, 0x03)
+    ))
+    val storeProgram = machineSetup(Map(
+      supervisorEntry -> uType(0x40403, 5),
+      (supervisorEntry + 0x04) -> iType(0x26, 5, 0, 5, 0x13),
+      (supervisorEntry + 0x08) -> iType(7, 0, 0, 6, 0x13),
+      (supervisorEntry + 0x0c) -> sType(0, 6, 5, 2)
+    ))
+
+    def runMisaligned(program: Map[BigInt, BigInt], expectedPc: BigInt, expectedCause: Int): Unit = {
+      simulate(new AetherCore(CoreProfiles.rv32imsuSv32Software)) { dut =>
+        initialize(dut)
+        var cycles = 0
+        var sawFault = false
+        var dataPteReads = 0
+        var physicalRequests = 0
+
+        while (!sawFault && cycles < 420) {
+          val fetchPa = dut.io.imem.addr.peek().litValue
+          dut.io.imem.inst.poke(program.getOrElse(fetchPa, BigInt("00000013", 16)).U)
+
+          drivePte(dut, leaf).foreach { address =>
+            if (address == rootPteAddress || address == leafPteAddress) dataPteReads += 1
+          }
+
+          dut.io.dmem.ready.poke(true.B)
+          dut.io.dmem.fault.poke(false.B)
+          dut.io.dmem.rdata.poke(0.U)
+          if (dut.io.dmem.valid.peek().litToBoolean) physicalRequests += 1
+
+          dut.clock.step()
+          cycles += 1
+
+          if (dut.io.commit.valid.peek().litToBoolean &&
+              dut.io.commit.pc.peek().litValue == expectedPc) {
+            dut.io.commit.exception.expect(true.B)
+            dut.io.commit.exceptionCause.expect(expectedCause.U)
+            dut.io.commit.exceptionValue.expect(misalignedVa.U)
+            dut.io.commit.rdWrite.expect(false.B)
+            dut.io.commit.memValid.expect(false.B)
+            sawFault = true
+          }
+        }
+
+        sawFault shouldBe true
+        dataPteReads shouldBe 0
+        physicalRequests shouldBe 0
+      }
+    }
+
+    runMisaligned(
+      loadProgram,
+      supervisorEntry + 0x08,
+      MachineExceptionCode.LoadAddressMisaligned
+    )
+    runMisaligned(
+      storeProgram,
+      supervisorEntry + 0x0c,
+      MachineExceptionCode.StoreAddressMisaligned
+    )
+  }
 }
