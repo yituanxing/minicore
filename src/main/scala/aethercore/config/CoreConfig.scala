@@ -91,12 +91,31 @@ final case class PlatformConfig(
   val busBytes: Int = busDataBits / 8
 }
 
+object AetherCoreCapabilities {
+  val instructionExtensions: Set[Char] = Set('I', 'M', 'A')
+  val zExtensions: Set[String] = Set("Zicsr", "Zifencei")
+  val privilegeModes: Set[Char] = Set('M', 'S', 'U')
+}
+
 final case class CoreConfig(
     name: String,
     isa: IsaConfig,
     platform: PlatformConfig
 ) {
   require(name.nonEmpty, "core profile name must not be empty")
+  require(
+    isa.extensions.subsetOf(AetherCoreCapabilities.instructionExtensions),
+    s"unsupported AetherCore instruction extension set: ${isa.extensions}"
+  )
+  require(
+    isa.zExtensions.subsetOf(AetherCoreCapabilities.zExtensions),
+    s"unsupported AetherCore Z-extension set: ${isa.zExtensions}"
+  )
+  require(
+    isa.privilegeModes.subsetOf(AetherCoreCapabilities.privilegeModes),
+    s"unsupported AetherCore privilege-mode set: ${isa.privilegeModes}"
+  )
+  require(!isa.hasA || isa.xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(
     !isa.hasSv32 || platform.paddrBits >= 34,
     s"Sv32 requires at least 34 physical address bits, got ${platform.paddrBits}"
