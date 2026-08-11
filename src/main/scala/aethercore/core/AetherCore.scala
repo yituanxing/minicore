@@ -420,22 +420,27 @@ class AetherCore(
   val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
   val storeMask = WireDefault(fullStoreMask)
   val dataAccessBytes = WireDefault(busBytes.U(4.W))
+  val dataAlignmentMask = WireDefault((busBytes - 1).U(xlen.W))
   switch(exMem.ctrl.memSize) {
     is(MemSize.Byte) {
       storeMask := 1.U(busBytes.W)
       dataAccessBytes := 1.U
+      dataAlignmentMask := 0.U
     }
     is(MemSize.Half) {
       storeMask := 3.U(busBytes.W)
       dataAccessBytes := 2.U
+      dataAlignmentMask := 1.U
     }
     is(MemSize.Word) {
       storeMask := 15.U(busBytes.W)
       dataAccessBytes := 4.U
+      dataAlignmentMask := 3.U
     }
     is(MemSize.DWord) {
       storeMask := fullStoreMask
       dataAccessBytes := 8.U
+      dataAlignmentMask := 7.U
     }
   }
 
@@ -474,6 +479,8 @@ class AetherCore(
   val memoryBoundaryOpen = !exMem.trap.valid && !takingTrap && !takingInterrupt &&
     !takingXret && !takingSfence && !waitingForInterrupt
   val candidateDataAccess = exMem.valid && (ordinaryDataAccess || atomicInstruction) && memoryBoundaryOpen
+  val dataAddressMisaligned = candidateDataAccess && ((exMem.result & dataAlignmentMask) =/= 0.U)
+  val alignedDataAccess = candidateDataAccess && !dataAddressMisaligned
   val atomicNeedsWritePermission = atomicSc || atomicRmw
 
   dataPmp.io.address := exMem.result
@@ -481,11 +488,11 @@ class AetherCore(
   dataPmp.io.write := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
   dataPmp.io.execute := false.B
 
-  val dataPmpFault = candidateDataAccess &&
+  val dataPmpFault = alignedDataAccess &&
     (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
   val atomicScBusRequest = if (config.isa.hasSv32) atomicSc else atomicSc && scReservationMatch
   val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
-  val rawDataRequest = candidateDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
+  val rawDataRequest = alignedDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
   val dataBusWrite = Mux(
     atomicInstruction,
     atomicWriteRequest || (atomicSc && scReservationMatch),
@@ -573,7 +580,7 @@ class AetherCore(
   }
 
   val memoryStall = if (config.isa.hasSv32) {
-    candidateDataAccess && (vmCsrHazard || !vmRequestComplete)
+    alignedDataAccess && (vmCsrHazard || !vmRequestComplete)
   } else {
     io.dmem.valid && !io.dmem.ready
   }
@@ -608,7 +615,7 @@ class AetherCore(
     )
   )
   val ordinaryCommittedMemory = exMem.valid && ordinaryDataAccess && !exMem.trap.valid &&
-    !memoryPageFault && !memoryFault
+    !dataAddressMisaligned && !memoryPageFault && !memoryFault
   val committedMemoryAccess = Mux(atomicInstruction, atomicCommittedMemory, ordinaryCommittedMemory)
   val committedMemoryWrite = Mux(
     atomicInstruction,
@@ -723,7 +730,15 @@ class AetherCore(
     memWb.wfi := exMem.ctrl.wfi
     memWb.xret := exMem.ctrl.xret
     memWb.trap := exMem.trap
-    when((memoryPageFault || memoryFault) && !exMem.trap.valid) {
+    when(dataAddressMisaligned && !exMem.trap.valid) {
+      memWb.trap.valid := true.B
+      memWb.trap.cause := Mux(
+        memoryFaultIsLoad,
+        MachineExceptionCode.LoadAddressMisaligned.U(xlen.W),
+        MachineExceptionCode.StoreAddressMisaligned.U(xlen.W)
+      )
+      memWb.trap.value := exMem.result
+    }.elsewhen((memoryPageFault || memoryFault) && !exMem.trap.valid) {
       memWb.trap.valid := true.B
       memWb.trap.cause := Mux(
         memoryPageFault,
