@@ -16,11 +16,11 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasM shouldBe true
     config.isa.hasA shouldBe false
     config.isa.hasZicsr shouldBe true
-    config.isa.hasZifencei shouldBe false
+    config.isa.hasZifencei shouldBe true
     config.isa.hasSv32 shouldBe false
     config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe true
-    config.isa.march shouldBe "rv64im_zicsr"
+    config.isa.march shouldBe "rv64im_zicsr_zifencei"
     config.isa.mabi shouldBe "lp64"
     config.platform.resetVector shouldBe BigInt("80000000", 16)
     config.platform.busDataBits shouldBe 64
