@@ -50,6 +50,7 @@ object MachineCsrBit {
   val MstatusMpie: Int = 7
   val SstatusSpp: Int = 8
   val MstatusMppLow: Int = 11
+  val MstatusMprv: Int = 17
   val SstatusSum: Int = 18
   val SstatusMxr: Int = 19
   val SupervisorTimerInterrupt: Int = Rv32SstcBit.SupervisorTimerInterrupt
@@ -78,6 +79,7 @@ object MachineCsrWarl {
     (BigInt(1) << MachineCsrBit.MstatusMie) |
       (BigInt(1) << MachineCsrBit.MstatusMpie) |
       (BigInt(3) << MachineCsrBit.MstatusMppLow) |
+      (if (isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
       supervisorStatusMask(isa)
 
   private def delegableExceptionMask(isa: IsaConfig): BigInt = {
@@ -204,6 +206,7 @@ class MachineCsrFile(
   private val sstatusSpie = BigInt(1) << MachineCsrBit.SstatusSpie
   private val mstatusMpie = BigInt(1) << MachineCsrBit.MstatusMpie
   private val sstatusSpp = BigInt(1) << MachineCsrBit.SstatusSpp
+  private val mstatusMprv = BigInt(1) << MachineCsrBit.MstatusMprv
   private val sstatusSum = BigInt(1) << MachineCsrBit.SstatusSum
   private val sstatusMxr = BigInt(1) << MachineCsrBit.SstatusMxr
   private val mstatusMpp = BigInt(3) << MachineCsrBit.MstatusMppLow
@@ -225,6 +228,7 @@ class MachineCsrFile(
   private val mstatusTransitionPreserveMask = allBits & ~mstatusTransitionMask
   private val sstatusTransitionMask = sstatusSie | sstatusSpie | sstatusSpp
   private val sstatusTransitionPreserveMask = allBits & ~sstatusTransitionMask
+  private val mprvClearMask = allBits & ~mstatusMprv
   private val leastPrivilege =
     if (isa.hasU) BigInt(PrivilegeMode.User)
     else if (isa.hasS) BigInt(PrivilegeMode.Supervisor)
@@ -254,6 +258,7 @@ class MachineCsrFile(
     val writeData = Input(UInt(xlen.W))
 
     val currentPrivilege = Output(UInt(2.W))
+    val effectiveDataPrivilege = Output(UInt(2.W))
     val supervisorSum = Output(Bool())
     val supervisorMxr = Output(Bool())
     val satpTranslationEnabled = Output(Bool())
@@ -371,6 +376,13 @@ class MachineCsrFile(
       sstatusWriteValue,
       mstatus
     )
+  )
+  val mprvActive = isa.hasU.B && privilege === PrivilegeMode.Machine.U &&
+    effectiveMstatus(MachineCsrBit.MstatusMprv)
+  io.effectiveDataPrivilege := Mux(
+    mprvActive,
+    effectiveMstatus(12, 11),
+    privilege
   )
   val sieWriteValue =
     (mie & (~supervisorInterruptMask & allBits).U(xlen.W)) |
@@ -520,8 +532,6 @@ class MachineCsrFile(
 
   if (xlen == 32) {
     when(io.readAddr === MachineCsrAddress.Mstatush.U) {
-      // AetherCore is little-endian only and currently implements none of the
-      // other RV32 mstatush fields, so every writable field has the WARL set {0}.
       io.readData := 0.U
       io.readImplemented := true.B
       io.readWritable := true.B
@@ -596,10 +606,6 @@ class MachineCsrFile(
         io.readWritable := true.B
       }
       is(MachineCsrAddress.Mcountinhibit.U) {
-        // This core currently implements no mcycle/minstret/HPM state to
-        // inhibit, so all implemented bits have the legal WARL value zero.
-        // Keep writes legal so OpenSBI can probe Priv v1.11 before it probes
-        // menvcfg/Priv v1.12 and enables Sstc STCE.
         io.readData := 0.U
         io.readImplemented := true.B
         io.readWritable := true.B
@@ -669,8 +675,13 @@ class MachineCsrFile(
       ((privilege === PrivilegeMode.Supervisor.U).asUInt << MachineCsrBit.SstatusSpp)
 
   val machineReturnPrivilege = mstatus(12, 11)
+  val machineReturnBase = Mux(
+    machineReturnPrivilege === PrivilegeMode.Machine.U,
+    mstatus,
+    mstatus & mprvClearMask.U(xlen.W)
+  )
   val machineReturnMstatus =
-    (mstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
+    (machineReturnBase & mstatusTransitionPreserveMask.U(xlen.W)) |
       (mstatus(MachineCsrBit.MstatusMpie).asUInt << MachineCsrBit.MstatusMie) |
       mstatusMpie.U(xlen.W) |
       (leastPrivilege << MachineCsrBit.MstatusMppLow).U(xlen.W)
@@ -678,8 +689,9 @@ class MachineCsrFile(
   val supervisorReturnPrivilege =
     if (isa.hasU) Mux(mstatus(MachineCsrBit.SstatusSpp), PrivilegeMode.Supervisor.U, PrivilegeMode.User.U)
     else PrivilegeMode.Supervisor.U(2.W)
+  val supervisorReturnBase = mstatus & mprvClearMask.U(xlen.W)
   val supervisorReturnMstatus =
-    (mstatus & sstatusTransitionPreserveMask.U(xlen.W)) |
+    (supervisorReturnBase & sstatusTransitionPreserveMask.U(xlen.W)) |
       (mstatus(MachineCsrBit.SstatusSpie).asUInt << MachineCsrBit.SstatusSie) |
       sstatusSpie.U(xlen.W)
 
@@ -713,16 +725,12 @@ class MachineCsrFile(
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
       is(MachineCsrAddress.Mstatush.U) {
-        // RV32 mstatush fields are implemented as WARL-zero in this profile.
       }
       is(MachineCsrAddress.Mie.U) { mie := canonicalWriteData }
       is(MachineCsrAddress.Mcounteren.U) { mcounteren := canonicalWriteData }
       is(MachineCsrAddress.Mcountinhibit.U) {
-        // No implemented cycle/instret/HPM counter can currently be inhibited.
-        // Accept the write and retain the WARL-zero value.
       }
       is(MachineCsrAddress.Menvcfg.U) {
-        // The bounded RV32 profile currently implements only menvcfgh.STCE.
       }
       is(MachineCsrAddress.Menvcfgh.U) { menvcfgh := canonicalWriteData }
       is(MachineCsrAddress.Mtvec.U) { mtvec := canonicalWriteData }
@@ -745,7 +753,6 @@ class MachineCsrFile(
         is(SupervisorCsrAddress.Scause.U) { scause := canonicalWriteData }
         is(SupervisorCsrAddress.Stval.U) { stval := canonicalWriteData }
         is(SupervisorCsrAddress.Sip.U) {
-          // All currently implemented pending bits are hardware-driven.
         }
       }
     }
