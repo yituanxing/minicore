@@ -140,7 +140,7 @@ object MachineCsrWarl {
             requestedMpp === PrivilegeMode.User.U ||
               requestedMpp === PrivilegeMode.Machine.U,
             requestedMpp,
-            PrivilegeMode.Machine.U,
+            PrivilegeMode.Machine.U
           )
         } else {
           PrivilegeMode.Machine.U(2.W)
