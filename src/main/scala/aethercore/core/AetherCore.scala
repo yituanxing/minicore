@@ -357,11 +357,15 @@ class AetherCore(
 
   val branchTaken = idEx.valid && idEx.ctrl.branch =/= BranchType.None && branchCondition
   val jumpTaken = idEx.valid && idEx.ctrl.jump
-  val redirect = branchTaken || jumpTaken
+  val controlTransferTaken = branchTaken || jumpTaken
   val branchTarget = idEx.pc + idEx.imm
   val jalrAlignmentMask = ((BigInt(1) << xlen) - 2).U(xlen.W)
   val jalrTarget = (forwardedRs1 + idEx.imm) & jalrAlignmentMask
   val redirectTarget = Mux(idEx.ctrl.jalr, jalrTarget, branchTarget)
+  val instructionAlignmentMask = (if (config.isa.hasC) BigInt(1) else BigInt(3)).U(xlen.W)
+  val controlTransferMisaligned =
+    controlTransferTaken && ((redirectTarget & instructionAlignmentMask) =/= 0.U)
+  val redirect = controlTransferTaken && !controlTransferMisaligned
 
   val csrInstruction = idEx.ctrl.csrOp =/= CsrOp.None
   val csrAddr = idEx.inst(31, 20)
@@ -748,7 +752,11 @@ class AetherCore(
     exMem.csrAddr := csrAddr
     exMem.csrData := canonicalCsrWriteData
     exMem.trap := idEx.trap
-    when((csrException || wfiException || xretException || sfencePrivilegeException) && !idEx.trap.valid) {
+    when(controlTransferMisaligned && !idEx.trap.valid) {
+      exMem.trap.valid := true.B
+      exMem.trap.cause := MachineExceptionCode.InstructionAddressMisaligned.U(xlen.W)
+      exMem.trap.value := redirectTarget
+    }.elsewhen((csrException || wfiException || xretException || sfencePrivilegeException) && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
       exMem.trap.value := idExInstructionValue
