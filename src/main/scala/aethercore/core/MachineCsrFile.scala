@@ -83,7 +83,7 @@ object MachineCsrWarl {
   private def delegableExceptionMask(isa: IsaConfig): BigInt = {
     if (!isa.hasS) BigInt(0)
     else {
-      val v1Causes = Seq(0, 1, 2, 3, 5, 7, 8, 9)
+      val v1Causes = Seq(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
       val implementedCauses =
         if (isa.hasSv32) v1Causes ++ Seq(12, 13, 15)
         else v1Causes
@@ -140,7 +140,7 @@ object MachineCsrWarl {
             requestedMpp === PrivilegeMode.User.U ||
               requestedMpp === PrivilegeMode.Machine.U,
             requestedMpp,
-            PrivilegeMode.Machine.U
+            PrivilegeMode.Machine.U,
           )
         } else {
           PrivilegeMode.Machine.U(2.W)
