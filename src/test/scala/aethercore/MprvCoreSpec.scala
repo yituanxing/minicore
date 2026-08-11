@@ -5,7 +5,7 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.common.PrivilegeMode
-import aethercore.config.CoreProfiles
+import aethercore.config.{CoreProfiles, IsaConfig}
 import aethercore.core.{AetherCore, MachineCsrAddress, MachineCsrBit, MachineCsrFile}
 
 class MprvCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
@@ -60,13 +60,33 @@ class MprvCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "keep MPRV read-only zero when U mode is absent" in {
+  it should "keep MPRV read-only zero when no lower privilege mode exists" in {
     simulate(new MachineCsrFile(CoreProfiles.rv32imSoftware.isa)) { dut =>
       initializeCsr(dut)
       val mprv = BigInt(1) << MachineCsrBit.MstatusMprv
       write(dut, MachineCsrAddress.Mstatus, mprv)
       (read(dut, MachineCsrAddress.Mstatus) & mprv) shouldBe 0
       dut.io.effectiveDataPrivilege.expect(PrivilegeMode.Machine.U)
+    }
+  }
+
+  it should "support MPRV with MPP=S even when U mode is not implemented" in {
+    val msOnly = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S'),
+      zExtensions = Set("Zicsr")
+    )
+
+    simulate(new MachineCsrFile(msOnly)) { dut =>
+      initializeCsr(dut)
+      val mprv = BigInt(1) << MachineCsrBit.MstatusMprv
+      val mppS = BigInt(PrivilegeMode.Supervisor) << MachineCsrBit.MstatusMppLow
+
+      write(dut, MachineCsrAddress.Mstatus, mprv | mppS)
+      (read(dut, MachineCsrAddress.Mstatus) & mprv) shouldBe mprv
+      dut.io.currentPrivilege.expect(PrivilegeMode.Machine.U)
+      dut.io.effectiveDataPrivilege.expect(PrivilegeMode.Supervisor.U)
     }
   }
 
@@ -107,14 +127,14 @@ class MprvCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
   it should "translate an M-mode explicit load through Sv32 as S privilege when MPRV is set" in {
     val program = Map(
-      base -> uType(0x80020, 1),                 // satp = Sv32, root PPN 0x20000
+      base -> uType(0x80020, 1),                   // satp = Sv32, root PPN 0x20000
       (base + 4) -> csr(0x180, 1),
-      (base + 8) -> uType(0x21, 2),             // x2 = 0x21000
+      (base + 8) -> uType(0x21, 2),               // x2 = 0x21000
       (base + 12) -> iType(-2048, 2, 0, 2, 0x13), // x2 = 0x20800 = MPRV | MPP=S
       (base + 16) -> csr(0x300, 2),
       (base + 20) -> uType(0x40403, 5),
       (base + 24) -> iType(0x24, 5, 0, 5, 0x13),
-      (base + 28) -> iType(0, 5, 2, 6, 0x03),   // lw x6, 0(x5)
+      (base + 28) -> iType(0, 5, 2, 6, 0x03),     // lw x6, 0(x5)
       (base + 32) -> BigInt("00100073", 16)
     )
     val rootPte = pte(nextPpn)
