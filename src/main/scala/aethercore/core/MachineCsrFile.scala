@@ -79,7 +79,7 @@ object MachineCsrWarl {
     (BigInt(1) << MachineCsrBit.MstatusMie) |
       (BigInt(1) << MachineCsrBit.MstatusMpie) |
       (BigInt(3) << MachineCsrBit.MstatusMppLow) |
-      (if (isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
+      (if (isa.hasS || isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
       supervisorStatusMask(isa)
 
   private def delegableExceptionMask(isa: IsaConfig): BigInt = {
@@ -229,6 +229,7 @@ class MachineCsrFile(
   private val sstatusTransitionMask = sstatusSie | sstatusSpie | sstatusSpp
   private val sstatusTransitionPreserveMask = allBits & ~sstatusTransitionMask
   private val mprvClearMask = allBits & ~mstatusMprv
+  private val hasLowerPrivilege = isa.hasS || isa.hasU
   private val leastPrivilege =
     if (isa.hasU) BigInt(PrivilegeMode.User)
     else if (isa.hasS) BigInt(PrivilegeMode.Supervisor)
@@ -377,7 +378,7 @@ class MachineCsrFile(
       mstatus
     )
   )
-  val mprvActive = isa.hasU.B && privilege === PrivilegeMode.Machine.U &&
+  val mprvActive = hasLowerPrivilege.B && privilege === PrivilegeMode.Machine.U &&
     effectiveMstatus(MachineCsrBit.MstatusMprv)
   io.effectiveDataPrivilege := Mux(
     mprvActive,
@@ -532,6 +533,8 @@ class MachineCsrFile(
 
   if (xlen == 32) {
     when(io.readAddr === MachineCsrAddress.Mstatush.U) {
+      // AetherCore is little-endian only and currently implements none of the
+      // other RV32 mstatush fields, so every writable field has the WARL set {0}.
       io.readData := 0.U
       io.readImplemented := true.B
       io.readWritable := true.B
@@ -606,6 +609,10 @@ class MachineCsrFile(
         io.readWritable := true.B
       }
       is(MachineCsrAddress.Mcountinhibit.U) {
+        // This core currently implements no mcycle/minstret/HPM state to
+        // inhibit, so all implemented bits have the legal WARL value zero.
+        // Keep writes legal so OpenSBI can probe Priv v1.11 before it probes
+        // menvcfg/Priv v1.12 and enables Sstc STCE.
         io.readData := 0.U
         io.readImplemented := true.B
         io.readWritable := true.B
@@ -725,12 +732,16 @@ class MachineCsrFile(
     switch(io.writeAddr) {
       is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
       is(MachineCsrAddress.Mstatush.U) {
+        // RV32 mstatush fields are implemented as WARL-zero in this profile.
       }
       is(MachineCsrAddress.Mie.U) { mie := canonicalWriteData }
       is(MachineCsrAddress.Mcounteren.U) { mcounteren := canonicalWriteData }
       is(MachineCsrAddress.Mcountinhibit.U) {
+        // No implemented cycle/instret/HPM counter can currently be inhibited.
+        // Accept the write and retain the WARL-zero value.
       }
       is(MachineCsrAddress.Menvcfg.U) {
+        // The bounded RV32 profile currently implements only menvcfgh.STCE.
       }
       is(MachineCsrAddress.Menvcfgh.U) { menvcfgh := canonicalWriteData }
       is(MachineCsrAddress.Mtvec.U) { mtvec := canonicalWriteData }
@@ -753,6 +764,7 @@ class MachineCsrFile(
         is(SupervisorCsrAddress.Scause.U) { scause := canonicalWriteData }
         is(SupervisorCsrAddress.Stval.U) { stval := canonicalWriteData }
         is(SupervisorCsrAddress.Sip.U) {
+          // All currently implemented pending bits are hardware-driven.
         }
       }
     }
