@@ -79,13 +79,13 @@ class CoreSmokeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     val breakpointPc = base + 28
     val expected = BigInt("fffffffffffffb63", 16)
     val program = Map[BigInt, BigInt](
-      base + 0  -> BigInt("6a200b93", 16), // addi x23, x0, 0x6a2: visible stale value
-      base + 4  -> BigInt("b6300693", 16), // addi x13, x0, -1181
-      base + 8  -> BigInt("00100793", 16), // addi x15, x0, 1
-      base + 12 -> BigInt("00200113", 16), // addi x2, x0, 2
-      base + 16 -> BigInt("0227cbb3", 16), // div x23, x15, x2 => 0
-      base + 20 -> BigInt("00003b03", 16), // ld x22, 0(x0): force one-cycle MEM stall
-      base + 24 -> BigInt("00db8833", 16), // add x16, x23, x13 => -1181
+      base + 0  -> BigInt("6a200b93", 16),
+      base + 4  -> BigInt("b6300693", 16),
+      base + 8  -> BigInt("00100793", 16),
+      base + 12 -> BigInt("00200113", 16),
+      base + 16 -> BigInt("0227cbb3", 16),
+      base + 20 -> BigInt("00003b03", 16),
+      base + 24 -> BigInt("00db8833", 16),
       breakpointPc -> ebreak
     )
 
@@ -167,10 +167,10 @@ class CoreSmokeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     val base = BigInt("80000000", 16)
     val target = base + 2
     val auipcX1 = BigInt("00000097", 16)
-    val jalrX5X1Plus2 = BigInt("002082e7", 16)
+    val jalrX5X1Plus3 = BigInt("003082e7", 16)
     val program = Map(
       base -> auipcX1,
-      base + 4 -> jalrX5X1Plus2,
+      base + 4 -> jalrX5X1Plus3,
       base + 8 -> ebreak
     )
 
@@ -186,7 +186,7 @@ class CoreSmokeSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
         if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
           dut.io.commit.pc.expect((base + 4).U)
-          dut.io.commit.inst.expect(jalrX5X1Plus2.U)
+          dut.io.commit.inst.expect(jalrX5X1Plus3.U)
           dut.io.commit.exceptionCause.expect(MachineExceptionCode.InstructionAddressMisaligned.U)
           dut.io.commit.exceptionValue.expect(target.U)
           dut.io.commit.rd.expect(5.U)
