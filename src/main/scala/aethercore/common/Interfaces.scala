@@ -51,6 +51,7 @@ object PrivilegeMode {
 }
 
 object MachineExceptionCode {
+  val InstructionAddressMisaligned: Int = 0
   val InstructionAccessFault: Int = 1
   val IllegalInstruction: Int = 2
   val Breakpoint: Int = 3
