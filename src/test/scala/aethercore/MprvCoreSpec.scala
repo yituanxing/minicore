@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.common.PrivilegeMode
+import aethercore.common.{MachineExceptionCode, PrivilegeMode}
 import aethercore.config.{CoreProfiles, IsaConfig}
 import aethercore.core.{AetherCore, MachineCsrAddress, MachineCsrBit, MachineCsrFile}
 
@@ -124,6 +124,52 @@ class MprvCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       BigInt(1) |
       (if (read) BigInt(1) << 1 else BigInt(0)) |
       (if (accessed) BigInt(1) << 6 else BigInt(0))
+
+  it should "apply MPRV effective U privilege to data PMP before issuing the bus request" in {
+    val address = BigInt("100", 16)
+    val program = Map(
+      base -> uType(0x20, 2),                       // x2 = MPRV, MPP=U
+      (base + 4) -> csr(MachineCsrAddress.Mstatus, 2),
+      (base + 8) -> iType(0x100, 0, 0, 1, 0x13),
+      (base + 12) -> iType(0, 1, 2, 3, 0x03),      // lw x3, 0(x1)
+      (base + 16) -> BigInt("00100073", 16)
+    )
+
+    simulate(new AetherCore(CoreProfiles.rv32imuPmpSoftware)) { dut =>
+      dut.io.imem.inst.poke(BigInt("00000013", 16).U)
+      dut.io.imem.fault.poke(false.B)
+      dut.io.dmem.ready.poke(true.B)
+      dut.io.dmem.rdata.poke(BigInt("12345678", 16).U)
+      dut.io.dmem.fault.poke(false.B)
+      dut.io.timerInterrupt.poke(false.B)
+
+      var sawFault = false
+      var sawDataRequest = false
+      var cycles = 0
+
+      while (!sawFault && cycles < 160) {
+        val fetchPa = dut.io.imem.addr.peek().litValue
+        dut.io.imem.inst.poke(program.getOrElse(fetchPa, BigInt("00100073", 16)).U)
+        if (dut.io.dmem.valid.peek().litToBoolean) sawDataRequest = true
+
+        dut.clock.step()
+        cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.pc.peek().litValue == base + 12) {
+          dut.io.commit.exception.expect(true.B)
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.LoadAccessFault.U)
+          dut.io.commit.exceptionValue.expect(address.U)
+          dut.io.commit.rd.expect(3.U)
+          dut.io.commit.rdWrite.expect(false.B)
+          dut.io.commit.memValid.expect(false.B)
+          sawFault = true
+        }
+      }
+
+      sawFault shouldBe true
+      sawDataRequest shouldBe false
+    }
+  }
 
   it should "translate an M-mode explicit load through Sv32 as S privilege when MPRV is set" in {
     val program = Map(
