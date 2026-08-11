@@ -65,7 +65,7 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, MachineCsrAddress.Misa) shouldBe BigInt("40141100", 16)
 
       write(dut, MachineCsrAddress.Medeleg, BigInt("ffffffff", 16))
-      read(dut, MachineCsrAddress.Medeleg) shouldBe BigInt("000003af", 16)
+      read(dut, MachineCsrAddress.Medeleg) shouldBe BigInt("000003ff", 16)
 
       write(dut, MachineCsrAddress.Mideleg, BigInt("ffffffff", 16))
       read(dut, MachineCsrAddress.Mideleg) shouldBe 0
