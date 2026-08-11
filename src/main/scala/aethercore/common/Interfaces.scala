@@ -55,7 +55,9 @@ object MachineExceptionCode {
   val InstructionAccessFault: Int = 1
   val IllegalInstruction: Int = 2
   val Breakpoint: Int = 3
+  val LoadAddressMisaligned: Int = 4
   val LoadAccessFault: Int = 5
+  val StoreAddressMisaligned: Int = 6
   val StoreAccessFault: Int = 7
   val EnvironmentCallFromU: Int = 8
   val EnvironmentCallFromS: Int = 9
