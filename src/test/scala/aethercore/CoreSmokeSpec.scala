@@ -250,7 +250,7 @@ class CoreSmokeSpec extends AnyFlatSpec with Matchers with ChiselSim {
             dut.io.commit.pc.expect(breakpointPc.U)
             dut.io.commit.exceptionCause.expect(MachineExceptionCode.Breakpoint.U)
             sawBreakpoint = true
-          }.elsewhen(dut.io.commit.rdWrite.peek().litToBoolean) {
+          } else if (dut.io.commit.rdWrite.peek().litToBoolean) {
             dut.io.commit.rd.expect(3.U)
             dut.io.commit.rdData.expect(7.U)
             sawX3 = true
