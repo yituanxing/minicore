@@ -79,7 +79,7 @@ object MachineCsrWarl {
     (BigInt(1) << MachineCsrBit.MstatusMie) |
       (BigInt(1) << MachineCsrBit.MstatusMpie) |
       (BigInt(3) << MachineCsrBit.MstatusMppLow) |
-      (if (isa.hasS || isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
+      (if (isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
       supervisorStatusMask(isa)
 
   private def delegableExceptionMask(isa: IsaConfig): BigInt = {
@@ -229,7 +229,6 @@ class MachineCsrFile(
   private val sstatusTransitionMask = sstatusSie | sstatusSpie | sstatusSpp
   private val sstatusTransitionPreserveMask = allBits & ~sstatusTransitionMask
   private val mprvClearMask = allBits & ~mstatusMprv
-  private val hasLowerPrivilege = isa.hasS || isa.hasU
   private val leastPrivilege =
     if (isa.hasU) BigInt(PrivilegeMode.User)
     else if (isa.hasS) BigInt(PrivilegeMode.Supervisor)
@@ -378,7 +377,7 @@ class MachineCsrFile(
       mstatus
     )
   )
-  val mprvActive = hasLowerPrivilege.B && privilege === PrivilegeMode.Machine.U &&
+  val mprvActive = isa.hasU.B && privilege === PrivilegeMode.Machine.U &&
     effectiveMstatus(MachineCsrBit.MstatusMprv)
   io.effectiveDataPrivilege := Mux(
     mprvActive,
