@@ -250,7 +250,7 @@ object CoreProfiles {
       xlen = 64,
       extensions = Set('I', 'M'),
       privilegeModes = Set('M'),
-      zExtensions = Set("Zicsr")
+      zExtensions = Set("Zicsr", "Zifencei")
     ),
     platform = PlatformConfig(
       resetVector = BigInt("80000000", 16),
