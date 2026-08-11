@@ -5,6 +5,7 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scala.collection.mutable
+import aethercore.common.MachineExceptionCode
 import aethercore.config.CoreProfiles
 import aethercore.sim.AetherCoreSimTop
 
@@ -186,5 +187,63 @@ class RV32AtomicCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       retired(17) shouldBe BigInt("ffffffff", 16)
       retired(18) shouldBe 1
     }
+  }
+
+  it should "trap misaligned LR SC and AMO before reservation or bus effects" in {
+    val base = BigInt("80000000", 16)
+    val address = BigInt("102", 16)
+    val rv32ima = CoreProfiles.rv32imSoftware.copy(
+      name = "rv32ima-misaligned-atomic-test",
+      isa = CoreProfiles.rv32imSoftware.isa.copy(extensions = Set('I', 'M', 'A'))
+    )
+    val lr = amo(0x02, rs2 = 0, rs1 = 1, rd = 3)
+    val sc = amo(0x03, rs2 = 2, rs1 = 1, rd = 4)
+    val amoAdd = amo(0x00, rs2 = 2, rs1 = 1, rd = 5)
+
+    def runFault(inst: BigInt, expectedCause: Int, expectedRd: Int): Unit = {
+      val program = Map(
+        base -> iType(0x102, 0, 0, 1, 0x13),
+        (base + 4) -> iType(3, 0, 0, 2, 0x13),
+        (base + 8) -> inst,
+        (base + 12) -> BigInt("00100073", 16)
+      )
+
+      simulate(new AetherCoreSimTop(rv32ima)) { dut =>
+        dut.io.imemFault.poke(false.B)
+        dut.io.memFault.poke(false.B)
+        dut.io.memReady.poke(true.B)
+        dut.io.memRdata.poke(BigInt("12345678", 16).U)
+
+        var sawTrap = false
+        var sawDataRequest = false
+        var cycles = 0
+
+        while (!sawTrap && cycles < 120) {
+          val pc = dut.io.imemAddr.peek().litValue
+          dut.io.imemInst.poke(program.getOrElse(pc, BigInt("00100073", 16)).U)
+          if (dut.io.memValid.peek().litToBoolean) sawDataRequest = true
+          dut.clock.step()
+          cycles += 1
+
+          if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
+            dut.io.commit.pc.expect((base + 8).U(32.W))
+            dut.io.commit.inst.expect(inst.U)
+            dut.io.commit.exceptionCause.expect(expectedCause.U)
+            dut.io.commit.exceptionValue.expect(address.U(32.W))
+            dut.io.commit.rd.expect(expectedRd.U)
+            dut.io.commit.rdWrite.expect(false.B)
+            dut.io.commit.memValid.expect(false.B)
+            sawTrap = true
+          }
+        }
+
+        sawTrap shouldBe true
+        sawDataRequest shouldBe false
+      }
+    }
+
+    runFault(lr, MachineExceptionCode.LoadAddressMisaligned, 3)
+    runFault(sc, MachineExceptionCode.StoreAddressMisaligned, 4)
+    runFault(amoAdd, MachineExceptionCode.StoreAddressMisaligned, 5)
   }
 }
