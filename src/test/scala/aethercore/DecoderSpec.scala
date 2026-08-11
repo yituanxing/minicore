@@ -157,6 +157,27 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "gate FENCE.I on Zifencei while retaining base FENCE" in {
+    val rv32i = IsaConfig(
+      xlen = 32,
+      extensions = Set('I'),
+      privilegeModes = Set('M')
+    )
+
+    simulate(new Decoder(rv32i)) { dut =>
+      dut.io.inst.poke("h0000000f".U) // fence
+      dut.io.ctrl.illegal.expect(false.B)
+
+      dut.io.inst.poke("h0000100f".U) // fence.i
+      dut.io.ctrl.illegal.expect(true.B)
+    }
+
+    simulate(new Decoder(CoreProfiles.rv32imauPmpOsSoftware.isa)) { dut =>
+      dut.io.inst.poke("h0000100f".U)
+      dut.io.ctrl.illegal.expect(false.B)
+    }
+  }
+
   it should "enable M instructions only when configured" in {
     val rv32im = IsaConfig(
       xlen = 32,

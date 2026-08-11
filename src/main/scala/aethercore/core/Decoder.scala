@@ -9,6 +9,7 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   private val hasM = isa.hasM
   private val hasA = isa.hasA
   private val hasZicsr = isa.hasZicsr
+  private val hasZifencei = isa.hasZifencei
   private val hasWordOps = isa.hasWordOps
 
   val io = IO(new Bundle {
@@ -242,7 +243,9 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
         }
       }
     }
-    is("b0001111".U) { when(funct3 === 0.U || funct3 === 1.U) { c.illegal := false.B } }
+    is("b0001111".U) {
+      when(funct3 === 0.U || (funct3 === 1.U && hasZifencei.B)) { c.illegal := false.B }
+    }
     is("b1110011".U) {
       switch(funct3) {
         is("b000".U) {
