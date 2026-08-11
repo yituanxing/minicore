@@ -172,6 +172,34 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.mabi shouldBe "ilp32"
   }
 
+  it should "keep IsaConfig descriptive while CoreConfig rejects unrealizable AetherCore profiles" in {
+    val rv32Platform = CoreProfiles.rv32iMinimal.platform
+    val rv64Platform = CoreProfiles.rv64imCurrent.platform
+
+    val rv64ima = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M')
+    )
+    rv64ima.march shouldBe "rv64ima"
+    an[IllegalArgumentException] should be thrownBy
+      CoreConfig("unsupported-rv64a", rv64ima, rv64Platform)
+
+    val unsupportedProfiles = Seq(
+      "compressed" -> IsaConfig(32, Set('I', 'C'), Set('M')),
+      "float" -> IsaConfig(32, Set('I', 'F'), Set('M')),
+      "double" -> IsaConfig(32, Set('I', 'D'), Set('M')),
+      "bitmanip" -> IsaConfig(32, Set('I', 'B'), Set('M')),
+      "unknown-z" -> IsaConfig(32, Set('I'), Set('M'), zExtensions = Set("Zba")),
+      "hypervisor" -> IsaConfig(32, Set('I'), Set('M', 'H'))
+    )
+
+    for ((name, isa) <- unsupportedProfiles) {
+      an[IllegalArgumentException] should be thrownBy
+        CoreConfig(s"unsupported-$name", isa, rv32Platform)
+    }
+  }
+
   it should "reject unsupported architectural, extension, VM and platform widths early" in {
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(xlen = 48, extensions = Set('I'), privilegeModes = Set('M'))
