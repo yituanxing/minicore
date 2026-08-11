@@ -144,7 +144,7 @@ class AetherCore(
   instructionPmp.io.config := csrFile.io.pmpConfig
   instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
 
-  dataPmp.io.privilege := csrFile.io.currentPrivilege
+  dataPmp.io.privilege := csrFile.io.effectiveDataPrivilege
   dataPmp.io.config := csrFile.io.pmpConfig
   dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
@@ -400,8 +400,6 @@ class AetherCore(
     withSupervisorExternalInterrupt
   )
   val csrException = csrInstruction && !csrLegal
-  // This core currently exposes mstatus.TW as read-only zero. WFI is therefore
-  // legal in S-mode; keep U-mode trapping when Supervisor mode is implemented.
   val wfiException =
     idEx.ctrl.wfi && csrFile.io.currentPrivilege === PrivilegeMode.User.U
   val machineXretException =
@@ -509,7 +507,7 @@ class AetherCore(
     vm.io.requestValid := rawDataRequest && !dataPmpFault && !vmCsrHazard
     vm.io.flush := takingSfence
     vm.io.virtualAddress := exMem.result(31, 0)
-    vm.io.privilege := csrFile.io.currentPrivilege
+    vm.io.privilege := csrFile.io.effectiveDataPrivilege
     vm.io.translateWrite := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
     vm.io.write := dataBusWrite
     vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)(31, 0)
