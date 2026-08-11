@@ -65,10 +65,42 @@ class SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, MachineCsrAddress.Misa) shouldBe BigInt("40141100", 16)
 
       write(dut, MachineCsrAddress.Medeleg, BigInt("ffffffff", 16))
-      read(dut, MachineCsrAddress.Medeleg) shouldBe BigInt("000003ae", 16)
+      read(dut, MachineCsrAddress.Medeleg) shouldBe BigInt("000003af", 16)
 
       write(dut, MachineCsrAddress.Mideleg, BigInt("ffffffff", 16))
       read(dut, MachineCsrAddress.Mideleg) shouldBe 0
+    }
+  }
+
+  it should "delegate instruction-address-misaligned metadata from U mode to S mode" in {
+    simulate(new MachineCsrFile(CoreProfiles.rv32imsuSoftware.isa)) { dut =>
+      initializeCsr(dut)
+      val target = supervisorEntry + 2
+
+      write(dut, SupervisorCsrAddress.Stvec, supervisorTrap)
+      write(
+        dut,
+        MachineCsrAddress.Medeleg,
+        BigInt(1) << MachineExceptionCode.InstructionAddressMisaligned
+      )
+      write(dut, MachineCsrAddress.Mepc, supervisorEntry)
+      write(dut, MachineCsrAddress.Mstatus, BigInt("00000080", 16)) // MPP=U, MPIE=1
+      mretCsr(dut)
+      dut.io.currentPrivilege.expect(PrivilegeMode.User.U)
+
+      dut.io.trapPc.poke(supervisorEntry.U)
+      dut.io.trapCause.poke(MachineExceptionCode.InstructionAddressMisaligned.U)
+      dut.io.trapValue.poke(target.U)
+      dut.io.trapEnter.poke(true.B)
+      dut.io.trapDelegatedToSupervisor.expect(true.B)
+      dut.io.trapVector.expect(supervisorTrap.U)
+      dut.clock.step()
+      dut.io.trapEnter.poke(false.B)
+
+      dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
+      read(dut, SupervisorCsrAddress.Sepc) shouldBe supervisorEntry
+      read(dut, SupervisorCsrAddress.Scause) shouldBe MachineExceptionCode.InstructionAddressMisaligned
+      read(dut, SupervisorCsrAddress.Stval) shouldBe target
     }
   }
 
