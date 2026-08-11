@@ -291,4 +291,85 @@ class CoreSmokeSpec extends AnyFlatSpec with Matchers with ChiselSim {
       sawTrap shouldBe true
     }
   }
+
+  it should "trap an RV64 misaligned word load before issuing a data request" in {
+    val base = BigInt("80000000", 16)
+    val address = BigInt("102", 16)
+    val addiX1Address = BigInt("10200093", 16)
+    val lwX5X1 = BigInt("0000a283", 16)
+    val program = Map(
+      base -> addiX1Address,
+      base + 4 -> lwX5X1,
+      base + 8 -> ebreak
+    )
+
+    simulate(new AetherCoreSimTop) { dut =>
+      initialize(dut)
+      var sawTrap = false
+      var sawDataRequest = false
+      var cycles = 0
+
+      while (!sawTrap && cycles < 100) {
+        dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, ebreak).U)
+        if (dut.io.memValid.peek().litToBoolean) sawDataRequest = true
+        dut.clock.step()
+        cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
+          dut.io.commit.pc.expect((base + 4).U)
+          dut.io.commit.inst.expect(lwX5X1.U)
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.LoadAddressMisaligned.U)
+          dut.io.commit.exceptionValue.expect(address.U)
+          dut.io.commit.rd.expect(5.U)
+          dut.io.commit.rdWrite.expect(false.B)
+          dut.io.commit.memValid.expect(false.B)
+          sawTrap = true
+        }
+      }
+
+      sawTrap shouldBe true
+      sawDataRequest shouldBe false
+    }
+  }
+
+  it should "trap an RV64 misaligned doubleword store before issuing a data request" in {
+    val base = BigInt("80000000", 16)
+    val address = BigInt("104", 16)
+    val addiX1Address = BigInt("10400093", 16)
+    val addiX2Value = BigInt("07f00113", 16)
+    val sdX2X1 = BigInt("0020b023", 16)
+    val program = Map(
+      base -> addiX1Address,
+      base + 4 -> addiX2Value,
+      base + 8 -> sdX2X1,
+      base + 12 -> ebreak
+    )
+
+    simulate(new AetherCoreSimTop) { dut =>
+      initialize(dut)
+      var sawTrap = false
+      var sawDataRequest = false
+      var cycles = 0
+
+      while (!sawTrap && cycles < 120) {
+        dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, ebreak).U)
+        if (dut.io.memValid.peek().litToBoolean) sawDataRequest = true
+        dut.clock.step()
+        cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean && dut.io.commit.exception.peek().litToBoolean) {
+          dut.io.commit.pc.expect((base + 8).U)
+          dut.io.commit.inst.expect(sdX2X1.U)
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.StoreAddressMisaligned.U)
+          dut.io.commit.exceptionValue.expect(address.U)
+          dut.io.commit.rdWrite.expect(false.B)
+          dut.io.commit.memValid.expect(false.B)
+          sawTrap = true
+        }
+      }
+
+      sawTrap shouldBe true
+      sawDataRequest shouldBe false
+    }
+  }
 }
