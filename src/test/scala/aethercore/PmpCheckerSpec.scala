@@ -152,4 +152,37 @@ class PmpCheckerSpec extends AnyFlatSpec with Matchers with ChiselSim {
       )
     }
   }
+
+  it should "match RV32 PMP regions in a 34-bit physical address domain" in {
+    simulate(new PmpChecker(32, paddrBits = 34)) { dut =>
+      initialize(dut)
+
+      val highBase = BigInt("100000000", 16)
+      val highTop = BigInt("100001000", 16)
+
+      // An OFF entry may still provide the lower TOR bound for the next entry.
+      dut.io.pmpAddress(0).poke((highBase >> 2).U)
+      dut.io.pmpAddress(1).poke((highTop >> 2).U)
+      dut.io.config(1).poke(
+        config(read = true, mode = PmpAddressMode.Tor).U
+      )
+
+      check(dut, highBase, 4, allow = true, entry = 1)
+      check(dut, highTop - 4, 4, allow = true, entry = 1)
+      check(dut, highTop - 2, 4, allow = false, entry = 1)
+      check(dut, BigInt("fffffff0", 16), 4, allow = false, matched = false)
+
+      // 31 trailing one bits encode a 2^34-byte NAPOT range exactly. This is
+      // the portable way to cover the complete RV32 PA34 physical domain.
+      for (entry <- 0 until PmpConstants.MaxEntries) {
+        dut.io.config(entry).poke(0.U)
+        dut.io.pmpAddress(entry).poke(0.U)
+      }
+      dut.io.pmpAddress(0).poke(BigInt("7fffffff", 16).U)
+      dut.io.config(0).poke(
+        config(read = true, mode = PmpAddressMode.Napot).U
+      )
+      check(dut, BigInt("3ffffffff", 16), 1, allow = true, entry = 0)
+    }
+  }
 }

@@ -31,12 +31,18 @@ object PmpCsrWarl {
     })
   }
 
-  def canonicalizeAddress(isa: IsaConfig, data: UInt): UInt = {
-    val addressBits = isa.xlen - 2
-    data & ((BigInt(1) << addressBits) - 1).U(isa.xlen.W)
+  def canonicalizeAddress(isa: IsaConfig, data: UInt): UInt =
+    canonicalizeAddress(isa, isa.xlen, data)
+
+  def canonicalizeAddress(isa: IsaConfig, paddrBits: Int, data: UInt): UInt = {
+    val geometry = PmpGeometry(isa.xlen, paddrBits)
+    data & geometry.encodedAddressMask.U(isa.xlen.W)
   }
 
-  def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt = {
+  def canonicalize(isa: IsaConfig, address: UInt, data: UInt): UInt =
+    canonicalize(isa, isa.xlen, address, data)
+
+  def canonicalize(isa: IsaConfig, paddrBits: Int, address: UInt, data: UInt): UInt = {
     val result = WireDefault(data)
     if (isa.hasPmp) {
       when(address === PmpCsrAddress.Pmpcfg0.U) {
@@ -44,7 +50,7 @@ object PmpCsrWarl {
       }
       for (entry <- 0 until isa.pmpEntries) {
         when(address === PmpCsrAddress.pmpaddr(entry).U) {
-          result := canonicalizeAddress(isa, data)
+          result := canonicalizeAddress(isa, paddrBits, data)
         }
       }
     }
@@ -52,9 +58,12 @@ object PmpCsrWarl {
   }
 }
 
-class PmpCsrFile(val isa: IsaConfig) extends Module {
+class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
+  def this(isa: IsaConfig) = this(isa, isa.xlen)
+
   private val xlen = isa.xlen
-  private val pmpAddressBits = xlen - 2
+  private val geometry = PmpGeometry(xlen, paddrBits)
+  private val pmpAddressBits = geometry.encodedAddressBits
 
   val io = IO(new Bundle {
     val readAddr = Input(UInt(12.W))
@@ -89,14 +98,14 @@ class PmpCsrFile(val isa: IsaConfig) extends Module {
     }
     for (entry <- 0 until isa.pmpEntries) {
       when(io.readAddr === PmpCsrAddress.pmpaddr(entry).U) {
-        io.readData := Cat(0.U(2.W), pmpAddress(entry))
+        io.readData := pmpAddress(entry).pad(xlen)
         io.readImplemented := true.B
         io.readWritable := true.B
       }
     }
   }
 
-  val canonicalWriteData = PmpCsrWarl.canonicalize(isa, io.writeAddr, io.writeData)
+  val canonicalWriteData = PmpCsrWarl.canonicalize(isa, paddrBits, io.writeAddr, io.writeData)
 
   if (isa.hasPmp) {
     when(io.writeEnable && io.writeAddr === PmpCsrAddress.Pmpcfg0.U) {

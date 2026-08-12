@@ -160,6 +160,9 @@ jobs:
         run: |
           ./mill aethercore.test.testOnly \
             aethercore.CoreConfigSpec \
+            aethercore.PmpCsrFileSpec \
+            aethercore.PmpCheckerSpec \
+            aethercore.PmpCoreSpec \
             aethercore.DecoderSpec \
             aethercore.Sv32PageTableWalkerSpec \
             aethercore.Sv32SatpRegisterSpec \
