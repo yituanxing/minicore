@@ -45,6 +45,16 @@ class PmpCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "implement all RV32 pmpaddr CSR bits for a 34-bit physical domain" in {
+    simulate(new PmpCsrFile(CoreProfiles.rv32imuPmpSoftware.isa, paddrBits = 34)) { dut =>
+      initialize(dut)
+
+      write(dut, PmpCsrAddress.pmpaddr(0), BigInt("ffffffff", 16))
+      read(dut, PmpCsrAddress.pmpaddr(0)) shouldBe BigInt("ffffffff", 16)
+      dut.io.pmpAddress(0).expect(BigInt("ffffffff", 16).U)
+    }
+  }
+
   it should "lock an entry and the lower bound of a locked TOR entry" in {
     simulate(new PmpCsrFile(CoreProfiles.rv32imuPmpSoftware.isa)) { dut =>
       initialize(dut)

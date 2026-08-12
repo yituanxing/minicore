@@ -31,17 +31,24 @@ object PmpAddressMode {
   * privilege. An unmatched S/U access is denied and an unmatched M access is
   * allowed, matching the privileged architecture PMP rules.
   */
-class PmpChecker(val xlen: Int, val entries: Int = PmpConstants.MaxEntries) extends Module {
-  require(xlen == 32 || xlen == 64, s"PMP requires XLEN 32 or 64, got $xlen")
+class PmpChecker(
+    val xlen: Int,
+    val entries: Int = PmpConstants.MaxEntries,
+    val paddrBits: Int
+) extends Module {
+  def this(xlen: Int) = this(xlen, PmpConstants.MaxEntries, xlen)
+  def this(xlen: Int, entries: Int) = this(xlen, entries, xlen)
+
+  private val geometry = PmpGeometry(xlen, paddrBits)
   require(entries > 0 && entries <= PmpConstants.MaxEntries)
 
-  private val pmpAddressBits = xlen - 2
+  private val pmpAddressBits = geometry.encodedAddressBits
   private val entryIndexBits = math.max(1, log2Ceil(entries))
-  private val addressMask = (BigInt(1) << pmpAddressBits) - 1
+  private val addressMask = geometry.encodedAddressMask
 
   val io = IO(new Bundle {
     val privilege = Input(UInt(2.W))
-    val address = Input(UInt(xlen.W))
+    val address = Input(UInt(paddrBits.W))
     val bytes = Input(UInt(4.W))
     val write = Input(Bool())
     val execute = Input(Bool())
@@ -54,9 +61,9 @@ class PmpChecker(val xlen: Int, val entries: Int = PmpConstants.MaxEntries) exte
   })
 
   val start = Cat(0.U(1.W), io.address)
-  val end = Wire(UInt((xlen + 1).W))
+  val end = Wire(UInt((paddrBits + 1).W))
   end := start + io.bytes - 1.U
-  val invalidRange = io.bytes === 0.U || end(xlen)
+  val invalidRange = io.bytes === 0.U || end(paddrBits)
 
   val overlaps = Wire(Vec(entries, Bool()))
   val entryAllows = Wire(Vec(entries, Bool()))
@@ -64,14 +71,16 @@ class PmpChecker(val xlen: Int, val entries: Int = PmpConstants.MaxEntries) exte
   for (entry <- 0 until entries) {
     val config = io.config(entry)
     val mode = config(PmpConstants.ConfigAddressHigh, PmpConstants.ConfigAddressLow)
-    val lower = WireDefault(0.U((xlen + 1).W))
-    val upper = WireDefault(0.U((xlen + 1).W))
+    val lower = WireDefault(0.U((paddrBits + 1).W))
+    val upper = WireDefault(0.U((paddrBits + 1).W))
     val encodedAddress = io.pmpAddress(entry)
-    val byteAddress = Cat(0.U(1.W), encodedAddress, 0.U(2.W))
+    val byteAddress = Cat(0.U(1.W), encodedAddress, 0.U(2.W)).pad(paddrBits + 1)
 
     switch(mode) {
       is(PmpAddressMode.Tor.U) {
-        lower := (if (entry == 0) 0.U else Cat(0.U(1.W), io.pmpAddress(entry - 1), 0.U(2.W)))
+        lower :=
+          (if (entry == 0) 0.U
+           else Cat(0.U(1.W), io.pmpAddress(entry - 1), 0.U(2.W)).pad(paddrBits + 1))
         upper := byteAddress
       }
       is(PmpAddressMode.Na4.U) {
@@ -81,7 +90,7 @@ class PmpChecker(val xlen: Int, val entries: Int = PmpConstants.MaxEntries) exte
       is(PmpAddressMode.Napot.U) {
         when(encodedAddress.andR) {
           lower := 0.U
-          upper := (BigInt(1) << xlen).U((xlen + 1).W)
+          upper := geometry.allOnesNapotUpper.U((paddrBits + 1).W)
         }.otherwise {
           // NAPOT encodes size/8-1 in the low-order one bits. Exactly one
           // condition below is true: `ones` trailing ones followed by zero.
@@ -97,9 +106,9 @@ class PmpChecker(val xlen: Int, val entries: Int = PmpConstants.MaxEntries) exte
                 0.U(1.W),
                 encodedAddress & clearMask.U(pmpAddressBits.W),
                 0.U(2.W)
-              )
+              ).pad(paddrBits + 1)
               lower := base
-              upper := base + (BigInt(1) << (ones + 3)).U((xlen + 1).W)
+              upper := base + (BigInt(1) << (ones + 3)).U((paddrBits + 1).W)
             }
           }
         }
