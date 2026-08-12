@@ -329,7 +329,7 @@ popd >/dev/null
 
 cat > "${OUT_DIR}/evidence/result.txt" <<EOF
 status=PASS
-contract=nuttx-13.0.0-aethercore-p1-protected-rv32ima-build-v2
+contract=nuttx-13.0.0-aethercore-p1-protected-rv32ima-build-v3
 kernel_image=${OUT_DIR}/nuttx.elf
 userspace_image=${OUT_DIR}/nuttx_user.elf
 combined_image=${OUT_DIR}/aethercore-protected.bin
@@ -339,9 +339,9 @@ userspace_link=0x80040000
 user_flash=0x80040000-0x80080000:rx
 user_ram=0x80200000-0x80300000:rw
 pmp_mode=NAPOT
-pmp_entries_implemented=4
-pmp_entries_used=0,1
-pmp_free_scan=disabled-in-platform-init
+pmp_entries_implemented=16
+pmp_allocator=upstream-riscv_append_pmp_region
+pmp_free_scan=enabled-upstream-16-entry-namespace
 address_environment=disabled
 percpu_scratch=enabled
 syscall_boundary=ecall-riscv_swint-dispatch_syscall

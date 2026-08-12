@@ -34,11 +34,9 @@ final case class IsaConfig(
     !sstc || xlen == 32,
     "the current bounded Sstc implementation is RV32-only"
   )
-  require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
-  require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
   require(
-    !virtualMemoryModes.contains("Sv32") || pmpEntries == 0,
-    "Sv32+PMP is deferred until PMP checks consume the full translated PA34"
+    Set(0, 16, 64).contains(pmpEntries),
+    s"standard PMP implementation count must be 0, 16 or 64, got $pmpEntries"
   )
 
   val xBytes: Int = xlen / 8
@@ -119,6 +117,14 @@ final case class CoreConfig(
   require(
     !isa.hasSv32 || platform.paddrBits >= 34,
     s"Sv32 requires at least 34 physical address bits, got ${platform.paddrBits}"
+  )
+  require(
+    !isa.hasPmp || (isa.xlen == 32 && isa.pmpEntries == 16),
+    "the current AetherCore PMP implementation supports the standard RV32 PMP16 surface only"
+  )
+  require(
+    !(isa.hasSv32 && isa.hasPmp),
+    "Sv32+PMP remains fail-closed until PMP qualifies translated final and implicit PTW physical accesses"
   )
 }
 
@@ -215,7 +221,7 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr"),
-      pmpEntries = 4
+      pmpEntries = 16
     ),
     platform = rv32Platform
   )
@@ -227,7 +233,7 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr", "Zifencei"),
-      pmpEntries = 4
+      pmpEntries = 16
     ),
     platform = rv32Platform
   )
@@ -239,7 +245,7 @@ object CoreProfiles {
       extensions = Set('I', 'M', 'A'),
       privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr", "Zifencei"),
-      pmpEntries = 4
+      pmpEntries = 16
     ),
     platform = rv32Platform
   )

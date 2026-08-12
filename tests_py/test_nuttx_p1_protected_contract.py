@@ -44,20 +44,24 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
 
-    def test_platform_binds_userspace_to_implemented_pmp_entries(self) -> None:
+    def test_platform_preserves_upstream_pmp16_allocator(self) -> None:
         text = OVERLAY.read_text()
         for fragment in (
-            "riscv_config_pmp_region(0, UFLASH_F",
-            "riscv_config_pmp_region(1, USRAM_F",
+            "PMP_UPSTREAM",
+            "riscv_append_pmp_region(UFLASH_F, UFLASH_START, UFLASH_SIZE)",
+            "riscv_append_pmp_region(USRAM_F, USRAM_START, USRAM_SIZE)",
             '"CONFIG_LIB_SYSCALL": True',
             '"CONFIG_RISCV_PERCPU_SCRATCH": True',
             '"CONFIG_ARCH_ADDRENV": False',
             '"CONFIG_ARCH_KERNEL_STACK": False',
-            "AetherCore exposes four PMP entries",
+            "standard RV32 PMP16 namespace",
             "Dedicated kernel-stack hardening is a later architecture milestone",
         ):
             self.assertIn(fragment, text)
-        self.assertIn('if "riscv_append_pmp_region(" in generated', text)
+        self.assertIn("expected one upstream protected PMP allocator anchor", text)
+        self.assertIn("obsolete fixed-entry PMP workaround", text)
+        self.assertNotIn("PMP_NEW", text)
+        self.assertNotIn("replace_once(userspace", text)
         self.assertNotIn("CONFIG_ARCH_KERNEL_STACKSIZE", text)
 
     def test_p1_requires_real_user_transition_and_syscall_dispatch(self) -> None:
@@ -86,9 +90,10 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "atomic_extension=A",
             "atomic_user_instructions=${atomic_user_instructions}",
             "profile=rv32ima_zicsr_zifencei",
-            "p1-protected-rv32ima-build-v2",
+            "p1-protected-rv32ima-build-v3",
         ):
             self.assertIn(fragment, text)
+        self.assertNotIn("p1-protected-rv32ima-build-v2", text)
         self.assertIn('if "a" not in extensions', text)
         self.assertNotIn('for forbidden in ("a", "c", "f", "d", "v")', text)
 
@@ -97,10 +102,11 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
         for fragment in (
             "qemu_rv_configure_mpu",
             "riscv_config_pmp_region",
+            "riscv_append_pmp_region",
             "riscv_swint",
-            "pmp_entries_implemented=4",
-            "pmp_entries_used=0,1",
-            "pmp_free_scan=disabled-in-platform-init",
+            "pmp_entries_implemented=16",
+            "pmp_allocator=upstream-riscv_append_pmp_region",
+            "pmp_free_scan=enabled-upstream-16-entry-namespace",
             "pmp_mode=NAPOT",
             "address_environment=disabled",
             "forbidden extension",
@@ -108,7 +114,8 @@ class NuttxP1ProtectedContractTest(unittest.TestCase):
             "runtime=not-yet-qualified",
         ):
             self.assertIn(fragment, text)
-        self.assertNotIn("riscv_append_pmp_region riscv_swint", text)
+        self.assertNotIn("pmp_entries_implemented=4", text)
+        self.assertNotIn("pmp_free_scan=disabled-in-platform-init", text)
         for forbidden in (
             "CONFIG_ARCH_ADDRENV",
             "CONFIG_ARCH_KERNEL_STACK",

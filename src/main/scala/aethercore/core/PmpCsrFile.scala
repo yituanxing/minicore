@@ -8,6 +8,11 @@ object PmpCsrAddress {
   val Pmpcfg0: Int = 0x3a0
   val Pmpaddr0: Int = 0x3b0
 
+  def pmpcfg(bank: Int): Int = {
+    require(bank >= 0 && bank < PmpConstants.ConfigCsrCount)
+    Pmpcfg0 + bank
+  }
+
   def pmpaddr(entry: Int): Int = {
     require(entry >= 0 && entry < PmpConstants.MaxEntries)
     Pmpaddr0 + entry
@@ -25,8 +30,8 @@ object PmpCsrWarl {
   }
 
   def canonicalizePackedConfig(isa: IsaConfig, data: UInt): UInt = {
-    require(isa.xlen == 32, "the current pmpcfg0 implementation is RV32-only")
-    Cat((0 until PmpConstants.MaxEntries).reverse.map { entry =>
+    require(isa.xlen == 32, "the current PMP configuration-bank implementation is RV32-only")
+    Cat((0 until PmpConstants.ConfigEntriesPerCsr).reverse.map { entry =>
       canonicalizeConfigByte(data(entry * 8 + 7, entry * 8))
     })
   }
@@ -45,8 +50,13 @@ object PmpCsrWarl {
   def canonicalize(isa: IsaConfig, paddrBits: Int, address: UInt, data: UInt): UInt = {
     val result = WireDefault(data)
     if (isa.hasPmp) {
-      when(address === PmpCsrAddress.Pmpcfg0.U) {
-        result := canonicalizePackedConfig(isa, data)
+      for (bank <- 0 until PmpConstants.ConfigCsrCount) {
+        val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+        if (firstEntry < isa.pmpEntries) {
+          when(address === PmpCsrAddress.pmpcfg(bank).U) {
+            result := canonicalizePackedConfig(isa, data)
+          }
+        }
       }
       for (entry <- 0 until isa.pmpEntries) {
         when(address === PmpCsrAddress.pmpaddr(entry).U) {
@@ -64,6 +74,15 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
   private val xlen = isa.xlen
   private val geometry = PmpGeometry(xlen, paddrBits)
   private val pmpAddressBits = geometry.encodedAddressBits
+
+  require(
+    !isa.hasPmp || isa.xlen == 32,
+    "the current PMP CSR-bank implementation is RV32-only"
+  )
+  require(
+    isa.pmpEntries <= PmpConstants.MaxEntries,
+    s"PMP CSR bank supports at most ${PmpConstants.MaxEntries} entries, got ${isa.pmpEntries}"
+  )
 
   val io = IO(new Bundle {
     val readAddr = Input(UInt(12.W))
@@ -91,10 +110,19 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
   io.pmpAddress := pmpAddress
 
   if (isa.hasPmp) {
-    when(io.readAddr === PmpCsrAddress.Pmpcfg0.U) {
-      io.readData := Cat(config.reverse)
-      io.readImplemented := true.B
-      io.readWritable := true.B
+    for (bank <- 0 until PmpConstants.ConfigCsrCount) {
+      val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+      if (firstEntry < isa.pmpEntries) {
+        when(io.readAddr === PmpCsrAddress.pmpcfg(bank).U) {
+          io.readData := Cat(
+            (0 until PmpConstants.ConfigEntriesPerCsr).reverse.map { offset =>
+              config(firstEntry + offset)
+            }
+          )
+          io.readImplemented := true.B
+          io.readWritable := true.B
+        }
+      }
     }
     for (entry <- 0 until isa.pmpEntries) {
       when(io.readAddr === PmpCsrAddress.pmpaddr(entry).U) {
@@ -108,10 +136,18 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
   val canonicalWriteData = PmpCsrWarl.canonicalize(isa, paddrBits, io.writeAddr, io.writeData)
 
   if (isa.hasPmp) {
-    when(io.writeEnable && io.writeAddr === PmpCsrAddress.Pmpcfg0.U) {
-      for (entry <- 0 until isa.pmpEntries) {
-        when(!config(entry)(PmpConstants.ConfigLock)) {
-          config(entry) := canonicalWriteData(entry * 8 + 7, entry * 8)
+    for (bank <- 0 until PmpConstants.ConfigCsrCount) {
+      val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+      if (firstEntry < isa.pmpEntries) {
+        when(io.writeEnable && io.writeAddr === PmpCsrAddress.pmpcfg(bank).U) {
+          for (offset <- 0 until PmpConstants.ConfigEntriesPerCsr) {
+            val entry = firstEntry + offset
+            if (entry < isa.pmpEntries) {
+              when(!config(entry)(PmpConstants.ConfigLock)) {
+                config(entry) := canonicalWriteData(offset * 8 + 7, offset * 8)
+              }
+            }
+          }
         }
       }
     }

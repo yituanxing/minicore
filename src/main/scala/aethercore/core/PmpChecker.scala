@@ -5,7 +5,9 @@ import chisel3.util._
 import aethercore.common.PrivilegeMode
 
 object PmpConstants {
-  val MaxEntries: Int = 4
+  val MaxEntries: Int = 16
+  val ConfigEntriesPerCsr: Int = 4
+  val ConfigCsrCount: Int = MaxEntries / ConfigEntriesPerCsr
   val ConfigRead: Int = 0
   val ConfigWrite: Int = 1
   val ConfigExecute: Int = 2
