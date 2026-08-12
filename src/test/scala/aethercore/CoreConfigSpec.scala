@@ -136,10 +136,11 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasA shouldBe false
     config.isa.hasSv32 shouldBe false
     config.isa.hasSstc shouldBe false
+    config.isa.pmpEntries shouldBe 16
     config.isa.march shouldBe "rv32im_zicsr_zifencei"
   }
 
-  it should "describe the exact NuttX protected RV32IMAU OS profile" in {
+  it should "describe the exact NuttX protected RV32IMAU PMP16 OS profile" in {
     val config = CoreProfiles.rv32imauPmpOsSoftware
     config.name shouldBe "rv32imau-pmp-os-software"
     config.isa.xlen shouldBe 32
@@ -148,7 +149,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasU shouldBe true
     config.isa.hasS shouldBe false
     config.isa.hasPmp shouldBe true
-    config.isa.pmpEntries shouldBe 4
+    config.isa.pmpEntries shouldBe 16
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe true
     config.isa.hasSv32 shouldBe false
@@ -174,6 +175,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "keep IsaConfig descriptive while CoreConfig rejects unrealizable AetherCore profiles" in {
     val rv32Platform = CoreProfiles.rv32iMinimal.platform
+    val rv32Sv32Platform = CoreProfiles.rv32imsuSv32Software.platform
     val rv64Platform = CoreProfiles.rv64imCurrent.platform
 
     val rv64ima = IsaConfig(
@@ -184,6 +186,41 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     rv64ima.march shouldBe "rv64ima"
     an[IllegalArgumentException] should be thrownBy
       CoreConfig("unsupported-rv64a", rv64ima, rv64Platform)
+
+    val rv64Pmp16 = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr"),
+      pmpEntries = 16
+    )
+    rv64Pmp16.hasPmp shouldBe true
+    an[IllegalArgumentException] should be thrownBy
+      CoreConfig("unsupported-rv64-pmp16", rv64Pmp16, rv64Platform)
+
+    val rv32Pmp64 = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr"),
+      pmpEntries = 64
+    )
+    rv32Pmp64.pmpEntries shouldBe 64
+    an[IllegalArgumentException] should be thrownBy
+      CoreConfig("unsupported-rv32-pmp64", rv32Pmp64, rv32Platform)
+
+    val sv32Pmp16 = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv32"),
+      pmpEntries = 16
+    )
+    sv32Pmp16.hasSv32 shouldBe true
+    sv32Pmp16.hasPmp shouldBe true
+    an[IllegalArgumentException] should be thrownBy
+      CoreConfig("deferred-sv32-pmp16", sv32Pmp16, rv32Sv32Platform)
 
     val unsupportedProfiles = Seq(
       "compressed" -> IsaConfig(32, Set('I', 'C'), Set('M')),
@@ -226,8 +263,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
       IsaConfig(
         xlen = 32,
         extensions = Set('I'),
-        privilegeModes = Set('M', 'S'),
-        virtualMemoryModes = Set("Sv32"),
+        privilegeModes = Set('M', 'U'),
         pmpEntries = 4
       )
 

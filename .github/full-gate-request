@@ -1,4 +1,4 @@
-qualification=rv32im-supervisor-sv32-v2
-requested_after=caeb34c1e0f54b9a167f23d8d340445056289762
-pre_request_fast_gate_run=31243642551
-scope=M-S-U-Sv32-PA34-I-D-pagewalk-TLB-SFENCE-page-fault-delegation
+qualification=rv32-pmp16-standard-surface
+stacked_base=080627b915f966bc3c947794f115155e82083323
+scope=RV32-PMP16-pmpcfg0-3-pmpaddr0-15-global-priority-cross-bank-lock-forwarding-NuttX-upstream-allocator-P1v3
+historical_oracle=four-entry-NEMU-shadow-with-unchanged-first-bank-workloads

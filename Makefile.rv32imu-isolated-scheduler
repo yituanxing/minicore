@@ -33,7 +33,9 @@ software:
 contract: software
 	grep -q '^march=rv32im_zicsr$$' $(SOFTWARE_DIR)/manifest.txt
 	grep -q '^privileges=MU$$' $(SOFTWARE_DIR)/manifest.txt
-	grep -q '^pmp_entries=4$$' $(SOFTWARE_DIR)/manifest.txt
+	grep -q '^hardware_pmp_entries=16$$' $(SOFTWARE_DIR)/manifest.txt
+	grep -q '^pmp_shadow_entries=4$$' $(SOFTWARE_DIR)/manifest.txt
+	grep -q '^pmp_entries_configured=0,1,2$$' $(SOFTWARE_DIR)/manifest.txt
 	grep -q '^pmp_mode=dynamic-tor$$' $(SOFTWARE_DIR)/manifest.txt
 	grep -q '^syscalls=write,get_ticks,yield,exit$$' $(SOFTWARE_DIR)/manifest.txt
 	grep -q '^expected_task_a_state=killed$$' $(SOFTWARE_DIR)/manifest.txt

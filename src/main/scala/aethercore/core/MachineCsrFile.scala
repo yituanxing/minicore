@@ -179,8 +179,13 @@ object MachineCsrWarl {
     }
 
     if (isa.hasPmp) {
-      when(address === PmpCsrAddress.Pmpcfg0.U) {
-        result := PmpCsrWarl.canonicalize(isa, address, data)
+      for (bank <- 0 until PmpConstants.ConfigCsrCount) {
+        val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+        if (firstEntry < isa.pmpEntries) {
+          when(address === PmpCsrAddress.pmpcfg(bank).U) {
+            result := PmpCsrWarl.canonicalize(isa, address, data)
+          }
+        }
       }
       for (entry <- 0 until isa.pmpEntries) {
         when(address === PmpCsrAddress.pmpaddr(entry).U) {

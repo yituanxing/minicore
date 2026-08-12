@@ -153,6 +153,27 @@ class PmpCheckerSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "keep lowest-numbered match priority across the full PMP16 bank" in {
+    simulate(new PmpChecker(32)) { dut =>
+      initialize(dut)
+
+      val encoded = (BigInt("00003000", 16) >> 2) | 1
+      dut.io.pmpAddress(4).poke(encoded.U)
+      dut.io.pmpAddress(12).poke(encoded.U)
+      dut.io.config(4).poke(
+        config(read = true, mode = PmpAddressMode.Napot).U
+      )
+      dut.io.config(12).poke(
+        config(mode = PmpAddressMode.Napot).U
+      )
+
+      check(dut, BigInt("00003004", 16), 4, allow = true, entry = 4)
+
+      dut.io.config(4).poke(0.U)
+      check(dut, BigInt("00003004", 16), 4, allow = false, entry = 12)
+    }
+  }
+
   it should "match RV32 PMP regions in a 34-bit physical address domain" in {
     simulate(new PmpChecker(32, paddrBits = 34)) { dut =>
       initialize(dut)

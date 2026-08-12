@@ -55,6 +55,22 @@ class PmpCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "implement all four RV32 PMP config banks through entry 15" in {
+    simulate(new PmpCsrFile(CoreProfiles.rv32imuPmpSoftware.isa)) { dut =>
+      initialize(dut)
+
+      for (bank <- 0 until 4) {
+        val address = PmpCsrAddress.pmpcfg(bank)
+        write(dut, address, BigInt("1f1b1919", 16))
+        read(dut, address) shouldBe BigInt("1f1b1919", 16)
+      }
+
+      write(dut, PmpCsrAddress.pmpaddr(15), BigInt("92345678", 16))
+      read(dut, PmpCsrAddress.pmpaddr(15)) shouldBe BigInt("12345678", 16)
+      dut.io.pmpAddress(15).expect(BigInt("12345678", 16).U)
+    }
+  }
+
   it should "lock an entry and the lower bound of a locked TOR entry" in {
     simulate(new PmpCsrFile(CoreProfiles.rv32imuPmpSoftware.isa)) { dut =>
       initialize(dut)
@@ -69,6 +85,26 @@ class PmpCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
       read(dut, PmpCsrAddress.pmpaddr(0)) shouldBe BigInt("20000400", 16)
       read(dut, PmpCsrAddress.Pmpcfg0) shouldBe BigInt("00008800", 16)
+    }
+  }
+
+  it should "lock entry 3 through a locked TOR entry 4 across pmpcfg banks" in {
+    simulate(new PmpCsrFile(CoreProfiles.rv32imuPmpSoftware.isa)) { dut =>
+      initialize(dut)
+
+      write(dut, PmpCsrAddress.pmpaddr(3), BigInt("20001000", 16))
+      write(dut, PmpCsrAddress.pmpaddr(4), BigInt("20002000", 16))
+
+      // Entry 4 is the low byte of pmpcfg1. Locked TOR makes pmpaddr3 its
+      // immutable lower bound even though entry 3 lives in pmpcfg0.
+      write(dut, PmpCsrAddress.pmpcfg(1), BigInt("00000088", 16))
+      write(dut, PmpCsrAddress.pmpaddr(3), BigInt("20001800", 16))
+      write(dut, PmpCsrAddress.pmpaddr(4), BigInt("20002800", 16))
+      write(dut, PmpCsrAddress.pmpcfg(1), 0)
+
+      read(dut, PmpCsrAddress.pmpaddr(3)) shouldBe BigInt("20001000", 16)
+      read(dut, PmpCsrAddress.pmpaddr(4)) shouldBe BigInt("20002000", 16)
+      read(dut, PmpCsrAddress.pmpcfg(1)) shouldBe BigInt("00000088", 16)
     }
   }
 

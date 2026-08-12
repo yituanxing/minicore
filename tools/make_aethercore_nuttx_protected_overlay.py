@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Install the bounded AetherCore NuttX protected-userspace PMP overlay.
+"""Install the AetherCore NuttX protected-userspace configuration overlay.
 
-The upstream qemu-rv protected profile appends PMP regions by scanning for the
-next free entry across the architectural 16-entry namespace. AetherCore
-intentionally implements four PMP entries. The P1 profile needs exactly two
-NAPOT entries, so bind user flash and user RAM to entries 0 and 1 explicitly.
+AetherCore now exposes the standard RV32 PMP16 namespace used by pinned NuttX,
+so the upstream qemu-rv protected profile must keep its normal
+riscv_append_pmp_region() allocator. The earlier four-entry AetherCore profile
+required a platform patch that forced user flash/RAM into entries 0/1; that
+workaround is deliberately removed here.
 
 NuttX 13.0.0 only allocates per-process kernel stacks when ARCH_ADDRENV is
 active. The pure protected/PMP qemu-rv path used here deliberately keeps
@@ -23,23 +24,10 @@ import re
 import sys
 from typing import Sequence
 
-PMP_OLD = r'''  int ret;
+PMP_UPSTREAM = r'''  int ret;
   ret = riscv_append_pmp_region(UFLASH_F, UFLASH_START, UFLASH_SIZE);
   DEBUGASSERT(ret == 0);
   ret = riscv_append_pmp_region(USRAM_F, USRAM_START, USRAM_SIZE);
-  DEBUGASSERT(ret == 0);
-'''
-
-PMP_NEW = r'''  int ret;
-
-  /* AetherCore exposes four PMP entries.  Protected NuttX uses exactly two
-   * naturally aligned regions, so configure the implemented entries directly
-   * instead of scanning the full architectural 16-entry CSR namespace.
-   */
-
-  ret = riscv_config_pmp_region(0, UFLASH_F, UFLASH_START, UFLASH_SIZE);
-  DEBUGASSERT(ret == 0);
-  ret = riscv_config_pmp_region(1, USRAM_F, USRAM_START, USRAM_SIZE);
   DEBUGASSERT(ret == 0);
 '''
 
@@ -56,18 +44,6 @@ BOOL_SETTINGS = {
 
 class OverlayError(RuntimeError):
     pass
-
-
-def replace_once(path: Path, old: str, new: str) -> None:
-    text = path.read_text()
-    count = text.count(old)
-    if count == 0:
-        if new in text:
-            return
-        raise OverlayError(f"expected protected PMP anchor missing in {path}")
-    if count != 1:
-        raise OverlayError(f"expected one protected PMP anchor in {path}, found {count}")
-    path.write_text(text.replace(old, new, 1))
 
 
 def set_config(path: Path, symbol: str, value: bool) -> None:
@@ -94,21 +70,27 @@ def install(root: Path) -> None:
     if "CONFIG_AETHERCORE_UART_RX_IRQ=y" not in config_lines:
         raise OverlayError("protected overlay requires the applied N4 platform boundary")
 
-    replace_once(userspace, PMP_OLD, PMP_NEW)
+    upstream = userspace.read_text()
+    count = upstream.count(PMP_UPSTREAM)
+    if count != 1:
+        raise OverlayError(
+            f"expected one upstream protected PMP allocator anchor in {userspace}, found {count}"
+        )
+    if "riscv_config_pmp_region(0, UFLASH_F" in upstream or \
+       "riscv_config_pmp_region(1, USRAM_F" in upstream:
+        raise OverlayError("protected userspace still contains the obsolete fixed-entry PMP workaround")
+
     for symbol, value in BOOL_SETTINGS.items():
         set_config(config, symbol, value)
 
     generated = userspace.read_text()
     required = (
-        "riscv_config_pmp_region(0, UFLASH_F",
-        "riscv_config_pmp_region(1, USRAM_F",
-        "AetherCore exposes four PMP entries",
+        "riscv_append_pmp_region(UFLASH_F, UFLASH_START, UFLASH_SIZE)",
+        "riscv_append_pmp_region(USRAM_F, USRAM_START, USRAM_SIZE)",
     )
     for fragment in required:
         if fragment not in generated:
-            raise OverlayError(f"generated protected PMP code missing {fragment}")
-    if "riscv_append_pmp_region(" in generated:
-        raise OverlayError("protected userspace still scans for free PMP entries")
+            raise OverlayError(f"upstream protected PMP allocator missing {fragment}")
 
     resolved = set(config.read_text().splitlines())
     required_config = (
