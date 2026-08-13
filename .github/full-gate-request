@@ -1,5 +1,5 @@
-qualification=rv32-pmp-production-pa-geometry
-stacked_base=990497c35db94a715a8cea4a9e08d900dbee4166
-scope=RV32-PMP16-PA34-production-MachineCsrFile-WARL-forwarding-whole-core-checkers-fail-closed-Sv32PMP
-focused_spec=PmpPhysicalAddressGeometrySpec
+qualification=physical-instruction-request-valid
+stacked_base=6582777bb8734ad46411b28881cbeacf86874d9a
+scope=InstructionBusIO-valid-bare-PMP-deny-Sv32-translation-final-request-host-memory-consumer-gating
+focused_spec=PhysicalInstructionRequestSpec
 non_claim=Sv32-plus-PMP-remains-disabled
