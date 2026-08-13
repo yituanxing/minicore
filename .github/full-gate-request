@@ -1,4 +1,5 @@
-qualification=rv32-pmp16-standard-surface
-stacked_base=080627b915f966bc3c947794f115155e82083323
-scope=RV32-PMP16-pmpcfg0-3-pmpaddr0-15-global-priority-cross-bank-lock-forwarding-NuttX-upstream-allocator-P1v3
-historical_oracle=four-entry-NEMU-shadow-with-unchanged-first-bank-workloads
+qualification=rv32-pmp-production-pa-geometry
+stacked_base=990497c35db94a715a8cea4a9e08d900dbee4166
+scope=RV32-PMP16-PA34-production-MachineCsrFile-WARL-forwarding-whole-core-checkers-fail-closed-Sv32PMP
+focused_spec=PmpPhysicalAddressGeometrySpec
+non_claim=Sv32-plus-PMP-remains-disabled

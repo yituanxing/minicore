@@ -119,11 +119,12 @@ class AetherCore(
   val alu = Module(new ALU(xlen))
   val csrFile = Module(new MachineCsrFile(
     config.isa,
+    paddrBits,
     withMachineExternalInterrupt,
     withSupervisorExternalInterrupt
   ))
-  val instructionPmp = Module(new PmpChecker(xlen))
-  val dataPmp = Module(new PmpChecker(xlen))
+  val instructionPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
+  val dataPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
   val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
   val fetchVm = if (config.isa.hasSv32) Some(Module(new Sv32InstructionFetchAdapter(paddrBits))) else None
   val ptwArbiter = if (config.isa.hasSv32) Some(Module(new Sv32PtwArbiter(paddrBits))) else None
@@ -395,6 +396,7 @@ class AetherCore(
   }
   val canonicalCsrWriteData = MachineCsrWarl.canonicalize(
     config.isa,
+    paddrBits,
     csrAddr,
     csrWriteData,
     withSupervisorExternalInterrupt
@@ -598,6 +600,7 @@ class AetherCore(
   }.elsewhen(atomicRmw) {
     atomicRdData := atomicOldData
   }
+
   val memStageRdData = Mux(
     atomicInstruction,
     atomicRdData,
