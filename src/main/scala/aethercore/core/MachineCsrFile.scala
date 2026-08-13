@@ -98,6 +98,15 @@ object MachineCsrWarl {
       address: UInt,
       data: UInt,
       withSupervisorExternalInterrupt: Boolean = false
+  ): UInt =
+    canonicalize(isa, isa.xlen, address, data, withSupervisorExternalInterrupt)
+
+  def canonicalize(
+      isa: IsaConfig,
+      paddrBits: Int,
+      address: UInt,
+      data: UInt,
+      withSupervisorExternalInterrupt: Boolean
   ): UInt = {
     val xlen = isa.xlen
     val allBits = (BigInt(1) << xlen) - 1
@@ -183,13 +192,13 @@ object MachineCsrWarl {
         val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
         if (firstEntry < isa.pmpEntries) {
           when(address === PmpCsrAddress.pmpcfg(bank).U) {
-            result := PmpCsrWarl.canonicalize(isa, address, data)
+            result := PmpCsrWarl.canonicalize(isa, paddrBits, address, data)
           }
         }
       }
       for (entry <- 0 until isa.pmpEntries) {
         when(address === PmpCsrAddress.pmpaddr(entry).U) {
-          result := PmpCsrWarl.canonicalize(isa, address, data)
+          result := PmpCsrWarl.canonicalize(isa, paddrBits, address, data)
         }
       }
     }
@@ -199,12 +208,24 @@ object MachineCsrWarl {
 
 class MachineCsrFile(
     val isa: IsaConfig,
-    val withMachineExternalInterrupt: Boolean = false,
-    val withSupervisorExternalInterrupt: Boolean = false
+    val paddrBits: Int,
+    val withMachineExternalInterrupt: Boolean,
+    val withSupervisorExternalInterrupt: Boolean
 ) extends Module {
+  def this(isa: IsaConfig) = this(isa, isa.xlen, false, false)
+  def this(isa: IsaConfig, withMachineExternalInterrupt: Boolean) =
+    this(isa, isa.xlen, withMachineExternalInterrupt, false)
+  def this(
+      isa: IsaConfig,
+      withMachineExternalInterrupt: Boolean,
+      withSupervisorExternalInterrupt: Boolean
+  ) = this(isa, isa.xlen, withMachineExternalInterrupt, withSupervisorExternalInterrupt)
+
   require(!withSupervisorExternalInterrupt || isa.hasS, "supervisor external interrupt requires S-mode")
 
   private val xlen = isa.xlen
+  private val pmpGeometry = PmpGeometry(xlen, paddrBits)
+  private val pmpAddressBits = pmpGeometry.encodedAddressBits
   private val allBits = (BigInt(1) << xlen) - 1
   private val sstatusSie = BigInt(1) << MachineCsrBit.SstatusSie
   private val mstatusMie = BigInt(1) << MachineCsrBit.MstatusMie
@@ -270,7 +291,7 @@ class MachineCsrFile(
     val satpRootPpn = Output(UInt(Sv32Satp.PpnBits.W))
     val satpAsid = Output(UInt(Sv32Satp.AsidBits.W))
     val pmpConfig = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
-    val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt((xlen - 2).W)))
+    val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt(pmpAddressBits.W)))
 
     val timerInterrupt = Input(Bool())
     val machineTimerInterrupt = Output(Bool())
@@ -316,7 +337,7 @@ class MachineCsrFile(
   val scause = RegInit(0.U(xlen.W))
   val stval = RegInit(0.U(xlen.W))
 
-  val pmp = Module(new PmpCsrFile(isa))
+  val pmp = Module(new PmpCsrFile(isa, paddrBits))
   pmp.io.readAddr := io.readAddr
   pmp.io.writeEnable := io.writeEnable
   pmp.io.writeAddr := io.writeAddr
@@ -326,6 +347,7 @@ class MachineCsrFile(
 
   val canonicalWriteData = MachineCsrWarl.canonicalize(
     isa,
+    paddrBits,
     io.writeAddr,
     io.writeData,
     withSupervisorExternalInterrupt

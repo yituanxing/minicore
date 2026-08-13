@@ -74,7 +74,8 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
     simulate(
       new MachineCsrFile(
         CoreProfiles.rv32imsuSv32Software.isa,
-        withSupervisorExternalInterrupt = true
+        false,
+        true
       )
     ) { dut =>
       initialize(dut)
@@ -101,7 +102,8 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
     simulate(
       new MachineCsrFile(
         CoreProfiles.rv32imsuSv32Software.isa,
-        withSupervisorExternalInterrupt = true
+        false,
+        true
       )
     ) { dut =>
       initialize(dut)
