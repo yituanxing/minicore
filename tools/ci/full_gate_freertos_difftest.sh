@@ -20,11 +20,11 @@ fi
 
 EXPECTED_REFERENCE_SHA256="e1e18bec22a1e6a19dbb300b43063ed5d3216a8d9f6ccf6400355d4fb897de9e"
 EXPECTED_ADAPTER_SHA256="ef8871db8119ec7ae3091e289f55c8c621042fd44d044bfb746028572d616810"
-# Requalified after the consolidated gate exposed a stale generated-runner
-# digest. The source runner and both deterministic generators are unchanged
-# from the protected NuttX freeze baseline; exact architectural summaries and
-# the deliberate mismatch probe below remain frozen and fail closed.
-EXPECTED_RUNNER_SHA256="0e55835761582e4e25e635ff958fbfc927000690b50526210a451baafe891177"
+# Requalified for Slice B after sim_main.cpp intentionally gained the physical
+# instruction-request-valid transport gate. The architectural summaries,
+# frozen NEMU reference, adapter/ELF/binary digests and deliberate mismatch
+# probe below remain unchanged and fail closed.
+EXPECTED_RUNNER_SHA256="23e1774339d13ba18d73efa5b50e5a184633c868818a518f0f5240b80698c32b"
 EXPECTED_ELF_SHA256="81870780703da81e49d521f8137d8ec2f695d8fc0f7e6bd86aeb96b6fca91396"
 EXPECTED_BINARY_SHA256="eb98b161627a9226bd3fe94077d714aedbb116f85bca875dcd5c43e5613468df"
 EXPECTED_STALL0_SUMMARY="PASS: self-check exit=0 after 271664 cycles, 168046 committed instructions, wfi-commits=1, masked-wfi-commits=1, wfi-sleep-cycles=30199, uart-rx-injected=0, external-seen=0, difftest=168046, zicsr-shadow=3191, trap-shadow=220, fence-shadow=1, wfi-shadow=1, mret-shadow=360, interrupt-shadow=140"

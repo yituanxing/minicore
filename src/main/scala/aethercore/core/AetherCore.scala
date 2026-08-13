@@ -144,6 +144,8 @@ class AetherCore(
   instructionPmp.io.execute := true.B
   instructionPmp.io.config := csrFile.io.pmpConfig
   instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
+  val instructionPmpFault =
+    if (config.isa.hasPmp) !instructionPmp.io.allow else false.B
 
   dataPmp.io.privilege := csrFile.io.effectiveDataPrivilege
   dataPmp.io.config := csrFile.io.pmpConfig
@@ -629,6 +631,8 @@ class AetherCore(
   val fetchContextChange = vmCsrHazard
   fetchKill := takingTrap || takingInterrupt || takingXret || takingSfence || waitingForInterrupt ||
     redirect || fetchContextChange
+  io.imem.valid := fetchResponseValid && !fetchKill && !fetchPageFault && !fetchAccessFault &&
+    !instructionPmpFault
   val frontendAdvance = !takingTrap && !takingInterrupt && !takingXret && !takingSfence &&
     !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
   if (config.isa.hasSv32) {
@@ -814,8 +818,7 @@ class AetherCore(
         ifId.valid := true.B
         ifId.pc := pc
         ifId.inst := io.imem.inst
-        ifId.fault := io.imem.fault ||
-          (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
+        ifId.fault := io.imem.fault || instructionPmpFault
         ifId.pageFault := false.B
         pc := pc + 4.U
       }

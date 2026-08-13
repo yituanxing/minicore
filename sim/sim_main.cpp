@@ -170,10 +170,11 @@ class Memory {
 };
 
 void driveInputs(VAetherCoreSimTop& top, const Memory& memory, bool memoryReady) {
+  const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
-  const bool ifault = !memory.contains(iaddr, 4);
+  const bool ifault = ivalid && !memory.contains(iaddr, 4);
   top.io_imemFault = ifault;
-  top.io_imemInst = ifault ? kEbreak : memory.read32(iaddr);
+  top.io_imemInst = (!ivalid || ifault) ? 0 : memory.read32(iaddr);
 
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
   const bool dvalid = top.io_memValid;

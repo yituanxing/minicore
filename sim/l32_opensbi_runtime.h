@@ -67,10 +67,11 @@ class Memory {
 /** Drive the complete current L32 physical-memory boundary for one low phase. */
 template <typename Top>
 void driveMemory(Top& top, const Memory& memory) {
+  const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
-  const bool ifault = !memory.contains(iaddr, 4);
+  const bool ifault = ivalid && !memory.contains(iaddr, 4);
   top.io_imemFault = ifault;
-  top.io_imemInst = ifault ? kEbreak : memory.read32(iaddr);
+  top.io_imemInst = (!ivalid || ifault) ? 0 : memory.read32(iaddr);
 
   const bool dvalid = top.io_memValid;
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);

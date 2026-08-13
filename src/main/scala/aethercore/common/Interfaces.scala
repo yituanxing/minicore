@@ -83,6 +83,7 @@ class TrapInfo(val xlen: Int) extends Bundle {
 class InstructionBusIO(val addrBits: Int = 64) extends Bundle {
   require(addrBits > 0, s"instruction address width must be positive, got $addrBits")
 
+  val valid = Output(Bool())
   val addr = Output(UInt(addrBits.W))
   val inst = Input(UInt(32.W))
   val fault = Input(Bool())
