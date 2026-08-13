@@ -199,6 +199,12 @@ class AetherCore(
     fetchAccessFault := fetch.io.accessFault
   }
 
+  val physicalInstructionRequestValid = if (config.isa.hasSv32) {
+    fetchResponseValid && !fetchPageFault && !fetchAccessFault && !fetchKill
+  } else {
+    !fetchKill && (if (config.isa.hasPmp) instructionPmp.io.allow else true.B)
+  }
+  io.imem.valid := physicalInstructionRequestValid
   io.imem.addr := fetchPhysicalAddress
   decoder.io.inst := ifId.inst
 
@@ -803,7 +809,7 @@ class AetherCore(
           ifId.pc := pc
           ifId.inst := io.imem.inst
           ifId.pageFault := fetchPageFault
-          ifId.fault := fetchAccessFault || (!fetchPageFault && io.imem.fault)
+          ifId.fault := fetchAccessFault || (!fetchPageFault && io.imem.valid && io.imem.fault)
           pc := pc + 4.U
         }.otherwise {
           ifId.valid := false.B
@@ -814,7 +820,7 @@ class AetherCore(
         ifId.valid := true.B
         ifId.pc := pc
         ifId.inst := io.imem.inst
-        ifId.fault := io.imem.fault ||
+        ifId.fault := (io.imem.valid && io.imem.fault) ||
           (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
         ifId.pageFault := false.B
         pc := pc + 4.U
