@@ -13,7 +13,8 @@ class Sv32PmpCompositionSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "AetherCore Sv32 plus PMP physical composition"
 
   private val base = BigInt("80000000", 16)
-  private val supervisorEntry = base + 0x40
+  // Leave enough room for the longest M-mode PMP setup before placing S-mode code.
+  private val supervisorEntry = base + 0x80
   private val rootPpn = BigInt("20000", 16)
   private val nextPpn = BigInt("21000", 16)
   private val va = BigInt("40403024", 16)
@@ -98,7 +99,7 @@ class Sv32PmpCompositionSpec extends AnyFlatSpec with Matchers with ChiselSim {
       uType(0x80020, 1),
       csr(satp, 1),
       uType(0x80000, 2),
-      iType(0x40, 2, 0, 2, 0x13),
+      iType(0x80, 2, 0, 2, 0x13),
       csr(mepc, 2),
       uType(0x1, 3),
       iType(-2048, 3, 0, 3, 0x13),
