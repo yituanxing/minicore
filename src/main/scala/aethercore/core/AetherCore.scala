@@ -10,6 +10,7 @@ class IfId(val xlen: Int = 64) extends Bundle {
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
   val instBytes = UInt(3.W)
+  val faultAddress = UInt(xlen.W)
   val fault = Bool()
   val pageFault = Bool()
 }
@@ -148,6 +149,10 @@ class AetherCore(
   val fetchPhysicalAddress = WireDefault(pc.pad(paddrBits))
   val fetchPageFault = WireDefault(false.B)
   val fetchAccessFault = WireDefault(false.B)
+  // Architectural instruction-fault VA is separate from instruction start PC.
+  // They are identical today; a later second parcel can fault at PC+2 while
+  // the architectural EPC remains the instruction start.
+  val fetchFaultAddress = WireDefault(pc)
   // The current frontend still fetches only base-width instructions.  Keeping
   // this as an explicit architectural fact lets later RV32C parcel assembly
   // change instruction length without rediscovering hidden PC+4 assumptions.
@@ -325,11 +330,11 @@ class AetherCore(
   when(ifId.pageFault) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.InstructionPageFault.U(xlen.W)
-    decodedTrap.value := ifId.pc
+    decodedTrap.value := ifId.faultAddress
   }.elsewhen(ifId.fault) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.InstructionAccessFault.U(xlen.W)
-    decodedTrap.value := ifId.pc
+    decodedTrap.value := ifId.faultAddress
   }.elsewhen(ifIdSfenceVma && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
@@ -846,6 +851,7 @@ class AetherCore(
           ifId.pc := pc
           ifId.inst := io.imem.inst
           ifId.instBytes := fetchedInstBytes
+          ifId.faultAddress := fetchFaultAddress
           ifId.pageFault := fetchPageFault
           ifId.fault := fetchAccessFault || instructionPmpFault ||
             (!fetchPageFault && !instructionPmpFault && io.imem.fault)
@@ -860,6 +866,7 @@ class AetherCore(
         ifId.pc := pc
         ifId.inst := io.imem.inst
         ifId.instBytes := fetchedInstBytes
+        ifId.faultAddress := fetchFaultAddress
         ifId.fault := io.imem.fault || instructionPmpFault
         ifId.pageFault := false.B
         pc := pc + fetchedInstBytes
