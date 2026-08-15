@@ -56,13 +56,13 @@ def main() -> None:
 
     text = replace_once(
         text,
-        '      if (imageInst != commit.inst) {\n'
-        '        fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +\n'
+        '      if (imageInst != commit.rawInst) {\n'
+        '        fail("DUT raw instruction " + hex32(commit.rawInst) + " differs from image instruction " +\n'
         '             hex32(imageInst) + " at pc=" + hex32(commitPc));\n'
         '      }\n\n'
         '      mretStep = commit.inst == kMret;\n',
-        '      if (imageInst != commit.inst) {\n'
-        '        fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +\n'
+        '      if (imageInst != commit.rawInst) {\n'
+        '        fail("DUT raw instruction " + hex32(commit.rawInst) + " differs from image instruction " +\n'
         '             hex32(imageInst) + " at pc=" + hex32(commitPc));\n'
         '      }\n'
         '      validatePmpNormal(before, commit);\n\n'
@@ -271,14 +271,14 @@ def main() -> None:
     text = replace_once(
         text,
         '      case kLoadAccessFault:\n'
-        '        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||\n'
+        '        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.rawInst ||\n'
         '            value != explicitMemoryAddress(before, commit.inst)) {\n'
         '          fail("load access-fault trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n',
         '      case kLoadAccessFault: {\n'
         '        const auto address = explicitMemoryAddress(before, commit.inst);\n'
-        '        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||\n'
+        '        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.rawInst ||\n'
         '            value != address || pmpAllows(address, memoryAccessSize(commit.inst), false, false)) {\n'
         '          fail("load access fault is not justified by the PMP shadow");\n'
         '        }\n'
@@ -290,14 +290,14 @@ def main() -> None:
     text = replace_once(
         text,
         '      case kStoreAccessFault:\n'
-        '        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||\n'
+        '        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.rawInst ||\n'
         '            value != explicitMemoryAddress(before, commit.inst)) {\n'
         '          fail("store access-fault trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n',
         '      case kStoreAccessFault: {\n'
         '        const auto address = explicitMemoryAddress(before, commit.inst);\n'
-        '        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||\n'
+        '        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.rawInst ||\n'
         '            value != address || pmpAllows(address, memoryAccessSize(commit.inst), true, false)) {\n'
         '          fail("store access fault is not justified by the PMP shadow");\n'
         '        }\n'

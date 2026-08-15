@@ -9,6 +9,7 @@ class IfId(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
   val instBytes = UInt(3.W)
   val faultAddress = UInt(xlen.W)
   val fault = Bool()
@@ -19,6 +20,7 @@ class IdEx(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
   val instBytes = UInt(3.W)
   val rs1 = UInt(5.W)
   val rs2 = UInt(5.W)
@@ -34,6 +36,7 @@ class ExMem(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
   val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val result = UInt(xlen.W)
@@ -53,6 +56,7 @@ class MemWb(
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
   val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val rdData = UInt(xlen.W)
@@ -316,7 +320,7 @@ class AetherCore(
   }
 
   val instructionTrapValue =
-    if (xlen == 32) ifId.inst else Cat(0.U((xlen - 32).W), ifId.inst)
+    if (xlen == 32) ifId.rawInst else Cat(0.U((xlen - 32).W), ifId.rawInst)
   val environmentCallCause = Mux(
     csrFile.io.currentPrivilege === PrivilegeMode.User.U,
     MachineExceptionCode.EnvironmentCallFromU.U(xlen.W),
@@ -451,7 +455,7 @@ class AetherCore(
   val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idExNextPc, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
   val idExInstructionValue =
-    if (xlen == 32) idEx.inst else Cat(0.U((xlen - 32).W), idEx.inst)
+    if (xlen == 32) idEx.rawInst else Cat(0.U((xlen - 32).W), idEx.rawInst)
 
   val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
   val storeMask = WireDefault(fullStoreMask)
@@ -682,6 +686,7 @@ class AetherCore(
   io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
   io.commit.inst := memWb.inst
+  io.commit.rawInst := memWb.rawInst
   io.commit.instBytes := memWb.instBytes
   io.commit.rd := memWb.rd
   io.commit.rdWrite := memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
@@ -762,6 +767,7 @@ class AetherCore(
     memWb.valid := exMem.valid
     memWb.pc := exMem.pc
     memWb.inst := exMem.inst
+    memWb.rawInst := exMem.rawInst
     memWb.instBytes := exMem.instBytes
     memWb.rd := exMem.rd
     memWb.rdData := memStageRdData
@@ -806,6 +812,7 @@ class AetherCore(
     exMem.valid := idEx.valid
     exMem.pc := idEx.pc
     exMem.inst := idEx.inst
+    exMem.rawInst := idEx.rawInst
     exMem.instBytes := idEx.instBytes
     exMem.rd := idEx.rd
     exMem.result := exResult
@@ -835,6 +842,7 @@ class AetherCore(
       idEx.valid := ifId.valid
       idEx.pc := ifId.pc
       idEx.inst := ifId.inst
+      idEx.rawInst := ifId.rawInst
       idEx.instBytes := ifId.instBytes
       idEx.rs1 := decoder.io.rs1
       idEx.rs2 := decoder.io.rs2
@@ -850,6 +858,7 @@ class AetherCore(
           ifId.valid := true.B
           ifId.pc := pc
           ifId.inst := io.imem.inst
+          ifId.rawInst := io.imem.inst
           ifId.instBytes := fetchedInstBytes
           ifId.faultAddress := fetchFaultAddress
           ifId.pageFault := fetchPageFault
@@ -865,6 +874,7 @@ class AetherCore(
         ifId.valid := true.B
         ifId.pc := pc
         ifId.inst := io.imem.inst
+        ifId.rawInst := io.imem.inst
         ifId.instBytes := fetchedInstBytes
         ifId.faultAddress := fetchFaultAddress
         ifId.fault := io.imem.fault || instructionPmpFault

@@ -6,7 +6,9 @@
 
 struct DifftestCommit {
   std::uint64_t pc = 0;
+  // inst is canonical execution encoding; rawInst is the fetched encoding.
   std::uint32_t inst = 0;
+  std::uint32_t rawInst = 0;
   std::uint8_t instBytes = 4;
   std::uint8_t rd = 0;
   bool rdWrite = false;
