@@ -49,6 +49,7 @@ class AetherCoreSimTop(
   val io = IO(new Bundle {
     val imemValid = Output(Bool())
     val imemAddr = Output(UInt(paddrBits.W))
+    val imemBytes = Output(UInt(3.W))
     val imemInst = Input(UInt(32.W))
     val imemFault = Input(Bool())
 
@@ -164,6 +165,7 @@ class AetherCoreSimTop(
   core.io.imem.fault := io.imemFault
   io.imemValid := core.io.imem.valid
   io.imemAddr := core.io.imem.addr
+  io.imemBytes := core.io.imem.bytes
 
   if (config.isa.hasSv32) {
     io.ptwValid.get := core.io.ptw.get.valid

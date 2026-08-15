@@ -23,10 +23,14 @@ class Rv32cInstructionLengthContract(unittest.TestCase):
         self.assertNotIn("idEx.pc + 4.U", self.core)
         self.assertNotIn("pc := pc + 4.U", self.core)
 
-    def test_fetch_transaction_is_not_mixed_with_architectural_length_yet(self):
+    def test_physical_transaction_width_stays_separate_from_architectural_length(self):
         self.assertIn("val fetchedInstBytes = 4.U(3.W)", self.core)
-        self.assertIn("instructionPmp.io.bytes := 4.U", self.core)
+        self.assertIn("val instructionTransactionBytes = 4.U(3.W)", self.core)
+        self.assertIn(
+            "instructionPmp.io.bytes := instructionTransactionBytes", self.core
+        )
         self.assertNotIn("instructionPmp.io.bytes := fetchedInstBytes", self.core)
+        self.assertNotIn("io.imem.bytes := fetchedInstBytes", self.core)
 
 
 if __name__ == "__main__":

@@ -152,10 +152,14 @@ class AetherCore(
   // this as an explicit architectural fact lets later RV32C parcel assembly
   // change instruction length without rediscovering hidden PC+4 assumptions.
   val fetchedInstBytes = 4.U(3.W)
+  // Physical instruction transport is a separate fact from architectural
+  // instruction length: RV32C will assemble a 32-bit instruction from two
+  // independent 2-byte parcels.  Keep today's transport width explicit.
+  val instructionTransactionBytes = 4.U(3.W)
 
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
   instructionPmp.io.address := fetchPhysicalAddress
-  instructionPmp.io.bytes := 4.U
+  instructionPmp.io.bytes := instructionTransactionBytes
   instructionPmp.io.write := false.B
   instructionPmp.io.execute := true.B
   instructionPmp.io.config := csrFile.io.pmpConfig
@@ -225,6 +229,7 @@ class AetherCore(
     (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
 
   io.imem.addr := fetchPhysicalAddress
+  io.imem.bytes := instructionTransactionBytes
   decoder.io.inst := ifId.inst
 
   registerFile.io.rs1Addr := decoder.io.rs1
