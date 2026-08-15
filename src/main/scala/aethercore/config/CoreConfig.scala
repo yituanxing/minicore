@@ -122,10 +122,6 @@ final case class CoreConfig(
     !isa.hasPmp || (isa.xlen == 32 && isa.pmpEntries == 16),
     "the current AetherCore PMP implementation supports the standard RV32 PMP16 surface only"
   )
-  require(
-    !(isa.hasSv32 && isa.hasPmp),
-    "Sv32+PMP remains fail-closed until PMP qualifies translated final and implicit PTW physical accesses"
-  )
 }
 
 object CoreProfiles {
@@ -209,6 +205,20 @@ object CoreProfiles {
       privilegeModes = Set('M', 'S', 'U'),
       zExtensions = Set("Zicsr", "Zifencei"),
       virtualMemoryModes = Set("Sv32"),
+      sstc = true
+    ),
+    platform = rv32Sv32Platform
+  )
+
+  val rv32imasuSv32PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv32imasu-sv32-pmp-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      virtualMemoryModes = Set("Sv32"),
+      pmpEntries = 16,
       sstc = true
     ),
     platform = rv32Sv32Platform
