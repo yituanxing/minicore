@@ -13,8 +13,6 @@ on:
       - tests_py/test_l32_linux_boot_contract.py
       - sim/opensbi_boot_main.cpp
       - Makefile.l32-linux-boot
-      - src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala
-      - src/main/scala/aethercore/ElaborateOpenSbi.scala
       - .github/workflows/l32-linux-boot.yml
   workflow_dispatch:
 
