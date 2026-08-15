@@ -135,6 +135,16 @@ class Memory {
     input.read(reinterpret_cast<char*>(bytes_.data()), static_cast<std::streamsize>(bytes_.size()));
   }
 
+  std::uint32_t readInstruction(std::uint64_t address, std::size_t size) const {
+    if (size != 2 && size != 4)
+      throw std::runtime_error("instruction transaction must be 2 or 4 bytes");
+    const auto offset = checkedOffset(address, size);
+    std::uint32_t value = 0;
+    for (std::size_t i = 0; i < size; ++i)
+      value |= std::uint32_t(bytes_[offset + i]) << (8 * i);
+    return value;
+  }
+
   std::uint32_t read32(std::uint64_t address) const {
     const auto offset = checkedOffset(address, 4);
     std::uint32_t value = 0;
@@ -172,9 +182,13 @@ class Memory {
 void driveInputs(VAetherCoreSimTop& top, const Memory& memory, bool memoryReady) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
-  const bool ifault = ivalid && !memory.contains(iaddr, 4);
+  const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
+  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4;
+  const bool ifault = ivalid &&
+      (invalidInstructionWidth || !memory.contains(iaddr, ibytes));
   top.io_imemFault = ifault;
-  top.io_imemInst = (!ivalid || ifault) ? 0 : memory.read32(iaddr);
+  top.io_imemInst =
+      (!ivalid || ifault) ? 0 : memory.readInstruction(iaddr, ibytes);
 
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
   const bool dvalid = top.io_memValid;

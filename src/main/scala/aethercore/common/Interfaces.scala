@@ -85,6 +85,7 @@ class InstructionBusIO(val addrBits: Int = 64) extends Bundle {
 
   val valid = Output(Bool())
   val addr = Output(UInt(addrBits.W))
+  val bytes = Output(UInt(3.W))
   val inst = Input(UInt(32.W))
   val fault = Input(Bool())
 }
