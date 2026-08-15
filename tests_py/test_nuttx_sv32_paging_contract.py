@@ -57,6 +57,10 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
     def test_n5c_handoff_enables_required_supervisor_firmware_gates(self):
         text = (ROOT / "Makefile.nuttx-sv32-probe").read_text()
         for required in (
+            "csrw pmpaddr0, t0",
+            "csrw pmpcfg0, t0",
+            "li t0, -1",
+            "li t0, 0x1f",
             "csrw medeleg, t0",
             "csrw mideleg, t0",
             "csrw mcounteren, t0",
@@ -65,9 +69,15 @@ class NuttXSv32PagingContractTest(unittest.TestCase):
             "li t0, 0x20",
             "li t0, 0x2",
             "li t0, 0x80000000",
+            "PMP allow-all installed",
             "page faults/U-ecall/STIP delegated, TM/STCE enabled",
         ):
             self.assertIn(required, text)
+
+    def test_n5c_sim_top_uses_the_composed_sv32_pmp_profile(self):
+        text = (ROOT / "src/main/scala/aethercore/sim/AetherCoreNuttXPagingSimTop.scala").read_text()
+        self.assertIn("CoreProfiles.rv32imasuSv32PmpSoftware", text)
+        self.assertNotIn("config = CoreProfiles.rv32imasuSv32Software,", text)
 
     def test_n5c_probe_only_succeeds_at_nsh(self):
         makefile = (ROOT / "Makefile.nuttx-sv32-probe").read_text()

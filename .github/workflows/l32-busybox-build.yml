@@ -45,8 +45,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify L32 runtime need
+    runs-on: [self-hosted, Linux, X64, minicore]
+    outputs:
+      run_heavy: ${{ steps.changes.outputs.run_heavy }}
+    steps:
+      - name: Checkout for path classification
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select full Linux runtime only for L32-specific changes or explicit dispatch
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "run_heavy=true" >> "$GITHUB_OUTPUT"
+            echo "L32 full runtime selected by explicit workflow_dispatch"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "${PR_BASE_SHA}" "${GITHUB_SHA}")"
+          printf '%s\n' "$changed"
+
+          # Core RTL changes are exercised continuously by Fast Gate and the
+          # currently targeted real-system lane. Do not rebuild/run the full
+          # Linux BusyBox matrix for every frontier commit; reserve this heavy
+          # lane for L32 runtime/platform changes and explicit milestone runs.
+          if grep -Eq '^(software/l32/|software/l32_busybox/|software/l32_real/|tools/ci/l32_|tools/ensure_l32_riscv32_linux_gcc\.sh$|tools/ensure_verilator_5_024\.sh$|tests_py/test_l32_|build\.mill$|mill$|Makefile\.l32-linux-boot$|sim/l32_opensbi_runtime\.h$|sim/opensbi_(boot|forkserver)_main\.cpp$|tools/ci/make_l32_dtb\.py$)' <<<"$changed"; then
+            echo "run_heavy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_heavy=false" >> "$GITHUB_OUTPUT"
+            echo "L32 full runtime deferred: this PR only reaches the lane through core/workflow changes"
+          fi
+
   busybox-shell:
     name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 runtime
+    needs: classify
+    if: needs.classify.outputs.run_heavy == 'true'
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
 

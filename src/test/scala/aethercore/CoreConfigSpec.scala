@@ -113,6 +113,21 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.march shouldBe "rv32ima_zicsr_zifencei"
   }
 
+  it should "describe the composed RV32IMA Sv32 PMP16 workload profile" in {
+    val config = CoreProfiles.rv32imasuSv32PmpSoftware
+    config.name shouldBe "rv32imasu-sv32-pmp-software"
+    config.isa.xlen shouldBe 32
+    config.isa.hasA shouldBe true
+    config.isa.hasS shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasSv32 shouldBe true
+    config.isa.hasPmp shouldBe true
+    config.isa.pmpEntries shouldBe 16
+    config.isa.hasSstc shouldBe true
+    config.platform.paddrBits shouldBe 34
+    config.isa.march shouldBe "rv32ima_zicsr_zifencei"
+  }
+
   it should "describe an independent RV32 Sv32 Supervisor ISA contract" in {
     val isa = IsaConfig(
       xlen = 32,
@@ -219,8 +234,10 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     )
     sv32Pmp16.hasSv32 shouldBe true
     sv32Pmp16.hasPmp shouldBe true
-    an[IllegalArgumentException] should be thrownBy
-      CoreConfig("deferred-sv32-pmp16", sv32Pmp16, rv32Sv32Platform)
+    val composed = CoreConfig("composed-sv32-pmp16", sv32Pmp16, rv32Sv32Platform)
+    composed.isa.hasSv32 shouldBe true
+    composed.isa.hasPmp shouldBe true
+    composed.platform.paddrBits shouldBe 34
 
     val unsupportedProfiles = Seq(
       "compressed" -> IsaConfig(32, Set('I', 'C'), Set('M')),

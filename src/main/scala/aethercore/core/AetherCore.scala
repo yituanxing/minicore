@@ -128,6 +128,7 @@ class AetherCore(
   val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
   val fetchVm = if (config.isa.hasSv32) Some(Module(new Sv32InstructionFetchAdapter(paddrBits))) else None
   val ptwArbiter = if (config.isa.hasSv32) Some(Module(new Sv32PtwArbiter(paddrBits))) else None
+  val ptwPmp = if (config.isa.hasSv32) Some(Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))) else None
 
   val ifIdSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(ifId.inst) else false.B
   val idExSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(idEx.inst) else false.B
@@ -137,26 +138,26 @@ class AetherCore(
   val takingXret = memWb.valid && memWb.xret =/= XRetOp.None && !memWb.trap.valid
   val takingSfence = memWb.valid && memWbSfenceVma && !memWb.trap.valid
 
-  instructionPmp.io.privilege := csrFile.io.currentPrivilege
-  instructionPmp.io.address := pc
-  instructionPmp.io.bytes := 4.U
-  instructionPmp.io.write := false.B
-  instructionPmp.io.execute := true.B
-  instructionPmp.io.config := csrFile.io.pmpConfig
-  instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
-  val instructionPmpFault =
-    if (config.isa.hasPmp) !instructionPmp.io.allow else false.B
-
-  dataPmp.io.privilege := csrFile.io.effectiveDataPrivilege
-  dataPmp.io.config := csrFile.io.pmpConfig
-  dataPmp.io.pmpAddress := csrFile.io.pmpAddress
-
   val fetchKill = WireDefault(false.B)
   val fetchResponseReady = WireDefault(false.B)
   val fetchResponseValid = WireDefault(true.B)
   val fetchPhysicalAddress = WireDefault(pc.pad(paddrBits))
   val fetchPageFault = WireDefault(false.B)
   val fetchAccessFault = WireDefault(false.B)
+
+  instructionPmp.io.privilege := csrFile.io.currentPrivilege
+  instructionPmp.io.address := fetchPhysicalAddress
+  instructionPmp.io.bytes := 4.U
+  instructionPmp.io.write := false.B
+  instructionPmp.io.execute := true.B
+  instructionPmp.io.config := csrFile.io.pmpConfig
+  instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
+
+  val dataPmpAddress = WireDefault(exMem.result.pad(paddrBits))
+  dataPmp.io.privilege := csrFile.io.effectiveDataPrivilege
+  dataPmp.io.address := dataPmpAddress
+  dataPmp.io.config := csrFile.io.pmpConfig
+  dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
   val dataPteValid = WireDefault(false.B)
   val dataPteAddress = WireDefault(0.U(paddrBits.W))
@@ -189,17 +190,31 @@ class AetherCore(
     fetch.io.pteData := arbiter.io.fetchRdata
     fetch.io.pteFault := arbiter.io.fetchFault
 
-    io.ptw.get.valid := arbiter.io.memoryValid
+    val pmp = ptwPmp.get
+    pmp.io.privilege := PrivilegeMode.Supervisor.U
+    pmp.io.address := arbiter.io.memoryAddress
+    pmp.io.bytes := 4.U
+    pmp.io.write := false.B
+    pmp.io.execute := false.B
+    pmp.io.config := csrFile.io.pmpConfig
+    pmp.io.pmpAddress := csrFile.io.pmpAddress
+    val ptwPmpFault = arbiter.io.memoryValid &&
+      (if (config.isa.hasPmp) !pmp.io.allow else false.B)
+
+    io.ptw.get.valid := arbiter.io.memoryValid && !ptwPmpFault
     io.ptw.get.addr := arbiter.io.memoryAddress
-    arbiter.io.memoryReady := io.ptw.get.ready
+    arbiter.io.memoryReady := Mux(ptwPmpFault, true.B, io.ptw.get.ready)
     arbiter.io.memoryRdata := io.ptw.get.rdata
-    arbiter.io.memoryFault := io.ptw.get.fault
+    arbiter.io.memoryFault := ptwPmpFault || (io.ptw.get.valid && io.ptw.get.fault)
 
     fetchResponseValid := fetch.io.responseValid
     fetchPhysicalAddress := fetch.io.physicalAddress
     fetchPageFault := fetch.io.pageFault
     fetchAccessFault := fetch.io.accessFault
   }
+
+  val instructionPmpFault = fetchResponseValid && !fetchPageFault && !fetchAccessFault &&
+    (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
 
   io.imem.addr := fetchPhysicalAddress
   decoder.io.inst := ifId.inst
@@ -485,13 +500,11 @@ class AetherCore(
   val alignedDataAccess = candidateDataAccess && !dataAddressMisaligned
   val atomicNeedsWritePermission = atomicSc || atomicRmw
 
-  dataPmp.io.address := exMem.result
   dataPmp.io.bytes := dataAccessBytes
   dataPmp.io.write := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
   dataPmp.io.execute := false.B
 
-  val dataPmpFault = alignedDataAccess &&
-    (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+  val dataPmpFault = WireDefault(false.B)
   val atomicScBusRequest = if (config.isa.hasSv32) atomicSc else atomicSc && scReservationMatch
   val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
   val rawDataRequest = alignedDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
@@ -515,7 +528,7 @@ class AetherCore(
 
   if (config.isa.hasSv32) {
     val vm = dataVm.get
-    vm.io.requestValid := rawDataRequest && !dataPmpFault && !vmCsrHazard
+    vm.io.requestValid := rawDataRequest && !vmCsrHazard
     vm.io.flush := takingSfence
     vm.io.virtualAddress := exMem.result(31, 0)
     vm.io.privilege := csrFile.io.effectiveDataPrivilege
@@ -535,15 +548,20 @@ class AetherCore(
     vm.io.pteData := dataPteRdata
     vm.io.pteFault := dataPteFault
 
-    io.dmem.valid := vm.io.dataValid
+    dataPmpAddress := vm.io.dataAddress
+    val translatedDataPmpFault = vm.io.dataValid &&
+      (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+    dataPmpFault := translatedDataPmpFault
+
+    io.dmem.valid := vm.io.dataValid && !translatedDataPmpFault
     io.dmem.write := vm.io.dataWrite
     io.dmem.addr := vm.io.dataAddress
     io.dmem.wdata := vm.io.dataWdata
     io.dmem.wmask := vm.io.dataWmask
     io.dmem.size := vm.io.dataSize
-    vm.io.dataReady := io.dmem.ready
+    vm.io.dataReady := Mux(translatedDataPmpFault, true.B, io.dmem.ready)
     vm.io.dataRdata := io.dmem.rdata(31, 0)
-    vm.io.dataFault := io.dmem.fault
+    vm.io.dataFault := translatedDataPmpFault || (io.dmem.valid && io.dmem.fault)
 
     translatedPhysicalAddress := vm.io.physicalAddress
     scReservationMatch := reservationValid && reservationAddress === vm.io.physicalAddress
@@ -551,7 +569,10 @@ class AetherCore(
     vmPageFault := vm.io.pageFault
     vmAccessFault := vm.io.accessFault
   } else {
-    io.dmem.valid := rawDataRequest && !dataPmpFault
+    val bareDataPmpFault = alignedDataAccess &&
+      (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+    dataPmpFault := bareDataPmpFault
+    io.dmem.valid := rawDataRequest && !bareDataPmpFault
     io.dmem.write := dataBusWrite
     io.dmem.addr := exMem.result.pad(paddrBits)
     io.dmem.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
@@ -807,7 +828,8 @@ class AetherCore(
           ifId.pc := pc
           ifId.inst := io.imem.inst
           ifId.pageFault := fetchPageFault
-          ifId.fault := fetchAccessFault || (!fetchPageFault && io.imem.fault)
+          ifId.fault := fetchAccessFault || instructionPmpFault ||
+            (!fetchPageFault && !instructionPmpFault && io.imem.fault)
           pc := pc + 4.U
         }.otherwise {
           ifId.valid := false.B
