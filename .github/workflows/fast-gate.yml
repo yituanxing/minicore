@@ -165,6 +165,7 @@ jobs:
             aethercore.PmpCoreSpec \
             aethercore.PmpPhysicalAddressGeometrySpec \
             aethercore.PhysicalInstructionRequestSpec \
+            aethercore.Sv32PmpCompositionSpec \
             aethercore.DecoderSpec \
             aethercore.Sv32PageTableWalkerSpec \
             aethercore.Sv32SatpRegisterSpec \
@@ -266,8 +267,8 @@ jobs:
             echo "- FreeRTOS selected: \`${{ needs.classify.outputs.run_freertos }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
             echo '- cross-XLEN shared-core guard reuses existing RV32 whole-core, RV64 whole-core, parameterized datapath, RV64M decoder and RV64M ALU tests before the RV32 frontier-specific suite'
-            echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, translated RV32A reservation/remap semantics, MPRV effective data privilege, deterministic shared PTW arbitration, and qualified physical instruction-request suppression during walks/faults'
-            echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34/Sstc profile and fail-closed configuration boundaries'
+            echo '- VM focused tests cover PA34 I/D translation, TLB hit/refill/flush, SFENCE.VMA retirement/privilege, page-fault delegation, translated RV32A reservation/remap semantics, MPRV effective data privilege, deterministic shared PTW arbitration, qualified physical instruction-request suppression, and Sv32+PMP final-I/final-D/PTW denial composition'
+            echo '- CoreConfigSpec covers frozen profiles plus the explicit Sv32 PA34/Sstc/PMP16 composition profile and fail-closed unsupported configuration boundaries'
             echo '- Sstc tests cover RV32 stimecmp split writes, TM/STCE access gates, time/timeh, full M-to-S execution, delegated STIP visibility and local/global interrupt qualification'
             echo '- OpenSBI-driven CSR tests cover mandatory RV32 mstatush WARL-zero behavior, scounteren TM gating across M/S/U time access, and mandatory read-only machine identity CSRs'
             echo '- privilege tests cover Machine CSR behavior, MRET/U-mode regressions, MPRV data privilege, the delegated Supervisor trap/SRET loop, and fail-closed privilege boundaries'
