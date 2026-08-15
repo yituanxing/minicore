@@ -199,6 +199,10 @@ class NemuDifftest::Impl {
 
   void check(const DifftestCommit& commit) {
     const auto commitPc = checkedAddress(commit.pc, "commit PC");
+    if (commit.instBytes != 2 && commit.instBytes != 4) {
+      fail("DUT reported unsupported instruction length " +
+           std::to_string(commit.instBytes));
+    }
     NemuState32 before{};
     regcpy_(&before, kToDut);
     comparePc(before.pc, commitPc, "before reference execution");
@@ -216,7 +220,7 @@ class NemuDifftest::Impl {
       ++trapShadowSteps_;
       trapStep = true;
     } else {
-      const std::uint32_t imageInst = instructionAt(commitPc);
+      const std::uint32_t imageInst = instructionAt(commitPc, commit.instBytes);
       if (imageInst != commit.inst) {
         fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
              hex32(imageInst) + " at pc=" + hex32(commitPc));
@@ -229,7 +233,7 @@ class NemuDifftest::Impl {
         regcpy_(&after, kToRef);
         ++mretShadowSteps_;
       } else if (zicsrStep) {
-        after = executeZicsr(before, commit.inst);
+        after = executeZicsr(before, commit.inst, commit.instBytes);
         regcpy_(&after, kToRef);
         ++zicsrShadowSteps_;
       } else {
@@ -252,7 +256,8 @@ class NemuDifftest::Impl {
 
     std::ostringstream line;
     line << "#" << checked_ << " pc=" << hex32(commitPc)
-         << " inst=" << hex32(commit.inst);
+         << " inst=" << hex32(commit.inst)
+         << " bytes=" << static_cast<unsigned>(commit.instBytes);
     if (commit.rdWrite) {
       line << " x" << static_cast<unsigned>(commit.rd) << "="
            << hex32(static_cast<std::uint32_t>(commit.rdData));
@@ -344,7 +349,8 @@ class NemuDifftest::Impl {
     }
   }
 
-  NemuState32 executeZicsr(const NemuState32& before, std::uint32_t instruction) {
+  NemuState32 executeZicsr(const NemuState32& before, std::uint32_t instruction,
+                             std::uint8_t instBytes) {
     const std::uint32_t funct3 = (instruction >> 12) & 0x7U;
     const std::uint32_t operation = funct3 & 0x3U;
     const bool immediate = (funct3 & 0x4U) != 0;
@@ -366,7 +372,7 @@ class NemuDifftest::Impl {
     }
 
     NemuState32 after = before;
-    after.pc = before.pc + 4;
+    after.pc = before.pc + instBytes;
     if (rd != 0) after.gpr[rd] = oldValue;
     after.gpr[0] = 0;
 
@@ -431,7 +437,7 @@ class NemuDifftest::Impl {
         return;
 
       case kIllegalInstruction: {
-        const auto instruction = instructionAt(pc);
+        const auto instruction = instructionAt(pc, commit.instBytes);
         if (instruction != commit.inst || value != commit.inst) {
           fail("illegal-instruction trap metadata disagrees with the image");
         }
@@ -439,27 +445,27 @@ class NemuDifftest::Impl {
       }
 
       case kBreakpoint:
-        if (commit.inst != kEbreak || instructionAt(pc) != kEbreak || value != pc) {
+        if (commit.inst != kEbreak || instructionAt(pc, commit.instBytes) != kEbreak || value != pc) {
           fail("breakpoint trap metadata is inconsistent");
         }
         return;
 
       case kLoadAccessFault:
-        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc) != commit.inst ||
+        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||
             value != explicitMemoryAddress(before, commit.inst)) {
           fail("load access-fault trap metadata is inconsistent");
         }
         return;
 
       case kStoreAccessFault:
-        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc) != commit.inst ||
+        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||
             value != explicitMemoryAddress(before, commit.inst)) {
           fail("store access-fault trap metadata is inconsistent");
         }
         return;
 
       case kEnvironmentCallFromM:
-        if (commit.inst != kEcall || instructionAt(pc) != kEcall || value != 0) {
+        if (commit.inst != kEcall || instructionAt(pc, commit.instBytes) != kEcall || value != 0) {
           fail("M-mode ECALL trap metadata is inconsistent");
         }
         return;
@@ -488,15 +494,21 @@ class NemuDifftest::Impl {
     return after;
   }
 
-  std::uint32_t instructionAt(std::uint32_t pc) const {
-    if (pc < resetPc_ || static_cast<std::uint64_t>(pc - resetPc_) + 4 > image_.size()) {
+  std::uint32_t instructionAt(std::uint32_t pc, std::uint8_t bytes) const {
+    if (bytes != 2 && bytes != 4) {
+      fail("DUT reported unsupported instruction length " +
+           std::to_string(bytes));
+    }
+    if (pc < resetPc_ ||
+        static_cast<std::uint64_t>(pc - resetPc_) + bytes > image_.size()) {
       fail("DUT event outside the loaded image at pc=" + hex32(pc));
     }
     const std::size_t offset = static_cast<std::size_t>(pc - resetPc_);
-    return std::uint32_t(image_[offset]) |
-           (std::uint32_t(image_[offset + 1]) << 8) |
-           (std::uint32_t(image_[offset + 2]) << 16) |
-           (std::uint32_t(image_[offset + 3]) << 24);
+    std::uint32_t value = 0;
+    for (std::uint8_t byte = 0; byte < bytes; ++byte) {
+      value |= std::uint32_t(image_[offset + byte]) << (byte * 8);
+    }
+    return value;
   }
 
   void comparePc(std::uint32_t reference, std::uint32_t dut, const char* phase) const {

@@ -129,6 +129,7 @@ class CommitTrace(
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val rdWrite = Bool()
   val rdData = UInt(xlen.W)

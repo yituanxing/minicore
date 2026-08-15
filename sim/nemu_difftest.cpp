@@ -140,7 +140,7 @@ class NemuDifftest::Impl {
     comparePc(before.pc, commit.pc, "before reference execution");
     compareRegisters(before, "before reference execution");
 
-    const std::uint32_t imageInst = instructionAt(commit.pc);
+    const std::uint32_t imageInst = instructionAt(commit.pc, commit.instBytes);
     if (imageInst != commit.inst) {
       fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
            hex32(imageInst) + " at pc=" + hex64(commit.pc));
@@ -159,7 +159,8 @@ class NemuDifftest::Impl {
 
     std::ostringstream line;
     line << "#" << checked_ << " pc=" << hex64(commit.pc)
-         << " inst=" << hex32(commit.inst);
+         << " inst=" << hex32(commit.inst)
+         << " bytes=" << static_cast<unsigned>(commit.instBytes);
     if (commit.rdWrite) {
       line << " x" << static_cast<unsigned>(commit.rd) << "=" << hex64(commit.rdData);
     }
@@ -176,15 +177,19 @@ class NemuDifftest::Impl {
   std::uint64_t checkedCommits() const { return checked_; }
 
  private:
-  std::uint32_t instructionAt(std::uint64_t pc) const {
-    if (pc < resetPc_ || pc - resetPc_ + 4 > image_.size()) {
+  std::uint32_t instructionAt(std::uint64_t pc, std::uint8_t bytes) const {
+    if (bytes != 2 && bytes != 4) {
+      fail("DUT reported unsupported instruction length " + std::to_string(bytes));
+    }
+    if (pc < resetPc_ || pc - resetPc_ + bytes > image_.size()) {
       fail("DUT committed outside the loaded image at pc=" + hex64(pc));
     }
     const std::size_t offset = static_cast<std::size_t>(pc - resetPc_);
-    return std::uint32_t(image_[offset]) |
-           (std::uint32_t(image_[offset + 1]) << 8) |
-           (std::uint32_t(image_[offset + 2]) << 16) |
-           (std::uint32_t(image_[offset + 3]) << 24);
+    std::uint32_t value = 0;
+    for (std::uint8_t byte = 0; byte < bytes; ++byte) {
+      value |= std::uint32_t(image_[offset + byte]) << (byte * 8);
+    }
+    return value;
   }
 
   void comparePc(std::uint64_t reference, std::uint64_t dut, const char* phase) const {

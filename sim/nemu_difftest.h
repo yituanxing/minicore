@@ -7,6 +7,7 @@
 struct DifftestCommit {
   std::uint64_t pc = 0;
   std::uint32_t inst = 0;
+  std::uint8_t instBytes = 4;
   std::uint8_t rd = 0;
   bool rdWrite = false;
   std::uint64_t rdData = 0;
