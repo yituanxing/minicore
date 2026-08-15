@@ -677,6 +677,7 @@ class AetherCore(
   io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
   io.commit.inst := memWb.inst
+  io.commit.instBytes := memWb.instBytes
   io.commit.rd := memWb.rd
   io.commit.rdWrite := memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
   io.commit.rdData := memWb.rdData
