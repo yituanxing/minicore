@@ -221,8 +221,8 @@ class NemuDifftest::Impl {
       trapStep = true;
     } else {
       const std::uint32_t imageInst = instructionAt(commitPc, commit.instBytes);
-      if (imageInst != commit.inst) {
-        fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
+      if (imageInst != commit.rawInst) {
+        fail("DUT raw instruction " + hex32(commit.rawInst) + " differs from image instruction " +
              hex32(imageInst) + " at pc=" + hex32(commitPc));
       }
 
@@ -257,6 +257,7 @@ class NemuDifftest::Impl {
     std::ostringstream line;
     line << "#" << checked_ << " pc=" << hex32(commitPc)
          << " inst=" << hex32(commit.inst)
+         << " raw=" << hex32(commit.rawInst)
          << " bytes=" << static_cast<unsigned>(commit.instBytes);
     if (commit.rdWrite) {
       line << " x" << static_cast<unsigned>(commit.rd) << "="
@@ -438,34 +439,34 @@ class NemuDifftest::Impl {
 
       case kIllegalInstruction: {
         const auto instruction = instructionAt(pc, commit.instBytes);
-        if (instruction != commit.inst || value != commit.inst) {
+        if (instruction != commit.rawInst || value != commit.rawInst) {
           fail("illegal-instruction trap metadata disagrees with the image");
         }
         return;
       }
 
       case kBreakpoint:
-        if (commit.inst != kEbreak || instructionAt(pc, commit.instBytes) != kEbreak || value != pc) {
+        if (commit.inst != kEbreak || instructionAt(pc, commit.instBytes) != commit.rawInst || value != pc) {
           fail("breakpoint trap metadata is inconsistent");
         }
         return;
 
       case kLoadAccessFault:
-        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||
+        if ((commit.inst & 0x7fU) != kLoadOpcode || instructionAt(pc, commit.instBytes) != commit.rawInst ||
             value != explicitMemoryAddress(before, commit.inst)) {
           fail("load access-fault trap metadata is inconsistent");
         }
         return;
 
       case kStoreAccessFault:
-        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.inst ||
+        if ((commit.inst & 0x7fU) != kStoreOpcode || instructionAt(pc, commit.instBytes) != commit.rawInst ||
             value != explicitMemoryAddress(before, commit.inst)) {
           fail("store access-fault trap metadata is inconsistent");
         }
         return;
 
       case kEnvironmentCallFromM:
-        if (commit.inst != kEcall || instructionAt(pc, commit.instBytes) != kEcall || value != 0) {
+        if (commit.inst != kEcall || instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {
           fail("M-mode ECALL trap metadata is inconsistent");
         }
         return;

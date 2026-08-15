@@ -141,8 +141,8 @@ class NemuDifftest::Impl {
     compareRegisters(before, "before reference execution");
 
     const std::uint32_t imageInst = instructionAt(commit.pc, commit.instBytes);
-    if (imageInst != commit.inst) {
-      fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
+    if (imageInst != commit.rawInst) {
+      fail("DUT raw instruction " + hex32(commit.rawInst) + " differs from image instruction " +
            hex32(imageInst) + " at pc=" + hex64(commit.pc));
     }
 
@@ -160,6 +160,7 @@ class NemuDifftest::Impl {
     std::ostringstream line;
     line << "#" << checked_ << " pc=" << hex64(commit.pc)
          << " inst=" << hex32(commit.inst)
+         << " raw=" << hex32(commit.rawInst)
          << " bytes=" << static_cast<unsigned>(commit.instBytes);
     if (commit.rdWrite) {
       line << " x" << static_cast<unsigned>(commit.rd) << "=" << hex64(commit.rdData);

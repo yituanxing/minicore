@@ -228,6 +228,7 @@ bool uartRxReady(const Top& top) {
 void dumpCommit(const VAetherCoreSimTop& top) {
   std::cout << "commit pc=0x" << std::hex << static_cast<std::uint64_t>(top.io_commit_pc)
             << " inst=0x" << static_cast<std::uint32_t>(top.io_commit_inst)
+            << " raw=0x" << static_cast<std::uint32_t>(top.io_commit_rawInst)
             << " bytes=" << std::dec << static_cast<unsigned>(top.io_commit_instBytes)
             << " rd=" << static_cast<unsigned>(top.io_commit_rd)
             << " write=" << static_cast<unsigned>(top.io_commit_rdWrite)
@@ -239,6 +240,7 @@ DifftestCommit makeDifftestCommit(const VAetherCoreSimTop& top) {
   DifftestCommit commit;
   commit.pc = static_cast<std::uint64_t>(top.io_commit_pc);
   commit.inst = static_cast<std::uint32_t>(top.io_commit_inst);
+  commit.rawInst = static_cast<std::uint32_t>(top.io_commit_rawInst);
   commit.instBytes = static_cast<std::uint8_t>(top.io_commit_instBytes);
   commit.rd = static_cast<std::uint8_t>(top.io_commit_rd);
   commit.rdWrite = top.io_commit_rdWrite;

@@ -183,19 +183,19 @@ def main() -> None:
     text = replace_once(
         text,
         '      case kEnvironmentCallFromM:\n'
-        '        if (commit.inst != kEcall || instructionAt(pc, commit.instBytes) != kEcall || value != 0) {\n'
+        '        if (commit.inst != kEcall || instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {\n'
         '          fail("M-mode ECALL trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n',
         '      case kEnvironmentCallFromU:\n'
         '        if (machine_.currentPrivilege != kPrivilegeUser || commit.inst != kEcall ||\n'
-        '            instructionAt(pc, commit.instBytes) != kEcall || value != 0) {\n'
+        '            instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {\n'
         '          fail("U-mode ECALL trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n\n'
         '      case kEnvironmentCallFromM:\n'
         '        if (machine_.currentPrivilege != kPrivilegeMachine || commit.inst != kEcall ||\n'
-        '            instructionAt(pc, commit.instBytes) != kEcall || value != 0) {\n'
+        '            instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {\n'
         '          fail("M-mode ECALL trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n',
