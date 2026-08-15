@@ -25,6 +25,7 @@ jobs:
       - name: Checkout for path classification
         uses: actions/checkout@v4
         with:
+          clean: false
           fetch-depth: 0
 
       - name: Classify changed paths
@@ -83,8 +84,10 @@ jobs:
     needs: classify
     runs-on: [self-hosted, Linux, X64, minicore]
     steps:
-      - name: Checkout
+      - name: Checkout without deleting persistent outputs
         uses: actions/checkout@v4
+        with:
+          clean: false
       - name: Run source contracts
         shell: bash
         run: python3 -m unittest discover -s tests_py -v

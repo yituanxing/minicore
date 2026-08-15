@@ -63,12 +63,50 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn("kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}", text)
         self.assertIn("kbuild_tz=${TZ}", text)
 
-    def test_canonical_base_rebuild_never_reuses_kbuild_objects(self):
+    def test_canonical_base_rebuild_is_transactional_and_resumable(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
-        self.assertIn('rm -rf "${OBJ_DIR}" "${EVIDENCE_DIR}"', text)
-        self.assertIn("never try to repair the canonical root", text)
+        self.assertIn('CANONICAL_BUILD_DIR="${ROOT_DIR}/build/l32-linux"', text)
+        self.assertIn('STAGING_BUILD_DIR="${ROOT_DIR}/build/.l32-linux-staging"', text)
+        self.assertIn('BUILD_DIR="${STAGING_BUILD_DIR}"', text)
+        self.assertIn('STAGING_KEY_FILE="${BUILD_DIR}/.aethercore-staging-input-key"', text)
+        self.assertIn('input_key="$("${CACHE_KEY_SCRIPT}" key)"', text)
+        self.assertIn("resuming interrupted Kbuild", text)
+        self.assertIn("A different recipe/toolchain must never inherit Kbuild objects", text)
+        self.assertIn('rm -rf "${STAGING_BUILD_DIR}"', text)
+        self.assertIn('"${CACHE_KEY_SCRIPT}" mark "${STAGING_BUILD_DIR}"', text)
+        self.assertIn('"${CACHE_KEY_SCRIPT}" check "${STAGING_BUILD_DIR}"', text)
+        self.assertIn('rm -rf "${CANONICAL_BUILD_DIR}"', text)
+        self.assertIn('mv "${STAGING_BUILD_DIR}" "${CANONICAL_BUILD_DIR}"', text)
+        self.assertIn("previous canonical base remains untouched", text)
+        self.assertIn('vmlinux=${CANONICAL_BUILD_DIR}/obj/vmlinux', text)
+        self.assertIn('image=${CANONICAL_BUILD_DIR}/obj/arch/riscv/boot/Image', text)
         self.assertIn("build-inputs.txt", text)
+        self.assertIn("archived paths identify the durable canonical artifact", text)
+        self.assertIn('"${CANONICAL_BUILD_DIR}/obj/vmlinux"', text)
+        self.assertIn('"${CANONICAL_BUILD_DIR}/obj/arch/riscv/boot/Image"', text)
+        self.assertIn('> "${CANONICAL_BUILD_DIR}/evidence/sha256.txt"', text)
+        self.assertNotIn("PREVIOUS_BUILD_DIR", text)
         self.assertNotIn(".aethercore-object-inputs", text)
+
+    def test_self_hosted_classifiers_preserve_persistent_outputs(self):
+        fast = (ROOT / ".github/workflows/fast-gate.yml").read_text()
+        for step_name in (
+            "Checkout for path classification",
+            "Checkout without deleting persistent outputs",
+            "Checkout without deleting incremental outputs",
+        ):
+            with self.subTest(workflow="fast-gate", step=step_name):
+                marker = f"      - name: {step_name}\n"
+                self.assertIn(marker, fast)
+                block = fast.split(marker, 1)[1].split("\n      - name:", 1)[0]
+                self.assertIn("clean: false", block)
+        self.assertNotIn("git clean -ffdx", fast)
+
+        busybox = (ROOT / ".github/workflows/l32-busybox-build.yml").read_text()
+        marker = "      - name: Checkout for path classification\n"
+        self.assertIn(marker, busybox)
+        block = busybox.split(marker, 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("clean: false", block)
 
     def test_linux_build_does_not_touch_rtl(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()

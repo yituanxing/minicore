@@ -8,21 +8,50 @@ source "${ROOT_DIR}/software/l32/linux-freeze.env"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/linux"
 ARCHIVE="${CACHE_ROOT}/linux-${LINUX_VERSION}.tar.xz"
 SOURCE_DIR="${CACHE_ROOT}/linux-${LINUX_VERSION}"
-BUILD_DIR="${ROOT_DIR}/build/l32-linux"
+CANONICAL_BUILD_DIR="${ROOT_DIR}/build/l32-linux"
+STAGING_BUILD_DIR="${ROOT_DIR}/build/.l32-linux-staging"
+BUILD_DIR="${STAGING_BUILD_DIR}"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 OBJ_DIR="${BUILD_DIR}/obj"
+STAGING_KEY_FILE="${BUILD_DIR}/.aethercore-staging-input-key"
+CACHE_KEY_SCRIPT="${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
 
 # The canonical base is a recipe-derived artifact, not an incremental Kbuild
-# checkpoint. Fixed neutral metadata plus a clean object tree keep a cache
-# repair independent of whatever a self-hosted runner built previously.
+# checkpoint. Fixed neutral metadata keeps rebuilds deterministic. Rebuild in a
+# staging directory so cancellation, runner loss, or a failed Kbuild never
+# destroys the previously published frozen base. A same-key interrupted
+# staging tree may resume; the final frozen hashes remain the hard qualification.
 export KBUILD_BUILD_USER="${L32_LINUX_BUILD_USER}"
 export KBUILD_BUILD_HOST="${L32_LINUX_BUILD_HOST}"
 export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"
 export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
 export TZ="${L32_LINUX_BUILD_TZ}"
 
-mkdir -p "${CACHE_ROOT}" "${BUILD_DIR}"
+mkdir -p "${CACHE_ROOT}" "${ROOT_DIR}/build"
+
+publish_staging() {
+  # Staging has already passed the exact frozen-output checks. Removing the old
+  # canonical tree only at this point keeps the previous canonical base untouched
+  # throughout the long Kbuild. If interruption lands in this tiny publish window,
+  # the qualified staging tree remains and the next invocation republishes it.
+  rm -rf "${CANONICAL_BUILD_DIR}"
+  mv "${STAGING_BUILD_DIR}" "${CANONICAL_BUILD_DIR}"
+}
+
+# Recover a fully qualified staging result left by an interruption during the
+# tiny publish window. This path performs no Kbuild work.
+if "${CACHE_KEY_SCRIPT}" check "${STAGING_BUILD_DIR}" >/dev/null 2>&1; then
+  echo "L32 Linux staging cache already qualified; publishing without rebuild."
+  publish_staging
+  "${CACHE_KEY_SCRIPT}" check "${CANONICAL_BUILD_DIR}"
+  sha256sum \
+    "${CANONICAL_BUILD_DIR}/obj/vmlinux" \
+    "${CANONICAL_BUILD_DIR}/obj/arch/riscv/boot/Image" \
+    "${CANONICAL_BUILD_DIR}/evidence/resolved.config" \
+    > "${CANONICAL_BUILD_DIR}/evidence/sha256.txt"
+  exit 0
+fi
 
 command -v "${L32_CROSS_COMPILE_PREFIX}gcc" >/dev/null 2>&1 || {
   echo "ERROR: provision the pinned L32 Linux toolchain first" >&2
@@ -60,11 +89,23 @@ if [[ ! -f "${marker}" ]] || [[ "$(cat "${marker}" 2>/dev/null)" != "${LINUX_SHA
   trap - EXIT
 fi
 
-# A validated cache avoids this build entirely. Once a rebuild is required,
-# start from a clean Kbuild tree; never try to repair the canonical root by
-# relinking stale objects from a previous workflow or build identity.
-rm -rf "${OBJ_DIR}" "${EVIDENCE_DIR}"
-mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}"
+input_key="$("${CACHE_KEY_SCRIPT}" key)"
+resume_staging=0
+if [[ -f "${STAGING_KEY_FILE}" ]] && [[ "$(cat "${STAGING_KEY_FILE}")" == "${input_key}" ]]; then
+  resume_staging=1
+  echo "L32 Linux staging input key matches; resuming interrupted Kbuild."
+else
+  # A different recipe/toolchain must never inherit Kbuild objects.
+  rm -rf "${STAGING_BUILD_DIR}"
+  mkdir -p "${STAGING_BUILD_DIR}"
+  printf '%s\n' "${input_key}" > "${STAGING_KEY_FILE}"
+fi
+
+mkdir -p "${OBJ_DIR}"
+rm -rf "${EVIDENCE_DIR}"
+mkdir -p "${EVIDENCE_DIR}"
+rm -f "${BUILD_DIR}/result.txt" "${BUILD_DIR}/config.log" "${BUILD_DIR}/linux-build.log"
+
 {
   echo "recipe_version=${L32_LINUX_RECIPE_VERSION}"
   echo "linux_sha256=${LINUX_SHA256}"
@@ -75,6 +116,8 @@ mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}"
   echo "kbuild_version=${KBUILD_BUILD_VERSION}"
   echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
   echo "kbuild_tz=${TZ}"
+  echo "staging_input_key=${input_key}"
+  echo "resumed_staging=${resume_staging}"
 } > "${EVIDENCE_DIR}/build-inputs.txt"
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
@@ -152,8 +195,8 @@ fi
   echo "linux_version=${LINUX_VERSION}"
   echo "source_sha256=${LINUX_SHA256}"
   echo "defconfig=${LINUX_RV32_DEFCONFIG}"
-  echo "vmlinux=${VMLINUX}"
-  echo "image=${IMAGE}"
+  echo "vmlinux=${CANONICAL_BUILD_DIR}/obj/vmlinux"
+  echo "image=${CANONICAL_BUILD_DIR}/obj/arch/riscv/boot/Image"
   echo "arch=${arch:-not-emitted}"
   echo "kbuild_user=${KBUILD_BUILD_USER}"
   echo "kbuild_host=${KBUILD_BUILD_HOST}"
@@ -161,3 +204,19 @@ fi
   echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
   echo "kbuild_tz=${TZ}"
 } | tee "${BUILD_DIR}/result.txt"
+
+# Qualify the complete staging tree before publishing it. Until these exact
+# hashes pass, the previous canonical base remains untouched.
+"${CACHE_KEY_SCRIPT}" mark "${STAGING_BUILD_DIR}"
+"${CACHE_KEY_SCRIPT}" check "${STAGING_BUILD_DIR}"
+publish_staging
+"${CACHE_KEY_SCRIPT}" check "${CANONICAL_BUILD_DIR}"
+# sha256sum records its operand paths. Rewrite the evidence after publication so
+# archived paths identify the durable canonical artifact rather than the moved
+# staging directory, without changing which bytes were qualified above.
+sha256sum \
+  "${CANONICAL_BUILD_DIR}/obj/vmlinux" \
+  "${CANONICAL_BUILD_DIR}/obj/arch/riscv/boot/Image" \
+  "${CANONICAL_BUILD_DIR}/evidence/resolved.config" \
+  > "${CANONICAL_BUILD_DIR}/evidence/sha256.txt"
+echo "L32 Linux transactional publish complete: ${CANONICAL_BUILD_DIR}"
