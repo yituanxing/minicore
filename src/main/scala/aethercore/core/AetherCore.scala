@@ -9,6 +9,7 @@ class IfId(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val fault = Bool()
   val pageFault = Bool()
 }
@@ -17,6 +18,7 @@ class IdEx(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rs1 = UInt(5.W)
   val rs2 = UInt(5.W)
   val rd = UInt(5.W)
@@ -31,6 +33,7 @@ class ExMem(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val result = UInt(xlen.W)
   val storeData = UInt(xlen.W)
@@ -49,6 +52,7 @@ class MemWb(
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val rdData = UInt(xlen.W)
   val regWrite = Bool()
@@ -144,6 +148,10 @@ class AetherCore(
   val fetchPhysicalAddress = WireDefault(pc.pad(paddrBits))
   val fetchPageFault = WireDefault(false.B)
   val fetchAccessFault = WireDefault(false.B)
+  // The current frontend still fetches only base-width instructions.  Keeping
+  // this as an explicit architectural fact lets later RV32C parcel assembly
+  // change instruction length without rediscovering hidden PC+4 assumptions.
+  val fetchedInstBytes = 4.U(3.W)
 
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
   instructionPmp.io.address := fetchPhysicalAddress
@@ -254,7 +262,7 @@ class AetherCore(
 
   val interruptPc = Mux(
     wfiRetiring,
-    memWb.pc + 4.U,
+    memWb.pc + memWb.instBytes,
     Mux(exMem.valid, exMem.pc, Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc)))
   )
   val takingExternalInterrupt =
@@ -429,7 +437,8 @@ class AetherCore(
   val sfencePrivilegeException = idExSfenceVma &&
     csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U
 
-  val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
+  val idExNextPc = idEx.pc + idEx.instBytes
+  val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idExNextPc, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
   val idExInstructionValue =
     if (xlen == 32) idEx.inst else Cat(0.U((xlen - 32).W), idEx.inst)
@@ -696,14 +705,14 @@ class AetherCore(
     reservationValid := false.B
     atomicWritePhase := false.B
   }.elsewhen(takingSfence) {
-    pc := memWb.pc + 4.U
+    pc := memWb.pc + memWb.instBytes
     ifId.valid := false.B
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
     atomicWritePhase := false.B
   }.elsewhen(waitingForInterrupt) {
-    pc := memWb.pc + 4.U
+    pc := memWb.pc + memWb.instBytes
     ifId.valid := false.B
     idEx.valid := false.B
     exMem.valid := false.B
@@ -742,6 +751,7 @@ class AetherCore(
     memWb.valid := exMem.valid
     memWb.pc := exMem.pc
     memWb.inst := exMem.inst
+    memWb.instBytes := exMem.instBytes
     memWb.rd := exMem.rd
     memWb.rdData := memStageRdData
     memWb.regWrite := exMem.ctrl.regWrite
@@ -785,6 +795,7 @@ class AetherCore(
     exMem.valid := idEx.valid
     exMem.pc := idEx.pc
     exMem.inst := idEx.inst
+    exMem.instBytes := idEx.instBytes
     exMem.rd := idEx.rd
     exMem.result := exResult
     exMem.storeData := forwardedRs2
@@ -813,6 +824,7 @@ class AetherCore(
       idEx.valid := ifId.valid
       idEx.pc := ifId.pc
       idEx.inst := ifId.inst
+      idEx.instBytes := ifId.instBytes
       idEx.rs1 := decoder.io.rs1
       idEx.rs2 := decoder.io.rs2
       idEx.rd := decoder.io.rd
@@ -827,10 +839,11 @@ class AetherCore(
           ifId.valid := true.B
           ifId.pc := pc
           ifId.inst := io.imem.inst
+          ifId.instBytes := fetchedInstBytes
           ifId.pageFault := fetchPageFault
           ifId.fault := fetchAccessFault || instructionPmpFault ||
             (!fetchPageFault && !instructionPmpFault && io.imem.fault)
-          pc := pc + 4.U
+          pc := pc + fetchedInstBytes
         }.otherwise {
           ifId.valid := false.B
           ifId.fault := false.B
@@ -840,9 +853,10 @@ class AetherCore(
         ifId.valid := true.B
         ifId.pc := pc
         ifId.inst := io.imem.inst
+        ifId.instBytes := fetchedInstBytes
         ifId.fault := io.imem.fault || instructionPmpFault
         ifId.pageFault := false.B
-        pc := pc + 4.U
+        pc := pc + fetchedInstBytes
       }
     }
   }
