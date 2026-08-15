@@ -11,7 +11,7 @@ import aethercore.config.CoreProfiles
   */
 class AetherCoreOpenSbiSimTop
     extends AetherCoreSimTop(
-      config = CoreProfiles.rv32imasuSv32Software,
+      config = CoreProfiles.rv32imasuSv32PmpSoftware,
       stopOnTrap = false,
       withMachineInterruptPlatform = false,
       withSupervisorInterruptPlatform = true,
