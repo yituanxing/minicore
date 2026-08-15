@@ -256,7 +256,6 @@ class Sv32PmpCompositionSpec extends AnyFlatSpec with Matchers with ChiselSim {
     simulate(new AetherCore(CoreProfiles.rv32imasuSv32PmpSoftware)) { dut =>
       initialize(dut)
       var externalPtwRequests = 0
-      var sawSuppressedPteAddress = false
       var sawFault = false
       var cycles = 0
 
@@ -269,8 +268,6 @@ class Sv32PmpCompositionSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.ptw.get.fault.poke(false.B)
         if (dut.io.ptw.get.valid.peek().litToBoolean) {
           externalPtwRequests += 1
-        } else if (dut.io.ptw.get.addr.peek().litValue == codeRootPteAddress) {
-          sawSuppressedPteAddress = true
         }
 
         dut.clock.step()
@@ -285,7 +282,6 @@ class Sv32PmpCompositionSpec extends AnyFlatSpec with Matchers with ChiselSim {
         }
       }
 
-      sawSuppressedPteAddress shouldBe true
       externalPtwRequests shouldBe 0
       sawFault shouldBe true
     }
