@@ -6,12 +6,12 @@ import aethercore.config.CoreProfiles
   *
   * Keep the existing first-stage RAM, ACLINT mtime/mtimecmp and ns16550 UART,
   * then add only the QEMU-virt-compatible Supervisor PLIC context required by
-  * Linux's real ttyS0 interrupt-driven transmit path. The UART remains source
-  * 10, matching the Linux/QEMU virt platform contract.
+  * Linux's real ttyS0 interrupt-driven transmit path. OpenSBI owns the PMP
+  * domain policy; AetherCore only enforces the resulting physical accesses.
   */
 class AetherCoreOpenSbiSimTop
     extends AetherCoreSimTop(
-      config = CoreProfiles.rv32imasuSv32Software,
+      config = CoreProfiles.rv32imasuSv32PmpSoftware,
       stopOnTrap = false,
       withMachineInterruptPlatform = false,
       withSupervisorInterruptPlatform = true,

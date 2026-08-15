@@ -5,9 +5,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class L32OpenSBIExecContractTest(unittest.TestCase):
-    def test_sim_top_reuses_only_frozen_first_stage_devices(self):
+    def test_sim_top_reuses_frozen_devices_with_composed_sv32_pmp_profile(self):
         text = (ROOT / "src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala").read_text()
-        self.assertIn("CoreProfiles.rv32imasuSv32Software", text)
+        self.assertIn("CoreProfiles.rv32imasuSv32PmpSoftware", text)
+        self.assertNotIn("CoreProfiles.rv32imasuSv32Software,", text)
         self.assertIn("withNs16550Uart = true", text)
         self.assertIn("withMachineInterruptPlatform = false", text)
         self.assertIn("stopOnTrap = false", text)
