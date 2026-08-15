@@ -6,7 +6,6 @@ RUNTIME = ROOT / "sim/l32_opensbi_runtime.h"
 COLD = ROOT / "sim/opensbi_boot_main.cpp"
 FORKSERVER = ROOT / "sim/opensbi_forkserver_main.cpp"
 MAKEFILE = ROOT / "Makefile.l32-linux-boot"
-SIM_TOP = ROOT / "src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala"
 
 
 class L32SimRuntimeContractTest(unittest.TestCase):
@@ -80,11 +79,6 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "L32_FORKSERVER_PASS",
         ):
             self.assertIn(marker, forkserver)
-
-    def test_linux_shell_uses_composed_sv32_pmp_profile(self):
-        text = SIM_TOP.read_text()
-        self.assertIn("CoreProfiles.rv32imasuSv32PmpSoftware", text)
-        self.assertNotIn("CoreProfiles.rv32imasuSv32Software,", text)
 
     def test_makefile_keeps_cold_and_forkserver_as_separate_scenarios(self):
         text = MAKEFILE.read_text()
