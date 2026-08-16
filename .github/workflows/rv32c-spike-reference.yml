@@ -1,0 +1,96 @@
+name: RV32C Spike Reference
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv32c-spike-reference.yml
+      - tools/ensure_rv32c_spike_reference.sh
+      - tools/spike_rv32_reference_shim.cpp
+      - tests_py/test_rv32c_spike_reference_contract.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-spike-reference-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reproduce:
+    name: Pinned RV32IMC Spike ABI reproducibility
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Run reference source contract
+        shell: bash
+        run: python3 -m unittest tests_py.test_rv32c_spike_reference_contract -v
+
+      - name: Independently build reference A
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AETHERCORE_RV32_SPIKE_WORK_DIR="$GITHUB_WORKSPACE/build/rv32c-spike-reference-a"
+          spike_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
+          test -f "$spike_so"
+          spike_sha="$(sha256sum "$spike_so" | awk '{print $1}')"
+          echo "SPIKE_SO_A=$spike_so" >> "$GITHUB_ENV"
+          echo "SPIKE_SHA_A=$spike_sha" >> "$GITHUB_ENV"
+
+      - name: Independently build reference B
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AETHERCORE_RV32_SPIKE_WORK_DIR="$GITHUB_WORKSPACE/build/rv32c-spike-reference-b"
+          spike_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
+          test -f "$spike_so"
+          spike_sha="$(sha256sum "$spike_so" | awk '{print $1}')"
+          echo "SPIKE_SO_B=$spike_so" >> "$GITHUB_ENV"
+          echo "SPIKE_SHA_B=$spike_sha" >> "$GITHUB_ENV"
+
+      - name: Freeze reproducible reference identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=85b02befce3e98383080c28f33f18bb4d08282cf97e2e6b7f2f7e334a223c85f
+          test "$SPIKE_SHA_A" = "$expected"
+          test "$SPIKE_SHA_B" = "$expected"
+          test "$SPIKE_SHA_A" = "$SPIKE_SHA_B"
+          grep -q '^semantic_smoke=PASS$' build/rv32c-spike-reference-a/evidence/semantic-smoke.txt
+          grep -q '^semantic_smoke=PASS$' build/rv32c-spike-reference-b/evidence/semantic-smoke.txt
+
+      - name: Write reference summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C Spike reference provider'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- Spike revision: `530af85d83781a3dae31a4ace84a573ec255fefa`'
+            echo '- ISA profile: `RV32IMC_Zicsr`'
+            echo '- privilege profile: M-mode, bare 64 MiB RAM'
+            echo '- expected shared-object SHA-256: `85b02befce3e98383080c28f33f18bb4d08282cf97e2e6b7f2f7e334a223c85f`'
+            echo '- acceptance: two from-scratch builds with identical SHA plus standalone raw `0x1141` one-step semantic proof'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reproducibility evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-spike-reference-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv32c-spike-reference-a/evidence/**
+            build/rv32c-spike-reference-a/rv32imc-spike-reference.so
+            build/rv32c-spike-reference-b/evidence/**
+            build/rv32c-spike-reference-b/rv32imc-spike-reference.so
