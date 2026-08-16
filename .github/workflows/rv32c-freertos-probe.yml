@@ -58,6 +58,13 @@ jobs:
           } > build/freertos-rv32imc-qualification/reference.txt
           cat build/freertos-rv32imc-qualification/reference.txt
 
+      - name: Validate RV32 reference ABI register canonicalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/probe_rv32_reference_abi.py "$RV32_REFERENCE_SO" \
+            | tee build/freertos-rv32imc-qualification/reference-abi.txt
+
       - name: Build unchanged FreeRTOS RV32IMC and audit real compressed encodings
         shell: bash
         run: |
@@ -93,6 +100,7 @@ jobs:
             echo '- reference: freshly rebuilt deterministic Spike RV32IMC provider through the existing timer DiffTest ABI'
             for file in \
               build/freertos-rv32imc-qualification/reference.txt \
+              build/freertos-rv32imc-qualification/reference-abi.txt \
               build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt; do
               if [[ -f "$file" ]]; then
                 echo
@@ -114,6 +122,7 @@ jobs:
           if-no-files-found: warn
           path: |
             build/freertos-rv32imc-qualification/reference.txt
+            build/freertos-rv32imc-qualification/reference-abi.txt
             build/freertos-rv32imc-qualification/port-contract.json
             build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt
             build/freertos-rv32imc-qualification/aethercore-freertos.attributes
