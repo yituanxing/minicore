@@ -5,10 +5,19 @@ out_dir="${1:-build/rv32im-coremark/software}"
 port_dir="software/upstream/coremark"
 rv32_dir="software/rv32"
 prefix="${RISCV_PREFIX:-riscv64-unknown-elf-}"
+march="${AETHERCORE_RV32_MARCH:-rv32im}"
 cc="${prefix}gcc"
 objcopy="${prefix}objcopy"
 objdump="${prefix}objdump"
 readelf="${prefix}readelf"
+
+case "$march" in
+  rv32im|rv32imc) ;;
+  *)
+    echo "ERROR: unsupported CoreMark RV32 march: $march" >&2
+    exit 2
+    ;;
+esac
 
 for tool in "$cc" "$objcopy" "$objdump" "$readelf" git; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -19,14 +28,16 @@ done
 
 coremark_dir="$(bash tools/fetch_coremark.sh)"
 coremark_revision="$(git -C "$coremark_dir" rev-parse HEAD)"
-name="coremark_rv32im_O2"
+name="coremark_${march}_O2"
 obj_dir="$out_dir/obj-$name"
 elf="$out_dir/$name.elf"
 bin="$out_dir/$name.bin"
+dis="$out_dir/$name.dis"
+compiler_flags="${march^^} freestanding correctness run"
 
 base_cflags=(
   -std=c99
-  -march=rv32im
+  "-march=$march"
   -mabi=ilp32
   -mcmodel=medany
   -mno-relax
@@ -53,7 +64,7 @@ base_cflags=(
   -DITERATIONS=2
   -DTOTAL_DATA_SIZE=2000
   -DMAIN_HAS_NOARGC=1
-  '-DCOMPILER_FLAGS="RV32IM freestanding correctness run"'
+  "-DCOMPILER_FLAGS=\"$compiler_flags\""
 )
 
 ldflags=(
@@ -81,7 +92,7 @@ cp "$coremark_dir/LICENSE.md" "$out_dir/CoreMark-LICENSE.md"
 "$cc" --version > "$out_dir/compiler-version.txt"
 printf '%s\n' "${base_cflags[*]}" > "$out_dir/compiler-flags.txt"
 
-echo "== compile pinned CoreMark for RV32IM: revision=$coremark_revision =="
+echo "== compile pinned CoreMark for ${march^^}: revision=$coremark_revision =="
 objects=()
 for source in "${upstream_sources[@]}"; do
   object="$obj_dir/${source%.c}.o"
@@ -107,7 +118,7 @@ done
   -o "$elf"
 
 "$objcopy" -O binary "$elf" "$bin"
-"$objdump" -d -S "$elf" > "$out_dir/$name.dis"
+"$objdump" -d -S "$elf" > "$dis"
 "$readelf" -h -l -S "$elf" > "$out_dir/$name.elf.txt"
 
 bytes="$(stat -c '%s' "$bin")"
@@ -117,7 +128,7 @@ digest="$(sha256sum "$bin" | awk '{print $1}')"
 cat > "$out_dir/manifest.txt" <<EOF
 name=$name
 source=coremark@$coremark_revision
-march=rv32im
+march=$march
 mabi=ilp32
 optimization=O2
 iterations=2
@@ -126,6 +137,16 @@ words=$words
 bytes=$bytes
 sha256=$digest
 EOF
+
+if [[ "$march" == *c* ]]; then
+  compressed_instructions="$(grep -Ec '^[[:space:]]*[0-9a-f]+:[[:space:]]+[0-9a-f]{4}[[:space:]]' "$dis" || true)"
+  if [[ "$compressed_instructions" -le 0 ]]; then
+    echo "ERROR: $name advertises C but objdump contains no 16-bit instructions" >&2
+    exit 1
+  fi
+  printf 'compressed_instructions=%s\n' "$compressed_instructions" >> "$out_dir/manifest.txt"
+  echo "verified compiler-generated RV32C instructions: $compressed_instructions"
+fi
 
 printf 'wrote %s bytes (%s words): %s sha256=%s\n' \
   "$bytes" "$words" "$bin" "$digest"
