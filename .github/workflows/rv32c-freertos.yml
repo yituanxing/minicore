@@ -1,0 +1,175 @@
+name: RV32C FreeRTOS Qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv32c-freertos.yml
+      - Makefile.freertos
+      - Makefile.freertos-difftest
+      - Makefile.freertos-rv32imc
+      - software/freertos/**
+      - src/main/scala/aethercore/ElaborateRV32IMCTrap.scala
+      - src/main/scala/aethercore/config/CoreConfig.scala
+      - src/main/scala/aethercore/core/**
+      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
+      - src/main/scala/aethercore/sim/AetherCoreRV32IMCTrapSimTop.scala
+      - sim/nemu_difftest.h
+      - sim/nemu_difftest_rv32_timer.cpp
+      - tools/apply_rv32_difftest_isa_profile.py
+      - tools/make_freertos_runner.py
+      - tools/make_freertos_difftest_runner.py
+      - tools/make_freertos_difftest_adapter.py
+      - tools/make_freertos_wfi_difftest_adapter.py
+      - tools/make_freertos_rv32imc_runner.py
+      - tools/make_freertos_rv32imc_difftest_runner.py
+      - tools/resolve_rv32c_spike_reference.sh
+      - tools/ensure_riscv_none_elf_gcc_15_2.sh
+      - tests_py/test_rv32c_freertos_contract.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-freertos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: FreeRTOS V11.3.0 RV32IMC exact Spike DiffTest
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 35
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Validate permanent RV32C FreeRTOS contracts
+        shell: bash
+        run: python3 -m unittest tests_py.test_rv32c_freertos_contract -v
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Resolve exact cached RV32IMC Spike reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          reference_so="$(bash tools/resolve_rv32c_spike_reference.sh)"
+          test -f "$reference_so"
+          echo "RV32_REFERENCE_SO=$reference_so" >> "$GITHUB_ENV"
+          mkdir -p build/freertos-rv32imc-qualification
+          {
+            echo 'provider=spike'
+            echo 'revision=530af85d83781a3dae31a4ace84a573ec255fefa'
+            echo 'isa=RV32IMC_Zicsr'
+            echo 'priv=M'
+            echo "sha256=$(sha256sum "$reference_so" | awk '{print $1}')"
+          } > build/freertos-rv32imc-qualification/reference.txt
+          grep -q '^sha256=22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df$' \
+            build/freertos-rv32imc-qualification/reference.txt
+          cat build/freertos-rv32imc-qualification/reference.txt
+
+      - name: Build unchanged FreeRTOS RV32IMC and freeze real compressed encodings
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          make -j"$(nproc)" -f Makefile.freertos-rv32imc qualification image rv32c-audit
+          evidence=build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt
+          grep -q '^status=PASS$' "$evidence"
+          grep -q '^march=rv32imc_zicsr$' "$evidence"
+          grep -q '^startup_compressed=0$' "$evidence"
+          grep -q '^kernel_c_compressed=2763$' "$evidence"
+          grep -q '^app_c_compressed=273$' "$evidence"
+          grep -q '^port_c_compressed=29$' "$evidence"
+          grep -q '^port_asm_compressed=356$' "$evidence"
+          grep -q '^linked_compressed=1988$' "$evidence"
+          cat "$evidence"
+
+      - name: Run unchanged FreeRTOS RV32IMC standalone
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -f Makefile.freertos-rv32imc run-local
+          log=build/freertos-rv32imc-qualification/logs/local.log
+          grep -Fq '175228 committed instructions' "$log"
+          grep -Fq 'PASS: self-check exit=0' "$log"
+          ! grep -Fq 'FAIL:' "$log"
+
+      - name: Run unchanged FreeRTOS RV32IMC against exact Spike
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -f Makefile.freertos-rv32imc \
+            RV32_NEMU_SO="$RV32_REFERENCE_SO" STALL_PERIOD=5 run-difftest
+          log=build/freertos-rv32imc-qualification/logs/difftest-stall5.log
+          grep -Fq '175228 committed instructions' "$log"
+          grep -Fq 'difftest=175228' "$log"
+          grep -Fq 'zicsr-shadow=3435' "$log"
+          grep -Fq 'trap-shadow=217' "$log"
+          grep -Fq 'fence-shadow=1' "$log"
+          grep -Fq 'wfi-shadow=1' "$log"
+          grep -Fq 'mret-shadow=410' "$log"
+          grep -Fq 'interrupt-shadow=193' "$log"
+          grep -Fq 'PASS: self-check exit=0' "$log"
+          ! grep -Fq 'FAIL:' "$log"
+
+      - name: Write RV32C FreeRTOS summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C FreeRTOS qualification'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- source: FreeRTOS Kernel V11.3.0, unchanged'
+            echo '- compiler profile: `-march=rv32imc_zicsr -mabi=ilp32 -Os`'
+            echo '- local reset/bootstrap remains explicitly `.option norvc`'
+            echo '- DUT: RV32IMC trap/interrupt profile'
+            echo '- architectural oracle: exact SHA-validated cached Spike RV32IMC provider'
+            echo '- provider ABI/MMIO semantics are owned and qualified by the lower stacked provider layer'
+            for file in \
+              build/freertos-rv32imc-qualification/reference.txt \
+              build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt \
+              build/freertos-rv32imc-qualification/aethercore-freertos.bin.sha256; do
+              if [[ -f "$file" ]]; then
+                echo
+                echo "### $(basename "$file")"
+                echo '```text'
+                cat "$file"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload RV32C FreeRTOS evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-freertos-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/freertos-rv32imc-qualification/reference.txt
+            build/freertos-rv32imc-qualification/port-contract.json
+            build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt
+            build/freertos-rv32imc-qualification/aethercore-freertos.attributes
+            build/freertos-rv32imc-qualification/aethercore-freertos.dis
+            build/freertos-rv32imc-qualification/aethercore-freertos.bin.sha256
+            build/freertos-rv32imc-qualification/logs/local.log
+            build/freertos-rv32imc-qualification/logs/difftest-stall5.log
+            build/freertos-rv32imc-qualification/nemu_difftest_rv32_freertos_wfi.cpp
+            build/freertos-rv32imc-qualification/sim_main_rv32im_freertos.cpp
+            build/freertos-rv32imc-qualification/sim_main_rv32im_freertos_difftest.cpp

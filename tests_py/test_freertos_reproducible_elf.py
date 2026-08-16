@@ -4,6 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = ROOT / "Makefile.freertos"
+RV32C_MAKEFILE = ROOT / "Makefile.freertos-rv32imc"
 
 
 class FreeRtosReproducibleElfTest(unittest.TestCase):
@@ -31,7 +32,12 @@ class FreeRtosReproducibleElfTest(unittest.TestCase):
 
     def test_build_rule_changes_invalidate_cached_objects_and_elf(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("BUILD_RULES := Makefile.freertos", text)
+        rv32c = RV32C_MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn("BUILD_RULES ?= Makefile.freertos", text)
+        self.assertIn(
+            "BUILD_RULES := Makefile.freertos Makefile.freertos-difftest Makefile.freertos-rv32imc",
+            rv32c,
+        )
         self.assertIn(
             "FREERTOS_CONFIG_DEPS := $(APP_DIR)/FreeRTOSConfig.h $(APP_DIR)/platform.h",
             text,
