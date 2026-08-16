@@ -10,8 +10,28 @@ KCONFIGLIB_VERSION="14.1.0"
 KCONFIGLIB_DIR="${CACHE_ROOT}/host-tools/kconfiglib-${KCONFIGLIB_VERSION}"
 NUTTX_DIR="${SOURCE_DIR}/nuttx-${NUTTX_VERSION}-sv32-paging"
 APPS_DIR="${SOURCE_DIR}/apps-${NUTTX_VERSION}-sv32-paging"
-OUT_DIR="${ROOT_DIR}/build/nuttx-sv32-paging-aether-profile"
+PROFILE="${AETHERCORE_NUTTX_N5_PROFILE:-rv32ima}"
 JOBS="${NUTTX_JOBS:-6}"
+
+case "$PROFILE" in
+  rv32ima)
+    ENABLE_C=0
+    DEFAULT_OUT_DIR="${ROOT_DIR}/build/nuttx-sv32-paging-aether-profile"
+    CONTRACT="nuttx-13.0.0-aethercore-sv32-paging-rv32ima-build-v1"
+    PROFILE_TEXT="rv32ima_zicsr_zifencei+Sv32+Sstc"
+    ;;
+  rv32imac)
+    ENABLE_C=1
+    DEFAULT_OUT_DIR="${ROOT_DIR}/build/nuttx-sv32c-paging-aether-profile"
+    CONTRACT="nuttx-13.0.0-aethercore-sv32-paging-rv32imac-build-v1"
+    PROFILE_TEXT="rv32imac_zicsr_zifencei+Sv32+Sstc"
+    ;;
+  *)
+    echo "N5-B FAIL: unsupported AetherCore N5 software profile ${PROFILE}" >&2
+    exit 2
+    ;;
+esac
+OUT_DIR="${AETHERCORE_NUTTX_N5_OUT_DIR:-${DEFAULT_OUT_DIR}}"
 
 [[ -d "${NUTTX_DIR}" && -d "${APPS_DIR}" ]] || {
   echo "N5-B FAIL: N5-A extracted source trees are missing" >&2
@@ -48,17 +68,19 @@ make distclean >/dev/null 2>&1 || true
 # intentionally retained because N5-A proved that both kernel and userspace
 # contain real LR/SC/AMO instructions. Sstc is also retained: it is a genuine
 # supervisor-timer requirement of the pinned workload and should drive RTL,
-# not be silently compiled away.
-python3 - .config <<'PY'
+# not be silently compiled away. C is an explicit bounded profile choice: the
+# historical rv32ima baseline keeps it disabled, while rv32imac requires it.
+python3 - .config "${ENABLE_C}" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 path = Path(sys.argv[1])
+enable_c = sys.argv[2] == "1"
 settings = {
     "CONFIG_ARCH_CHIP_QEMU_RV_ISA_M": True,
     "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A": True,
-    "CONFIG_ARCH_CHIP_QEMU_RV_ISA_C": False,
+    "CONFIG_ARCH_CHIP_QEMU_RV_ISA_C": enable_c,
     "CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI": True,
     "CONFIG_ARCH_RV_ISA_V": False,
     "CONFIG_ARCH_FPU": False,
@@ -94,13 +116,20 @@ required=(
   CONFIG_BUILD_KERNEL
   CONFIG_PAGING
 )
+if [[ "$ENABLE_C" == 1 ]]; then
+  required+=(CONFIG_ARCH_CHIP_QEMU_RV_ISA_C)
+fi
 for symbol in "${required[@]}"; do
   grep -Fqx "${symbol}=y" .config || {
     echo "N5-B FAIL: resolved profile lost ${symbol}" >&2
     exit 3
   }
 done
-for symbol in CONFIG_ARCH_CHIP_QEMU_RV_ISA_C CONFIG_ARCH_RV_ISA_V CONFIG_ARCH_FPU CONFIG_ARCH_DPFPU CONFIG_ARCH_QPFPU; do
+if [[ "$ENABLE_C" == 0 ]] && grep -Fqx 'CONFIG_ARCH_CHIP_QEMU_RV_ISA_C=y' .config; then
+  echo "N5-B FAIL: historical rv32ima profile unexpectedly retained C" >&2
+  exit 3
+fi
+for symbol in CONFIG_ARCH_RV_ISA_V CONFIG_ARCH_FPU CONFIG_ARCH_DPFPU CONFIG_ARCH_QPFPU; do
   if grep -Fqx "${symbol}=y" .config; then
     echo "N5-B FAIL: resolved profile retained unsupported ${symbol}" >&2
     exit 3
@@ -140,12 +169,17 @@ for image in nuttx "${USER_INIT}"; do
 done
 riscv64-unknown-elf-nm -n nuttx > "${OUT_DIR}/evidence/kernel-symbols.txt"
 
-python3 "${ROOT_DIR}/tools/ci/audit_riscv_elf_profile.py" \
-  --kernel-attributes "${OUT_DIR}/evidence/kernel-elf-attributes.txt" \
-  --kernel-disassembly "${OUT_DIR}/evidence/kernel-disassembly.txt" \
-  --user-attributes "${OUT_DIR}/evidence/user-elf-attributes.txt" \
-  --user-disassembly "${OUT_DIR}/evidence/user-disassembly.txt" \
+AUDIT_ARGS=(
+  --kernel-attributes "${OUT_DIR}/evidence/kernel-elf-attributes.txt"
+  --kernel-disassembly "${OUT_DIR}/evidence/kernel-disassembly.txt"
+  --user-attributes "${OUT_DIR}/evidence/user-elf-attributes.txt"
+  --user-disassembly "${OUT_DIR}/evidence/user-disassembly.txt"
   --output "${OUT_DIR}/evidence/isa-audit.txt"
+)
+if [[ "$ENABLE_C" == 1 ]]; then
+  AUDIT_ARGS+=(--require-c)
+fi
+python3 "${ROOT_DIR}/tools/ci/audit_riscv_elf_profile.py" "${AUDIT_ARGS[@]}"
 
 for symbol in riscv_fillpage up_addrenv_create up_addrenv_select up_addrenv_destroy riscv_jump_to_user; do
   grep -Eq "[[:space:]]${symbol}$" "${OUT_DIR}/evidence/kernel-symbols.txt" || {
@@ -158,15 +192,21 @@ sha256sum "${OUT_DIR}/nuttx.elf" "${OUT_DIR}/user-init.elf" > "${OUT_DIR}/eviden
 {
   echo "status=PASS"
   echo "stage=N5-B"
-  echo "contract=nuttx-13.0.0-aethercore-sv32-paging-rv32ima-build-v1"
-  echo "profile=rv32ima_zicsr_zifencei+Sv32+Sstc"
+  echo "contract=${CONTRACT}"
+  echo "software_profile=${PROFILE}"
+  echo "profile=${PROFILE_TEXT}"
   echo "runtime_qualification=not-yet-attempted"
-  echo "optional_C_F_D_V=disabled"
+  if [[ "$ENABLE_C" == 1 ]]; then
+    echo "optional_F_D_V=disabled"
+    echo "C=required-by-real-kernel-and-userspace"
+  else
+    echo "optional_C_F_D_V=disabled"
+  fi
   echo "RV32A=required-by-real-kernel-and-userspace"
   echo "Sstc=retained-as-real-supervisor-timer-requirement"
 } > "${OUT_DIR}/evidence/result.txt"
 
 popd >/dev/null
 
-echo "N5-B PASS: bounded RV32IMA Sv32 paging software profile builds"
+echo "N5-B PASS: bounded ${PROFILE^^} Sv32 paging software profile builds"
 cat "${OUT_DIR}/evidence/isa-audit.txt"

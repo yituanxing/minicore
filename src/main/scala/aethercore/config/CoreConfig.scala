@@ -236,6 +236,23 @@ object CoreProfiles {
     platform = rv32Sv32Platform
   )
 
+  // RV32C N5 qualification profile. This is deliberately a peer of the
+  // historical RV32IMA profile rather than a mutation of it so the old N5
+  // executable remains an independent non-C regression baseline.
+  val rv32imacsuSv32PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv32imacsu-sv32-pmp-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A', 'C'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      virtualMemoryModes = Set("Sv32"),
+      pmpEntries = 16,
+      sstc = true
+    ),
+    platform = rv32Sv32Platform
+  )
+
   val rv32imuPmpSoftware: CoreConfig = CoreConfig(
     name = "rv32imu-pmp-software",
     isa = IsaConfig(
