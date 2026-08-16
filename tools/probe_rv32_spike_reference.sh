@@ -72,14 +72,17 @@ map_flags="-ffile-prefix-map=$SOURCE_DIR=/aethercore/spike-src -fdebug-prefix-ma
   exit 1
 }
 
-make -C "$BUILD_DIR" -j2 libriscv.a libsoftfloat.a libfdt.a \
+# processor_t constructs riscv/disasm.cc's disassembler, whose register-name
+# tables are owned by the separate official disasm subproject. Build and link
+# libdisasm.a rather than re-declaring those tables in the shim.
+make -C "$BUILD_DIR" -j2 libriscv.a libsoftfloat.a libfdt.a libdisasm.a \
   > "$EVIDENCE_DIR/build.log" 2>&1
 [[ ! -e "$AETHERCORE_DTC_SENTINEL" ]] || {
   printf 'ERROR: selected Spike library build unexpectedly executed dtc\n' >&2
   exit 1
 }
 
-for archive in libriscv.a libsoftfloat.a libfdt.a; do
+for archive in libriscv.a libsoftfloat.a libfdt.a libdisasm.a; do
   [[ -f "$BUILD_DIR/$archive" ]] || {
     printf 'ERROR: Spike build did not produce %s\n' "$archive" >&2
     tail -n 80 "$EVIDENCE_DIR/build.log" >&2 || true
@@ -93,10 +96,12 @@ g++ -std=c++17 -O2 -g0 -fPIC -shared \
   -I"$SOURCE_DIR/riscv" \
   -I"$SOURCE_DIR/softfloat" \
   -I"$SOURCE_DIR/fdt" \
+  -I"$SOURCE_DIR/disasm" \
   "$ROOT/tools/spike_rv32_reference_shim.cpp" \
   -Wl,--build-id=none -Wl,--no-undefined \
   -Wl,--start-group \
     "$BUILD_DIR/libriscv.a" \
+    "$BUILD_DIR/libdisasm.a" \
     "$BUILD_DIR/libsoftfloat.a" \
     "$BUILD_DIR/libfdt.a" \
   -Wl,--end-group \
