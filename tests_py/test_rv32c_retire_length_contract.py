@@ -32,12 +32,15 @@ class Rv32cRetireLengthContract(unittest.TestCase):
         self.assertIn("pmpAllows(pc, commit.instBytes, false, true)", pmp)
         self.assertNotIn("pmpAllows(pc, 4, false, true)", pmp)
 
-    def test_retire_length_does_not_open_c_or_conflate_physical_transport(self):
+    def test_retire_length_remains_separate_from_two_byte_physical_parcels(self):
         core = (ROOT / "src/main/scala/aethercore/core/AetherCore.scala").read_text()
-        self.assertIn("val fetchedInstBytes = 4.U(3.W)", core)
-        self.assertIn("val instructionTransactionBytes = 4.U(3.W)", core)
+        parcel = (ROOT / "src/main/scala/aethercore/core/Rv32CParcelController.scala").read_text()
+        self.assertIn("fetchedInstBytes := parcel.io.instructionBytes", core)
+        self.assertIn("if (config.isa.hasC) 2.U(3.W) else 4.U(3.W)", core)
         self.assertIn("io.imem.bytes := instructionTransactionBytes", core)
+        self.assertIn("instructionPmp.io.bytes := instructionTransactionBytes", core)
         self.assertNotIn("io.imem.bytes := memWb.instBytes", core)
+        self.assertIn("io.instructionBytes := Mux(secondParcelPending, 4.U, 2.U)", parcel)
 
 
 if __name__ == "__main__":

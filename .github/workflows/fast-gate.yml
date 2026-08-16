@@ -172,6 +172,9 @@ jobs:
             aethercore.DecoderSpec \
             aethercore.Rv32CDecompressorSpec \
             aethercore.Rv32CParcelControllerSpec \
+            aethercore.Rv32CCoreConfigSpec \
+            aethercore.Rv32CCoreSpec \
+            aethercore.Rv32CSv32ParcelSpec \
             aethercore.Sv32PageTableWalkerSpec \
             aethercore.Sv32SatpRegisterSpec \
             aethercore.Sv32SupervisorCsrSpec \

@@ -29,11 +29,14 @@ class Rv32cParcelControllerContract(unittest.TestCase):
         self.assertIn("io.pageFault := io.parcelPageFault", parcel)
         self.assertIn("io.accessFault := io.parcelAccessFault", parcel)
 
-    def test_controller_is_not_wired_into_the_core_yet(self):
+    def test_controller_is_integrated_without_owning_translation_or_pmp(self):
         core = (ROOT / "src/main/scala/aethercore/core/AetherCore.scala").read_text()
         config = (ROOT / "src/main/scala/aethercore/config/CoreConfig.scala").read_text()
-        self.assertNotIn("Rv32CParcelController", core)
-        self.assertNotIn("Set('I', 'M', 'A', 'C')", config)
+        self.assertIn("Some(Module(new Rv32CParcelController(xlen)))", core)
+        self.assertIn("fetchVirtualAddress := parcel.io.parcelRequestAddress", core)
+        self.assertIn("parcel.io.parcelPageFault := fetchPageFault", core)
+        self.assertIn("parcel.io.parcelAccessFault := physicalParcelAccessFault", core)
+        self.assertIn("Set('I', 'M', 'A', 'C')", config)
 
 
 if __name__ == "__main__":
