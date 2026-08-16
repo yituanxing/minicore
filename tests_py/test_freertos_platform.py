@@ -6,6 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "software" / "freertos" / "aethercore"
 MAKEFILE = ROOT / "Makefile.freertos"
+RV32C_MAKEFILE = ROOT / "Makefile.freertos-rv32imc"
 CI_SCRIPT = ROOT / "tools" / "ci" / "full_gate_freertos.sh"
 VERILATOR_INSTALLER = ROOT / "tools" / "ensure_verilator_5_024.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "full-gate.yml"
@@ -36,14 +37,17 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertIn("local_stall_period=5", text)
         self.assertIn("binary_sha256=", text)
 
-    def test_build_uses_only_the_initial_rv32im_zicsr_profile(self) -> None:
+    def test_default_build_stays_rv32im_and_new_isa_profiles_are_explicit_opt_in(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("-march=rv32im_zicsr", text)
+        rv32c = RV32C_MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn("FREERTOS_MARCH ?= rv32im_zicsr", text)
+        self.assertIn("ARCH_FLAGS := -march=$(FREERTOS_MARCH)", text)
         self.assertIn("-mabi=ilp32", text)
         self.assertIn("-msmall-data-limit=0", text)
-        self.assertNotIn("-march=rv32imac", text)
-        self.assertNotIn("-march=rv32ima", text)
-        self.assertNotIn("-march=rv32imaf", text)
+        self.assertNotIn("rv32imac", text)
+        self.assertNotIn("rv32imaf", text)
+        self.assertIn("FREERTOS_MARCH := rv32imc_zicsr", rv32c)
+        self.assertNotIn("rv32imac", rv32c)
         self.assertIn("KERNEL_C_SOURCES := tasks.c queue.c list.c", text)
         self.assertNotIn("event_groups.c", text)
         self.assertNotIn("stream_buffer.c", text)
