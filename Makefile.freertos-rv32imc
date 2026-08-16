@@ -3,6 +3,7 @@ BUILD_RULES := Makefile.freertos Makefile.freertos-difftest Makefile.freertos-rv
 FREERTOS_MARCH := rv32imc_zicsr
 TOP := AetherCoreRV32IMCTrapSimTop
 ELABORATE_MAIN := aethercore.ElaborateRV32IMCTrap
+override RUNNER_TOOL := tools/make_freertos_rv32imc_runner.py
 
 include Makefile.freertos-difftest
 
