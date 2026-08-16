@@ -36,6 +36,14 @@ bool contains(reg_t base, std::size_t size, reg_t address, std::size_t length) {
   return offset <= size && length <= size - static_cast<std::size_t>(offset);
 }
 
+bool rangesOverlap(reg_t firstBase, std::size_t firstSize,
+                   reg_t secondBase, std::size_t secondSize) {
+  const std::uint64_t firstEnd = static_cast<std::uint64_t>(firstBase) + firstSize;
+  const std::uint64_t secondEnd = static_cast<std::uint64_t>(secondBase) + secondSize;
+  return static_cast<std::uint64_t>(firstBase) < secondEnd &&
+         static_cast<std::uint64_t>(secondBase) < firstEnd;
+}
+
 class BareSpikeSim final : public simif_t {
  public:
   BareSpikeSim() : ram_(kRamSize, 0) {}
@@ -46,14 +54,16 @@ class BareSpikeSim final : public simif_t {
   }
 
   bool mmio_load(reg_t address, std::size_t length, std::uint8_t* bytes) override {
-    if (mmio_ == nullptr || !contains(mmioBase_, mmioSize_, address, length)) return false;
-    std::memcpy(bytes, mmio_ + static_cast<std::size_t>(address - mmioBase_), length);
+    auto* host = findMmio(address, length);
+    if (host == nullptr) return false;
+    std::memcpy(bytes, host, length);
     return true;
   }
 
   bool mmio_store(reg_t address, std::size_t length, const std::uint8_t* bytes) override {
-    if (mmio_ == nullptr || !contains(mmioBase_, mmioSize_, address, length)) return false;
-    std::memcpy(mmio_ + static_cast<std::size_t>(address - mmioBase_), bytes, length);
+    auto* host = findMmio(address, length);
+    if (host == nullptr) return false;
+    std::memcpy(host, bytes, length);
     return true;
   }
 
@@ -67,8 +77,7 @@ class BareSpikeSim final : public simif_t {
       else std::memcpy(buffer, host, length);
       return;
     }
-    if (mmio_ != nullptr && contains(mmioBase_, mmioSize_, address, length)) {
-      auto* host = mmio_ + static_cast<std::size_t>(address - mmioBase_);
+    if (auto* host = findMmio(address, length)) {
       if (toReference) std::memcpy(host, buffer, length);
       else std::memcpy(buffer, host, length);
       return;
@@ -78,16 +87,32 @@ class BareSpikeSim final : public simif_t {
 
   void addMmio(reg_t base, std::uint8_t* space, std::size_t size) {
     if (space == nullptr || size == 0) fail("invalid passive MMIO mapping");
-    mmioBase_ = base;
-    mmio_ = space;
-    mmioSize_ = size;
+    for (const auto& mapping : mmio_) {
+      if (rangesOverlap(mapping.base, mapping.size, base, size)) {
+        fail("overlapping passive MMIO mapping");
+      }
+    }
+    mmio_.push_back(MmioMapping{base, space, size});
   }
 
  private:
+  struct MmioMapping {
+    reg_t base;
+    std::uint8_t* space;
+    std::size_t size;
+  };
+
+  std::uint8_t* findMmio(reg_t address, std::size_t length) {
+    for (const auto& mapping : mmio_) {
+      if (contains(mapping.base, mapping.size, address, length)) {
+        return mapping.space + static_cast<std::size_t>(address - mapping.base);
+      }
+    }
+    return nullptr;
+  }
+
   std::vector<std::uint8_t> ram_;
-  reg_t mmioBase_ = 0;
-  std::uint8_t* mmio_ = nullptr;
-  std::size_t mmioSize_ = 0;
+  std::vector<MmioMapping> mmio_;
 };
 
 std::unique_ptr<BareSpikeSim> gSim;
@@ -101,6 +126,10 @@ void requireReady() {
 
 extern "C" void difftest_init() {
   gProcessor.reset();
+  gSim.reset();
+  for (void* space : gSpaces) std::free(space);
+  gSpaces.clear();
+
   gSim = std::make_unique<BareSpikeSim>();
   gProcessor = std::make_unique<processor_t>(
       "RV32IMC_Zicsr", "M", DEFAULT_VARCH, gSim.get(), 0, false, stderr, std::cerr);
