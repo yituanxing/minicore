@@ -4,6 +4,7 @@ FREERTOS_MARCH := rv32imc_zicsr
 TOP := AetherCoreRV32IMCTrapSimTop
 ELABORATE_MAIN := aethercore.ElaborateRV32IMCTrap
 override RUNNER_TOOL := tools/make_freertos_rv32imc_runner.py
+DIFFTEST_ADAPTER_POSTPROCESSOR := tools/apply_rv32_difftest_isa_profile.py
 
 include Makefile.freertos-difftest
 
