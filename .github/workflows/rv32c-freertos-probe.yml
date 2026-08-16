@@ -40,11 +40,12 @@ jobs:
         shell: bash
         run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
 
-      - name: Resolve exact reproducible RV32IMC Spike reference
+      - name: Build current deterministic RV32IMC Spike reference
         shell: bash
         run: |
           set -euo pipefail
-          reference_so="$(bash tools/ensure_rv32_spike_single_step.sh)"
+          work_dir="$PWD/build/freertos-rv32imc-spike-reference"
+          reference_so="$(bash tools/probe_rv32_spike_deterministic.sh "$work_dir")"
           test -f "$reference_so"
           echo "RV32_REFERENCE_SO=$reference_so" >> "$GITHUB_ENV"
           mkdir -p build/freertos-rv32imc-qualification
@@ -52,6 +53,7 @@ jobs:
             echo 'provider=spike'
             echo 'revision=530af85d83781a3dae31a4ace84a573ec255fefa'
             echo 'isa=RV32IMC_Zicsr'
+            echo 'mode=exploration-rebuild'
             echo "sha256=$(sha256sum "$reference_so" | awk '{print $1}')"
           } > build/freertos-rv32imc-qualification/reference.txt
           cat build/freertos-rv32imc-qualification/reference.txt
@@ -88,7 +90,7 @@ jobs:
             echo '- compiler profile: `-march=rv32imc_zicsr -mabi=ilp32 -Os`'
             echo '- local startup remains `.option norvc`'
             echo '- DUT: RV32IMC trap/interrupt profile'
-            echo '- reference: exact reproducible Spike RV32IMC provider through the existing timer DiffTest ABI'
+            echo '- reference: freshly rebuilt deterministic Spike RV32IMC provider through the existing timer DiffTest ABI'
             for file in \
               build/freertos-rv32imc-qualification/reference.txt \
               build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt; do
@@ -122,3 +124,4 @@ jobs:
             build/freertos-rv32imc-qualification/nemu_difftest_rv32_freertos_wfi.cpp
             build/freertos-rv32imc-qualification/sim_main_rv32im_freertos.cpp
             build/freertos-rv32imc-qualification/sim_main_rv32im_freertos_difftest.cpp
+            build/freertos-rv32imc-spike-reference/evidence/**
