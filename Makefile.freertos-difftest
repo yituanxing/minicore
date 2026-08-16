@@ -7,6 +7,7 @@ DIFFTEST_SIM_OBJ_DIR := $(BUILD_DIR)/difftest-sim-obj
 DIFFTEST_SIM_BINARY := $(DIFFTEST_SIM_OBJ_DIR)/V$(TOP)
 DIFFTEST_LOG_DIR := $(BUILD_DIR)/logs
 DIFFTEST_ADAPTER_POSTPROCESSOR ?=
+DIFFTEST_RUNNER_TOOL ?= tools/make_freertos_difftest_runner.py
 
 RV32_NEMU_SO ?=
 STALL_PERIOD ?= 5
@@ -27,8 +28,8 @@ $(FREERTOS_DIFFTEST_CPP): $(FREERTOS_BASE_DIFFTEST_CPP) tools/make_freertos_wfi_
 		mv "$@.profiled" "$@"; \
 	fi
 
-$(DIFFTEST_GENERATED_MAIN): $(GENERATED_MAIN) tools/make_freertos_difftest_runner.py
-	python3 tools/make_freertos_difftest_runner.py $< $@
+$(DIFFTEST_GENERATED_MAIN): $(GENERATED_MAIN) $(DIFFTEST_RUNNER_TOOL)
+	python3 $(DIFFTEST_RUNNER_TOOL) $< $@
 difftest-runner-source: $(DIFFTEST_GENERATED_MAIN)
 
 $(DIFFTEST_SIM_BINARY): $(RTL_STAMP) $(DIFFTEST_GENERATED_MAIN) $(FREERTOS_DIFFTEST_CPP)
