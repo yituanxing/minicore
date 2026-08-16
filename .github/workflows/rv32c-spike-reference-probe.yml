@@ -59,6 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          chmod +x ./mill
           mkdir -p build/rv32c-spike-probe
           make -j"$(nproc)" -f Makefile.rv32imc-coremark \
             RV32_NEMU_SO="$RV32_SPIKE_SO" run \
