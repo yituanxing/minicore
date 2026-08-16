@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
-BUILD_RULES := Makefile.freertos
+BUILD_RULES ?= Makefile.freertos
 BUILD_DIR ?= build/freertos-qualification
 SOURCE_DIR := $(BUILD_DIR)/FreeRTOS-Kernel
 SOURCE_STAMP := $(BUILD_DIR)/.freertos-source-ready
@@ -19,10 +19,11 @@ TOOLCHAIN_PROBE := $(BUILD_DIR)/toolchain-sysroot-probe.o
 RTL_DIR := $(BUILD_DIR)/rtl
 RTL_STAMP := $(RTL_DIR)/.aethercore-rtl-ready
 SIM_OBJ_DIR := $(BUILD_DIR)/sim-obj
-SIM_BINARY := $(SIM_OBJ_DIR)/VAetherCoreRV32IMTrapSimTop
+TOP ?= AetherCoreRV32IMTrapSimTop
+ELABORATE_MAIN ?= aethercore.ElaborateRV32IMTrap
+SIM_BINARY := $(SIM_OBJ_DIR)/V$(TOP)
 GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32im_freertos.cpp
 RUNNER_TOOL := tools/make_freertos_runner.py
-TOP := AetherCoreRV32IMTrapSimTop
 RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
 SCALA_SOURCES := $(shell find src/main/scala -type f -name '*.scala' -print) build.mill
 
@@ -43,7 +44,8 @@ TRACE_STAMP := $(BUILD_DIR)/.trace-$(TRACE)
 
 TOOLCHAIN_SYSROOT := $(shell $(CC) --print-sysroot 2>/dev/null)
 SYSROOT_FLAGS := --sysroot=$(TOOLCHAIN_SYSROOT)
-ARCH_FLAGS := -march=rv32im_zicsr -mabi=ilp32 -mcmodel=medany -msmall-data-limit=0
+FREERTOS_MARCH ?= rv32im_zicsr
+ARCH_FLAGS := -march=$(FREERTOS_MARCH) -mabi=ilp32 -mcmodel=medany -msmall-data-limit=0
 LIBRARY_ARCH_FLAGS := -march=rv32im -mabi=ilp32
 DEBUG_PREFIX_ROOT := /aethercore/freertos-build
 DEBUG_PREFIX_FLAGS := \
@@ -166,7 +168,7 @@ image: $(BIN)
 
 $(RTL_STAMP): $(SCALA_SOURCES)
 	rm -rf $(RTL_DIR)
-	./mill aethercore.runMain aethercore.ElaborateRV32IMTrap --target-dir $(RTL_DIR)
+	./mill aethercore.runMain $(ELABORATE_MAIN) --target-dir $(RTL_DIR)
 	touch $@
 
 rtl: $(RTL_STAMP)
@@ -182,7 +184,7 @@ $(GENERATED_MAIN): sim/sim_main.cpp $(RUNNER_TOOL) $(TRACE_STAMP) $(BUILD_RULES)
 runner-source: $(GENERATED_MAIN)
 
 $(SIM_BINARY): $(RTL_STAMP) $(GENERATED_MAIN) sim/nemu_difftest_rv32_timer.cpp $(BUILD_RULES)
-	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IM trap SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no SystemVerilog files for $(TOP) in $(RTL_DIR)"; exit 1; }
 	+$(VERILATOR) --cc --exe --build -j $(JOBS) $(VERILATOR_TRACE_FLAGS) -Wall -Wno-fatal \
 		--top-module $(TOP) -Mdir $(SIM_OBJ_DIR) \
 		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
