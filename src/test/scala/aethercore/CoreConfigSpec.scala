@@ -240,7 +240,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     composed.platform.paddrBits shouldBe 34
 
     val unsupportedProfiles = Seq(
-      "compressed" -> IsaConfig(32, Set('I', 'C'), Set('M')),
       "float" -> IsaConfig(32, Set('I', 'F'), Set('M')),
       "double" -> IsaConfig(32, Set('I', 'D'), Set('M')),
       "bitmanip" -> IsaConfig(32, Set('I', 'B'), Set('M')),

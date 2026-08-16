@@ -90,7 +90,7 @@ final case class PlatformConfig(
 }
 
 object AetherCoreCapabilities {
-  val instructionExtensions: Set[Char] = Set('I', 'M', 'A')
+  val instructionExtensions: Set[Char] = Set('I', 'M', 'A', 'C')
   val zExtensions: Set[String] = Set("Zicsr", "Zifencei")
   val privilegeModes: Set[Char] = Set('M', 'S', 'U')
 }
@@ -114,6 +114,7 @@ final case class CoreConfig(
     s"unsupported AetherCore privilege-mode set: ${isa.privilegeModes}"
   )
   require(!isa.hasA || isa.xlen == 32, "the current atomic execution path implements RV32A word operations only")
+  require(!isa.hasC || isa.xlen == 32, "the current compressed frontend implements RV32C only")
   require(
     !isa.hasSv32 || platform.paddrBits >= 34,
     s"Sv32 requires at least 34 physical address bits, got ${platform.paddrBits}"
@@ -155,6 +156,17 @@ object CoreProfiles {
     isa = IsaConfig(
       xlen = 32,
       extensions = Set('I', 'M'),
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imcSoftware: CoreConfig = CoreConfig(
+    name = "rv32imc-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'C'),
       privilegeModes = Set('M'),
       zExtensions = Set("Zicsr")
     ),

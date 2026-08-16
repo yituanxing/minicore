@@ -136,6 +136,7 @@ class AetherCore(
   val dataPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
   val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
   val fetchVm = if (config.isa.hasSv32) Some(Module(new Sv32InstructionFetchAdapter(paddrBits))) else None
+  val compressedFetch = if (config.isa.hasC) Some(Module(new Rv32CParcelController(xlen))) else None
   val ptwArbiter = if (config.isa.hasSv32) Some(Module(new Sv32PtwArbiter(paddrBits))) else None
   val ptwPmp = if (config.isa.hasSv32) Some(Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))) else None
 
@@ -150,22 +151,28 @@ class AetherCore(
   val fetchKill = WireDefault(false.B)
   val fetchResponseReady = WireDefault(false.B)
   val fetchResponseValid = WireDefault(true.B)
-  val fetchPhysicalAddress = WireDefault(pc.pad(paddrBits))
+  val frontendAdvance = WireDefault(false.B)
+  val fetchVirtualAddress = WireDefault(pc)
+  val fetchPhysicalAddress = WireDefault(fetchVirtualAddress.pad(paddrBits))
   val fetchPageFault = WireDefault(false.B)
   val fetchAccessFault = WireDefault(false.B)
-  // Architectural instruction-fault VA is separate from instruction start PC.
-  // They are identical today; a later second parcel can fault at PC+2 while
-  // the architectural EPC remains the instruction start.
-  val fetchFaultAddress = WireDefault(pc)
-  // The current frontend still fetches only base-width instructions.  Keeping
-  // this as an explicit architectural fact lets later RV32C parcel assembly
-  // change instruction length without rediscovering hidden PC+4 assumptions.
-  val fetchedInstBytes = 4.U(3.W)
-  // Physical instruction transport is a separate fact from architectural
-  // instruction length: RV32C will assemble a 32-bit instruction from two
-  // independent 2-byte parcels.  Keep today's transport width explicit.
-  val instructionTransactionBytes = 4.U(3.W)
+  val fetchInstructionValid = WireDefault(fetchResponseValid)
+  val fetchedInst = WireDefault(io.imem.inst)
+  val fetchedRawInst = WireDefault(io.imem.inst)
+  val fetchedInstBytes = WireDefault(4.U(3.W))
+  val fetchFaultAddress = WireDefault(fetchVirtualAddress)
+  val fetchInstructionPageFault = WireDefault(fetchPageFault)
+  val fetchInstructionAccessFault = WireDefault(false.B)
+  val instructionTransactionBytes =
+    if (config.isa.hasC) 2.U(3.W) else 4.U(3.W)
 
+  if (config.isa.hasC) {
+    val parcel = compressedFetch.get
+    parcel.io.instructionPc := pc
+    parcel.io.kill := fetchKill
+    parcel.io.advance := frontendAdvance
+    fetchVirtualAddress := parcel.io.parcelRequestAddress
+  }
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
   instructionPmp.io.address := fetchPhysicalAddress
   instructionPmp.io.bytes := instructionTransactionBytes
@@ -191,7 +198,7 @@ class AetherCore(
     fetch.io.requestValid := !fetchKill
     fetch.io.kill := fetchKill
     fetch.io.flush := takingSfence
-    fetch.io.virtualAddress := pc(31, 0)
+    fetch.io.virtualAddress := fetchVirtualAddress(31, 0)
     fetch.io.privilege := csrFile.io.currentPrivilege
     fetch.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
     fetch.io.satpRootPpn := csrFile.io.satpRootPpn
@@ -236,11 +243,32 @@ class AetherCore(
 
   val instructionPmpFault = fetchResponseValid && !fetchPageFault && !fetchAccessFault &&
     (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
+  val physicalParcelAccessFault =
+    fetchAccessFault || instructionPmpFault ||
+      (!fetchPageFault && !instructionPmpFault && io.imem.fault)
+  fetchInstructionAccessFault := physicalParcelAccessFault
+
+  if (config.isa.hasC) {
+    val parcel = compressedFetch.get
+    parcel.io.parcelResponseValid := fetchResponseValid
+    parcel.io.parcelBits := io.imem.inst(15, 0)
+    parcel.io.parcelPageFault := fetchPageFault
+    parcel.io.parcelAccessFault := physicalParcelAccessFault
+    fetchInstructionValid := parcel.io.instructionValid
+    fetchedInst := parcel.io.instruction
+    fetchedRawInst := parcel.io.rawInstruction
+    fetchedInstBytes := parcel.io.instructionBytes
+    fetchFaultAddress := parcel.io.faultAddress
+    fetchInstructionPageFault := parcel.io.pageFault
+    fetchInstructionAccessFault := parcel.io.accessFault
+    if (config.isa.hasSv32) {
+      fetchResponseReady := parcel.io.parcelResponseReady
+    }
+  }
 
   io.imem.addr := fetchPhysicalAddress
   io.imem.bytes := instructionTransactionBytes
   decoder.io.inst := ifId.inst
-
   registerFile.io.rs1Addr := decoder.io.rs1
   registerFile.io.rs2Addr := decoder.io.rs2
   registerFile.io.writeEnable := memWb.valid && memWb.regWrite && !memWb.trap.valid
@@ -677,9 +705,9 @@ class AetherCore(
     redirect || fetchContextChange
   io.imem.valid := fetchResponseValid && !fetchKill && !fetchPageFault && !fetchAccessFault &&
     !instructionPmpFault
-  val frontendAdvance = !takingTrap && !takingInterrupt && !takingXret && !takingSfence &&
+  frontendAdvance := !takingTrap && !takingInterrupt && !takingXret && !takingSfence &&
     !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
-  if (config.isa.hasSv32) {
+  if (config.isa.hasSv32 && !config.isa.hasC) {
     fetchResponseReady := frontendAdvance && fetchResponseValid
   }
 
@@ -854,16 +882,15 @@ class AetherCore(
       idEx.trap := decodedTrap
 
       if (config.isa.hasSv32) {
-        when(fetchResponseValid) {
+        when(fetchInstructionValid) {
           ifId.valid := true.B
           ifId.pc := pc
-          ifId.inst := io.imem.inst
-          ifId.rawInst := io.imem.inst
+          ifId.inst := fetchedInst
+          ifId.rawInst := fetchedRawInst
           ifId.instBytes := fetchedInstBytes
           ifId.faultAddress := fetchFaultAddress
-          ifId.pageFault := fetchPageFault
-          ifId.fault := fetchAccessFault || instructionPmpFault ||
-            (!fetchPageFault && !instructionPmpFault && io.imem.fault)
+          ifId.pageFault := fetchInstructionPageFault
+          ifId.fault := fetchInstructionAccessFault
           pc := pc + fetchedInstBytes
         }.otherwise {
           ifId.valid := false.B
@@ -871,15 +898,21 @@ class AetherCore(
           ifId.pageFault := false.B
         }
       } else {
-        ifId.valid := true.B
-        ifId.pc := pc
-        ifId.inst := io.imem.inst
-        ifId.rawInst := io.imem.inst
-        ifId.instBytes := fetchedInstBytes
-        ifId.faultAddress := fetchFaultAddress
-        ifId.fault := io.imem.fault || instructionPmpFault
-        ifId.pageFault := false.B
-        pc := pc + fetchedInstBytes
+        when(fetchInstructionValid) {
+          ifId.valid := true.B
+          ifId.pc := pc
+          ifId.inst := fetchedInst
+          ifId.rawInst := fetchedRawInst
+          ifId.instBytes := fetchedInstBytes
+          ifId.faultAddress := fetchFaultAddress
+          ifId.fault := fetchInstructionAccessFault
+          ifId.pageFault := false.B
+          pc := pc + fetchedInstBytes
+        }.otherwise {
+          ifId.valid := false.B
+          ifId.fault := false.B
+          ifId.pageFault := false.B
+        }
       }
     }
   }
