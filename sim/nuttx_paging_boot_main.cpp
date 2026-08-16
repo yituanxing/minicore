@@ -1,4 +1,10 @@
+#ifdef AETHERCORE_NUTTX_C_TOP
+#include "VAetherCoreNuttXPagingCSimTop.h"
+using NuttXTop = VAetherCoreNuttXPagingCSimTop;
+#else
 #include "VAetherCoreNuttXPagingSimTop.h"
+using NuttXTop = VAetherCoreNuttXPagingSimTop;
+#endif
 #include "verilated.h"
 
 #include <array>
@@ -12,7 +18,6 @@
 namespace {
 constexpr std::uint64_t kRamBase = 0x80000000ULL;
 constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
-constexpr std::uint32_t kEbreak = 0x00100073U;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr std::size_t kRecentStoreCount = 8;
 constexpr std::uint64_t kSupervisorTimerInterruptCode = 5ULL;
@@ -83,7 +88,7 @@ bool isExpectedPagingFault(std::uint64_t cause) {
          cause == kStorePageFault;
 }
 
-void driveMemory(VAetherCoreNuttXPagingSimTop& top, const Memory& memory) {
+void driveMemory(NuttXTop& top, const Memory& memory) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
@@ -108,8 +113,6 @@ void driveMemory(VAetherCoreNuttXPagingSimTop& top, const Memory& memory) {
   top.io_ptwFault = ptwFault;
   top.io_ptwRdata = (!ptwValid || ptwFault) ? 0 : memory.read32(ptwAddr);
 
-  // N5 currently validates boot-time PLIC MMIO only. Keep the QEMU UART RX
-  // source quiescent until Supervisor external interrupt delegation is frozen.
   top.io_rxValid = 0;
   top.io_rxByte = 0;
 }
@@ -117,21 +120,25 @@ void driveMemory(VAetherCoreNuttXPagingSimTop& top, const Memory& memory) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 3)
-      throw std::runtime_error("usage: VAetherCoreNuttXPagingSimTop IMAGE.bin [MAX_CYCLES]");
+    if (argc < 2 || argc > 4)
+      throw std::runtime_error(
+          "usage: NUTTX_PAGING_SIM IMAGE.bin [MAX_CYCLES] [REQUIRE_COMPRESSED]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
-        argc == 3 ? std::stoull(argv[2], nullptr, 0) : 50000000ULL;
+        argc >= 3 ? std::stoull(argv[2], nullptr, 0) : 50000000ULL;
+    const bool requireCompressed =
+        argc >= 4 ? std::stoull(argv[3], nullptr, 0) != 0 : false;
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
-    VAetherCoreNuttXPagingSimTop top{&context};
+    NuttXTop top{&context};
     Memory memory;
     memory.load(image);
 
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
+    std::uint64_t compressedCommits = 0;
     std::uint64_t interrupts = 0;
     std::uint64_t supervisorTimerInterrupts = 0;
     std::uint64_t lastInterruptCause = 0;
@@ -184,8 +191,14 @@ int main(int argc, char** argv) {
         uart.push_back(byte);
         std::cout << byte << std::flush;
         if (uart.find("nsh>") != std::string::npos) {
+          if (requireCompressed && compressedCommits == 0) {
+            std::cerr << "\nN5C_COMPRESSED_EXECUTION_MISSING cycles=" << cycles
+                      << " commits=" << commits << "\n";
+            return 6;
+          }
           std::cerr << "\nN5C_BOOT_REACHED_NSH cycles=" << cycles
                     << " commits=" << commits
+                    << " compressed-commits=" << compressedCommits
                     << " exceptions=" << exceptions
                     << " paging-faults=" << pagingFaults
                     << " user-ecalls=" << userEcalls
@@ -198,6 +211,9 @@ int main(int argc, char** argv) {
 
       if (top.io_commit_valid) {
         ++commits;
+        if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
+          ++compressedCommits;
+        }
         recentPcs[recentIndex] = static_cast<std::uint64_t>(top.io_commit_pc);
         recentIndex = (recentIndex + 1) % kRecentCommitCount;
         if (recentCount < kRecentCommitCount) ++recentCount;
@@ -288,6 +304,7 @@ int main(int argc, char** argv) {
 
     std::cerr << "\nN5C_PROBE_TIMEOUT cycles=" << cycles
               << " commits=" << commits
+              << " compressed-commits=" << compressedCommits
               << " last-pc=0x" << std::hex
               << static_cast<std::uint64_t>(top.io_commit_pc)
               << " mtime=0x" << static_cast<std::uint64_t>(top.io_mtime)

@@ -1,0 +1,197 @@
+name: RV32C NuttX Sv32 Qualification
+
+on:
+  pull_request:
+    paths:
+      - software/nuttx/**
+      - src/main/scala/aethercore/**
+      - sim/nuttx_paging_boot_main.cpp
+      - Makefile.nuttx-sv32-probe
+      - Makefile.nuttx-sv32c-probe
+      - tools/ci/nuttx_sv32_paging_build_audit.sh
+      - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+      - tools/ci/nuttx_sv32_paging_cache_key.sh
+      - tools/ci/audit_riscv_elf_profile.py
+      - tools/ci/nuttx_prepare_host_tools.sh
+      - tools/ci/ensure_genromfs.sh
+      - tools/ci/kconfig-tweak
+      - tools/fetch_range_archive.py
+      - tests_py/test_nuttx_sv32_paging_contract.py
+      - tests_py/test_rv32c_nuttx_sv32_contract.py
+      - .github/workflows/rv32c-nuttx-sv32.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-nuttx-sv32-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: NuttX 13.0.0 RV32IMAC Sv32 real paging boot
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 75
+    env:
+      AETHERCORE_NUTTX_N5_PROFILE: rv32imac
+      AETHERCORE_NUTTX_N5_OUT_DIR: ${{ github.workspace }}/build/nuttx-sv32c-paging-aether-profile
+
+    steps:
+      - name: Checkout AetherCore
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate RV32C N5 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/nuttx_sv32_paging_build_audit.sh
+          bash -n tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          bash -n tools/ci/nuttx_sv32_paging_cache_key.sh
+          python3 -m py_compile tools/ci/audit_riscv_elf_profile.py
+          python3 -m unittest \
+            tests_py.test_nuttx_sv32_paging_contract \
+            tests_py.test_rv32c_nuttx_sv32_contract -v
+
+      - name: Probe reusable RV32IMAC N5 software image
+        id: n5c_software_cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/nuttx_sv32_paging_cache_key.sh
+          if tools/ci/nuttx_sv32_paging_cache_key.sh check build/nuttx-sv32c-paging-aether-profile; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+            echo 'RV32IMAC N5 software cache miss: rebuild pinned source audit and bounded C profile once.'
+          fi
+
+      - name: Fetch verified pinned NuttX release sources
+        if: steps.n5c_software_cache.outputs.hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/nuttx/manifest.env
+          cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+          archive_dir="${cache_root}/archives"
+          mkdir -p "${archive_dir}" build
+
+          fetch_release() {
+            local release_name="$1"
+            local output_name="$2"
+            python3 tools/fetch_range_archive.py \
+              --url "https://archive.apache.org/dist/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
+              --output "${archive_dir}/${output_name}" \
+              --chunk-size 1048576 --jobs 6 --retries 5 --max-time 180
+            tar -tzf "${archive_dir}/${output_name}" >/dev/null
+          }
+
+          fetch_release "apache-nuttx-${NUTTX_VERSION}.tar.gz" "nuttx-${NUTTX_COMMIT}.tar.gz"
+          fetch_release "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+
+      - name: Prepare pinned NuttX host tools
+        if: steps.n5c_software_cache.outputs.hit != 'true'
+        shell: bash
+        run: |
+          chmod +x tools/ci/nuttx_prepare_host_tools.sh
+          bash tools/ci/nuttx_prepare_host_tools.sh
+
+      - name: Re-establish pinned upstream N5-A source/config audit
+        if: steps.n5c_software_cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_sv32_paging_build_audit.sh
+          bash tools/ci/nuttx_sv32_paging_build_audit.sh
+
+      - name: Build bounded unchanged RV32IMAC NuttX kernel and userspace
+        if: steps.n5c_software_cache.outputs.hit != 'true'
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          bash tools/ci/nuttx_sv32_paging_aether_profile_build.sh
+          evidence=build/nuttx-sv32c-paging-aether-profile/evidence
+          grep -Fqx 'status=PASS' "$evidence/result.txt"
+          grep -Fqx 'software_profile=rv32imac' "$evidence/result.txt"
+          grep -Fqx 'C=required-by-real-kernel-and-userspace' "$evidence/result.txt"
+          grep -Eq '^kernel_compressed_instructions=[1-9][0-9]*$' "$evidence/isa-audit.txt"
+          grep -Eq '^user_compressed_instructions=[1-9][0-9]*$' "$evidence/isa-audit.txt"
+          cat "$evidence/isa-audit.txt"
+
+      - name: Mark reusable RV32IMAC N5 software image
+        if: steps.n5c_software_cache.outputs.hit != 'true'
+        shell: bash
+        run: tools/ci/nuttx_sv32_paging_cache_key.sh mark build/nuttx-sv32c-paging-aether-profile
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Boot unchanged RV32IMAC NuttX through real Sv32 and require C retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.nuttx-sv32c-probe \
+            NUTTX_ELF=build/nuttx-sv32c-paging-aether-profile/nuttx.elf \
+            JOBS="$(nproc)" MAX_CYCLES=50000000 run-local
+          log=build/nuttx-sv32c-boot-probe/logs/boot-probe.log
+          grep -q 'N5C_BOOT_REACHED_NSH' "$log"
+          grep -Eq 'compressed-commits=[1-9][0-9]*' "$log"
+          ! grep -q 'N5C_COMPRESSED_EXECUTION_MISSING' "$log"
+          ! grep -q 'N5C_FIRST_UNEXPECTED_EXCEPTION' "$log"
+
+      - name: Write RV32C NuttX summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C NuttX Sv32 qualification'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- source: pinned NuttX 13.0.0 kernel/apps, unchanged'
+            echo '- software profile: `rv32imac_zicsr_zifencei + Sv32 + Sstc`'
+            echo '- hardware profile: RV32IMAC + M/S/U + Sv32 + PMP16 + Sstc'
+            echo '- local M-mode handoff remains `rv32ima_zicsr_zifencei` (non-C)'
+            echo '- acceptance: kernel and userspace contain real 16-bit encodings and the boot trace retires compressed instructions before NSH'
+            for file in \
+              build/nuttx-sv32c-paging-aether-profile/evidence/result.txt \
+              build/nuttx-sv32c-paging-aether-profile/evidence/isa-audit.txt \
+              build/nuttx-sv32c-paging-aether-profile/evidence/nuttx.elf.sha256 \
+              build/nuttx-sv32c-boot-probe/image-layout.txt \
+              build/nuttx-sv32c-boot-probe/images.sha256 \
+              build/nuttx-sv32c-boot-probe/logs/boot-probe.log; do
+              if [[ -f "$file" ]]; then
+                echo
+                echo "### $(basename "$file")"
+                echo '```text'
+                tail -n 80 "$file"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload RV32C NuttX evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-nuttx-sv32-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-sv32c-paging-aether-profile/nuttx.elf
+            build/nuttx-sv32c-paging-aether-profile/user-init.elf
+            build/nuttx-sv32c-paging-aether-profile/resolved.config
+            build/nuttx-sv32c-paging-aether-profile/evidence/
+            build/nuttx-sv32c-boot-probe/nuttx-readelf.txt
+            build/nuttx-sv32c-boot-probe/image-layout.txt
+            build/nuttx-sv32c-boot-probe/images.sha256
+            build/nuttx-sv32c-boot-probe/logs/*.log

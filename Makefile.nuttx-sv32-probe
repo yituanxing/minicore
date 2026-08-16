@@ -9,7 +9,11 @@ KERNEL_IMAGE := $(BUILD_DIR)/nuttx-kernel.bin
 BOOT_SRC := $(BUILD_DIR)/n5c-handoff.S
 BOOT_ELF := $(BUILD_DIR)/n5c-handoff.elf
 BOOT_BIN := $(BUILD_DIR)/n5c-handoff.bin
-TOP := AetherCoreNuttXPagingSimTop
+TOP ?= AetherCoreNuttXPagingSimTop
+ELABORATE_MAIN ?= aethercore.ElaborateNuttXPaging
+HANDOFF_MARCH ?= rv32ima_zicsr_zifencei
+NUTTX_RUNNER_CFLAGS ?=
+REQUIRE_COMPRESSED ?= 0
 VERILATOR ?= verilator
 JOBS ?= 6
 NUTTX_ELF ?=
@@ -26,7 +30,7 @@ rtl:
 	@test -f ./mill || { echo "ERROR: mill launcher is missing"; exit 4; }
 	chmod +x ./mill
 	set +e; \
-		./mill aethercore.runMain aethercore.ElaborateNuttXPaging --target-dir $(RTL_DIR) \
+		./mill aethercore.runMain $(ELABORATE_MAIN) --target-dir $(RTL_DIR) \
 			2>&1 | tee $(BUILD_DIR)/logs/rtl-build.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
@@ -74,7 +78,7 @@ image:
 		'  csrw mepc, t0' \
 		'  mret' \
 		'1: j 1b' > $(BOOT_SRC); \
-	riscv64-unknown-elf-gcc -march=rv32ima_zicsr_zifencei -mabi=ilp32 \
+	riscv64-unknown-elf-gcc -march=$(HANDOFF_MARCH) -mabi=ilp32 \
 		-nostdlib -nostartfiles -Wl,--build-id=none -Wl,-e,_start -Wl,-Ttext=$(RAM_BASE) \
 		-o $(BOOT_ELF) $(BOOT_SRC); \
 	riscv64-unknown-elf-objcopy -O binary $(BOOT_ELF) $(BOOT_BIN); \
@@ -90,7 +94,7 @@ image:
 	[[ $$image_size -le $$((ram_limit_dec - ram_base_dec)) ]] || { \
 		echo "ERROR: combined N5-C image exceeds runner RAM"; exit 3; \
 	}; \
-	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; PMP allow-all installed; page faults/U-ecall/STIP delegated, TM/STCE enabled; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
+	echo "N5-C handoff: M-mode $(RAM_BASE) -> S-mode $$entry; handoff-march=$(HANDOFF_MARCH); PMP allow-all installed; page faults/U-ecall/STIP delegated, TM/STCE enabled; kernel offset=$$load_offset image-bytes=$$image_size" | tee $(BUILD_DIR)/image-layout.txt
 	sha256sum "$(NUTTX_ELF)" $(BOOT_BIN) $(KERNEL_IMAGE) $(IMAGE) | tee $(BUILD_DIR)/images.sha256
 
 sim: rtl
@@ -99,7 +103,7 @@ sim: rtl
 	set +e; \
 		$(VERILATOR) --cc --exe --build -Wall -Wno-fatal \
 			--top-module $(TOP) -Mdir $(OBJ_DIR) \
-			-CFLAGS "-std=c++20 -O2" \
+			-CFLAGS "-std=c++20 -O2 $(NUTTX_RUNNER_CFLAGS)" \
 			$(RTL_DIR)/*.sv $(abspath sim/nuttx_paging_boot_main.cpp) \
 			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-build.log; \
 		rc=$${PIPESTATUS[0]}; \
@@ -109,7 +113,7 @@ sim: rtl
 run-local: image sim
 	mkdir -p $(BUILD_DIR)/logs
 	set +e; \
-		$(OBJ_DIR)/V$(TOP) $(IMAGE) $(MAX_CYCLES) 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) $(IMAGE) $(MAX_CYCLES) $(REQUIRE_COMPRESSED) 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -119,6 +123,11 @@ run-local: image sim
 	grep -q 'N5C_BOOT_REACHED_NSH' $(BUILD_DIR)/logs/boot-probe.log || { \
 		echo "ERROR: N5-C returned success without the NSH milestone"; exit 5; \
 	}
+	if [[ "$(REQUIRE_COMPRESSED)" == 1 ]]; then \
+		grep -Eq 'compressed-commits=[1-9][0-9]*' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: N5-C C-profile boot reached NSH without a compressed retirement"; exit 6; \
+		}; \
+	fi
 	sha256sum $(BUILD_DIR)/logs/boot-probe.log
 
 clean:
