@@ -1,0 +1,42 @@
+BUILD_DIR ?= build/rv32imc-coremark
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+SOFTWARE_DIR := $(BUILD_DIR)/software
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv32imc.cpp
+TOP := AetherCoreRV32IMCSimTop
+PROGRAM := $(SOFTWARE_DIR)/coremark_rv32imc_O2.bin
+VERILATOR ?= verilator
+RV32_NEMU_SO ?=
+
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+
+.PHONY: all rtl workload runner-source sim run clean
+
+all: run
+
+rtl:
+	bash ./mill aethercore.runMain aethercore.ElaborateRV32IMC --target-dir $(RTL_DIR)
+
+workload:
+	RISCV_PREFIX=riscv-none-elf- AETHERCORE_RV32_MARCH=rv32imc bash tools/build_rv32im_coremark.sh $(SOFTWARE_DIR)
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/VAetherCoreRV32IMCSimTop/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+
+sim: rtl runner-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV32IMC SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest_rv32.cpp)
+
+run: sim workload
+	@test -n "$(RV32_NEMU_SO)" || { echo "ERROR: set RV32_NEMU_SO to the exact RV32 NEMU reference"; exit 1; }
+	@test -f "$(RV32_NEMU_SO)" || { echo "ERROR: RV32 NEMU reference not found: $(RV32_NEMU_SO)"; exit 1; }
+	$(OBJ_DIR)/V$(TOP) $(PROGRAM) \
+		--max-cycles 10000000 --self-check-exit --stall-period 5 \
+		--difftest $(RV32_NEMU_SO)
+
+clean:
+	rm -rf $(BUILD_DIR)

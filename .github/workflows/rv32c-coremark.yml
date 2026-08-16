@@ -1,0 +1,111 @@
+name: RV32C CoreMark Qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv32c-coremark.yml
+      - Makefile.rv32imc-coremark
+      - software/rv32/**
+      - software/upstream/coremark/**
+      - src/main/scala/aethercore/**
+      - tools/build_rv32im_coremark.sh
+      - tools/ensure_riscv_none_elf_gcc_15_2.sh
+      - tools/ensure_rv32_nemu_single_step.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-coremark-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: GCC RV32IMC CoreMark exact DiffTest
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 20
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Resolve exact single-step RV32 NEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          rv32_nemu_so="$(bash tools/ensure_rv32_nemu_single_step.sh)"
+          test -f "$rv32_nemu_so"
+          echo "RV32_NEMU_SO=$rv32_nemu_so" >> "$GITHUB_ENV"
+          sha256sum "$rv32_nemu_so"
+
+      - name: Build unchanged pinned CoreMark with compiler-generated C
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.rv32imc-coremark workload
+          manifest=build/rv32imc-coremark/software/manifest.txt
+          grep -q '^march=rv32imc$' "$manifest"
+          grep -q '^mabi=ilp32$' "$manifest"
+          grep -Eq '^source=coremark@[0-9a-f]{40}$' "$manifest"
+          grep -Eq '^compressed_instructions=[1-9][0-9]*$' "$manifest"
+          cat "$manifest"
+
+      - name: Run compiler-generated RV32C stream against NEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -f Makefile.rv32imc-coremark \
+            RV32_NEMU_SO="$RV32_NEMU_SO" run
+
+      - name: Write RV32C software summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C real-software qualification'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- source: pinned upstream CoreMark, unchanged'
+            echo '- compiler profile: `-march=rv32imc -mabi=ilp32 -O2`'
+            echo '- acceptance requires at least one real 16-bit instruction in objdump output'
+            echo '- execution uses AetherCoreRV32IMCSimTop and exact single-step RV32 NEMU DiffTest'
+            if [[ -f build/rv32imc-coremark/software/manifest.txt ]]; then
+              echo
+              echo '```text'
+              cat build/rv32imc-coremark/software/manifest.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload RV32C CoreMark evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-coremark-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv32imc-coremark/software/manifest.txt
+            build/rv32imc-coremark/software/coremark.revision
+            build/rv32imc-coremark/software/compiler-version.txt
+            build/rv32imc-coremark/software/compiler-flags.txt
+            build/rv32imc-coremark/software/coremark_rv32imc_O2.elf
+            build/rv32imc-coremark/software/coremark_rv32imc_O2.bin
+            build/rv32imc-coremark/software/coremark_rv32imc_O2.dis
+            build/rv32imc-coremark/software/coremark_rv32imc_O2.map
+            build/rv32imc-coremark/software/coremark_rv32imc_O2.elf.txt
