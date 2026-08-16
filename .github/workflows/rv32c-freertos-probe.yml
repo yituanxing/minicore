@@ -1,0 +1,124 @@
+name: RV32C FreeRTOS Probe
+
+on:
+  push:
+    branches:
+      - explore/rv32c-freertos
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-freertos-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: FreeRTOS V11.3.0 RV32IMC + exact Spike frontier
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 35
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout exploration tree
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Validate RV32C FreeRTOS probe contracts
+        shell: bash
+        run: python3 -m unittest tests_py.test_rv32c_freertos_probe_contract
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Resolve exact reproducible RV32IMC Spike reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          reference_so="$(bash tools/ensure_rv32_spike_single_step.sh)"
+          test -f "$reference_so"
+          echo "RV32_REFERENCE_SO=$reference_so" >> "$GITHUB_ENV"
+          mkdir -p build/freertos-rv32imc-qualification
+          {
+            echo 'provider=spike'
+            echo 'revision=530af85d83781a3dae31a4ace84a573ec255fefa'
+            echo 'isa=RV32IMC_Zicsr'
+            echo "sha256=$(sha256sum "$reference_so" | awk '{print $1}')"
+          } > build/freertos-rv32imc-qualification/reference.txt
+          cat build/freertos-rv32imc-qualification/reference.txt
+
+      - name: Build unchanged FreeRTOS RV32IMC and audit real compressed encodings
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          make -j"$(nproc)" -f Makefile.freertos-rv32imc qualification image rv32c-audit
+
+      - name: Run unchanged FreeRTOS RV32IMC standalone
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -f Makefile.freertos-rv32imc run-local
+
+      - name: Run unchanged FreeRTOS RV32IMC against exact Spike
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -f Makefile.freertos-rv32imc \
+            run-difftest RV32_NEMU_SO="$RV32_REFERENCE_SO"
+
+      - name: Write exploration summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C FreeRTOS exploration'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- source: pinned FreeRTOS Kernel V11.3.0, unchanged'
+            echo '- compiler profile: `-march=rv32imc_zicsr -mabi=ilp32 -Os`'
+            echo '- local startup remains `.option norvc`'
+            echo '- DUT: RV32IMC trap/interrupt profile'
+            echo '- reference: exact reproducible Spike RV32IMC provider through the existing timer DiffTest ABI'
+            for file in \
+              build/freertos-rv32imc-qualification/reference.txt \
+              build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt; do
+              if [[ -f "$file" ]]; then
+                echo
+                echo "### $(basename "$file")"
+                echo '```text'
+                cat "$file"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exploration evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-freertos-probe-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/freertos-rv32imc-qualification/reference.txt
+            build/freertos-rv32imc-qualification/port-contract.json
+            build/freertos-rv32imc-qualification/rv32c-encoding-evidence.txt
+            build/freertos-rv32imc-qualification/aethercore-freertos.attributes
+            build/freertos-rv32imc-qualification/aethercore-freertos.dis
+            build/freertos-rv32imc-qualification/aethercore-freertos.bin.sha256
+            build/freertos-rv32imc-qualification/logs/local.log
+            build/freertos-rv32imc-qualification/logs/difftest-stall5.log
+            build/freertos-rv32imc-qualification/nemu_difftest_rv32_freertos_wfi.cpp
+            build/freertos-rv32imc-qualification/sim_main_rv32im_freertos.cpp
+            build/freertos-rv32imc-qualification/sim_main_rv32im_freertos_difftest.cpp
