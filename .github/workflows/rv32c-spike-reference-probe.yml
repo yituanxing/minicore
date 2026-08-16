@@ -1,0 +1,108 @@
+name: RV32C Spike Reference Probe
+
+on:
+  push:
+    branches:
+      - explore/rv32c-spike-reference
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-spike-reference-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Spike v1.1.0 ABI + RV32IMC CoreMark lockstep probe
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 30
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+
+    steps:
+      - name: Checkout exploration tree
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Build pinned Spike RV32IMC ABI reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          spike_so="$(bash tools/probe_rv32_spike_reference.sh)"
+          test -f "$spike_so"
+          echo "RV32_SPIKE_SO=$spike_so" >> "$GITHUB_ENV"
+          sha256sum "$spike_so"
+
+      - name: Build unchanged CoreMark with real compressed code
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.rv32imc-coremark workload
+          manifest=build/rv32imc-coremark/software/manifest.txt
+          grep -q '^march=rv32imc$' "$manifest"
+          grep -Eq '^compressed_instructions=[1-9][0-9]*$' "$manifest"
+          cat "$manifest"
+
+      - name: Run exact retirement lockstep against Spike
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/rv32c-spike-probe
+          make -j"$(nproc)" -f Makefile.rv32imc-coremark \
+            RV32_NEMU_SO="$RV32_SPIKE_SO" run \
+            2>&1 | tee build/rv32c-spike-probe/run.log
+
+      - name: Write exploration summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C Spike reference exploration'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- Spike: `riscv-isa-sim v1.1.0 / 530af85d83781a3dae31a4ace84a573ec255fefa`'
+            echo '- reference profile: `RV32IMC_Zicsr`, M-mode, 64 MiB bare RAM'
+            echo '- ABI: existing AetherCore RV32 `difftest_*` surface'
+            if [[ -f build/rv32-spike-reference-probe/evidence/reference.sha256 ]]; then
+              echo
+              echo '### Reference'
+              echo '```text'
+              cat build/rv32-spike-reference-probe/evidence/result.txt
+              cat build/rv32-spike-reference-probe/evidence/reference.sha256
+              echo '```'
+            fi
+            if [[ -f build/rv32imc-coremark/software/manifest.txt ]]; then
+              echo
+              echo '### Workload'
+              echo '```text'
+              cat build/rv32imc-coremark/software/manifest.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exploration evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-spike-reference-probe-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/rv32-spike-reference-probe/evidence/**
+            build/rv32-spike-reference-probe/rv32imc-spike-reference.so
+            build/rv32c-spike-probe/run.log
+            build/rv32imc-coremark/software/manifest.txt
+            build/rv32imc-coremark/software/coremark_rv32imc_O2.dis
