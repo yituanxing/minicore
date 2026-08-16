@@ -7,9 +7,10 @@ WORK_DIR="${AETHERCORE_RV32_SPIKE_WORK_DIR:-$ROOT/build/rv32-spike-reference-pro
 SOURCE_DIR="$WORK_DIR/riscv-isa-sim"
 BUILD_DIR="$WORK_DIR/build"
 EVIDENCE_DIR="$WORK_DIR/evidence"
+HOST_TOOLS="$WORK_DIR/host-tools"
 REFERENCE_SO="$WORK_DIR/rv32imc-spike-reference.so"
 
-for tool in git make g++ dtc; do
+for tool in git make g++ strings; do
   command -v "$tool" >/dev/null 2>&1 || {
     printf 'ERROR: Spike RV32C reference requires host tool: %s\n' "$tool" >&2
     exit 1
@@ -17,7 +18,24 @@ for tool in git make g++ dtc; do
 done
 
 rm -rf "$WORK_DIR"
-mkdir -p "$SOURCE_DIR" "$BUILD_DIR" "$EVIDENCE_DIR"
+mkdir -p "$SOURCE_DIR" "$BUILD_DIR" "$EVIDENCE_DIR" "$HOST_TOOLS"
+
+# Spike v1.1.0's configure script requires a dtc path even when only the
+# processor/MMU library is used. The bare reference never builds or executes
+# Spike's DTS/DTB platform path. Provide a fail-fast configure sentinel instead
+# of mutating pinned Spike source or requiring an unused host package. Any real
+# invocation proves this assumption wrong and fails the probe.
+cat > "$HOST_TOOLS/dtc" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ERROR: configure-only dtc sentinel was invoked\n' >&2
+: "${AETHERCORE_DTC_SENTINEL:?}"
+touch "$AETHERCORE_DTC_SENTINEL"
+exit 99
+EOF
+chmod +x "$HOST_TOOLS/dtc"
+export AETHERCORE_DTC_SENTINEL="$EVIDENCE_DIR/dtc-invoked.txt"
+export PATH="$HOST_TOOLS:$PATH"
 
 git -C "$SOURCE_DIR" init -q
 git -C "$SOURCE_DIR" remote add origin https://github.com/riscv-software-src/riscv-isa-sim.git
@@ -49,9 +67,17 @@ map_flags="-ffile-prefix-map=$SOURCE_DIR=/aethercore/spike-src -fdebug-prefix-ma
     "$SOURCE_DIR/configure" --prefix="$WORK_DIR/install" \
       > "$EVIDENCE_DIR/configure.log" 2>&1
 )
+[[ ! -e "$AETHERCORE_DTC_SENTINEL" ]] || {
+  printf 'ERROR: Spike configure unexpectedly executed dtc\n' >&2
+  exit 1
+}
 
 make -C "$BUILD_DIR" -j2 libriscv.a libsoftfloat.a libfdt.a \
   > "$EVIDENCE_DIR/build.log" 2>&1
+[[ ! -e "$AETHERCORE_DTC_SENTINEL" ]] || {
+  printf 'ERROR: selected Spike library build unexpectedly executed dtc\n' >&2
+  exit 1
+}
 
 for archive in libriscv.a libsoftfloat.a libfdt.a; do
   [[ -f "$BUILD_DIR/$archive" ]] || {
@@ -80,6 +106,14 @@ g++ -std=c++17 -O2 -g0 -fPIC -shared \
     cat "$EVIDENCE_DIR/link.log" >&2
     exit 1
   }
+[[ ! -e "$AETHERCORE_DTC_SENTINEL" ]] || {
+  printf 'ERROR: Spike reference link unexpectedly executed dtc\n' >&2
+  exit 1
+}
+if strings "$REFERENCE_SO" | grep -Fq "$HOST_TOOLS/dtc"; then
+  printf 'ERROR: unused dtc platform path leaked into the bare reference shared object\n' >&2
+  exit 1
+fi
 
 file "$REFERENCE_SO" | tee "$EVIDENCE_DIR/reference.file.txt" >&2
 sha256sum "$REFERENCE_SO" | tee "$EVIDENCE_DIR/reference.sha256" >&2
@@ -99,6 +133,7 @@ isa=RV32IMC_Zicsr
 priv=M
 ram_base=0x80000000
 ram_size=67108864
+dtc_runtime_dependency=none
 reference_so=$REFERENCE_SO
 EOF
 cat "$EVIDENCE_DIR/result.txt" >&2
