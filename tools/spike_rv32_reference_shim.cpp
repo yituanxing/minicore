@@ -30,6 +30,11 @@ static_assert(offsetof(ReferenceState32, pc) == 32 * sizeof(std::uint32_t));
   std::abort();
 }
 
+reg_t canonicalRv32Register(std::uint32_t value) {
+  return static_cast<reg_t>(
+      static_cast<std::int64_t>(static_cast<std::int32_t>(value)));
+}
+
 bool contains(reg_t base, std::size_t size, reg_t address, std::size_t length) {
   if (address < base) return false;
   const std::uint64_t offset = static_cast<std::uint64_t>(address - base);
@@ -148,7 +153,7 @@ extern "C" void difftest_regcpy(void* rawState, bool direction) {
   auto* spike = gProcessor->get_state();
   if (direction) {
     for (std::size_t index = 0; index < 32; ++index) {
-      spike->XPR.write(index, state->gpr[index]);
+      spike->XPR.write(index, canonicalRv32Register(state->gpr[index]));
     }
     spike->pc = state->pc;
   } else {
