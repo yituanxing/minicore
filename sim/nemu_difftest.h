@@ -31,10 +31,29 @@ struct DifftestCommit {
   std::uint64_t interruptPc = 0;
 };
 
+struct Rv32DifftestIsaProfile {
+  std::uint32_t misa = 0x40001100U;
+  std::uint8_t ialignBytes = 4;
+
+  static constexpr Rv32DifftestIsaProfile rv32im() {
+    return Rv32DifftestIsaProfile{0x40001100U, 4};
+  }
+
+  static constexpr Rv32DifftestIsaProfile rv32imc() {
+    return Rv32DifftestIsaProfile{0x40001104U, 2};
+  }
+};
+
 class NemuDifftest {
  public:
   NemuDifftest(const std::string& sharedObject, const std::string& imagePath,
                std::uint64_t resetPc, std::uint64_t ramSize);
+  // The explicit RV32 profile overload is implemented by the RV32 timer/trap
+  // adapter. Existing RV32IM and RV64 users keep the historical four-argument
+  // constructor and therefore cannot silently opt into compressed IALIGN.
+  NemuDifftest(const std::string& sharedObject, const std::string& imagePath,
+               std::uint64_t resetPc, std::uint64_t ramSize,
+               Rv32DifftestIsaProfile profile);
   ~NemuDifftest();
 
   NemuDifftest(const NemuDifftest&) = delete;
