@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REVISION="530af85d83781a3dae31a4ace84a573ec255fefa"
-EXPECTED_SHA256="85b02befce3e98383080c28f33f18bb4d08282cf97e2e6b7f2f7e334a223c85f"
+EXPECTED_SHA256="22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df"
 WORK_DIR="${AETHERCORE_RV32_SPIKE_WORK_DIR:-$ROOT/build/rv32c-spike-reference}"
 SOURCE_DIR="$WORK_DIR/riscv-isa-sim"
 BUILD_DIR="$WORK_DIR/build"
@@ -18,15 +18,11 @@ for tool in git make g++ strings file sha256sum nm python3; do
   }
 done
 
-# Every invocation is an independent rebuild. This is intentional: the
-# reference SHA is part of the qualification contract, not a cache key.
+# This is the reproducibility builder, not the consumer cache resolver. Every
+# invocation starts from an empty work directory by design.
 rm -rf "$WORK_DIR"
 mkdir -p "$SOURCE_DIR" "$BUILD_DIR" "$EVIDENCE_DIR" "$HOST_TOOLS"
 
-# Spike v1.1.0 configure requires a dtc executable even though this bare
-# processor/MMU library path never consumes DTS/DTB data. A fail-fast sentinel
-# proves that dtc remains configure-only instead of silently adding a runtime
-# dependency to the reference provider.
 cat > "$HOST_TOOLS/dtc" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -74,9 +70,6 @@ map_flags="-ffile-prefix-map=$SOURCE_DIR=/aethercore/spike-src -fdebug-prefix-ma
   exit 1
 }
 
-# processor_t constructs the official disassembler; its register-name tables
-# live in the separate disasm library. Link the official archive rather than
-# reproducing those symbols in the ABI shim.
 make -C "$BUILD_DIR" -j2 libriscv.a libsoftfloat.a libfdt.a libdisasm.a \
   > "$EVIDENCE_DIR/build.log" 2>&1
 [[ ! -e "$AETHERCORE_DTC_SENTINEL" ]] || {
@@ -139,9 +132,7 @@ for symbol in difftest_init difftest_memcpy difftest_regcpy difftest_exec new_sp
   }
 done
 
-# Standalone semantic proof for the first real compressed instruction that
-# exposed the old NEMU frontier: raw 0x1141 = C.ADDI16SP -16. This validates
-# RV32C decoding and one-instruction stepping without depending on CoreMark.
+# Standalone semantic proof for raw 0x1141 = C.ADDI16SP -16.
 python3 - "$REFERENCE_SO" > "$EVIDENCE_DIR/semantic-smoke.txt" <<'PY'
 import ctypes
 import sys
@@ -181,6 +172,15 @@ print('sp_after=0x800ffff0')
 PY
 cat "$EVIDENCE_DIR/semantic-smoke.txt" >&2
 
+python3 "$ROOT/tools/probe_rv32_reference_abi.py" "$REFERENCE_SO" \
+  > "$EVIDENCE_DIR/abi-smoke.txt"
+cat "$EVIDENCE_DIR/abi-smoke.txt" >&2
+
+grep -q '^status=PASS$' "$EVIDENCE_DIR/abi-smoke.txt"
+grep -q '^mixed_provenance_bne=fallthrough$' "$EVIDENCE_DIR/abi-smoke.txt"
+grep -q '^passive_mmio_maps=2$' "$EVIDENCE_DIR/abi-smoke.txt"
+grep -q '^passive_mmio_independent=PASS$' "$EVIDENCE_DIR/abi-smoke.txt"
+
 cat > "$EVIDENCE_DIR/result.txt" <<EOF
 status=PASS
 revision=$REVISION
@@ -191,6 +191,7 @@ ram_base=0x80000000
 ram_size=67108864
 dtc_runtime_dependency=none
 semantic_smoke=PASS
+abi_smoke=PASS
 reference_so=$REFERENCE_SO
 EOF
 cat "$EVIDENCE_DIR/result.txt" >&2

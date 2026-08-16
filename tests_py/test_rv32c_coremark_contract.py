@@ -29,18 +29,18 @@ class Rv32cCoreMarkContract(unittest.TestCase):
         self.assertIn("--difftest $(RV32_REFERENCE_SO)", makefile)
         self.assertNotIn("RV32_NEMU_SO", makefile)
 
-    def test_coremark_layer_consumes_the_frozen_reference_provider(self):
+    def test_coremark_consumes_exact_cached_provider_resolver(self):
         workflow = (ROOT / ".github/workflows/rv32c-coremark.yml").read_text()
-        self.assertIn("ensure_rv32c_spike_reference.sh", workflow)
-        self.assertNotIn("ensure_rv32_spike_single_step.sh", workflow)
-        self.assertNotIn("probe_rv32_spike_deterministic.sh", workflow)
-        self.assertIn("frozen exact Spike RV32IMC reference provider", workflow)
+        self.assertIn('rv32_reference_so="$(bash tools/resolve_rv32c_spike_reference.sh)"', workflow)
+        self.assertIn("22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df", workflow)
+        self.assertNotIn('rv32_reference_so="$(bash tools/ensure_rv32c_spike_reference.sh)"', workflow)
+        self.assertIn("exact SHA-validated cached Spike RV32IMC provider", workflow)
 
     def test_workflow_requires_real_compressed_code_and_exact_spike_difftest(self):
         workflow = (ROOT / ".github/workflows/rv32c-coremark.yml").read_text()
         self.assertIn("compressed_instructions=[1-9][0-9]*", workflow)
         self.assertIn("ensure_riscv_none_elf_gcc_15_2.sh", workflow)
-        self.assertIn("ensure_rv32c_spike_reference.sh", workflow)
+        self.assertIn("resolve_rv32c_spike_reference.sh", workflow)
         self.assertIn("Makefile.rv32imc-coremark", workflow)
         self.assertIn("chmod +x ./mill", workflow)
         self.assertIn('RV32_REFERENCE_SO="$RV32_REFERENCE_SO" run', workflow)
