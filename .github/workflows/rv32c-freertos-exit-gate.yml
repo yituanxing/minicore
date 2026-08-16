@@ -1,0 +1,158 @@
+name: RV32C FreeRTOS Exit Gate
+
+on:
+  push:
+    branches:
+      - explore/rv32c-freertos
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-freertos-exit-gate
+  cancel-in-progress: true
+
+jobs:
+  exit-gate:
+    name: Reproducible Spike + CoreMark + legacy FreeRTOS
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 40
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+      EXPECTED_SPIKE_SHA256: "22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df"
+
+    steps:
+      - name: Checkout exploration tree
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Build upgraded Spike provider twice and require byte identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PWD"
+          work_a="$root/build/rv32c-freertos-exit/spike-a"
+          work_b="$RUNNER_TEMP/aethercore-rv32c-freertos-spike-b"
+          rm -rf "$work_b"
+
+          spike_a="$(bash tools/probe_rv32_spike_deterministic.sh "$work_a")"
+          spike_b="$(bash tools/probe_rv32_spike_deterministic.sh "$work_b")"
+          test -f "$spike_a"
+          test -f "$spike_b"
+
+          sha_a="$(sha256sum "$spike_a" | awk '{print $1}')"
+          sha_b="$(sha256sum "$spike_b" | awk '{print $1}')"
+          [[ "$sha_a" == "$EXPECTED_SPIKE_SHA256" ]] || {
+            echo "ERROR: upgraded Spike A hash drift: expected=$EXPECTED_SPIKE_SHA256 actual=$sha_a" >&2
+            exit 1
+          }
+          [[ "$sha_b" == "$EXPECTED_SPIKE_SHA256" ]] || {
+            echo "ERROR: upgraded Spike B hash drift: expected=$EXPECTED_SPIKE_SHA256 actual=$sha_b" >&2
+            exit 1
+          }
+          cmp -s "$spike_a" "$spike_b" || {
+            echo "ERROR: upgraded Spike providers are not byte-identical" >&2
+            cmp -l "$spike_a" "$spike_b" | head -n 40 >&2 || true
+            exit 1
+          }
+
+          mkdir -p build/rv32c-freertos-exit
+          {
+            echo 'status=PASS'
+            echo 'revision=530af85d83781a3dae31a4ace84a573ec255fefa'
+            echo "sha256=$sha_a"
+            echo 'byte_identical=yes'
+            echo "build_a=$spike_a"
+            echo "build_b=$spike_b"
+          } > build/rv32c-freertos-exit/spike-reproducibility.txt
+          cat build/rv32c-freertos-exit/spike-reproducibility.txt
+
+          echo "UPGRADED_SPIKE_SO=$spike_a" >> "$GITHUB_ENV"
+
+      - name: Re-run compiler-generated RV32C CoreMark against upgraded Spike
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          mkdir -p build/rv32c-freertos-exit
+          make -j"$(nproc)" -f Makefile.rv32imc-coremark \
+            RV32_REFERENCE_SO="$UPGRADED_SPIKE_SO" run \
+            2>&1 | tee build/rv32c-freertos-exit/coremark-upgraded-spike.log
+          grep -Fq '595310 committed instructions' build/rv32c-freertos-exit/coremark-upgraded-spike.log
+          grep -Fq 'difftest=595310' build/rv32c-freertos-exit/coremark-upgraded-spike.log
+          grep -Fq 'PASS: self-check exit=0' build/rv32c-freertos-exit/coremark-upgraded-spike.log
+
+      - name: Resolve historical exact RV32IM NEMU reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          nemu_so="$(bash tools/ensure_rv32_nemu_single_step.sh)"
+          test -f "$nemu_so"
+          echo "RV32_NEMU_SO=$nemu_so" >> "$GITHUB_ENV"
+          {
+            echo 'provider=nemu'
+            echo 'revision=8601834e4889e6bf3b6113eb5f824ba7689126f5'
+            echo "sha256=$(sha256sum "$nemu_so" | awk '{print $1}')"
+          } > build/rv32c-freertos-exit/legacy-nemu.txt
+          cat build/rv32c-freertos-exit/legacy-nemu.txt
+
+      - name: Re-run legacy RV32IM FreeRTOS exact NEMU path
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" -f Makefile.freertos-difftest \
+            run-difftest RV32_NEMU_SO="$RV32_NEMU_SO"
+          cp build/freertos-qualification/logs/difftest-stall5.log \
+            build/rv32c-freertos-exit/legacy-freertos-nemu.log
+          grep -Fq 'PASS: self-check exit=0' build/rv32c-freertos-exit/legacy-freertos-nemu.log
+          grep -Eq 'difftest=[1-9][0-9]*' build/rv32c-freertos-exit/legacy-freertos-nemu.log
+          grep -Eq 'interrupt-shadow=[1-9][0-9]*' build/rv32c-freertos-exit/legacy-freertos-nemu.log
+          ! grep -Fq 'FAIL:' build/rv32c-freertos-exit/legacy-freertos-nemu.log
+
+      - name: Write exit-gate summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C FreeRTOS exploration exit gate'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- upgraded Spike provider must rebuild byte-identically in two unrelated absolute work directories'
+            echo '- upgraded provider must preserve the earlier 595,310-retirement CoreMark qualification'
+            echo '- historical RV32IM FreeRTOS must remain green against the frozen NEMU reference'
+            for file in \
+              build/rv32c-freertos-exit/spike-reproducibility.txt \
+              build/rv32c-freertos-exit/legacy-nemu.txt; do
+              if [[ -f "$file" ]]; then
+                echo
+                echo "### $(basename "$file")"
+                echo '```text'
+                cat "$file"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exit-gate evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-freertos-exit-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/rv32c-freertos-exit/**
+            build/rv32imc-coremark/software/manifest.txt
+            build/freertos-qualification/logs/difftest-stall5.log
