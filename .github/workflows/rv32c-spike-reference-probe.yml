@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   probe:
-    name: Spike v1.1.0 ABI + RV32IMC CoreMark lockstep probe
+    name: Spike v1.1.0 reproducibility + RV32IMC CoreMark lockstep probe
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       AETHERCORE_MILL_NO_DAEMON: "1"
 
@@ -36,14 +36,43 @@ jobs:
         shell: bash
         run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
 
-      - name: Build pinned Spike RV32IMC ABI reference
+      - name: Build pinned Spike RV32IMC reference twice and require byte identity
         shell: bash
         run: |
           set -euo pipefail
-          spike_so="$(bash tools/probe_rv32_spike_reference.sh)"
-          test -f "$spike_so"
-          echo "RV32_SPIKE_SO=$spike_so" >> "$GITHUB_ENV"
-          sha256sum "$spike_so"
+          root="$PWD"
+          work_a="$root/build/rv32-spike-reference-probe-a"
+          work_b="$root/build/rv32-spike-reference-probe-b"
+
+          spike_a="$(AETHERCORE_RV32_SPIKE_WORK_DIR="$work_a" bash tools/probe_rv32_spike_reference.sh)"
+          spike_b="$(AETHERCORE_RV32_SPIKE_WORK_DIR="$work_b" bash tools/probe_rv32_spike_reference.sh)"
+          test -f "$spike_a"
+          test -f "$spike_b"
+
+          sha_a="$(sha256sum "$spike_a" | awk '{print $1}')"
+          sha_b="$(sha256sum "$spike_b" | awk '{print $1}')"
+          printf 'reference_a=%s\nreference_b=%s\n' "$sha_a" "$sha_b"
+          [[ "$sha_a" == "$sha_b" ]] || {
+            echo "ERROR: independently built Spike reference hashes differ" >&2
+            cmp -l "$spike_a" "$spike_b" | head -n 40 >&2 || true
+            exit 1
+          }
+          cmp -s "$spike_a" "$spike_b" || {
+            echo "ERROR: independently built Spike references are not byte-identical" >&2
+            exit 1
+          }
+
+          mkdir -p build/rv32c-spike-probe
+          {
+            echo "status=PASS"
+            echo "reference_sha256=$sha_a"
+            echo "build_a=$spike_a"
+            echo "build_b=$spike_b"
+            echo "byte_identical=yes"
+          } > build/rv32c-spike-probe/reproducibility.txt
+
+          echo "RV32_SPIKE_SO=$spike_a" >> "$GITHUB_ENV"
+          echo "RV32_SPIKE_SHA256=$sha_a" >> "$GITHUB_ENV"
 
       - name: Build unchanged CoreMark with real compressed code
         shell: bash
@@ -76,12 +105,19 @@ jobs:
             echo '- Spike: `riscv-isa-sim v1.1.0 / 530af85d83781a3dae31a4ace84a573ec255fefa`'
             echo '- reference profile: `RV32IMC_Zicsr`, M-mode, 64 MiB bare RAM'
             echo '- ABI: existing AetherCore RV32 `difftest_*` surface'
-            if [[ -f build/rv32-spike-reference-probe/evidence/reference.sha256 ]]; then
+            if [[ -f build/rv32c-spike-probe/reproducibility.txt ]]; then
+              echo
+              echo '### Reproducibility'
+              echo '```text'
+              cat build/rv32c-spike-probe/reproducibility.txt
+              echo '```'
+            fi
+            if [[ -f build/rv32-spike-reference-probe-a/evidence/result.txt ]]; then
               echo
               echo '### Reference'
               echo '```text'
-              cat build/rv32-spike-reference-probe/evidence/result.txt
-              cat build/rv32-spike-reference-probe/evidence/reference.sha256
+              cat build/rv32-spike-reference-probe-a/evidence/result.txt
+              cat build/rv32-spike-reference-probe-a/evidence/reference.sha256
               echo '```'
             fi
             if [[ -f build/rv32imc-coremark/software/manifest.txt ]]; then
@@ -102,8 +138,10 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           path: |
-            build/rv32-spike-reference-probe/evidence/**
-            build/rv32-spike-reference-probe/rv32imc-spike-reference.so
+            build/rv32-spike-reference-probe-a/evidence/**
+            build/rv32-spike-reference-probe-a/rv32imc-spike-reference.so
+            build/rv32-spike-reference-probe-b/evidence/reference.sha256
+            build/rv32c-spike-probe/reproducibility.txt
             build/rv32c-spike-probe/run.log
             build/rv32imc-coremark/software/manifest.txt
             build/rv32imc-coremark/software/coremark_rv32imc_O2.dis
