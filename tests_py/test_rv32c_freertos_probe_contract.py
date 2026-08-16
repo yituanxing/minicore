@@ -18,6 +18,7 @@ class Rv32cFreeRtosProbeContract(unittest.TestCase):
         self.assertNotIn("rv32imac", probe)
         self.assertIn("TOP := AetherCoreRV32IMCTrapSimTop", probe)
         self.assertIn("ELABORATE_MAIN := aethercore.ElaborateRV32IMCTrap", probe)
+        self.assertIn("DIFFTEST_RUNNER_TOOL := tools/make_freertos_rv32imc_difftest_runner.py", probe)
         self.assertIn("DIFFTEST_ADAPTER_POSTPROCESSOR := tools/apply_rv32_difftest_isa_profile.py", probe)
         self.assertIn("include Makefile.freertos-difftest", probe)
 
@@ -40,13 +41,15 @@ class Rv32cFreeRtosProbeContract(unittest.TestCase):
 
     def test_rv32_difftest_profile_keeps_im_default_and_explicit_imc_opt_in(self):
         header = (ROOT / "sim/nemu_difftest.h").read_text()
-        runner = (ROOT / "tools/make_freertos_rv32imc_runner.py").read_text()
+        standalone_runner = (ROOT / "tools/make_freertos_rv32imc_runner.py").read_text()
+        difftest_runner = (ROOT / "tools/make_freertos_rv32imc_difftest_runner.py").read_text()
         profile_adapter = (ROOT / "tools/apply_rv32_difftest_isa_profile.py").read_text()
 
         self.assertIn("Rv32DifftestIsaProfile", header)
         self.assertIn("0x40001100U, 4", header)
         self.assertIn("0x40001104U, 2", header)
-        self.assertIn("Rv32DifftestIsaProfile::rv32imc()", runner)
+        self.assertNotIn("Rv32DifftestIsaProfile::rv32imc()", standalone_runner)
+        self.assertIn("Rv32DifftestIsaProfile::rv32imc()", difftest_runner)
         self.assertIn("profile_.misa", profile_adapter)
         self.assertIn("profile_.ialignBytes", profile_adapter)
         self.assertIn("alignInstructionAddress", profile_adapter)
