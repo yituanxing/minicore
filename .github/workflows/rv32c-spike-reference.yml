@@ -5,6 +5,8 @@ on:
     paths:
       - .github/workflows/rv32c-spike-reference.yml
       - tools/ensure_rv32c_spike_reference.sh
+      - tools/resolve_rv32c_spike_reference.sh
+      - tools/probe_rv32_reference_abi.py
       - tools/spike_rv32_reference_shim.cpp
       - tests_py/test_rv32c_spike_reference_contract.py
   workflow_dispatch:
@@ -20,7 +22,7 @@ jobs:
   reproduce:
     name: Pinned RV32IMC Spike ABI reproducibility
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout without deleting persistent outputs
@@ -33,7 +35,7 @@ jobs:
         shell: bash
         run: python3 -m unittest tests_py.test_rv32c_spike_reference_contract -v
 
-      - name: Independently build reference A
+      - name: Independently build and probe reference A
         shell: bash
         run: |
           set -euo pipefail
@@ -41,17 +43,27 @@ jobs:
           spike_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
           test -f "$spike_so"
           spike_sha="$(sha256sum "$spike_so" | awk '{print $1}')"
+          grep -q '^semantic_smoke=PASS$' build/rv32c-spike-reference-a/evidence/semantic-smoke.txt
+          grep -q '^status=PASS$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          grep -q '^mixed_provenance_bne=fallthrough$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          grep -q '^passive_mmio_maps=2$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          grep -q '^passive_mmio_independent=PASS$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
           echo "SPIKE_SO_A=$spike_so" >> "$GITHUB_ENV"
           echo "SPIKE_SHA_A=$spike_sha" >> "$GITHUB_ENV"
 
-      - name: Independently build reference B
+      - name: Independently build and probe reference B
         shell: bash
         run: |
           set -euo pipefail
-          export AETHERCORE_RV32_SPIKE_WORK_DIR="$GITHUB_WORKSPACE/build/rv32c-spike-reference-b"
+          export AETHERCORE_RV32_SPIKE_WORK_DIR="$RUNNER_TEMP/rv32c-spike-reference-b"
           spike_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
           test -f "$spike_so"
           spike_sha="$(sha256sum "$spike_so" | awk '{print $1}')"
+          grep -q '^semantic_smoke=PASS$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/semantic-smoke.txt"
+          grep -q '^status=PASS$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          grep -q '^mixed_provenance_bne=fallthrough$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          grep -q '^passive_mmio_maps=2$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          grep -q '^passive_mmio_independent=PASS$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
           echo "SPIKE_SO_B=$spike_so" >> "$GITHUB_ENV"
           echo "SPIKE_SHA_B=$spike_sha" >> "$GITHUB_ENV"
 
@@ -59,26 +71,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected=85b02befce3e98383080c28f33f18bb4d08282cf97e2e6b7f2f7e334a223c85f
+          expected=22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df
           test "$SPIKE_SHA_A" = "$expected"
           test "$SPIKE_SHA_B" = "$expected"
           test "$SPIKE_SHA_A" = "$SPIKE_SHA_B"
-          grep -q '^semantic_smoke=PASS$' build/rv32c-spike-reference-a/evidence/semantic-smoke.txt
-          grep -q '^semantic_smoke=PASS$' build/rv32c-spike-reference-b/evidence/semantic-smoke.txt
 
       - name: Write reference summary
         if: always()
         shell: bash
         run: |
           {
-            echo '## RV32C Spike reference provider'
+            echo '## RV32C Spike reference provider v2'
             echo
             echo "- head: \`${GITHUB_SHA}\`"
             echo '- Spike revision: `530af85d83781a3dae31a4ace84a573ec255fefa`'
             echo '- ISA profile: `RV32IMC_Zicsr`'
             echo '- privilege profile: M-mode, bare 64 MiB RAM'
-            echo '- expected shared-object SHA-256: `85b02befce3e98383080c28f33f18bb4d08282cf97e2e6b7f2f7e334a223c85f`'
-            echo '- acceptance: two from-scratch builds with identical SHA plus standalone raw `0x1141` one-step semantic proof'
+            echo '- expected shared-object SHA-256: `22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df`'
+            echo '- acceptance: two from-scratch builds in independent absolute roots with identical SHA'
+            echo '- ABI semantics: canonical RV32 regcpy values and multiple independent passive MMIO mappings'
+            echo '- consumer cache resolver is deliberately not used by this reproducibility job'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reproducibility evidence
@@ -92,5 +104,5 @@ jobs:
           path: |
             build/rv32c-spike-reference-a/evidence/**
             build/rv32c-spike-reference-a/rv32imc-spike-reference.so
-            build/rv32c-spike-reference-b/evidence/**
-            build/rv32c-spike-reference-b/rv32imc-spike-reference.so
+            ${{ runner.temp }}/rv32c-spike-reference-b/evidence/**
+            ${{ runner.temp }}/rv32c-spike-reference-b/rv32imc-spike-reference.so

@@ -11,6 +11,8 @@ on:
       - tools/build_rv32im_coremark.sh
       - tools/ensure_riscv_none_elf_gcc_15_2.sh
       - tools/ensure_rv32c_spike_reference.sh
+      - tools/resolve_rv32c_spike_reference.sh
+      - tools/probe_rv32_reference_abi.py
       - tools/spike_rv32_reference_shim.cpp
   workflow_dispatch:
 
@@ -48,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rv32_reference_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
+          rv32_reference_so="$(bash tools/resolve_rv32c_spike_reference.sh)"
           test -f "$rv32_reference_so"
           echo "RV32_REFERENCE_SO=$rv32_reference_so" >> "$GITHUB_ENV"
           mkdir -p build/rv32imc-coremark
@@ -59,6 +61,8 @@ jobs:
             echo 'priv=M'
             echo "sha256=$(sha256sum "$rv32_reference_so" | awk '{print $1}')"
           } > build/rv32imc-coremark/reference.txt
+          grep -q '^sha256=22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df$' \
+            build/rv32imc-coremark/reference.txt
           cat build/rv32imc-coremark/reference.txt
 
       - name: Build unchanged pinned CoreMark with compiler-generated C
@@ -92,7 +96,7 @@ jobs:
             echo '- source: pinned upstream CoreMark, unchanged'
             echo '- compiler profile: `-march=rv32imc -mabi=ilp32 -O2`'
             echo '- acceptance requires real compiler-generated 16-bit encodings'
-            echo '- architectural oracle: frozen exact Spike RV32IMC reference provider from the lower stacked layer'
+            echo '- architectural oracle: exact SHA-validated cached Spike RV32IMC provider'
             if [[ -f build/rv32imc-coremark/reference.txt ]]; then
               echo
               echo '### Reference'
