@@ -5,7 +5,8 @@ BUILD_DIR ?= build/l32-linux-probe
 RTL_DIR ?= $(BUILD_DIR)/rtl
 OBJ_DIR := $(BUILD_DIR)/obj
 FORKSERVER_OBJ_DIR := $(BUILD_DIR)/obj-forkserver
-TOP := AetherCoreOpenSbiSimTop
+TOP ?= AetherCoreOpenSbiSimTop
+ELABORATE_MAIN ?= aethercore.ElaborateOpenSbi
 VERILATOR ?= verilator
 VERILATOR_MODEL_OPT ?= -O3
 VERILATOR_THREADS ?= 1
@@ -23,6 +24,7 @@ UART_COMMAND ?=
 UART_COMMAND_FILE ?=
 POST_INPUT_MAX_CYCLES ?= 0
 PROGRESS_INTERVAL_CYCLES ?= 25000000
+REQUIRE_LAYERED_COMPRESSED ?= 0
 RUN_DEPS ?= sim
 FORKSERVER_RUN_DEPS ?= forkserver-sim
 FORKSERVER_BATCH_FILE ?=
@@ -41,7 +43,7 @@ rtl:
 	@test -f ./mill || { echo "ERROR: mill launcher is missing"; exit 4; }
 	chmod +x ./mill
 	set +e; \
-		./mill aethercore.runMain aethercore.ElaborateOpenSbi --target-dir $(RTL_DIR) \
+		./mill aethercore.runMain $(ELABORATE_MAIN) --target-dir $(RTL_DIR) \
 			2>&1 | tee $(BUILD_DIR)/logs/rtl-build.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
@@ -115,7 +117,7 @@ run-local: $(RUN_DEPS)
 		if [[ -n "$(UART_COMMAND_FILE)" ]]; then \
 			uart_command="$$(cat "$(UART_COMMAND_FILE)")"; \
 		fi; \
-		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$$uart_command" "$(POST_INPUT_MAX_CYCLES)" "$(PROGRESS_INTERVAL_CYCLES)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$$uart_command" "$(POST_INPUT_MAX_CYCLES)" "$(PROGRESS_INTERVAL_CYCLES)" "$(REQUIRE_LAYERED_COMPRESSED)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -128,6 +130,11 @@ run-local: $(RUN_DEPS)
 	grep -q 'Linux version 6\.6\.143' $(BUILD_DIR)/logs/boot-probe.log || { \
 		echo "ERROR: Linux version banner was not observed"; exit 6; \
 	}
+	if [[ "$(REQUIRE_LAYERED_COMPRESSED)" -gt 0 ]]; then \
+		grep -q 'L32_LAYERED_COMPRESSED_PASS' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: OpenSBI/Linux C qualification returned without layered compressed evidence"; exit 12; \
+		}; \
+	fi
 	if [[ "$(MIN_INTERRUPTS)" -gt 0 ]]; then \
 		grep -q 'L32_FIRST_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
 			echo "ERROR: Linux reached UART marker without a real interrupt retirement"; exit 7; \
