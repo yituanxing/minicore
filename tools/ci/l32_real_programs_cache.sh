@@ -4,15 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32_busybox/manifest.env"
 source "${ROOT_DIR}/software/l32_real/manifest.env"
+source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
 
-BUILD_DIR="${ROOT_DIR}/build/l32-real-programs"
+BUILD_DIR="${L32_USERSPACE_REAL_PROGRAMS_BUILD_DIR}"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"
-COMPONENT_CACHE_DIR="${CACHE_ROOT}/components"
+COMPONENT_CACHE_DIR="${CACHE_ROOT}/components${L32_USERSPACE_BUILD_SUFFIX}"
 MARKER="${BUILD_DIR}/software-cache.txt"
 RESULT="${BUILD_DIR}/result.txt"
 BUILD_SCRIPT="${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"
-MUSL_WRAPPER="${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc"
-MUSL_LIBC="${ROOT_DIR}/build/l32-busybox/musl-prefix/lib/libc.a"
+PROFILE_HELPER="${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+PROFILE_AUDIT="${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+WRAPPER_TOOL="${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
+MUSL_WRAPPER="${L32_USERSPACE_MUSL_WRAPPER}"
+MUSL_LIBC="${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/libc.a"
 components=(lua sqlite bash busybox zlib libpng)
 
 mkdir -p "${BUILD_DIR}" "${COMPONENT_CACHE_DIR}"
@@ -25,7 +29,21 @@ hash_or_missing() {
   fi
 }
 
+component_profile_name() {
+  case "$1" in
+    lua) printf '%s\n' lua ;;
+    sqlite) printf '%s\n' sqlite ;;
+    bash) printf '%s\n' bash ;;
+    busybox) printf '%s\n' busybox-real ;;
+    zlib) printf '%s\n' zlib ;;
+    libpng) printf '%s\n' libpng ;;
+    *) echo "ERROR: unknown real-program component: $1" >&2; return 2 ;;
+  esac
+}
+
 component_outputs() {
+  local profile_name
+  profile_name="$(component_profile_name "$1")"
   case "$1" in
     lua) printf '%s\n' "${BUILD_DIR}/lua" "${BUILD_DIR}/lua-smoke.lua" ;;
     sqlite) printf '%s\n' "${BUILD_DIR}/sqlite-smoke" ;;
@@ -35,15 +53,21 @@ component_outputs() {
     libpng) printf '%s\n' "${BUILD_DIR}/libpng-smoke" ;;
     *) echo "ERROR: unknown real-program component: $1" >&2; return 2 ;;
   esac
+  printf '%s\n' "${BUILD_DIR}/evidence/${profile_name}-profile.txt"
 }
 
 component_identity() {
   local component="$1"
+  printf 'profile=%s\n' "${L32_USERSPACE_PROFILE}"
   printf 'userspace_prefix=%s\n' "${L32_USERSPACE_CROSS_COMPILE_PREFIX}"
-  printf 'userspace_isa=%s\n' "${L32_USERSPACE_ISA}"
+  printf 'userspace_isa=%s\n' "${L32_USERSPACE_EFFECTIVE_ISA}"
   printf 'userspace_abi=%s\n' "${L32_USERSPACE_ABI}"
+  printf 'require_c=%s\n' "${L32_USERSPACE_REQUIRE_C}"
   printf 'musl_version=%s\n' "${MUSL_VERSION}"
   printf 'musl_sha256=%s\n' "${MUSL_SHA256}"
+  hash_or_missing "${PROFILE_HELPER}"
+  hash_or_missing "${PROFILE_AUDIT}"
+  hash_or_missing "${WRAPPER_TOOL}"
   hash_or_missing "${MUSL_WRAPPER}"
   hash_or_missing "${MUSL_LIBC}"
   printf 'recipe_hash=%s\n' "$("${BUILD_SCRIPT}" recipe-hash "${component}")"
@@ -92,6 +116,7 @@ component_hit() {
   marker="${entry}/marker.txt"
   [[ -f "${marker}" ]] || return 1
   [[ "$(awk '$1=="input_key" {print $2; exit}' "${marker}" 2>/dev/null)" == "${key}" ]] || return 1
+  [[ "$(awk '$1=="profile" {print $2; exit}' "${marker}" 2>/dev/null)" == "${L32_USERSPACE_PROFILE}" ]] || return 1
 
   while IFS= read -r output; do
     local rel cached expected actual
@@ -126,6 +151,9 @@ mark_component() {
   {
     echo "input_key ${key}"
     echo "component ${component}"
+    echo "profile ${L32_USERSPACE_PROFILE}"
+    echo "isa ${L32_USERSPACE_EFFECTIVE_ISA}"
+    echo "require_c ${L32_USERSPACE_REQUIRE_C}"
     while IFS= read -r output; do
       local rel cached
       [[ -s "${output}" ]] || { echo "ERROR: component ${component} did not produce ${output}" >&2; exit 40; }
@@ -138,7 +166,7 @@ mark_component() {
   } > "${marker}"
   rm -rf "${entry}"
   mv "${tmp_dir}" "${entry}"
-  echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK component=${component} key=${key}"
+  echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK profile=${L32_USERSPACE_PROFILE} component=${component} key=${key}"
 }
 
 declare -A keys
@@ -149,24 +177,28 @@ for component in "${components[@]}"; do
   keys["${component}"]="${key}"
   if component_hit "${component}" "${key}"; then
     decisions["${component}"]="hit"
-    echo "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT component=${component} key=${key}"
+    echo "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT profile=${L32_USERSPACE_PROFILE} component=${component} key=${key}"
     continue
   fi
 
   all_hits=0
   decisions["${component}"]="miss"
-  echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS component=${component} key=${key}"
+  echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS profile=${L32_USERSPACE_PROFILE} component=${component} key=${key}"
   "${BUILD_SCRIPT}" "${component}"
   mark_component "${component}" "${key}"
 done
 
 "${BUILD_SCRIPT}" finalize
 grep -qx 'L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS' "${RESULT}"
+grep -qx "profile=${L32_USERSPACE_PROFILE}" "${RESULT}"
 
 aggregate_key="$({ for component in "${components[@]}"; do printf '%s %s\n' "${component}" "${keys[${component}]}"; done; } | sha256sum | awk '{print $1}')"
 tmp="${MARKER}.tmp.$$"
 {
-  echo "format component-v1"
+  echo "format component-v2"
+  echo "profile ${L32_USERSPACE_PROFILE}"
+  echo "isa ${L32_USERSPACE_EFFECTIVE_ISA}"
+  echo "require_c ${L32_USERSPACE_REQUIRE_C}"
   echo "input_key ${aggregate_key}"
   for component in "${components[@]}"; do
     echo "component ${component} ${keys[${component}]}"
@@ -183,7 +215,7 @@ tmp="${MARKER}.tmp.$$"
 mv "${tmp}" "${MARKER}"
 
 if (( all_hits )); then
-  echo "L32_REAL_PROGRAMS_CACHE_HIT key=${aggregate_key} components=${#components[@]}"
+  echo "L32_REAL_PROGRAMS_CACHE_HIT profile=${L32_USERSPACE_PROFILE} key=${aggregate_key} components=${#components[@]}"
 else
-  echo "L32_REAL_PROGRAMS_CACHE_MARK key=${aggregate_key} components=${#components[@]}"
+  echo "L32_REAL_PROGRAMS_CACHE_MARK profile=${L32_USERSPACE_PROFILE} key=${aggregate_key} components=${#components[@]}"
 fi

@@ -3,23 +3,35 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32_busybox/manifest.env"
+source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
 
-BUSYBOX_BUILD_DIR="${ROOT_DIR}/build/l32-busybox"
-BUILD_DIR="${ROOT_DIR}/build/l32-runtime-probe"
+BUSYBOX_BUILD_DIR="${L32_USERSPACE_BUSYBOX_BUILD_DIR}"
+BUILD_DIR="${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}"
 SOURCE="${ROOT_DIR}/software/l32_busybox/runtime_probe.c"
-REAL_GCC="${BUSYBOX_BUILD_DIR}/l32-musl-real-gcc"
+REAL_GCC="${L32_USERSPACE_MUSL_WRAPPER}"
 OUTPUT="${BUILD_DIR}/l32-runtime-probe"
 READELF="${L32_USERSPACE_CROSS_COMPILE_PREFIX}readelf"
+OBJDUMP="${L32_USERSPACE_CROSS_COMPILE_PREFIX}objdump"
+PROFILE_AUDIT="${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+WRAPPER_TOOL="${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
 
 mkdir -p "${BUILD_DIR}"
 
 [[ -s "${SOURCE}" ]] || { echo "ERROR: missing L32 runtime probe source" >&2; exit 20; }
-[[ -x "${REAL_GCC}" ]] || { echo "ERROR: qualified musl link wrapper is missing" >&2; exit 21; }
 grep -qx 'L32_BUSYBOX_BUILD_RESULT: status=PASS' "${BUSYBOX_BUILD_DIR}/result.txt" || {
   echo "ERROR: qualified L32 musl/BusyBox build is required first" >&2
   exit 21
 }
-command -v "${READELF}" >/dev/null 2>&1 || { echo "ERROR: missing ${READELF}" >&2; exit 22; }
+grep -qx "profile=${L32_USERSPACE_PROFILE}" "${BUSYBOX_BUILD_DIR}/result.txt" || {
+  echo "ERROR: musl/BusyBox profile does not match runtime probe profile" >&2
+  exit 21
+}
+[[ -x "${WRAPPER_TOOL}" ]] || { echo "ERROR: missing musl link-wrapper generator" >&2; exit 21; }
+"${WRAPPER_TOOL}" >/dev/null
+[[ -x "${REAL_GCC}" ]] || { echo "ERROR: qualified musl link wrapper is missing: ${REAL_GCC}" >&2; exit 21; }
+for tool in "${READELF}" "${OBJDUMP}"; do
+  command -v "${tool}" >/dev/null 2>&1 || { echo "ERROR: missing ${tool}" >&2; exit 22; }
+done
 
 GITHUB_WORKSPACE="${ROOT_DIR}" "${REAL_GCC}" \
   -Os -pipe -fno-pie -no-pie \
@@ -31,28 +43,26 @@ GITHUB_WORKSPACE="${ROOT_DIR}" "${REAL_GCC}" \
 file "${OUTPUT}" | tee "${BUILD_DIR}/file.txt"
 file "${OUTPUT}" | grep -q 'statically linked'
 
-python3 - "${OUTPUT}" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-data = path.read_bytes()
-if len(data) < 40 or data[:4] != b'\x7fELF':
-    raise SystemExit(f"ERROR: not ELF: {path}")
-if data[4] != 1 or data[5] != 1:
-    raise SystemExit(f"ERROR: expected ELF32 little-endian: {path}")
-if int.from_bytes(data[18:20], 'little') != 243:
-    raise SystemExit(f"ERROR: expected EM_RISCV: {path}")
-flags = int.from_bytes(data[36:40], 'little')
-if flags & 0x6:
-    raise SystemExit(f"ERROR: runtime probe unexpectedly uses hard/soft FP ABI flags: 0x{flags:x}")
-if flags & 0x1:
-    raise SystemExit(f"ERROR: runtime probe unexpectedly uses RVC: 0x{flags:x}")
-print(f"L32_RUNTIME_PROBE_ABI_OK e_flags=0x{flags:x}")
-PY
+c_policy=(--forbid-c)
+if [[ "${L32_USERSPACE_REQUIRE_C}" -eq 1 ]]; then
+  c_policy=(--require-c)
+fi
+python3 "${PROFILE_AUDIT}" \
+  --elf "${OUTPUT}" \
+  --name runtime-probe \
+  --readelf "${READELF}" \
+  --objdump "${OBJDUMP}" \
+  "${c_policy[@]}" \
+  --output "${BUILD_DIR}/profile.txt"
+probe_compressed="$(awk -F= '$1 == "compressed_instructions" {print $2; exit}' "${BUILD_DIR}/profile.txt")"
 
 {
   echo "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS"
+  echo "profile=${L32_USERSPACE_PROFILE}"
+  echo "isa=${L32_USERSPACE_EFFECTIVE_ISA}"
+  echo "abi=${L32_USERSPACE_ABI}"
+  echo "require_c=${L32_USERSPACE_REQUIRE_C}"
+  echo "compressed_instructions=${probe_compressed}"
   echo "probe=${OUTPUT}"
   echo "probe_sha256=$(sha256sum "${OUTPUT}" | awk '{print $1}')"
   echo "source_sha256=$(sha256sum "${SOURCE}" | awk '{print $1}')"

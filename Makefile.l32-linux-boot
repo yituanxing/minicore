@@ -31,6 +31,7 @@ FORKSERVER_BATCH_FILE ?=
 FORKSERVER_TRIGGER ?= L32 BUSYBOX SHELL READY
 FORKSERVER_BOOT_MAX_CYCLES ?= 450000000
 FORKSERVER_CASE_MAX_CYCLES ?= 50000000
+FORKSERVER_REQUIRE_USER_COMPRESSED ?= 0
 UART_INPUT_ENABLED := $(if $(strip $(UART_COMMAND)$(UART_COMMAND_FILE)),1,0)
 export AETHERCORE_UART_COMMAND := $(UART_COMMAND)
 
@@ -94,6 +95,7 @@ forkserver-local: $(FORKSERVER_RUN_DEPS)
 			"$(FORKSERVER_BATCH_FILE)" \
 			"$(FORKSERVER_CASE_MAX_CYCLES)" \
 			"$(PROGRESS_INTERVAL_CYCLES)" \
+			"$(FORKSERVER_REQUIRE_USER_COMPRESSED)" \
 			2>&1 | tee $(BUILD_DIR)/logs/forkserver.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
@@ -107,6 +109,11 @@ forkserver-local: $(FORKSERVER_RUN_DEPS)
 	grep -q '^L32_FORKSERVER_PASS ' $(BUILD_DIR)/logs/forkserver.log || { \
 		echo "ERROR: forkserver returned without an all-pass result"; exit 22; \
 	}
+	if [[ "$(FORKSERVER_REQUIRE_USER_COMPRESSED)" -gt 0 ]]; then \
+		grep -q '^L32_FORKSERVER_USER_COMPRESSED_PASS ' $(BUILD_DIR)/logs/forkserver.log || { \
+			echo "ERROR: C forkserver returned without per-case userspace compressed evidence"; exit 23; \
+		}; \
+	fi
 
 run-local: $(RUN_DEPS)
 	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }

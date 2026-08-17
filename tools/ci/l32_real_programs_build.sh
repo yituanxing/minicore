@@ -4,17 +4,21 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32_busybox/manifest.env"
 source "${ROOT_DIR}/software/l32_real/manifest.env"
+source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"
 DOWNLOAD_DIR="${CACHE_ROOT}/downloads"
 SOURCE_DIR="${CACHE_ROOT}/sources"
-BUILD_DIR="${ROOT_DIR}/build/l32-real-programs"
+BUILD_DIR="${L32_USERSPACE_REAL_PROGRAMS_BUILD_DIR}"
 BUSYBOX_REAL_BUILD="${BUILD_DIR}/busybox-real-src"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
-MUSL_CC="${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc"
+MUSL_CC="${L32_USERSPACE_MUSL_WRAPPER}"
 READELF="${L32_USERSPACE_CROSS_COMPILE_PREFIX}readelf"
+OBJDUMP="${L32_USERSPACE_CROSS_COMPILE_PREFIX}objdump"
 AR="${L32_USERSPACE_CROSS_COMPILE_PREFIX}ar"
 RANLIB="${L32_USERSPACE_CROSS_COMPILE_PREFIX}ranlib"
+PROFILE_AUDIT="${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+WRAPPER_TOOL="${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
 JOBS="${L32_REAL_JOBS:-$(nproc)}"
 
 fetch_verified() {
@@ -30,36 +34,39 @@ fetch_verified() {
 }
 
 check_elf() {
-  local elf="$1"
+  local name="$1" elf="$2"
   [[ -s "${elf}" ]] || { echo "ERROR: missing ELF ${elf}" >&2; exit 30; }
   file "${elf}" | grep -q 'ELF 32-bit.*RISC-V'
   file "${elf}" | grep -q 'statically linked'
-  python3 - "${elf}" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1])
-d = p.read_bytes()
-if d[:4] != b'\x7fELF' or d[4] != 1 or d[5] != 1:
-    raise SystemExit(f"ERROR: expected little-endian ELF32: {p}")
-if int.from_bytes(d[18:20], 'little') != 243:
-    raise SystemExit(f"ERROR: expected RISC-V ELF: {p}")
-flags = int.from_bytes(d[36:40], 'little')
-if flags & 0x0006 or flags & 0x0001:
-    raise SystemExit(f"ERROR: expected soft-float non-RVC ELF flags=0x{flags:x}: {p}")
-PY
-  "${READELF}" -h -A "${elf}"
+  local c_policy=(--forbid-c)
+  if [[ "${L32_USERSPACE_REQUIRE_C}" -eq 1 ]]; then
+    c_policy=(--require-c)
+  fi
+  python3 "${PROFILE_AUDIT}" \
+    --elf "${elf}" \
+    --name "${name}" \
+    --readelf "${READELF}" \
+    --objdump "${OBJDUMP}" \
+    "${c_policy[@]}" \
+    --output "${EVIDENCE_DIR}/${name}-profile.txt"
 }
 
 ensure_environment() {
   mkdir -p "${DOWNLOAD_DIR}" "${SOURCE_DIR}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
-  for tool in curl tar sha256sum file make python3 "${READELF}" "${AR}" "${RANLIB}"; do
+  for tool in curl tar sha256sum file make python3 "${READELF}" "${OBJDUMP}" "${AR}" "${RANLIB}"; do
     command -v "${tool}" >/dev/null 2>&1 || { echo "ERROR: missing real-program build tool: ${tool}" >&2; exit 20; }
   done
-  [[ -x "${MUSL_CC}" ]] || { echo "ERROR: qualified L32 musl compiler wrapper is missing" >&2; exit 21; }
-  grep -qx 'L32_BUSYBOX_BUILD_RESULT: status=PASS' "${ROOT_DIR}/build/l32-busybox/result.txt" || {
+  grep -qx 'L32_BUSYBOX_BUILD_RESULT: status=PASS' "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/result.txt" || {
     echo "ERROR: qualified L32 musl/BusyBox build is required first" >&2
     exit 21
   }
+  grep -qx "profile=${L32_USERSPACE_PROFILE}" "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/result.txt" || {
+    echo "ERROR: musl/BusyBox profile does not match real-program profile" >&2
+    exit 21
+  }
+  [[ -x "${WRAPPER_TOOL}" ]] || { echo "ERROR: missing musl link-wrapper generator" >&2; exit 21; }
+  "${WRAPPER_TOOL}" >/dev/null
+  [[ -x "${MUSL_CC}" ]] || { echo "ERROR: qualified L32 musl compiler wrapper is missing" >&2; exit 21; }
 }
 
 build_lua() {
@@ -80,7 +87,7 @@ build_lua() {
     2>&1 | tee "${BUILD_DIR}/lua-build.log"
   cp "${build}/src/lua" "${BUILD_DIR}/lua"
   cp "${ROOT_DIR}/software/l32_real/lua-smoke.lua" "${BUILD_DIR}/lua-smoke.lua"
-  check_elf "${BUILD_DIR}/lua" > "${EVIDENCE_DIR}/lua-readelf.txt"
+  check_elf lua "${BUILD_DIR}/lua" > "${EVIDENCE_DIR}/lua-readelf.txt"
 }
 
 build_sqlite() {
@@ -102,7 +109,7 @@ PY
     -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 \
     -I"${src}" "${src}/sqlite3.c" "${ROOT_DIR}/software/l32_real/sqlite-smoke.c" \
     -lm -o "${BUILD_DIR}/sqlite-smoke" 2>&1 | tee "${BUILD_DIR}/sqlite-build.log"
-  check_elf "${BUILD_DIR}/sqlite-smoke" > "${EVIDENCE_DIR}/sqlite-readelf.txt"
+  check_elf sqlite "${BUILD_DIR}/sqlite-smoke" > "${EVIDENCE_DIR}/sqlite-readelf.txt"
 }
 
 build_bash() {
@@ -134,7 +141,7 @@ build_bash() {
   cp "${build}/bash" "${BUILD_DIR}/bash"
   cp "${ROOT_DIR}/software/l32_real/bash-smoke.sh" "${BUILD_DIR}/bash-smoke.sh"
   chmod 0755 "${BUILD_DIR}/bash-smoke.sh"
-  check_elf "${BUILD_DIR}/bash" > "${EVIDENCE_DIR}/bash-readelf.txt"
+  check_elf bash "${BUILD_DIR}/bash" > "${EVIDENCE_DIR}/bash-readelf.txt"
 }
 
 build_busybox() {
@@ -197,7 +204,7 @@ PY
       CC="${MUSL_CC}" HOSTCC="${HOSTCC:-cc}" -j"${JOBS}" busybox
   ) 2>&1 | tee "${BUILD_DIR}/busybox-real-build.log"
   cp "${BUSYBOX_REAL_BUILD}/busybox" "${BUILD_DIR}/busybox-real"
-  check_elf "${BUILD_DIR}/busybox-real" > "${EVIDENCE_DIR}/busybox-real-readelf.txt"
+  check_elf busybox-real "${BUILD_DIR}/busybox-real" > "${EVIDENCE_DIR}/busybox-real-readelf.txt"
 }
 
 build_zlib() {
@@ -223,7 +230,7 @@ build_zlib() {
     "${build}/libz.a" \
     -o "${BUILD_DIR}/zlib-smoke" \
     2>&1 | tee "${BUILD_DIR}/zlib-smoke-build.log"
-  check_elf "${BUILD_DIR}/zlib-smoke" > "${EVIDENCE_DIR}/zlib-readelf.txt"
+  check_elf zlib "${BUILD_DIR}/zlib-smoke" > "${EVIDENCE_DIR}/zlib-readelf.txt"
 }
 
 build_libpng() {
@@ -270,7 +277,7 @@ build_libpng() {
     "${png_build}/.libs/libpng16.a" "${zlib_build}/libz.a" -lm \
     -o "${BUILD_DIR}/libpng-smoke" \
     2>&1 | tee "${BUILD_DIR}/libpng-smoke-build.log"
-  check_elf "${BUILD_DIR}/libpng-smoke" > "${EVIDENCE_DIR}/libpng-readelf.txt"
+  check_elf libpng "${BUILD_DIR}/libpng-smoke" > "${EVIDENCE_DIR}/libpng-readelf.txt"
 }
 
 recipe_hash() {
@@ -311,6 +318,10 @@ finalize() {
 
   {
     echo "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS"
+    echo "profile=${L32_USERSPACE_PROFILE}"
+    echo "isa=${L32_USERSPACE_EFFECTIVE_ISA}"
+    echo "abi=${L32_USERSPACE_ABI}"
+    echo "require_c=${L32_USERSPACE_REQUIRE_C}"
     echo "lua_version=${LUA_VERSION}"
     echo "sqlite_version=${SQLITE_VERSION}"
     echo "bash_version=${BASH_VERSION}"

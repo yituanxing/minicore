@@ -3,11 +3,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/l32_busybox/manifest.env"
+source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/userspace"
 DOWNLOAD_DIR="${CACHE_ROOT}/downloads"
 SOURCE_ROOT="${CACHE_ROOT}/sources"
-BUILD_DIR="${ROOT_DIR}/build/l32-busybox"
+BUILD_DIR="${L32_USERSPACE_BUSYBOX_BUILD_DIR}"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 MUSL_BUILD_DIR="${BUILD_DIR}/musl-src"
 MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
@@ -16,52 +17,51 @@ JOBS="${L32_USERSPACE_JOBS:-$(nproc)}"
 
 BASE_GCC="${L32_USERSPACE_CROSS_COMPILE_PREFIX}gcc"
 READELF="${L32_USERSPACE_CROSS_COMPILE_PREFIX}readelf"
+OBJDUMP="${L32_USERSPACE_CROSS_COMPILE_PREFIX}objdump"
+PROFILE_AUDIT="${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+MUSL_LINK_WRAPPER_BUILDER="${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
 
 mkdir -p "${DOWNLOAD_DIR}" "${SOURCE_ROOT}" "${BUILD_DIR}" "${EVIDENCE_DIR}"
 
-for tool in curl tar sha256sum file make python3 "${BASE_GCC}" "${READELF}"; do
+for tool in curl tar sha256sum file make python3 "${BASE_GCC}" "${READELF}" "${OBJDUMP}"; do
   command -v "${tool}" >/dev/null 2>&1 || {
     echo "ERROR: missing required L32 userspace build tool: ${tool}" >&2
     exit 20
   }
 done
+[[ -f "${PROFILE_AUDIT}" ]] || {
+  echo "ERROR: missing generic RISC-V ELF profile auditor: ${PROFILE_AUDIT}" >&2
+  exit 20
+}
+[[ -x "${MUSL_LINK_WRAPPER_BUILDER}" ]] || {
+  echo "ERROR: missing profile-owned musl link wrapper builder: ${MUSL_LINK_WRAPPER_BUILDER}" >&2
+  exit 20
+}
 
-check_riscv_soft_float_elf() {
-  local elf="$1"
-  python3 - "${elf}" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-data = path.read_bytes()
-if len(data) < 40 or data[:4] != b'\x7fELF':
-    raise SystemExit(f"ERROR: not an ELF file: {path}")
-if data[4] != 1:
-    raise SystemExit(f"ERROR: expected ELF32, got EI_CLASS={data[4]}: {path}")
-if data[5] != 1:
-    raise SystemExit(f"ERROR: expected little-endian ELF: {path}")
-e_machine = int.from_bytes(data[18:20], "little")
-if e_machine != 243:
-    raise SystemExit(f"ERROR: expected EM_RISCV=243, got {e_machine}: {path}")
-e_flags = int.from_bytes(data[36:40], "little")
-EF_RISCV_RVC = 0x0001
-EF_RISCV_FLOAT_ABI = 0x0006
-if e_flags & EF_RISCV_FLOAT_ABI:
-    raise SystemExit(f"ERROR: expected soft-float ABI, e_flags=0x{e_flags:x}: {path}")
-if e_flags & EF_RISCV_RVC:
-    raise SystemExit(f"ERROR: unexpected RVC flag, e_flags=0x{e_flags:x}: {path}")
-print(f"L32_ELF_ABI_OK path={path} e_flags=0x{e_flags:x} float_abi=soft rvc=0")
-PY
+audit_riscv_profile() {
+  local name="$1" elf="$2" output="$3"
+  local c_policy=(--forbid-c)
+  if [[ "${L32_USERSPACE_REQUIRE_C}" -eq 1 ]]; then
+    c_policy=(--require-c)
+  fi
+  python3 "${PROFILE_AUDIT}" \
+    --elf "${elf}" \
+    --name "${name}" \
+    --readelf "${READELF}" \
+    --objdump "${OBJDUMP}" \
+    "${c_policy[@]}" \
+    --output "${output}"
 }
 
 # The runner's riscv64-unknown-elf toolchain is multilib and is already used by
 # the frozen RV32 workload gates. Wrap it so musl sees one compiler command
-# whose target contract is always RV32IMA/ILP32; this also avoids accidentally
-# selecting an RV64 libgcc when musl probes the compiler runtime.
-L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
+# whose target contract is always the selected RV32 ISA with ILP32; this also
+# avoids accidentally selecting an RV64 libgcc when musl probes the compiler
+# runtime.
+L32_CC="${BUILD_DIR}/l32-${L32_USERSPACE_PROFILE}-ilp32-gcc"
 cat > "${L32_CC}" <<EOF
 #!/usr/bin/env bash
-exec "$(command -v "${BASE_GCC}")" -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" -mstrict-align "\$@"
+exec "$(command -v "${BASE_GCC}")" -march="${L32_USERSPACE_EFFECTIVE_ISA}" -mabi="${L32_USERSPACE_ABI}" -mstrict-align "\$@"
 EOF
 chmod +x "${L32_CC}"
 
@@ -74,23 +74,17 @@ EOF
 {
   echo "compiler=$(${BASE_GCC} --version | head -n 1)"
   echo "dumpmachine=$(${BASE_GCC} -dumpmachine)"
-  echo "isa=${L32_USERSPACE_ISA}"
+  echo "profile=${L32_USERSPACE_PROFILE}"
+  echo "isa=${L32_USERSPACE_EFFECTIVE_ISA}"
   echo "abi=${L32_USERSPACE_ABI}"
-  echo "multilib=$(${BASE_GCC} -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" -print-multi-directory)"
-  echo "libgcc=$(${BASE_GCC} -march="${L32_USERSPACE_ISA}" -mabi="${L32_USERSPACE_ABI}" -print-libgcc-file-name)"
+  echo "require_c=${L32_USERSPACE_REQUIRE_C}"
+  echo "multilib=$(${BASE_GCC} -march="${L32_USERSPACE_EFFECTIVE_ISA}" -mabi="${L32_USERSPACE_ABI}" -print-multi-directory)"
+  echo "libgcc=$(${BASE_GCC} -march="${L32_USERSPACE_EFFECTIVE_ISA}" -mabi="${L32_USERSPACE_ABI}" -print-libgcc-file-name)"
   "${L32_CC}" -Os -ffreestanding -c "${BUILD_DIR}/toolchain-probe.c" -o "${BUILD_DIR}/toolchain-probe.o"
   "${READELF}" -h -A "${BUILD_DIR}/toolchain-probe.o"
 } 2>&1 | tee "${BUILD_DIR}/toolchain-probe.log"
-check_riscv_soft_float_elf "${BUILD_DIR}/toolchain-probe.o" | tee -a "${BUILD_DIR}/toolchain-probe.log"
-probe_arch="$(${READELF} -A "${BUILD_DIR}/toolchain-probe.o" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
-[[ "${probe_arch}" == rv32i* && "${probe_arch}" == *"_m"* && "${probe_arch}" == *"_a"* ]] || {
-  echo "ERROR: bootstrap compiler lost required RV32IMA ISA: ${probe_arch}" >&2
-  exit 24
-}
-if [[ "${probe_arch}" =~ _f[0-9] || "${probe_arch}" =~ _d[0-9] || "${probe_arch}" =~ _c[0-9] ]]; then
-  echo "ERROR: bootstrap compiler retained unsupported F/D/C extension: ${probe_arch}" >&2
-  exit 24
-fi
+audit_riscv_profile toolchain-probe "${BUILD_DIR}/toolchain-probe.o" \
+  "${EVIDENCE_DIR}/toolchain-probe-profile.txt" | tee -a "${BUILD_DIR}/toolchain-probe.log"
 
 fetch_verified() {
   local url="$1" sha="$2" output="$3" tmp
@@ -139,9 +133,20 @@ cp -a "${BUSYBOX_SOURCE_DIR}" "${BUSYBOX_BUILD_DIR}"
   make install
 ) 2>&1 | tee "${BUILD_DIR}/musl-build.log"
 
-MUSL_GCC="${MUSL_PREFIX}/bin/musl-gcc"
+# Keep musl's upstream gcc wrapper as an install-completeness artifact, but do
+# not use its specs with the runner's bare-metal GCC. Those specs reintroduce
+# newlib/libgloss start/end files (for example crtbeginS.o and -lgloss), which
+# are not Linux-musl ownership. Generate one canonical profile-owned driver and
+# use it for every linked userspace artifact from this point onward.
+MUSL_UPSTREAM_GCC="${MUSL_PREFIX}/bin/musl-gcc"
+[[ -x "${MUSL_UPSTREAM_GCC}" ]] || {
+  echo "ERROR: musl build did not install the upstream gcc wrapper" >&2
+  exit 21
+}
+"${MUSL_LINK_WRAPPER_BUILDER}"
+MUSL_GCC="${L32_USERSPACE_MUSL_WRAPPER}"
 [[ -x "${MUSL_GCC}" ]] || {
-  echo "ERROR: musl build did not install the gcc wrapper" >&2
+  echo "ERROR: profile-owned musl compiler/link driver was not generated" >&2
   exit 21
 }
 
@@ -157,7 +162,8 @@ EOF
 "${READELF}" -h -A "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-readelf.txt"
 file "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-file.txt"
 file "${BUILD_DIR}/musl-probe" | grep -q 'statically linked'
-check_riscv_soft_float_elf "${BUILD_DIR}/musl-probe" | tee "${EVIDENCE_DIR}/musl-probe-abi.txt"
+audit_riscv_profile musl-probe "${BUILD_DIR}/musl-probe" \
+  "${EVIDENCE_DIR}/musl-probe-profile.txt"
 
 (
   cd "${BUSYBOX_BUILD_DIR}"
@@ -230,17 +236,14 @@ BUSYBOX_ELF="${BUSYBOX_BUILD_DIR}/busybox"
 "${READELF}" -h -l -A "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-readelf.txt"
 file "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-file.txt"
 file "${BUSYBOX_ELF}" | grep -q 'statically linked'
-check_riscv_soft_float_elf "${BUSYBOX_ELF}" | tee "${EVIDENCE_DIR}/busybox-abi.txt"
+audit_riscv_profile busybox "${BUSYBOX_ELF}" "${EVIDENCE_DIR}/busybox-profile.txt"
 
 busybox_arch="$(${READELF} -A "${BUSYBOX_ELF}" | sed -n 's/.*Tag_RISCV_arch: "\([^"]*\)".*/\1/p' | head -n 1)"
-[[ "${busybox_arch}" == rv32i* && "${busybox_arch}" == *"_m"* && "${busybox_arch}" == *"_a"* ]] || {
-  echo "ERROR: BusyBox lost required RV32IMA ISA: ${busybox_arch}" >&2
+busybox_compressed="$(awk -F= '$1 == "compressed_instructions" {print $2; exit}' "${EVIDENCE_DIR}/busybox-profile.txt")"
+[[ -n "${busybox_compressed}" ]] || {
+  echo "ERROR: generic BusyBox profile audit did not record compressed count" >&2
   exit 23
 }
-if [[ "${busybox_arch}" =~ _f[0-9] || "${busybox_arch}" =~ _d[0-9] || "${busybox_arch}" =~ _c[0-9] ]]; then
-  echo "ERROR: BusyBox retained unsupported F/D/C extension: ${busybox_arch}" >&2
-  exit 23
-fi
 
 sha256sum \
   "${MUSL_TARBALL}" \
@@ -252,11 +255,16 @@ sha256sum \
 {
   echo "L32_BUSYBOX_BUILD_RESULT: status=PASS"
   echo "bootstrap_compiler=$(${BASE_GCC} --version | head -n 1)"
+  echo "profile=${L32_USERSPACE_PROFILE}"
   echo "musl_version=${MUSL_VERSION}"
   echo "busybox_version=${BUSYBOX_VERSION}"
-  echo "isa=${L32_USERSPACE_ISA}"
+  echo "isa=${L32_USERSPACE_EFFECTIVE_ISA}"
   echo "abi=${L32_USERSPACE_ABI}"
+  echo "require_c=${L32_USERSPACE_REQUIRE_C}"
+  echo "musl_wrapper=${MUSL_GCC}"
+  echo "musl_wrapper_sha256=$(sha256sum "${MUSL_GCC}" | awk '{print $1}')"
   echo "busybox_arch=${busybox_arch}"
+  echo "busybox_compressed_instructions=${busybox_compressed}"
   echo "busybox=${BUSYBOX_ELF}"
   echo "busybox_sha256=$(sha256sum "${BUSYBOX_ELF}" | awk '{print $1}')"
 } | tee "${BUILD_DIR}/result.txt"

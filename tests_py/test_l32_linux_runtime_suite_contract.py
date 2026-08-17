@@ -82,7 +82,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-    def test_real_programs_are_pinned_static_and_embedded(self):
+    def test_real_programs_are_pinned_static_profile_qualified_and_embedded(self):
         manifest = REAL_MANIFEST.read_text()
         for required in (
             "LUA_VERSION=5.5.0", "SQLITE_VERSION=3.53.3", "BASH_VERSION=5.3", "ZLIB_VERSION=1.3.2",
@@ -97,7 +97,8 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
             "lua-${LUA_VERSION}", "sqlite-amalgamation-${SQLITE_AMALGAMATION_ID}", "bash-${BASH_VERSION}",
             "zlib-${ZLIB_VERSION}", "libpng-${LIBPNG_VERSION}", "SQLITE_THREADSAFE=0", "--enable-static-link", "./configure --static",
             "libz.a", "zlib-smoke.c", "libpng16.la", ".libs/libpng16.a", "libpng-smoke.c",
-            "check_elf", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            "check_elf", "PROFILE_AUDIT", "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            'grep -qx "profile=${L32_USERSPACE_PROFILE}"',
             'build_triplet="$(sh support/config.guess)"',
             "sed -i -E 's/(^|[[:space:]])-rdynamic([[:space:]]|$)/ /g' Makefile",
             "generated Bash target Makefile still contains -rdynamic",
@@ -108,6 +109,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         initramfs = INITRAMFS_BUILD.read_text()
         for required in (
             "L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS",
+            'grep -qx "profile=${L32_USERSPACE_PROFILE}"',
             "file /opt/l32/lua ${LUA_ELF} 0755 0 0",
             "file /opt/l32/sqlite-smoke ${SQLITE_ELF} 0755 0 0",
             "file /opt/l32/bash ${BASH_ELF} 0755 0 0",
@@ -136,15 +138,32 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-    def test_probe_is_static_qualified_and_embedded_in_initramfs(self):
+    def test_probe_is_profile_owned_static_qualified_and_embedded_in_initramfs(self):
         build = PROBE_BUILD.read_text()
-        for required in ("l32-musl-real-gcc", "-fno-pie -no-pie", "statically linked", "expected ELF32 little-endian", "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS"):
+        for required in (
+            'source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"',
+            'REAL_GCC="${L32_USERSPACE_MUSL_WRAPPER}"',
+            'WRAPPER_TOOL="${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"',
+            'PROFILE_AUDIT="${ROOT_DIR}/tools/ci/riscv_elf_profile.py"',
+            'grep -qx "profile=${L32_USERSPACE_PROFILE}"',
+            '"${WRAPPER_TOOL}" >/dev/null',
+            "-fno-pie -no-pie",
+            "statically linked",
+            "c_policy=(--forbid-c)",
+            "c_policy=(--require-c)",
+            "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS",
+            'echo "profile=${L32_USERSPACE_PROFILE}"',
+        ):
             self.assertIn(required, build)
         initramfs = INITRAMFS_BUILD.read_text()
         for required in (
-            'PROBE_ELF="${PROBE_BUILD_DIR}/l32-runtime-probe"', "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS",
-            "file /bin/l32-runtime-probe ${PROBE_ELF} 0755 0 0", 'OBJ_MARKER="${OBJ_DIR}/.aethercore-object-inputs"',
-            "Preserve this variant's Kbuild object tree",
+            'PROBE_BUILD_DIR="${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}"',
+            'PROBE_ELF="${PROBE_BUILD_DIR}/l32-runtime-probe"',
+            "L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS",
+            'grep -qx "profile=${L32_USERSPACE_PROFILE}"',
+            "file /bin/l32-runtime-probe ${PROBE_ELF} 0755 0 0",
+            'OBJ_MARKER="${OBJ_DIR}/.aethercore-object-inputs"',
+            "Preserve each profile's Kbuild object tree",
         ):
             self.assertIn(required, initramfs)
 
@@ -180,7 +199,7 @@ class L32LinuxRuntimeSuiteContract(unittest.TestCase):
         self.assertEqual([row.split("\t", 1)[0] for row in rows], [case.case_id for case in suite.CASES])
         self.assertTrue(all(row.count("\t") == 2 for row in rows))
 
-    def test_workflow_routes_warm_batch_through_runtime_suite(self):
+    def test_historical_workflow_routes_warm_batch_through_same_runtime_suite(self):
         text = WORKFLOW.read_text()
         for required in (
             "tools/ci/l32_linux_runtime_suite.py", "tools/ci/l32_runtime_probe_build.sh",
