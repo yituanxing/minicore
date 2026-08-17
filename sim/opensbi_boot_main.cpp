@@ -1,4 +1,10 @@
+#ifdef AETHERCORE_L32_C_TOP
+#include "VAetherCoreOpenSbiCSimTop.h"
+using OpenSbiTop = VAetherCoreOpenSbiCSimTop;
+#else
 #include "VAetherCoreOpenSbiSimTop.h"
+using OpenSbiTop = VAetherCoreOpenSbiSimTop;
+#endif
 #include "l32_opensbi_runtime.h"
 #include "verilated.h"
 
@@ -13,6 +19,7 @@ namespace {
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
 constexpr std::uint64_t kSupervisorExternalInterruptCause = 0x80000009ULL;
+constexpr std::uint64_t kLinuxPayloadBase = 0x80400000ULL;
 
 using aethercore::l32sim::Memory;
 using aethercore::l32sim::initialize;
@@ -26,9 +33,9 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 10)
+    if (argc < 2 || argc > 11)
       throw std::runtime_error(
-          "usage: VAetherCoreOpenSbiSimTop FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES]");
+          "usage: L32_OPENSBI_SIM FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES] [REQUIRE_LAYERED_COMPRESSED]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
@@ -44,6 +51,8 @@ int main(int argc, char** argv) {
         argc >= 9 ? std::stoull(argv[8], nullptr, 0) : 0ULL;
     const std::uint64_t progressIntervalCycles =
         argc >= 10 ? std::stoull(argv[9], nullptr, 0) : 0ULL;
+    const bool requireLayeredCompressed =
+        argc >= 11 ? std::stoull(argv[10], nullptr, 0) != 0 : false;
     std::string uartInput;
     if (!uartCommand.empty()) {
       uartInput = uartCommand;
@@ -52,12 +61,15 @@ int main(int argc, char** argv) {
 
     VerilatedContext context;
     context.commandArgs(argc, argv);
-    VAetherCoreOpenSbiSimTop top{&context};
+    OpenSbiTop top{&context};
     Memory memory;
     memory.loadAtBase(image);
 
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
+    std::uint64_t compressedCommits = 0;
+    std::uint64_t opensbiCompressedCommits = 0;
+    std::uint64_t linuxCompressedCommits = 0;
     std::uint64_t exceptions = 0;
     std::uint64_t interrupts = 0;
     std::uint64_t supervisorExternalInterrupts = 0;
@@ -168,13 +180,36 @@ int main(int argc, char** argv) {
 
       if (top.io_commit_valid) {
         ++commits;
-        recentPcs[recentIndex] = static_cast<std::uint64_t>(top.io_commit_pc);
+        const auto commitPc = static_cast<std::uint64_t>(top.io_commit_pc);
+        if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
+          ++compressedCommits;
+          if (commitPc < kLinuxPayloadBase) {
+            ++opensbiCompressedCommits;
+            if (requireLayeredCompressed && opensbiCompressedCommits == 1) {
+              std::cerr << "\nL32_FIRST_OPENSBI_COMPRESSED cycles=" << cycles
+                        << " commits=" << commits
+                        << " pc=0x" << std::hex << commitPc
+                        << " raw=0x" << static_cast<std::uint32_t>(top.io_commit_rawInst)
+                        << std::dec << "\n";
+            }
+          } else {
+            ++linuxCompressedCommits;
+            if (requireLayeredCompressed && linuxCompressedCommits == 1) {
+              std::cerr << "\nL32_FIRST_LINUX_COMPRESSED cycles=" << cycles
+                        << " commits=" << commits
+                        << " pc=0x" << std::hex << commitPc
+                        << " raw=0x" << static_cast<std::uint32_t>(top.io_commit_rawInst)
+                        << std::dec << "\n";
+            }
+          }
+        }
+        recentPcs[recentIndex] = commitPc;
         recentIndex = (recentIndex + 1) % kRecentCommitCount;
         if (recentCount < kRecentCommitCount) ++recentCount;
 
         if (top.io_commit_exception) {
           ++exceptions;
-          lastExceptionPc = static_cast<std::uint64_t>(top.io_commit_pc);
+          lastExceptionPc = commitPc;
           lastExceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
           lastExceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);
           if (exceptions == 1) {
@@ -225,6 +260,22 @@ int main(int argc, char** argv) {
       if (sawMilestone && interrupts >= minInterrupts &&
           supervisorExternalInterrupts >= minSeip && inputSatisfied) {
         std::cout.flush();
+        if (requireLayeredCompressed &&
+            (opensbiCompressedCommits == 0 || linuxCompressedCommits == 0)) {
+          std::cerr << "\nL32_LAYERED_COMPRESSED_MISSING cycles=" << cycles
+                    << " commits=" << commits
+                    << " compressed=" << compressedCommits
+                    << " opensbi-compressed=" << opensbiCompressedCommits
+                    << " linux-compressed=" << linuxCompressedCommits << "\n";
+          return 13;
+        }
+        if (requireLayeredCompressed) {
+          std::cerr << "\nL32_LAYERED_COMPRESSED_PASS cycles=" << cycles
+                    << " commits=" << commits
+                    << " compressed=" << compressedCommits
+                    << " opensbi-compressed=" << opensbiCompressedCommits
+                    << " linux-compressed=" << linuxCompressedCommits << "\n";
+        }
         if (milestone == kDefaultMilestone) {
           std::cerr << "\nL32_OPENSBI_TEST_PAYLOAD_PASS cycles=" << cycles
                     << " commits=" << commits
@@ -235,6 +286,9 @@ int main(int argc, char** argv) {
         }
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
+                  << " compressed=" << compressedCommits
+                  << " opensbi-compressed=" << opensbiCompressedCommits
+                  << " linux-compressed=" << linuxCompressedCommits
                   << " exceptions=" << exceptions
                   << " interrupts=" << interrupts
                   << " seip=" << supervisorExternalInterrupts
@@ -266,6 +320,9 @@ int main(int argc, char** argv) {
     std::cout.flush();
     std::cerr << "\nL32_OPENSBI_TIMEOUT cycles=" << cycles
               << " commits=" << commits
+              << " compressed=" << compressedCommits
+              << " opensbi-compressed=" << opensbiCompressedCommits
+              << " linux-compressed=" << linuxCompressedCommits
               << " uart-bytes=" << uart.size()
               << " banner=" << (sawOpenSbiBanner ? 1 : 0)
               << " milestone=" << (sawMilestone ? 1 : 0)

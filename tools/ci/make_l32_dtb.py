@@ -17,6 +17,7 @@ FDT_VERSION = 17
 FDT_LAST_COMP_VERSION = 16
 CPU_INTC_PHANDLE = 1
 PLIC_PHANDLE = 2
+DEFAULT_CPU_ISA = "rv32ima_zicsr_zifencei_sstc"
 
 
 def be32(value: int) -> bytes:
@@ -88,7 +89,24 @@ class DtbBuilder:
         return header + reserve_map + bytes(self.struct_block) + bytes(self.strings)
 
 
-def build_l32_dtb(bootargs: str | None = None) -> bytes:
+def validate_cpu_isa(isa: str) -> str:
+    normalized = isa.strip().lower()
+    if not normalized.startswith("rv32i"):
+        raise ValueError(f"L32 CPU ISA must be an RV32I-derived profile: {isa!r}")
+    try:
+        normalized.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("L32 CPU ISA must be ASCII") from exc
+    if "\x00" in normalized:
+        raise ValueError("L32 CPU ISA must not contain NUL")
+    return normalized
+
+
+def build_l32_dtb(
+    bootargs: str | None = None,
+    isa: str = DEFAULT_CPU_ISA,
+) -> bytes:
+    cpu_isa = validate_cpu_isa(isa)
     b = DtbBuilder()
     b.begin_node("")
     b.prop("#address-cells", cells(2))
@@ -112,7 +130,7 @@ def build_l32_dtb(bootargs: str | None = None) -> bytes:
     b.prop("reg", cells(0))
     b.prop("status", string("okay"))
     b.prop("compatible", string("riscv"))
-    b.prop("riscv,isa", string("rv32ima_zicsr_zifencei_sstc"))
+    b.prop("riscv,isa", string(cpu_isa))
     b.prop("mmu-type", string("riscv,sv32"))
 
     b.begin_node("interrupt-controller")
@@ -184,9 +202,18 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--bootargs")
+    parser.add_argument(
+        "--isa",
+        default=DEFAULT_CPU_ISA,
+        help="CPU riscv,isa property; defaults to the frozen RV32IMA profile",
+    )
     args = parser.parse_args()
 
-    blob = build_l32_dtb(args.bootargs)
+    try:
+        cpu_isa = validate_cpu_isa(args.isa)
+    except ValueError as exc:
+        parser.error(str(exc))
+    blob = build_l32_dtb(args.bootargs, cpu_isa)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(blob)
     digest = hashlib.sha256(blob).hexdigest()
@@ -196,7 +223,7 @@ def main() -> int:
         f"bytes={len(blob)}",
         f"sha256={digest}",
         "hart=0",
-        "isa=rv32ima_zicsr_zifencei_sstc",
+        f"isa={cpu_isa}",
         "mmu=sv32",
         "ram=0x80000000+0x10000000",
         "plic=0x0c000000+0x00400000",
