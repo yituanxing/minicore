@@ -1,4 +1,10 @@
+#ifdef AETHERCORE_L32_C_TOP
+#include "VAetherCoreOpenSbiCSimTop.h"
+using OpenSbiTop = VAetherCoreOpenSbiCSimTop;
+#else
 #include "VAetherCoreOpenSbiSimTop.h"
+using OpenSbiTop = VAetherCoreOpenSbiSimTop;
+#endif
 #include "l32_opensbi_runtime.h"
 #include "verilated.h"
 
@@ -16,6 +22,11 @@
 
 namespace {
 constexpr std::uint64_t kSeipCause = 0x80000009ULL;
+// RV32 static userspace images in this qualification are required by the ELF
+// profile audit to keep every executable PT_LOAD below this boundary. OpenSBI
+// starts exactly at 0x80000000 and the post-boot Linux kernel executes in its
+// high virtual mapping, so low-PC compressed retirement is userspace-owned.
+constexpr std::uint64_t kUserspaceAddressLimit = 0x80000000ULL;
 
 using aethercore::l32sim::Memory;
 using aethercore::l32sim::initialize;
@@ -27,7 +38,14 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 }
 
 struct Workload { std::string id, milestone, command; };
-struct Counts { std::uint64_t commits = 0, exceptions = 0, interrupts = 0, seip = 0; };
+struct Counts {
+  std::uint64_t commits = 0;
+  std::uint64_t compressed = 0;
+  std::uint64_t userspaceCompressed = 0;
+  std::uint64_t exceptions = 0;
+  std::uint64_t interrupts = 0;
+  std::uint64_t seip = 0;
+};
 
 std::vector<Workload> loadWorkloads(const std::string& path) {
   std::ifstream in(path);
@@ -51,9 +69,14 @@ std::vector<Workload> loadWorkloads(const std::string& path) {
   return out;
 }
 
-void record(VAetherCoreOpenSbiSimTop& top, Counts& c) {
+void record(OpenSbiTop& top, Counts& c) {
   if (!top.io_commit_valid) return;
   ++c.commits;
+  if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
+    ++c.compressed;
+    const auto pc = static_cast<std::uint64_t>(top.io_commit_pc);
+    if (pc < kUserspaceAddressLimit) ++c.userspaceCompressed;
+  }
   if (top.io_commit_exception) ++c.exceptions;
   if (top.io_commit_interrupt) {
     ++c.interrupts;
@@ -61,7 +84,7 @@ void record(VAetherCoreOpenSbiSimTop& top, Counts& c) {
   }
 }
 
-bool cycle(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
+bool cycle(OpenSbiTop& top, VerilatedContext& ctx, Memory& mem,
            std::uint64_t& cycles, Counts& c, bool rxValid, std::uint8_t rxByte) {
   const bool accepted = step(top, ctx, mem, rxValid, rxByte);
   ++cycles;
@@ -69,12 +92,15 @@ bool cycle(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
   return accepted;
 }
 
-int runCase(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
+int runCase(OpenSbiTop& top, VerilatedContext& ctx, Memory& mem,
             const Workload& w, std::uint64_t startCycles, Counts start,
-            std::uint64_t maxCycles, std::uint64_t progressEvery) {
+            std::uint64_t maxCycles, std::uint64_t progressEvery,
+            bool requireUserspaceCompressed) {
   std::uint64_t cycles = startCycles;
   Counts c = start;
   const auto startCommits = c.commits;
+  const auto startCompressed = c.compressed;
+  const auto startUserspaceCompressed = c.userspaceCompressed;
   const auto startSeip = c.seip;
   std::string input = w.command;
   if (input.back() != '\n') input.push_back('\n');
@@ -122,10 +148,26 @@ int runCase(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
       nextProgress += progressEvery;
     }
     if (milestone && inputPos == input.size() && rxIrq && postSeip) {
+      const auto userCompressedDelta = c.userspaceCompressed - startUserspaceCompressed;
+      if (requireUserspaceCompressed && userCompressedDelta == 0) {
+        std::cout.flush();
+        std::cerr << "\nL32_FORKSERVER_USER_COMPRESSED_MISSING id=" << w.id
+                  << " delta-cycles=" << cycles - startCycles
+                  << " delta-commits=" << c.commits - startCommits
+                  << " delta-compressed=" << c.compressed - startCompressed
+                  << " delta-userspace-compressed=0\n";
+        return 13;
+      }
+      if (requireUserspaceCompressed) {
+        std::cerr << "\nL32_FORKSERVER_USER_COMPRESSED_PASS id=" << w.id
+                  << " delta-userspace-compressed=" << userCompressedDelta << "\n";
+      }
       std::cout.flush();
       std::cerr << "\nL32_FORKSERVER_CASE_PASS id=" << w.id
                 << " delta-cycles=" << cycles - startCycles
                 << " delta-commits=" << c.commits - startCommits
+                << " delta-compressed=" << c.compressed - startCompressed
+                << " delta-userspace-compressed=" << userCompressedDelta
                 << " seip-delta=" << c.seip - startSeip << "\n";
       return 0;
     }
@@ -135,7 +177,9 @@ int runCase(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
             << " delta-cycles=" << cycles - startCycles << " input=" << inputPos << '/'
             << input.size() << " rx-irq=" << (rxIrq ? 1 : 0)
             << " post-input-seip=" << (postSeip ? 1 : 0)
-            << " milestone=" << (milestone ? 1 : 0) << " exceptions=" << c.exceptions
+            << " milestone=" << (milestone ? 1 : 0)
+            << " delta-userspace-compressed=" << c.userspaceCompressed - startUserspaceCompressed
+            << " exceptions=" << c.exceptions
             << " interrupts=" << c.interrupts << " seip=" << c.seip << "\n";
   return 12;
 }
@@ -143,19 +187,21 @@ int runCase(VAetherCoreOpenSbiSimTop& top, VerilatedContext& ctx, Memory& mem,
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 5 || argc > 7)
+    if (argc < 5 || argc > 8)
       throw std::runtime_error(
-          "usage: FORKSERVER FW_PAYLOAD.bin BOOT_MAX_CYCLES UART_TRIGGER WORKLOADS.tsv [CASE_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES]");
+          "usage: FORKSERVER FW_PAYLOAD.bin BOOT_MAX_CYCLES UART_TRIGGER WORKLOADS.tsv [CASE_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES] [REQUIRE_USER_COMPRESSED]");
     const std::string image = argv[1];
     const auto bootMax = std::stoull(argv[2], nullptr, 0);
     const std::string trigger = argv[3];
     const auto workloads = loadWorkloads(argv[4]);
     const auto caseMax = argc >= 6 ? std::stoull(argv[5], nullptr, 0) : 50000000ULL;
     const auto progressEvery = argc >= 7 ? std::stoull(argv[6], nullptr, 0) : 25000000ULL;
+    const bool requireUserspaceCompressed =
+        argc >= 8 ? std::stoull(argv[7], nullptr, 0) != 0 : false;
 
     VerilatedContext ctx;
     ctx.commandArgs(argc, argv);
-    VAetherCoreOpenSbiSimTop top{&ctx};
+    OpenSbiTop top{&ctx};
     Memory mem;
     mem.loadAtBase(image);
     Counts counts;
@@ -194,8 +240,14 @@ int main(int argc, char** argv) {
       return 5;
     }
     std::cout.flush();
-    std::cerr << "\nL32_FORKSERVER_READY cycles=" << cycles << " commits=" << counts.commits
-              << " seip=" << counts.seip << " cases=" << workloads.size() << "\n";
+    std::cerr << "\nL32_FORKSERVER_READY cycles=" << cycles
+              << " commits=" << counts.commits
+              << " compressed=" << counts.compressed
+              << " userspace-compressed=" << counts.userspaceCompressed
+              << " seip=" << counts.seip
+              << " cases=" << workloads.size()
+              << " require-user-compressed=" << (requireUserspaceCompressed ? 1 : 0)
+              << "\n";
     std::cerr.flush();
 
     std::size_t passed = 0, failed = 0;
@@ -210,7 +262,9 @@ int main(int argc, char** argv) {
       if (pid < 0)
         throw std::runtime_error("fork failed for " + w.id + ": " + std::strerror(forkErr));
       if (pid == 0) {
-        const int rc = runCase(top, ctx, mem, w, cycles, counts, caseMax, progressEvery);
+        const int rc = runCase(
+            top, ctx, mem, w, cycles, counts, caseMax, progressEvery,
+            requireUserspaceCompressed);
         std::cout.flush();
         std::cerr.flush();
         _exit(rc);

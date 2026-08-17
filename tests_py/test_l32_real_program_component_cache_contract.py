@@ -5,6 +5,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "tools/ci/l32_real_programs_build.sh"
 CACHE = ROOT / "tools/ci/l32_real_programs_cache.sh"
+PROFILE = ROOT / "tools/ci/l32_userspace_profile.sh"
+PROFILE_AUDIT = ROOT / "tools/ci/riscv_elf_profile.py"
 INITRAMFS = ROOT / "tools/ci/l32_busybox_initramfs_build.sh"
 LIBPNG_SOURCE = ROOT / "software/l32_real/libpng-smoke.c"
 
@@ -15,7 +17,7 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
         for required in (
             "build_lua()", "build_sqlite()", "build_bash()", "build_busybox()", "build_zlib()", "build_libpng()",
             "recipe_hash()", "finalize()", "recipe-hash", "all|lua|sqlite|bash|busybox|zlib|libpng|finalize",
-            "declare -f build_lua", "declare -f build_sqlite", "declare -f build_bash",
+            "declare -f check_elf", "declare -f build_lua", "declare -f build_sqlite", "declare -f build_bash",
             "declare -f build_busybox", "declare -f build_zlib", "declare -f build_libpng",
         ):
             self.assertIn(required, text)
@@ -33,10 +35,12 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
     def test_cache_qualifies_and_rebuilds_components_independently(self):
         text = CACHE.read_text()
         for required in (
+            'source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"',
+            'BUILD_DIR="${L32_USERSPACE_REAL_PROGRAMS_BUILD_DIR}"',
             'CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"',
-            'COMPONENT_CACHE_DIR="${CACHE_ROOT}/components"',
+            'COMPONENT_CACHE_DIR="${CACHE_ROOT}/components${L32_USERSPACE_BUILD_SUFFIX}"',
             "components=(lua sqlite bash busybox zlib libpng)",
-            "component_outputs()", "component_identity()", "component_key()", "component_cache_entry()",
+            "component_profile_name()", "component_outputs()", "component_identity()", "component_key()", "component_cache_entry()",
             "component_hit()", "mark_component()",
             "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT", "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS",
             "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK", '"${BUILD_SCRIPT}" "${component}"',
@@ -49,14 +53,37 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
         ):
             self.assertIn(required, text)
 
-        # Component artifacts must survive clean checkouts on the self-hosted
-        # runner; build/ is workspace-local and cannot be the durable cache.
         self.assertNotIn('COMPONENT_CACHE_DIR="${BUILD_DIR}/component-cache"', text)
-
-        # A whole-file recipe/manifest hash would make an unrelated component
-        # change invalidate every output, defeating the component cache.
         self.assertNotIn('hash_or_missing "${ROOT_DIR}/software/l32_real/manifest.env"', text)
         self.assertNotIn('hash_or_missing "${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"', text)
+
+    def test_cache_identity_is_profile_specific_and_audit_aware(self):
+        text = CACHE.read_text()
+        for required in (
+            'printf \'profile=%s\\n\' "${L32_USERSPACE_PROFILE}"',
+            'printf \'userspace_isa=%s\\n\' "${L32_USERSPACE_EFFECTIVE_ISA}"',
+            'printf \'require_c=%s\\n\' "${L32_USERSPACE_REQUIRE_C}"',
+            'hash_or_missing "${PROFILE_HELPER}"',
+            'hash_or_missing "${PROFILE_AUDIT}"',
+            'hash_or_missing "${WRAPPER_TOOL}"',
+            'echo "profile ${L32_USERSPACE_PROFILE}"',
+            'echo "isa ${L32_USERSPACE_EFFECTIVE_ISA}"',
+            'echo "require_c ${L32_USERSPACE_REQUIRE_C}"',
+            'grep -qx "profile=${L32_USERSPACE_PROFILE}" "${RESULT}"',
+        ):
+            self.assertIn(required, text)
+        profile = PROFILE.read_text()
+        self.assertIn('L32_USERSPACE_BUILD_SUFFIX=""', profile)
+        self.assertIn('L32_USERSPACE_BUILD_SUFFIX="-rv32imac"', profile)
+        self.assertIn("--require-c", PROFILE_AUDIT.read_text())
+
+    def test_component_cache_preserves_profile_evidence_with_binary(self):
+        text = CACHE.read_text()
+        self.assertIn('printf \'%s\\n\' "${BUILD_DIR}/evidence/${profile_name}-profile.txt"', text)
+        for profile_name in ("lua", "sqlite", "bash", "busybox-real", "zlib", "libpng"):
+            self.assertIn(profile_name, text)
+        self.assertIn('[[ -n "${expected}" && -s "${cached}" ]] || return 1', text)
+        self.assertIn('echo "sha256 $(sha256sum "${cached}" | awk \'{print $1}\') ${rel}"', text)
 
     def test_finalize_does_not_refetch_sources_after_component_hits(self):
         text = BUILD.read_text()
@@ -78,7 +105,7 @@ class L32RealProgramComponentCacheContract(unittest.TestCase):
             'fetch_verified "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"',
             "./configure --host=riscv32-linux-musl --disable-shared --enable-static",
             "libpng16.la", ".libs/libpng16.a", "libpng-smoke.c", "libpng-smoke-build.log",
-            'check_elf "${BUILD_DIR}/libpng-smoke"',
+            'check_elf libpng "${BUILD_DIR}/libpng-smoke"',
         ):
             self.assertIn(required, build)
         smoke = LIBPNG_SOURCE.read_text()

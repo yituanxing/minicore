@@ -88,9 +88,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
-      - name: Run source contracts
+      - name: Run tracked source contracts only
         shell: bash
-        run: python3 -m unittest discover -s tests_py -v
+        run: |
+          set -euo pipefail
+          mapfile -t tracked_tests < <(git ls-files 'tests_py/test_*.py')
+          [[ "${#tracked_tests[@]}" -gt 0 ]] || {
+            echo 'ERROR: no tracked Python source contracts were found' >&2
+            exit 2
+          }
+          modules=()
+          for path in "${tracked_tests[@]}"; do
+            module="${path%.py}"
+            module="${module//\//.}"
+            modules+=("${module}")
+          done
+          echo "tracked_source_contracts=${#modules[@]}"
+          python3 -m unittest "${modules[@]}" -v
       - name: Write contract summary
         if: always()
         shell: bash
@@ -101,6 +115,7 @@ jobs:
             echo "- head: \`${GITHUB_SHA}\`"
             echo "- classified base: \`${{ needs.classify.outputs.classified_base }}\`"
             echo "- hardware gate selected: \`${{ needs.classify.outputs.run_hardware }}\`"
+            echo '- Python contracts are enumerated from the current Git tree so stale untracked tests on the persistent runner cannot become qualification inputs'
           } >> "$GITHUB_STEP_SUMMARY"
 
   fast-gate:
@@ -119,6 +134,17 @@ jobs:
         with:
           clean: false
           fetch-depth: 0
+
+      - name: Remove stale untracked Scala sources from persistent workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          stale="$(git ls-files --others --exclude-standard -- src/main/scala src/test/scala || true)"
+          if [[ -n "$stale" ]]; then
+            echo 'Removing stale untracked Scala sources left by another branch:'
+            printf '%s\n' "$stale"
+            git clean -fd -- src/main/scala src/test/scala
+          fi
 
       - name: Configure persistent fast cache
         shell: bash
@@ -287,6 +313,6 @@ jobs:
             echo '- exact single-step RV32 NEMU is verified and reused from persistent cache'
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
-            echo '- source-only contract tests run on the persistent self-hosted runner so private-repository hosted-runner availability cannot block classification'
+            echo '- source contracts are enumerated from the current Git tree and stale untracked Scala sources are removed selectively, so persistent-runner residue cannot become qualification input'
             echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"

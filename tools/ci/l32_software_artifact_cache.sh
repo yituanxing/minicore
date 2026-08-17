@@ -36,46 +36,70 @@ compiler_identity() {
 result_file=""
 result_marker=""
 marker_file=""
+profile_sensitive=0
+cache_profile=""
 inputs=()
 outputs=()
 dynamic_inputs=()
 
 case "${TARGET}" in
   busybox)
-    # shellcheck disable=SC1091
     source "${ROOT_DIR}/software/l32_busybox/manifest.env"
+    source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+    profile_sensitive=1
+    cache_profile="${L32_USERSPACE_PROFILE}"
     base_gcc="${L32_USERSPACE_CROSS_COMPILE_PREFIX}gcc"
-    result_file="${ROOT_DIR}/build/l32-busybox/result.txt"
+    result_file="${L32_USERSPACE_BUSYBOX_BUILD_DIR}/result.txt"
     result_marker="L32_BUSYBOX_BUILD_RESULT: status=PASS"
-    marker_file="${ROOT_DIR}/build/l32-busybox/evidence/software-cache.txt"
+    marker_file="${L32_USERSPACE_BUSYBOX_BUILD_DIR}/evidence/software-cache.txt"
     inputs=(
       "${ROOT_DIR}/software/l32_busybox/manifest.env"
+      "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+      "${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+      "${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
       "${ROOT_DIR}/tools/ci/l32_busybox_build.sh"
     )
     outputs=(
-      "${ROOT_DIR}/build/l32-busybox/busybox-src/busybox"
-      "${ROOT_DIR}/build/l32-busybox/musl-probe"
-      "${ROOT_DIR}/build/l32-busybox/musl-prefix/bin/musl-gcc"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/busybox-src/busybox"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-probe"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/bin/musl-gcc"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/l32-${L32_USERSPACE_PROFILE}-ilp32-gcc"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/libc.a"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/crt1.o"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/crti.o"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/crtn.o"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/evidence/toolchain-probe-profile.txt"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/evidence/musl-probe-profile.txt"
+      "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/evidence/busybox-profile.txt"
     )
+    dynamic_inputs+=("profile=${L32_USERSPACE_PROFILE}")
+    dynamic_inputs+=("isa=${L32_USERSPACE_EFFECTIVE_ISA}")
+    dynamic_inputs+=("require_c=${L32_USERSPACE_REQUIRE_C}")
     dynamic_inputs+=("$(compiler_identity "${base_gcc}")")
-    if [[ -n "${REALGCC:-}" ]]; then
-      dynamic_inputs+=("$(hash_file_if_present "${REALGCC}")")
-    fi
     ;;
   runtime-probe)
-    result_file="${ROOT_DIR}/build/l32-runtime-probe/result.txt"
+    source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+    profile_sensitive=1
+    cache_profile="${L32_USERSPACE_PROFILE}"
+    result_file="${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}/result.txt"
     result_marker="L32_RUNTIME_PROBE_BUILD_RESULT: status=PASS"
-    marker_file="${ROOT_DIR}/build/l32-runtime-probe/software-cache.txt"
+    marker_file="${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}/software-cache.txt"
     inputs=(
       "${ROOT_DIR}/software/l32_busybox/manifest.env"
       "${ROOT_DIR}/software/l32_busybox/runtime_probe.c"
+      "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+      "${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+      "${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
       "${ROOT_DIR}/tools/ci/l32_runtime_probe_build.sh"
     )
     outputs=(
-      "${ROOT_DIR}/build/l32-runtime-probe/l32-runtime-probe"
+      "${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}/l32-runtime-probe"
+      "${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}/profile.txt"
     )
-    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-busybox/l32-musl-real-gcc")")
-    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-busybox/musl-prefix/lib/libc.a")")
+    dynamic_inputs+=("profile=${L32_USERSPACE_PROFILE}")
+    dynamic_inputs+=("isa=${L32_USERSPACE_EFFECTIVE_ISA}")
+    dynamic_inputs+=("require_c=${L32_USERSPACE_REQUIRE_C}")
+    dynamic_inputs+=("$(hash_file_if_present "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/libc.a")")
     ;;
   minimal-initramfs)
     result_file="${ROOT_DIR}/build/l32-linux-initramfs/result.txt"
@@ -96,27 +120,32 @@ case "${TARGET}" in
     dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-linux/obj/arch/riscv/boot/Image")")
     ;;
   busybox-initramfs)
-    result_file="${ROOT_DIR}/build/l32-linux-busybox/result.txt"
+    source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+    profile_sensitive=1
+    cache_profile="${L32_USERSPACE_PROFILE}"
+    result_file="${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/result.txt"
     result_marker="L32_BUSYBOX_INITRAMFS_BUILD_RESULT: status=PASS"
-    marker_file="${ROOT_DIR}/build/l32-linux-busybox/evidence/software-cache.txt"
+    marker_file="${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/evidence/software-cache.txt"
     inputs=(
       "${ROOT_DIR}/software/l32/manifest.env"
       "${ROOT_DIR}/software/l32_busybox/manifest.env"
+      "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
       "${ROOT_DIR}/tools/ci/l32_busybox_initramfs_build.sh"
       "${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh"
     )
     outputs=(
-      "${ROOT_DIR}/build/l32-linux-busybox/rootfs/init"
-      "${ROOT_DIR}/build/l32-linux-busybox/rootfs/initramfs.list"
-      "${ROOT_DIR}/build/l32-linux-busybox/obj/vmlinux"
-      "${ROOT_DIR}/build/l32-linux-busybox/obj/arch/riscv/boot/Image"
+      "${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/rootfs/init"
+      "${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/rootfs/initramfs.list"
+      "${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/obj/vmlinux"
+      "${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/obj/arch/riscv/boot/Image"
     )
-    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-linux/obj/arch/riscv/boot/Image")")
-    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-busybox/busybox-src/busybox")")
-    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-runtime-probe/l32-runtime-probe")")
+    dynamic_inputs+=("profile=${L32_USERSPACE_PROFILE}")
+    dynamic_inputs+=("isa=${L32_USERSPACE_EFFECTIVE_ISA}")
+    dynamic_inputs+=("require_c=${L32_USERSPACE_REQUIRE_C}")
+    dynamic_inputs+=("$(hash_file_if_present "${L32_USERSPACE_BUSYBOX_BUILD_DIR}/busybox-src/busybox")")
+    dynamic_inputs+=("$(hash_file_if_present "${L32_USERSPACE_RUNTIME_PROBE_BUILD_DIR}/l32-runtime-probe")")
     ;;
   linux-payload)
-    # shellcheck disable=SC1091
     source "${ROOT_DIR}/software/l32/manifest.env"
     result_file="${ROOT_DIR}/build/l32-linux-boot/result.txt"
     result_marker="L32_LINUX_PAYLOAD_BUILD_RESULT: status=PASS"
@@ -135,7 +164,6 @@ case "${TARGET}" in
     dynamic_inputs+=("$(compiler_identity "${L32_CROSS_COMPILE_PREFIX}gcc")")
     ;;
   minimal-payload)
-    # shellcheck disable=SC1091
     source "${ROOT_DIR}/software/l32/manifest.env"
     result_file="${ROOT_DIR}/build/l32-minimal-init-boot/result.txt"
     result_marker="L32_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS"
@@ -154,22 +182,29 @@ case "${TARGET}" in
     dynamic_inputs+=("$(compiler_identity "${L32_CROSS_COMPILE_PREFIX}gcc")")
     ;;
   busybox-payload)
-    # shellcheck disable=SC1091
     source "${ROOT_DIR}/software/l32/manifest.env"
-    result_file="${ROOT_DIR}/build/l32-busybox-shell-boot/result.txt"
+    source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+    profile_sensitive=1
+    cache_profile="${L32_USERSPACE_PROFILE}"
+    result_file="${L32_USERSPACE_PAYLOAD_BUILD_DIR}/result.txt"
     result_marker="L32_BUSYBOX_SHELL_PAYLOAD_BUILD_RESULT: status=PASS"
-    marker_file="${ROOT_DIR}/build/l32-busybox-shell-boot/evidence/software-cache.txt"
+    marker_file="${L32_USERSPACE_PAYLOAD_BUILD_DIR}/evidence/software-cache.txt"
     inputs=(
       "${ROOT_DIR}/software/l32/manifest.env"
+      "${ROOT_DIR}/software/l32_busybox/manifest.env"
+      "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
       "${ROOT_DIR}/tools/ci/l32_busybox_payload_build.sh"
       "${ROOT_DIR}/tools/ci/make_l32_dtb.py"
     )
     outputs=(
-      "${ROOT_DIR}/build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.elf"
-      "${ROOT_DIR}/build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin"
-      "${ROOT_DIR}/build/l32-busybox-shell-boot/aethercore-rv32-busybox.dtb"
+      "${L32_USERSPACE_PAYLOAD_BUILD_DIR}/opensbi/platform/generic/firmware/fw_payload.elf"
+      "${L32_USERSPACE_PAYLOAD_BUILD_DIR}/opensbi/platform/generic/firmware/fw_payload.bin"
+      "${L32_USERSPACE_PAYLOAD_BUILD_DIR}/aethercore-rv32-busybox.dtb"
     )
-    dynamic_inputs+=("$(hash_file_if_present "${ROOT_DIR}/build/l32-linux-busybox/obj/arch/riscv/boot/Image")")
+    dynamic_inputs+=("profile=${L32_USERSPACE_PROFILE}")
+    dynamic_inputs+=("opensbi_isa=${L32_USERSPACE_OPENSBI_ISA}")
+    dynamic_inputs+=("dtb_isa=${L32_USERSPACE_DTB_ISA}")
+    dynamic_inputs+=("$(hash_file_if_present "${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/obj/arch/riscv/boot/Image")")
     dynamic_inputs+=("$(compiler_identity "${L32_CROSS_COMPILE_PREFIX}gcc")")
     ;;
   *)
@@ -192,6 +227,9 @@ fi
 if [[ ! -f "${marker_file}" ]] || [[ "$(awk '$1 == "input_key" { print $2; exit }' "${marker_file}" 2>/dev/null)" != "${input_key}" ]]; then
   cache_hit=0
 fi
+if (( profile_sensitive )) && [[ "$(awk '$1 == "profile" { print $2; exit }' "${marker_file}" 2>/dev/null)" != "${cache_profile}" ]]; then
+  cache_hit=0
+fi
 
 if (( cache_hit )); then
   for output in "${outputs[@]}"; do
@@ -210,17 +248,21 @@ if (( cache_hit )); then
 fi
 
 if (( cache_hit )); then
-  printf 'L32_SOFTWARE_CACHE_HIT target=%s key=%s\n' "${TARGET}" "${input_key}"
+  printf 'L32_SOFTWARE_CACHE_HIT target=%s profile=%s key=%s\n' "${TARGET}" "${cache_profile:-historical}" "${input_key}"
   exit 0
 fi
 
-printf 'L32_SOFTWARE_CACHE_MISS target=%s key=%s\n' "${TARGET}" "${input_key}"
+printf 'L32_SOFTWARE_CACHE_MISS target=%s profile=%s key=%s\n' "${TARGET}" "${cache_profile:-historical}" "${input_key}"
 "$@"
 
 [[ -f "${result_file}" ]] && grep -qx "${result_marker}" "${result_file}" || {
   echo "ERROR: ${TARGET} build did not produce its qualified PASS result" >&2
   exit 30
 }
+if (( profile_sensitive )) && ! grep -qx "profile=${cache_profile}" "${result_file}"; then
+  echo "ERROR: ${TARGET} build result does not match requested userspace profile ${cache_profile}" >&2
+  exit 30
+fi
 for output in "${outputs[@]}"; do
   [[ -s "${output}" ]] || {
     echo "ERROR: ${TARGET} build is missing qualified output ${output}" >&2
@@ -232,10 +274,14 @@ mkdir -p "$(dirname "${marker_file}")"
 tmp_marker="${marker_file}.tmp.$$"
 {
   printf 'input_key %s\n' "${input_key}"
+  if (( profile_sensitive )); then
+    printf 'profile %s\n' "${cache_profile}"
+  fi
   for output in "${outputs[@]}"; do
     rel="${output#${ROOT_DIR}/}"
     printf 'sha256 %s %s\n' "$(sha256sum "${output}" | awk '{print $1}')" "${rel}"
   done
 } > "${tmp_marker}"
 mv "${tmp_marker}" "${marker_file}"
-printf 'L32_SOFTWARE_CACHE_MARK target=%s key=%s outputs=%d\n' "${TARGET}" "${input_key}" "${#outputs[@]}"
+printf 'L32_SOFTWARE_CACHE_MARK target=%s profile=%s key=%s outputs=%d\n' \
+  "${TARGET}" "${cache_profile:-historical}" "${input_key}" "${#outputs[@]}"
