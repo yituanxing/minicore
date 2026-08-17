@@ -141,6 +141,16 @@ object CoreProfiles {
 
   private val rv32Sv32Platform: PlatformConfig = rv32Platform.copy(paddrBits = 34)
 
+  private val rv64Platform: PlatformConfig = PlatformConfig(
+    resetVector = BigInt("80000000", 16),
+    paddrBits = 64,
+    busDataBits = 64,
+    uartAddress = BigInt("10000000", 16),
+    exitAddress = BigInt("10000008", 16),
+    mtimeAddress = mtimeAddress,
+    mtimecmpAddress = mtimecmpAddress
+  )
+
   val rv32iMinimal: CoreConfig = CoreConfig(
     name = "rv32i-minimal",
     isa = IsaConfig(
@@ -289,6 +299,18 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  /** First bounded RV64 privileged software profile: bare M/S/U, no later system facilities. */
+  val rv64imsuSoftware: CoreConfig = CoreConfig(
+    name = "rv64imsu-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv64Platform
+  )
+
   val rv64imCurrent: CoreConfig = CoreConfig(
     name = "rv64im-current",
     isa = IsaConfig(
@@ -297,14 +319,6 @@ object CoreProfiles {
       privilegeModes = Set('M'),
       zExtensions = Set("Zicsr", "Zifencei")
     ),
-    platform = PlatformConfig(
-      resetVector = BigInt("80000000", 16),
-      paddrBits = 64,
-      busDataBits = 64,
-      uartAddress = BigInt("10000000", 16),
-      exitAddress = BigInt("10000008", 16),
-      mtimeAddress = mtimeAddress,
-      mtimecmpAddress = mtimecmpAddress
-    )
+    platform = rv64Platform
   )
 }
