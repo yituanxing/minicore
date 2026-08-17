@@ -12,7 +12,24 @@
   .equ CAUSE_ECALL_U, 8
   .equ CAUSE_ECALL_S, 9
 
+#if __riscv_xlen == 64
+  // This first RV64 M/S/U profile implements only 64-bit S/U XLEN, so the
+  // WARL SXL/UXL fields are fixed at encoding 2. RV32 has no such fields.
+  // 第一层 RV64 M/S/U 只实现 64 位 S/U XLEN，因此 SXL/UXL 固定为编码 2。
+  .equ MSTATUS_XLEN_BASE, 0x0000000a00000000
+  .equ SSTATUS_XLEN_BASE, 0x0000000200000000
+#else
+  .equ MSTATUS_XLEN_BASE, 0
+  .equ SSTATUS_XLEN_BASE, 0
+#endif
+
 main:
+  // The same executable contract must observe the correct reset status on
+  // both XLENs before it starts changing writable privilege state.
+  csrr t0, mstatus
+  li t1, MSTATUS_XLEN_BASE
+  bne t0, t1, fail_mstatus_reset
+
   // Fail closed if an exception unexpectedly reaches M mode after bring-up.
   la t0, machine_trap_fail
   csrw mtvec, t0
@@ -40,6 +57,9 @@ main:
   csrw mepc, t0
   li t0, MSTATUS_MPP_S | MSTATUS_MPIE
   csrw mstatus, t0
+  csrr t1, mstatus
+  li t2, MSTATUS_XLEN_BASE | MSTATUS_MPP_S | MSTATUS_MPIE
+  bne t1, t2, fail_mstatus_write
   mret
 
   // MRET must redirect; this path must never execute.
@@ -50,7 +70,8 @@ main:
 supervisor_entry:
   // We can only execute these S CSRs if the MRET really entered S mode.
   csrr t0, sstatus
-  bnez t0, fail_s_entry_status
+  li t1, SSTATUS_XLEN_BASE
+  bne t0, t1, fail_s_entry_status
 
 s_ecall_site:
   ecall
@@ -72,11 +93,15 @@ s_resume:
 
   // SRET from an S-origin trap clears SPP, copies SPIE to SIE and sets SPIE.
   csrr t0, sstatus
-  li t1, SSTATUS_SPIE
+  li t1, SSTATUS_XLEN_BASE | SSTATUS_SPIE
   bne t0, t1, fail_s_return_status
 
-  // Enter U mode with a second SRET. Clearing sstatus leaves SPP=U and SIE=0.
+  // Enter U mode with a second SRET. Clearing writable sstatus state leaves
+  // SPP=U and SIE=0 while RV64's read-only UXL field remains visible.
   csrw sstatus, zero
+  csrr t0, sstatus
+  li t1, SSTATUS_XLEN_BASE
+  bne t0, t1, fail_sstatus_xlen
   la t0, user_entry
   csrw sepc, t0
   sret
@@ -122,7 +147,7 @@ handle_s_ecall:
   la t5, s_ecall_site
   bne t1, t5, fail_s_epc
   bnez t2, fail_s_tval
-  li t5, SSTATUS_SPP
+  li t5, SSTATUS_XLEN_BASE | SSTATUS_SPP
   bne t3, t5, fail_s_trap_status
   bnez t4, fail_s_trap_count
   li t4, 1
@@ -138,7 +163,8 @@ handle_u_ecall:
   la t5, u_ecall_site
   bne t1, t5, fail_u_epc
   bnez t2, fail_u_tval
-  bnez t3, fail_u_trap_status
+  li t5, SSTATUS_XLEN_BASE
+  bne t3, t5, fail_u_trap_status
   li t5, 1
   bne t4, t5, fail_u_trap_count
   li t4, 2
@@ -194,6 +220,15 @@ fail_u_trap_count:
   j finish
 fail_u_younger_store:
   li a0, 17
+  j finish
+fail_mstatus_reset:
+  li a0, 40
+  j finish
+fail_mstatus_write:
+  li a0, 41
+  j finish
+fail_sstatus_xlen:
+  li a0, 42
 
 finish:
   li t0, EXIT_MMIO

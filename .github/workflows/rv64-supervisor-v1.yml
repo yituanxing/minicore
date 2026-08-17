@@ -1,0 +1,115 @@
+name: RV64 Supervisor V1 Qualification
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/**'
+      - 'src/test/scala/aethercore/RV64SupervisorModeSpec.scala'
+      - 'software/rv32/supervisor_v1_workload.S'
+      - 'software/rv32/crt0.S'
+      - 'software/rv32/linker.ld'
+      - 'tools/build_rv32im_supervisor_v1.sh'
+      - 'tools/build_rv64im_supervisor_v1.sh'
+      - 'Makefile.rv32im-supervisor-v1'
+      - 'Makefile.rv64im-supervisor-v1'
+      - '.github/workflows/rv64-supervisor-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-supervisor-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Shared RV32-RV64 M-S-U Supervisor V1
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 25
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala software tools .github/workflows || true
+            git clean -f -- Makefile.rv32im-supervisor-v1 Makefile.rv64im-supervisor-v1 || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill
+          echo "exact_head=$actual"
+
+      - name: Remove stale untracked Scala sources
+        shell: bash
+        run: git clean -fd -- src/main/scala src/test/scala
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V newlib toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Run RV64 SXL UXL and historical M-only Chisel contracts
+        shell: bash
+        run: ./mill aethercore.test.testOnly aethercore.RV64SupervisorModeSpec
+
+      - name: Run historical RV32 Supervisor V1 executable contract
+        shell: bash
+        run: |
+          jobs="$(nproc)"
+          build="$HOME/.cache/aethercore/rv32-supervisor-v1/$TARGET_SHA"
+          make -j"$jobs" -f Makefile.rv32im-supervisor-v1 \
+            BUILD_DIR="$build" JOBS="$jobs" run-local
+
+      - name: Run RV64 Supervisor V1 executable contract
+        shell: bash
+        run: |
+          jobs="$(nproc)"
+          build="$HOME/.cache/aethercore/rv64-supervisor-v1/$TARGET_SHA"
+          make -j"$jobs" -f Makefile.rv64im-supervisor-v1 \
+            BUILD_DIR="$build" JOBS="$jobs" run-local
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 Supervisor V1 qualification'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- shared workload: one M/S/U executable contract compiled for RV32 and RV64'
+            echo '- RV64 scope: RV64IM + Zicsr, M/S/U, bare translation, no A/C/PMP/Sstc/Sv39'
+            echo '- architectural contract: fixed WARL mstatus.SXL=2, mstatus.UXL=2 and sstatus.UXL=2'
+            echo '- executable contract: MRET -> S ECALL -> SRET -> U ECALL -> SRET, stall=0 and stall=3'
+            echo '- regression contract: historical RV32 Supervisor V1 and RV64 M-only behavior remain intact'
+          } >> "$GITHUB_STEP_SUMMARY"

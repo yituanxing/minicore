@@ -53,6 +53,8 @@ object MachineCsrBit {
   val MstatusMprv: Int = 17
   val SstatusSum: Int = 18
   val SstatusMxr: Int = 19
+  val MstatusUxlLow: Int = 32
+  val MstatusSxlLow: Int = 34
   val SupervisorTimerInterrupt: Int = Rv32SstcBit.SupervisorTimerInterrupt
   val MachineTimerInterrupt: Int = 7
   val SupervisorExternalInterrupt: Int = 9
@@ -81,6 +83,26 @@ object MachineCsrWarl {
       (BigInt(3) << MachineCsrBit.MstatusMppLow) |
       (if (isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
       supervisorStatusMask(isa)
+
+  /**
+    * AetherCore currently implements one XLEN for each enabled RV64 lower
+    * privilege mode. Model SXL/UXL as read-only WARL value 2 (64 bits).
+    *
+    * 当前 RV64 下层特权态只实现 64 位 XLEN，因此 SXL/UXL 固定为 WARL=2。
+    */
+  def mstatusXlenValue(isa: IsaConfig): BigInt = {
+    if (isa.xlen != 64) BigInt(0)
+    else
+      (if (isa.hasU) BigInt(2) << MachineCsrBit.MstatusUxlLow else BigInt(0)) |
+        (if (isa.hasS) BigInt(2) << MachineCsrBit.MstatusSxlLow else BigInt(0))
+  }
+
+  /** sstatus exposes UXL when RV64 S-mode can host U-mode. */
+  def sstatusXlenValue(isa: IsaConfig): BigInt = {
+    if (isa.xlen == 64 && isa.hasS && isa.hasU)
+      BigInt(2) << MachineCsrBit.MstatusUxlLow
+    else BigInt(0)
+  }
 
   private def delegableExceptionMask(isa: IsaConfig): BigInt = {
     if (!isa.hasS) BigInt(0)
@@ -158,7 +180,8 @@ object MachineCsrWarl {
         }
         result :=
           (data & (machineStatusMask(isa) & ~(BigInt(3) << MachineCsrBit.MstatusMppLow)).U(xlen.W)) |
-            (legalMpp << MachineCsrBit.MstatusMppLow)
+            (legalMpp << MachineCsrBit.MstatusMppLow) |
+            mstatusXlenValue(isa).U(xlen.W)
       }
       is(MachineCsrAddress.Mstatush.U) { result := 0.U }
       is(MachineCsrAddress.Medeleg.U) {
@@ -179,7 +202,9 @@ object MachineCsrWarl {
       }
       is(MachineCsrAddress.Mtvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(MachineCsrAddress.Mepc.U) { result := data & epcMask.U(xlen.W) }
-      is(SupervisorCsrAddress.Sstatus.U) { result := data & sstatusMask.U(xlen.W) }
+      is(SupervisorCsrAddress.Sstatus.U) {
+        result := (data & sstatusMask.U(xlen.W)) | sstatusXlenValue(isa).U(xlen.W)
+      }
       is(SupervisorCsrAddress.Sie.U) { result := data & supervisorInterruptMask.U(xlen.W) }
       is(SupervisorCsrAddress.Scounteren.U) { result := data & timeCounterMask.U(xlen.W) }
       is(SupervisorCsrAddress.Stvec.U) { result := data & mtvecMask.U(xlen.W) }
@@ -241,6 +266,8 @@ class MachineCsrFile(
       val v1Mask = sstatusSie | sstatusSpie | sstatusSpp
       if (isa.hasSv32) v1Mask | sstatusSum | sstatusMxr else v1Mask
     } else BigInt(0)
+  private val mstatusXlenValue = MachineCsrWarl.mstatusXlenValue(isa)
+  private val sstatusXlenValue = MachineCsrWarl.sstatusXlenValue(isa)
   private val supervisorTimerMask =
     if (isa.hasSstc) BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt else BigInt(0)
   private val supervisorExternalMask =
@@ -319,7 +346,7 @@ class MachineCsrFile(
   })
 
   val privilege = RegInit(PrivilegeMode.Machine.U(2.W))
-  val mstatus = RegInit(0.U(xlen.W))
+  val mstatus = RegInit(mstatusXlenValue.U(xlen.W))
   val medeleg = RegInit(0.U(xlen.W))
   val mideleg = RegInit(0.U(xlen.W))
   val mie = RegInit(0.U(xlen.W))
@@ -580,7 +607,7 @@ class MachineCsrFile(
         io.readWritable := true.B
       }
       is(SupervisorCsrAddress.Sstatus.U) {
-        io.readData := mstatus & supervisorStatusMask.U(xlen.W)
+        io.readData := (mstatus & supervisorStatusMask.U(xlen.W)) | sstatusXlenValue.U(xlen.W)
         io.readImplemented := true.B
         io.readWritable := true.B
       }
