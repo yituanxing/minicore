@@ -69,7 +69,7 @@ object MachineCsrWarl {
         (BigInt(1) << MachineCsrBit.SstatusSie) |
           (BigInt(1) << MachineCsrBit.SstatusSpie) |
           (BigInt(1) << MachineCsrBit.SstatusSpp)
-      if (isa.hasSv32)
+      if (isa.hasPagedVirtualMemory)
         v1Mask |
           (BigInt(1) << MachineCsrBit.SstatusSum) |
           (BigInt(1) << MachineCsrBit.SstatusMxr)
@@ -109,7 +109,7 @@ object MachineCsrWarl {
     else {
       val v1Causes = Seq(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
       val implementedCauses =
-        if (isa.hasSv32) v1Causes ++ Seq(12, 13, 15)
+        if (isa.hasPagedVirtualMemory) v1Causes ++ Seq(12, 13, 15)
         else v1Causes
       implementedCauses.foldLeft(BigInt(0))((mask, bit) => mask | (BigInt(1) << bit))
     }
@@ -253,6 +253,16 @@ class MachineCsrFile(
   private val xlen = isa.xlen
   private val pmpGeometry = PmpGeometry(xlen, paddrBits)
   private val pmpAddressBits = pmpGeometry.encodedAddressBits
+  private val pagingGeometries = isa.orderedPageTableGeometries
+  private val satpPpnBits = if (pagingGeometries.nonEmpty) pagingGeometries.map(_.ppnBits).distinct match {
+    case Seq(bits) => bits
+    case widths => throw new IllegalArgumentException(s"satp PPN widths must agree: $widths")
+  } else Sv32Satp.PpnBits
+  private val satpAsidBits = if (pagingGeometries.nonEmpty) pagingGeometries.map(_.asidBits).distinct match {
+    case Seq(bits) => bits
+    case widths => throw new IllegalArgumentException(s"satp ASID widths must agree: $widths")
+  } else Sv32Satp.AsidBits
+  private val satpModeBits = if (xlen == 32) 1 else 4
   private val allBits = (BigInt(1) << xlen) - 1
   private val sstatusSie = BigInt(1) << MachineCsrBit.SstatusSie
   private val mstatusMie = BigInt(1) << MachineCsrBit.MstatusMie
@@ -266,7 +276,7 @@ class MachineCsrFile(
   private val supervisorStatusMask =
     if (isa.hasS) {
       val v1Mask = sstatusSie | sstatusSpie | sstatusSpp
-      if (isa.hasSv32) v1Mask | sstatusSum | sstatusMxr else v1Mask
+      if (isa.hasPagedVirtualMemory) v1Mask | sstatusSum | sstatusMxr else v1Mask
     } else BigInt(0)
   private val mstatusXlenValue = MachineCsrWarl.mstatusXlenValue(isa)
   private val sstatusXlenValue = MachineCsrWarl.sstatusXlenValue(isa)
@@ -317,8 +327,9 @@ class MachineCsrFile(
     val supervisorSum = Output(Bool())
     val supervisorMxr = Output(Bool())
     val satpTranslationEnabled = Output(Bool())
-    val satpRootPpn = Output(UInt(Sv32Satp.PpnBits.W))
-    val satpAsid = Output(UInt(Sv32Satp.AsidBits.W))
+    val satpMode = Output(UInt(satpModeBits.W))
+    val satpRootPpn = Output(UInt(satpPpnBits.W))
+    val satpAsid = Output(UInt(satpAsidBits.W))
     val pmpConfig = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
     val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt(pmpAddressBits.W)))
 
@@ -404,17 +415,21 @@ class MachineCsrFile(
     sstc.get.io.writeData := io.writeData(31, 0)
   }
 
-  val satp = if (isa.hasSv32) Some(Module(new Sv32SatpRegister)) else None
-  if (isa.hasSv32) {
+  val satp = if (isa.hasPagedVirtualMemory)
+    Some(Module(new SatpRegister(pagingGeometries)))
+  else None
+  if (isa.hasPagedVirtualMemory) {
     satp.get.io.writeEnable := ordinaryWrite && io.writeAddr === SupervisorCsrAddress.Satp.U
-    satp.get.io.writeData := io.writeData(31, 0)
+    satp.get.io.writeData := io.writeData
     io.satpTranslationEnabled := satp.get.io.translationEnabled
+    io.satpMode := satp.get.io.mode
     io.satpRootPpn := satp.get.io.rootPpn
     io.satpAsid := satp.get.io.asid
     io.supervisorSum := mstatus(MachineCsrBit.SstatusSum)
     io.supervisorMxr := mstatus(MachineCsrBit.SstatusMxr)
   } else {
     io.satpTranslationEnabled := false.B
+    io.satpMode := 0.U
     io.satpRootPpn := 0.U
     io.satpAsid := 0.U
     io.supervisorSum := false.B
@@ -711,7 +726,7 @@ class MachineCsrFile(
     }
   }
 
-  if (isa.hasSv32) {
+  if (isa.hasPagedVirtualMemory) {
     when(io.readAddr === SupervisorCsrAddress.Satp.U) {
       io.readData := satp.get.io.readData
       io.readImplemented := true.B
