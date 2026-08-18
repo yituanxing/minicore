@@ -16,7 +16,8 @@ import chisel3.util._
   * The current profile uses Svade-style A/D behavior: a clear A bit, or a clear
   * D bit on a write, raises a page fault instead of modifying the PTE in memory.
   * RV64 PTE bits above the architectural 44-bit PPN are treated as reserved until
-  * Svnapot/Svpbmt are explicitly implemented.
+  * Svnapot/Svpbmt are explicitly implemented. Non-leaf U/A/D bits must remain
+  * zero, while a non-leaf G bit is inherited by every mapping below that entry.
   *
   * 基于 PageTableGeometry 的共享页表遍历器。Sv32/Sv39/Sv48 只提供页表层数、
   * VPN/PTE/PPN 宽度等几何差异，遍历、权限、superpage 对齐和地址拼接逻辑共享。
@@ -66,6 +67,7 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
   val requestExecute = Reg(Bool())
   val requestSum = Reg(Bool())
   val requestMxr = Reg(Bool())
+  val inheritedGlobal = RegInit(false.B)
 
   val resultPhysicalAddress = RegInit(0.U(PaddrBits.W))
   val resultPageFault = RegInit(false.B)
@@ -112,6 +114,7 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
   when(io.kill) {
     state := idle
     level := (geometry.levels - 1).U
+    inheritedGlobal := false.B
     resultPhysicalAddress := 0.U
     resultPageFault := false.B
     resultAccessFault := false.B
@@ -126,6 +129,7 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
       requestExecute := io.execute
       requestSum := io.sum
       requestMxr := io.mxr
+      inheritedGlobal := false.B
       resultPhysicalAddress := 0.U
       resultPageFault := false.B
       resultAccessFault := false.B
@@ -153,15 +157,15 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
       val accessed = pte(6)
       val dirty = pte(7)
       val ptePpn = pte(9 + PpnBits, 10)
+      val leaf = readable || executable
 
       val reservedHigh = if (10 + PpnBits < geometry.pteBits) {
         pte(geometry.pteBits - 1, 10 + PpnBits).orR
       } else {
         false.B
       }
-
-      val invalidEncoding = !valid || (!readable && writable) || reservedHigh
-      val leaf = readable || executable
+      val nonLeafReserved = !leaf && (user || accessed || dirty)
+      val invalidEncoding = !valid || (!readable && writable) || reservedHigh || nonLeafReserved
       val readAllowed = readable || (requestMxr && executable)
       val accessAllowed = Mux(requestExecute, executable, Mux(requestWrite, writable, readAllowed))
       val privilegeAllowed = Mux(
@@ -203,7 +207,7 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
         }.otherwise {
           resultPhysicalAddress := Cat(translatedPpn, virtualAddress(geometry.pageOffsetBits - 1, 0))
           resultLeafLevel := level
-          resultGlobal := global
+          resultGlobal := inheritedGlobal || global
           finish(false.B, false.B)
         }
       }.otherwise {
@@ -211,6 +215,7 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
           finish(true.B, false.B)
         }.otherwise {
           tablePpn := ptePpn
+          inheritedGlobal := inheritedGlobal || global
           level := level - 1.U
         }
       }
