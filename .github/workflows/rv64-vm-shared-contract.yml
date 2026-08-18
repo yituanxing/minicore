@@ -6,11 +6,15 @@ on:
       - 'src/main/scala/aethercore/config/PageTableGeometry.scala'
       - 'src/main/scala/aethercore/core/PageTableWalker.scala'
       - 'src/main/scala/aethercore/core/TranslationTlb.scala'
+      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
       - 'src/main/scala/aethercore/core/Sv32PageTableWalker.scala'
       - 'src/main/scala/aethercore/core/Sv32Tlb.scala'
+      - 'src/main/scala/aethercore/core/Sv32TranslationUnit.scala'
       - 'src/test/scala/aethercore/RV64SharedVirtualMemorySpec.scala'
+      - 'src/test/scala/aethercore/TranslationUnitSpec.scala'
       - 'src/test/scala/aethercore/Sv32PageTableWalkerSpec.scala'
       - 'src/test/scala/aethercore/Sv32TlbSpec.scala'
+      - 'src/test/scala/aethercore/Sv32TranslationUnitTlbSpec.scala'
       - '.github/workflows/rv64-vm-shared-contract.yml'
   workflow_dispatch:
 
@@ -75,7 +79,9 @@ jobs:
           ./mill aethercore.test.testOnly \
             aethercore.Sv32PageTableWalkerSpec \
             aethercore.Sv32TlbSpec \
-            aethercore.RV64SharedVirtualMemorySpec
+            aethercore.Sv32TranslationUnitTlbSpec \
+            aethercore.RV64SharedVirtualMemorySpec \
+            aethercore.TranslationUnitSpec
 
       - name: Write qualification summary
         if: always()
@@ -86,8 +92,9 @@ jobs:
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
             echo '- production capability advertisement: unchanged; RV64 paging remains fail-closed'
-            echo '- Sv32 oracle: historical walker and TLB specs run through the shared implementation'
-            echo '- Sv39: three-level walk, 64-bit PTE stride, canonical VA, 1 GiB gigapage and shared TLB reconstruction'
-            echo '- Sv48: four-level geometry, canonical VA, 512 GiB terapage and shared TLB reconstruction'
+            echo '- Sv32 oracle: historical walker, TLB and translation-unit specs run through the shared implementation'
+            echo '- Sv39: three-level walk, 64-bit PTE stride, canonical VA, 1 GiB gigapage, shared TLB and shared translation-unit composition'
+            echo '- Sv48: four-level geometry, canonical VA, 512 GiB terapage, shared TLB and shared translation-unit composition'
+            echo '- bare RV64 PA56 boundary: high architectural bits fault instead of aliasing low physical bits'
             echo '- PTE correctness: non-leaf U/A/D are reserved and ancestor G is inherited by descendants'
           } >> "$GITHUB_STEP_SUMMARY"
