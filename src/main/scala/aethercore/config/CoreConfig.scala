@@ -100,6 +100,8 @@ final case class CoreConfig(
     isa: IsaConfig,
     platform: PlatformConfig
 ) {
+  private val architecturalPmpPhysicalBits = if (isa.xlen == 32) 34 else 56
+
   require(name.nonEmpty, "core profile name must not be empty")
   require(
     isa.extensions.subsetOf(AetherCoreCapabilities.instructionExtensions),
@@ -120,8 +122,12 @@ final case class CoreConfig(
     s"Sv32 requires at least 34 physical address bits, got ${platform.paddrBits}"
   )
   require(
-    !isa.hasPmp || (isa.xlen == 32 && isa.pmpEntries == 16),
-    "the current AetherCore PMP implementation supports the standard RV32 PMP16 surface only"
+    !isa.hasPmp || isa.pmpEntries == 16,
+    "the current AetherCore PMP implementation exposes the bounded standard PMP16 surface"
+  )
+  require(
+    !isa.hasPmp || platform.paddrBits <= architecturalPmpPhysicalBits,
+    s"RV${isa.xlen} PMP can protect at most $architecturalPmpPhysicalBits physical address bits, got ${platform.paddrBits}"
   )
 }
 
@@ -150,6 +156,10 @@ object CoreProfiles {
     mtimeAddress = mtimeAddress,
     mtimecmpAddress = mtimecmpAddress
   )
+
+  // PMP address CSRs on RV64 encode PA55:2. Keep the 64-bit data bus while
+  // bounding the protected physical domain independently to 56 bits.
+  private val rv64PmpPlatform: PlatformConfig = rv64Platform.copy(paddrBits = 56)
 
   val rv32iMinimal: CoreConfig = CoreConfig(
     name = "rv32i-minimal",
@@ -309,6 +319,19 @@ object CoreProfiles {
       zExtensions = Set("Zicsr")
     ),
     platform = rv64Platform
+  )
+
+  /** RV64 PMP V1: same M/S/U execution profile with an independently bounded PA56 protected domain. */
+  val rv64imsuPmpSoftware: CoreConfig = CoreConfig(
+    name = "rv64imsu-pmp-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      pmpEntries = 16
+    ),
+    platform = rv64PmpPlatform
   )
 
   val rv64imCurrent: CoreConfig = CoreConfig(

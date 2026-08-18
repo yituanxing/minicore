@@ -1,0 +1,86 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/rv64im-pmp-v1
+RV64_RTL_DIR := $(BUILD_DIR)/rv64-rtl
+RV64_OBJ_DIR := $(BUILD_DIR)/rv64-obj
+RV32_RTL_DIR := $(BUILD_DIR)/rv32-rtl
+RV32_OBJ_DIR := $(BUILD_DIR)/rv32-obj
+RV64_SOFTWARE_DIR := $(BUILD_DIR)/rv64-software
+RV32_SOFTWARE_DIR := $(BUILD_DIR)/rv32-software
+RV64_MAIN := $(BUILD_DIR)/sim_main_rv64im_pmp_v1.cpp
+RV32_MAIN := $(BUILD_DIR)/sim_main_rv32im_pmp_v1.cpp
+RV64_TOP := AetherCoreRV64IMPmpSimTop
+RV32_TOP := AetherCoreRV32IMUPmpSimTop
+VERILATOR ?= verilator
+JOBS ?= 6
+
+RV64_RTL_SOURCES = $(wildcard $(RV64_RTL_DIR)/*.sv)
+RV32_RTL_SOURCES = $(wildcard $(RV32_RTL_DIR)/*.sv)
+
+.PHONY: all rtl-rv64 rtl-rv32 workload-rv64 workload-rv32 runner-sources sim-rv64 sim-rv32 run-rv64 run-rv32 run-local clean
+
+all: run-local
+
+rtl-rv64:
+	./mill aethercore.runMain aethercore.ElaborateRV64IMPmp --target-dir $(RV64_RTL_DIR)
+
+rtl-rv32:
+	./mill aethercore.runMain aethercore.ElaborateRV32IMUPmp --target-dir $(RV32_RTL_DIR)
+
+workload-rv64:
+	bash tools/build_pmp_v1.sh 64 $(RV64_SOFTWARE_DIR)
+
+workload-rv32:
+	bash tools/build_pmp_v1.sh 32 $(RV32_SOFTWARE_DIR)
+
+runner-sources:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/V$(RV64_TOP)/g' sim/sim_main.cpp > $(RV64_MAIN)
+	sed 's/VAetherCoreSimTop/V$(RV32_TOP)/g' sim/sim_main.cpp > $(RV32_MAIN)
+
+sim-rv64: rtl-rv64 runner-sources
+	@test -n "$(RV64_RTL_SOURCES)" || { echo "ERROR: no RV64 PMP V1 SystemVerilog files in $(RV64_RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(RV64_TOP) -Mdir $(RV64_OBJ_DIR) \
+		-j $(JOBS) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RV64_RTL_SOURCES) $(abspath $(RV64_MAIN)) $(abspath sim/nemu_difftest.cpp)
+
+sim-rv32: rtl-rv32 runner-sources
+	@test -n "$(RV32_RTL_SOURCES)" || { echo "ERROR: no RV32 PMP V1 SystemVerilog files in $(RV32_RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(RV32_TOP) -Mdir $(RV32_OBJ_DIR) \
+		-j $(JOBS) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RV32_RTL_SOURCES) $(abspath $(RV32_MAIN)) $(abspath sim/nemu_difftest.cpp)
+
+run-rv64: sim-rv64 workload-rv64
+	mkdir -p $(BUILD_DIR)/logs
+	@for stall in 0 3; do \
+		echo "== RV64IM PMP V1: stall=$$stall =="; \
+		$(RV64_OBJ_DIR)/V$(RV64_TOP) $(RV64_SOFTWARE_DIR)/pmp-v1.bin \
+			--max-cycles 20000 --self-check-exit --stall-period $$stall \
+			2>&1 | tee $(BUILD_DIR)/logs/rv64-stall-$$stall.log; \
+	done
+
+run-rv32: sim-rv32 workload-rv32
+	mkdir -p $(BUILD_DIR)/logs
+	@for stall in 0 3; do \
+		echo "== RV32IM PMP V1 shared workload: stall=$$stall =="; \
+		$(RV32_OBJ_DIR)/V$(RV32_TOP) $(RV32_SOFTWARE_DIR)/pmp-v1.bin \
+			--max-cycles 20000 --self-check-exit --stall-period $$stall \
+			2>&1 | tee $(BUILD_DIR)/logs/rv32-stall-$$stall.log; \
+	done
+
+run-local: run-rv32 run-rv64
+	sha256sum \
+		$(RV32_SOFTWARE_DIR)/pmp-v1.bin \
+		$(RV64_SOFTWARE_DIR)/pmp-v1.bin \
+		$(BUILD_DIR)/logs/rv32-stall-0.log \
+		$(BUILD_DIR)/logs/rv32-stall-3.log \
+		$(BUILD_DIR)/logs/rv64-stall-0.log \
+		$(BUILD_DIR)/logs/rv64-stall-3.log
+
+clean:
+	rm -rf $(BUILD_DIR)

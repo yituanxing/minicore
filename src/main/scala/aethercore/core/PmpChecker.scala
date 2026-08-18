@@ -6,8 +6,26 @@ import aethercore.common.PrivilegeMode
 
 object PmpConstants {
   val MaxEntries: Int = 16
+
+  // PMP configuration CSRs pack one 8-bit pmpcfg byte per entry. RV32 fits
+  // four entries in one CSR; RV64 fits eight and therefore uses only the even
+  // pmpcfg CSR numbers. Keep the historical RV32 aliases until every external
+  // helper has migrated to the XLEN-aware geometry.
+  // PMP 配置 CSR 每个条目占 8 位；RV32 每个 CSR 放 4 项，RV64 放 8 项并只使用偶数 pmpcfg。
   val ConfigEntriesPerCsr: Int = 4
   val ConfigCsrCount: Int = MaxEntries / ConfigEntriesPerCsr
+
+  def configEntriesPerCsr(xlen: Int): Int = xlen match {
+    case 32 => 4
+    case 64 => 8
+    case _  => throw new IllegalArgumentException(s"PMP config packing requires XLEN 32 or 64, got $xlen")
+  }
+
+  def configCsrCount(xlen: Int): Int = {
+    val entriesPerCsr = configEntriesPerCsr(xlen)
+    (MaxEntries + entriesPerCsr - 1) / entriesPerCsr
+  }
+
   val ConfigRead: Int = 0
   val ConfigWrite: Int = 1
   val ConfigExecute: Int = 2

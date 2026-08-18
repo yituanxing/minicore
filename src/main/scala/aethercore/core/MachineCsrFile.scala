@@ -213,10 +213,12 @@ object MachineCsrWarl {
     }
 
     if (isa.hasPmp) {
-      for (bank <- 0 until PmpConstants.ConfigCsrCount) {
-        val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+      val configEntriesPerCsr = PmpConstants.configEntriesPerCsr(isa.xlen)
+      val configCsrCount = PmpConstants.configCsrCount(isa.xlen)
+      for (bank <- 0 until configCsrCount) {
+        val firstEntry = bank * configEntriesPerCsr
         if (firstEntry < isa.pmpEntries) {
-          when(address === PmpCsrAddress.pmpcfg(bank).U) {
+          when(address === PmpCsrAddress.pmpcfg(isa, bank).U) {
             result := PmpCsrWarl.canonicalize(isa, paddrBits, address, data)
           }
         }
