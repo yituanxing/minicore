@@ -1,32 +1,32 @@
 package aethercore.core
 
+import aethercore.config.PageTableGeometry
 import chisel3._
-import chisel3.util._
 
 object Sv32Satp {
+  private val geometry = PageTableGeometry.Sv32
+
   val ModeBare: Int = 0
-  val ModeSv32: Int = 1
+  val ModeSv32: Int = geometry.satpMode
   val ModeBit: Int = 31
   val AsidHigh: Int = 30
-  val AsidLow: Int = 22
-  val AsidBits: Int = 9
-  val PpnHigh: Int = 21
+  val AsidLow: Int = geometry.ppnBits
+  val AsidBits: Int = geometry.asidBits
+  val PpnHigh: Int = geometry.ppnBits - 1
   val PpnLow: Int = 0
-  val PpnBits: Int = 22
+  val PpnBits: Int = geometry.ppnBits
 }
 
 /**
-  * RV32 satp state for the bounded Sv32 bring-up profile.
+  * Compatibility surface for the frozen RV32 Sv32 satp contract.
   *
-  * V2-B deliberately implements ASIDLEN=0. Sv32 writes retain the complete
-  * 22-bit root PPN while every ASID bit reads as zero. Bare is represented by
-  * the canonical all-zero value. This also gives deterministic behavior for a
-  * software write that requests Bare while leaving reserved payload bits set.
+  * The architectural state now comes from the shared geometry-driven
+  * SatpRegister. Keeping this thin wrapper preserves every existing Sv32 V2
+  * source/test interface while making that frozen workload the first production
+  * consumer of the VM framework that will later host Sv39 and Sv48.
   *
-  * The register intentionally emits no flush pulse: the privileged ISA does
-  * not make a satp write an implicit page-table-ordering or translation-cache
-  * fence. SFENCE.VMA is a separate architectural operation and will be added
-  * together with the TLB slice.
+  * 兼容现有 Sv32 V2 接口的薄封装。真正的 satp 状态由共享 SatpRegister 提供，
+  * 这样历史 Sv32 回归可以直接约束后续 Sv39/Sv48 所复用的实现。
   */
 class Sv32SatpRegister extends Module {
   val io = IO(new Bundle {
@@ -39,27 +39,12 @@ class Sv32SatpRegister extends Module {
     val asid = Output(UInt(Sv32Satp.AsidBits.W))
   })
 
-  val satp = RegInit(0.U(32.W))
+  private val shared = Module(new SatpRegister(Seq(PageTableGeometry.Sv32), implementedAsidBits = 0))
+  shared.io.writeEnable := io.writeEnable
+  shared.io.writeData := io.writeData
 
-  when(io.writeEnable) {
-    when(io.writeData(Sv32Satp.ModeBit)) {
-      // RV32 has only two MODE encodings: Bare=0 and Sv32=1. This bounded
-      // implementation supports Sv32 and implements no ASID bits.
-      satp := Cat(
-        Sv32Satp.ModeSv32.U(1.W),
-        0.U(Sv32Satp.AsidBits.W),
-        io.writeData(Sv32Satp.PpnHigh, Sv32Satp.PpnLow)
-      )
-    }.otherwise {
-      // Current privileged specifications require software to write zero to
-      // the remaining satp fields when selecting Bare. Canonicalizing Bare to
-      // zero keeps the implementation deterministic and fail-closed.
-      satp := 0.U
-    }
-  }
-
-  io.readData := satp
-  io.translationEnabled := satp(Sv32Satp.ModeBit)
-  io.rootPpn := satp(Sv32Satp.PpnHigh, Sv32Satp.PpnLow)
-  io.asid := 0.U
+  io.readData := shared.io.readData
+  io.translationEnabled := shared.io.translationEnabled
+  io.rootPpn := shared.io.rootPpn
+  io.asid := shared.io.asid
 }
