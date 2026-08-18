@@ -8,10 +8,20 @@ object PmpCsrAddress {
   val Pmpcfg0: Int = 0x3a0
   val Pmpaddr0: Int = 0x3b0
 
-  def pmpcfg(bank: Int): Int = {
-    require(bank >= 0 && bank < PmpConstants.ConfigCsrCount)
-    Pmpcfg0 + bank
+  /** Historical RV32 bank numbering: pmpcfg0..pmpcfg3. */
+  def pmpcfg(bank: Int): Int = pmpcfg(32, bank)
+
+  /**
+    * Return the architectural pmpcfg CSR for one packed config bank.
+    * RV32 uses consecutive CSRs; RV64 uses pmpcfg0, pmpcfg2, ... because each
+    * 64-bit CSR packs eight 8-bit entries and odd pmpcfg CSR numbers are absent.
+    */
+  def pmpcfg(xlen: Int, bank: Int): Int = {
+    require(bank >= 0 && bank < PmpConstants.configCsrCount(xlen))
+    Pmpcfg0 + (if (xlen == 64) bank * 2 else bank)
   }
+
+  def pmpcfg(isa: IsaConfig, bank: Int): Int = pmpcfg(isa.xlen, bank)
 
   def pmpaddr(entry: Int): Int = {
     require(entry >= 0 && entry < PmpConstants.MaxEntries)
@@ -30,8 +40,8 @@ object PmpCsrWarl {
   }
 
   def canonicalizePackedConfig(isa: IsaConfig, data: UInt): UInt = {
-    require(isa.xlen == 32, "the current PMP configuration-bank implementation is RV32-only")
-    Cat((0 until PmpConstants.ConfigEntriesPerCsr).reverse.map { entry =>
+    val entriesPerCsr = PmpConstants.configEntriesPerCsr(isa.xlen)
+    Cat((0 until entriesPerCsr).reverse.map { entry =>
       canonicalizeConfigByte(data(entry * 8 + 7, entry * 8))
     })
   }
@@ -50,10 +60,12 @@ object PmpCsrWarl {
   def canonicalize(isa: IsaConfig, paddrBits: Int, address: UInt, data: UInt): UInt = {
     val result = WireDefault(data)
     if (isa.hasPmp) {
-      for (bank <- 0 until PmpConstants.ConfigCsrCount) {
-        val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+      val entriesPerCsr = PmpConstants.configEntriesPerCsr(isa.xlen)
+      val configCsrCount = PmpConstants.configCsrCount(isa.xlen)
+      for (bank <- 0 until configCsrCount) {
+        val firstEntry = bank * entriesPerCsr
         if (firstEntry < isa.pmpEntries) {
-          when(address === PmpCsrAddress.pmpcfg(bank).U) {
+          when(address === PmpCsrAddress.pmpcfg(isa, bank).U) {
             result := canonicalizePackedConfig(isa, data)
           }
         }
@@ -74,11 +86,9 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
   private val xlen = isa.xlen
   private val geometry = PmpGeometry(xlen, paddrBits)
   private val pmpAddressBits = geometry.encodedAddressBits
+  private val configEntriesPerCsr = PmpConstants.configEntriesPerCsr(xlen)
+  private val configCsrCount = PmpConstants.configCsrCount(xlen)
 
-  require(
-    !isa.hasPmp || isa.xlen == 32,
-    "the current PMP CSR-bank implementation is RV32-only"
-  )
   require(
     isa.pmpEntries <= PmpConstants.MaxEntries,
     s"PMP CSR bank supports at most ${PmpConstants.MaxEntries} entries, got ${isa.pmpEntries}"
@@ -110,12 +120,12 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
   io.pmpAddress := pmpAddress
 
   if (isa.hasPmp) {
-    for (bank <- 0 until PmpConstants.ConfigCsrCount) {
-      val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+    for (bank <- 0 until configCsrCount) {
+      val firstEntry = bank * configEntriesPerCsr
       if (firstEntry < isa.pmpEntries) {
-        when(io.readAddr === PmpCsrAddress.pmpcfg(bank).U) {
+        when(io.readAddr === PmpCsrAddress.pmpcfg(isa, bank).U) {
           io.readData := Cat(
-            (0 until PmpConstants.ConfigEntriesPerCsr).reverse.map { offset =>
+            (0 until configEntriesPerCsr).reverse.map { offset =>
               config(firstEntry + offset)
             }
           )
@@ -136,11 +146,11 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
   val canonicalWriteData = PmpCsrWarl.canonicalize(isa, paddrBits, io.writeAddr, io.writeData)
 
   if (isa.hasPmp) {
-    for (bank <- 0 until PmpConstants.ConfigCsrCount) {
-      val firstEntry = bank * PmpConstants.ConfigEntriesPerCsr
+    for (bank <- 0 until configCsrCount) {
+      val firstEntry = bank * configEntriesPerCsr
       if (firstEntry < isa.pmpEntries) {
-        when(io.writeEnable && io.writeAddr === PmpCsrAddress.pmpcfg(bank).U) {
-          for (offset <- 0 until PmpConstants.ConfigEntriesPerCsr) {
+        when(io.writeEnable && io.writeAddr === PmpCsrAddress.pmpcfg(isa, bank).U) {
+          for (offset <- 0 until configEntriesPerCsr) {
             val entry = firstEntry + offset
             if (entry < isa.pmpEntries) {
               when(!config(entry)(PmpConstants.ConfigLock)) {

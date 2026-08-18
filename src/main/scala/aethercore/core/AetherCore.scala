@@ -92,7 +92,6 @@ class AetherCore(
   private val machineExternalCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineExternal)
 
-  require(paddrBits >= xlen, "physical address width must cover the architectural address width")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
   require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!config.isa.hasSv32 || paddrBits >= 34, "Sv32 requires a PA width of at least 34 bits")
@@ -153,9 +152,11 @@ class AetherCore(
   val fetchResponseValid = WireDefault(true.B)
   val frontendAdvance = WireDefault(false.B)
   val fetchVirtualAddress = WireDefault(pc)
-  val fetchPhysicalAddress = WireDefault(fetchVirtualAddress.pad(paddrBits))
+  val (bareFetchPhysicalAddress, bareFetchOutOfRange) =
+    PhysicalAddressNarrowing(fetchVirtualAddress, paddrBits)
+  val fetchPhysicalAddress = WireDefault(bareFetchPhysicalAddress)
   val fetchPageFault = WireDefault(false.B)
-  val fetchAccessFault = WireDefault(false.B)
+  val fetchAccessFault = WireDefault(bareFetchOutOfRange)
   val fetchInstructionValid = WireDefault(fetchResponseValid)
   val fetchedInst = WireDefault(io.imem.inst)
   val fetchedRawInst = WireDefault(io.imem.inst)
@@ -181,7 +182,9 @@ class AetherCore(
   instructionPmp.io.config := csrFile.io.pmpConfig
   instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
 
-  val dataPmpAddress = WireDefault(exMem.result.pad(paddrBits))
+  val (bareDataPhysicalAddress, bareDataOutOfRange) =
+    PhysicalAddressNarrowing(exMem.result, paddrBits)
+  val dataPmpAddress = WireDefault(bareDataPhysicalAddress)
   dataPmp.io.privilege := csrFile.io.effectiveDataPrivilege
   dataPmp.io.address := dataPmpAddress
   dataPmp.io.config := csrFile.io.pmpConfig
@@ -512,8 +515,10 @@ class AetherCore(
     }
   }
 
-  val translatedPhysicalAddress = WireDefault(exMem.result.pad(paddrBits))
-  val scReservationMatch = WireDefault(reservationValid && reservationAddress === exMem.result.pad(paddrBits))
+  val translatedPhysicalAddress = WireDefault(bareDataPhysicalAddress)
+  val scReservationMatch = WireDefault(
+    reservationValid && !bareDataOutOfRange && reservationAddress === bareDataPhysicalAddress
+  )
 
   val atomicInstruction = exMem.ctrl.atomicOp =/= AtomicOp.None
   val atomicLr = exMem.ctrl.atomicOp === AtomicOp.Lr
@@ -555,6 +560,7 @@ class AetherCore(
   dataPmp.io.write := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
   dataPmp.io.execute := false.B
 
+  val dataAddressRangeFault = WireDefault(false.B)
   val dataPmpFault = WireDefault(false.B)
   val atomicScBusRequest = if (config.isa.hasSv32) atomicSc else atomicSc && scReservationMatch
   val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
@@ -620,12 +626,14 @@ class AetherCore(
     vmPageFault := vm.io.pageFault
     vmAccessFault := vm.io.accessFault
   } else {
-    val bareDataPmpFault = alignedDataAccess &&
+    val bareDataRangeFault = alignedDataAccess && bareDataOutOfRange
+    val bareDataPmpFault = alignedDataAccess && !bareDataOutOfRange &&
       (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+    dataAddressRangeFault := bareDataRangeFault
     dataPmpFault := bareDataPmpFault
-    io.dmem.valid := rawDataRequest && !bareDataPmpFault
+    io.dmem.valid := rawDataRequest && !bareDataRangeFault && !bareDataPmpFault
     io.dmem.write := dataBusWrite
-    io.dmem.addr := exMem.result.pad(paddrBits)
+    io.dmem.addr := bareDataPhysicalAddress
     io.dmem.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
     io.dmem.wmask := storeMask
     io.dmem.size := exMem.ctrl.memSize
@@ -659,7 +667,7 @@ class AetherCore(
     io.dmem.valid && !io.dmem.ready
   }
   val memoryPageFault = if (config.isa.hasSv32) vmPageFault else false.B
-  val memoryFault = dataPmpFault ||
+  val memoryFault = dataAddressRangeFault || dataPmpFault ||
     (if (config.isa.hasSv32) vmAccessFault else io.dmem.valid && io.dmem.fault)
   val atomicReadHold = atomicReadPhase && io.dmem.valid && io.dmem.ready && !io.dmem.fault
   val lateResultHazard = idEx.ctrl.memRead || idEx.ctrl.atomicOp =/= AtomicOp.None

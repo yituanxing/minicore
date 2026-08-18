@@ -175,6 +175,27 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
+  it should "describe the bounded RV64 M/S/U PMP16 profile" in {
+    val config = CoreProfiles.rv64imsuPmpSoftware
+    config.name shouldBe "rv64imsu-pmp-software"
+    config.isa.xlen shouldBe 64
+    config.isa.hasM shouldBe true
+    config.isa.hasS shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasA shouldBe false
+    config.isa.hasC shouldBe false
+    config.isa.hasPmp shouldBe true
+    config.isa.pmpEntries shouldBe 16
+    config.isa.hasZicsr shouldBe true
+    config.isa.hasZifencei shouldBe false
+    config.isa.hasSv32 shouldBe false
+    config.isa.hasSstc shouldBe false
+    config.isa.march shouldBe "rv64im_zicsr"
+    config.isa.mabi shouldBe "lp64"
+    config.platform.paddrBits shouldBe 56
+    config.platform.busDataBits shouldBe 64
+  }
+
   it should "derive an independent RV32I software contract" in {
     val isa = IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'))
     isa.xBytes shouldBe 4
@@ -210,8 +231,14 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
       pmpEntries = 16
     )
     rv64Pmp16.hasPmp shouldBe true
+    val supportedRv64Pmp16 = CoreConfig(
+      "supported-rv64-pmp16",
+      rv64Pmp16,
+      CoreProfiles.rv64imsuPmpSoftware.platform
+    )
+    supportedRv64Pmp16.platform.paddrBits shouldBe 56
     an[IllegalArgumentException] should be thrownBy
-      CoreConfig("unsupported-rv64-pmp16", rv64Pmp16, rv64Platform)
+      CoreConfig("unsupported-rv64-pmp-pa64", rv64Pmp16, rv64Platform)
 
     val rv32Pmp64 = IsaConfig(
       xlen = 32,
