@@ -106,14 +106,22 @@ class DataBusIO(val addrBits: Int = 64, val dataBits: Int = 64) extends Bundle {
   val fault = Input(Bool())
 }
 
-/** Read-only physical-memory port used for implicit page-table-entry loads. */
-class PageTableReadBusIO(val addrBits: Int = 34) extends Bundle {
-  require(addrBits >= 34, s"Sv32 PTW physical address width must be at least 34, got $addrBits")
+/**
+  * Read-only physical-memory port used for implicit page-table-entry loads.
+  * Address and PTE widths are independent: Sv32 uses 32-bit PTEs while the
+  * RV64 Sv39/Sv48 family uses 64-bit PTEs over the same PA56 domain.
+  */
+class PageTableReadBusIO(
+    val addrBits: Int = 34,
+    val dataBits: Int = 32
+) extends Bundle {
+  require(addrBits > 0, s"PTW physical address width must be positive, got $addrBits")
+  require(Set(32, 64).contains(dataBits), s"PTW PTE width must be 32 or 64 bits, got $dataBits")
 
   val valid = Output(Bool())
   val addr = Output(UInt(addrBits.W))
   val ready = Input(Bool())
-  val rdata = Input(UInt(32.W))
+  val rdata = Input(UInt(dataBits.W))
   val fault = Input(Bool())
 }
 
