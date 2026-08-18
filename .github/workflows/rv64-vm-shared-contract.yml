@@ -1,0 +1,93 @@
+name: RV64 VM Shared Contract
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/config/PageTableGeometry.scala'
+      - 'src/main/scala/aethercore/core/PageTableWalker.scala'
+      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
+      - 'src/main/scala/aethercore/core/Sv32PageTableWalker.scala'
+      - 'src/main/scala/aethercore/core/Sv32Tlb.scala'
+      - 'src/test/scala/aethercore/RV64SharedVirtualMemorySpec.scala'
+      - 'src/test/scala/aethercore/Sv32PageTableWalkerSpec.scala'
+      - 'src/test/scala/aethercore/Sv32TlbSpec.scala'
+      - '.github/workflows/rv64-vm-shared-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-vm-shared-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Sv32 oracle + Sv39/Sv48 shared machinery
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 20
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala .github/workflows || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill
+          echo "exact_head=$actual"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run frozen Sv32 oracle and RV64 shared VM contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.Sv32PageTableWalkerSpec \
+            aethercore.Sv32TlbSpec \
+            aethercore.RV64SharedVirtualMemorySpec
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 shared virtual-memory contract'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- production capability advertisement: unchanged; RV64 paging remains fail-closed'
+            echo '- Sv32 oracle: historical walker and TLB specs run through the shared implementation'
+            echo '- Sv39: three-level walk, 64-bit PTE stride, canonical VA, 1 GiB gigapage and shared TLB reconstruction'
+            echo '- Sv48: four-level geometry, canonical VA, 512 GiB terapage and shared TLB reconstruction'
+            echo '- PTE correctness: non-leaf U/A/D are reserved and ancestor G is inherited by descendants'
+          } >> "$GITHUB_STEP_SUMMARY"
