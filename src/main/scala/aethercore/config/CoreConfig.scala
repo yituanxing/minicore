@@ -18,14 +18,14 @@ final case class IsaConfig(
     zExtensions.forall(name => name.startsWith("Z") && name.length > 1),
     s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
   )
-  require(
-    virtualMemoryModes.subsetOf(Set("Sv32")),
-    s"unsupported virtual-memory mode set: $virtualMemoryModes"
-  )
-  require(
-    !virtualMemoryModes.contains("Sv32") || (xlen == 32 && privilegeModes.contains('S')),
-    "Sv32 requires RV32 with Supervisor mode"
-  )
+
+  // Validate specification-level paging geometry independently from the set of
+  // modes already wired into the production core. This lets CSR/MMU building
+  // blocks be qualified ahead of capability advertisement without weakening the
+  // fail-closed CoreConfig boundary.
+  val pageTableGeometries: Set[PageTableGeometry] =
+    PageTableGeometry.validateArchitecturalModes(xlen, privilegeModes, virtualMemoryModes)
+
   require(
     !sstc || privilegeModes.contains('S'),
     "Sstc requires Supervisor mode"
@@ -48,10 +48,17 @@ final case class IsaConfig(
   val hasZifencei: Boolean = zExtensions.contains("Zifencei")
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
+  val hasPagedVirtualMemory: Boolean = pageTableGeometries.nonEmpty
   val hasSv32: Boolean = virtualMemoryModes.contains("Sv32")
+  val hasSv39: Boolean = virtualMemoryModes.contains("Sv39")
+  val hasSv48: Boolean = virtualMemoryModes.contains("Sv48")
   val hasSstc: Boolean = sstc
   val hasWordOps: Boolean = xlen == 64
   val hasPmp: Boolean = pmpEntries > 0
+
+  /** Deterministic satp mode order for hardware construction. */
+  val orderedPageTableGeometries: Seq[PageTableGeometry] =
+    pageTableGeometries.toSeq.sortBy(_.satpMode)
 
   val march: String = {
     val ordered = Seq('I', 'M', 'A', 'F', 'D', 'C')
@@ -93,6 +100,10 @@ object AetherCoreCapabilities {
   val instructionExtensions: Set[Char] = Set('I', 'M', 'A', 'C')
   val zExtensions: Set[String] = Set("Zicsr", "Zifencei")
   val privilegeModes: Set[Char] = Set('M', 'S', 'U')
+
+  // Keep production capability advertisement fail-closed until the RV64 satp,
+  // adapters and AetherCore integration slice is qualified end-to-end.
+  val virtualMemoryModes: Set[String] = Set("Sv32")
 }
 
 final case class CoreConfig(
@@ -115,12 +126,18 @@ final case class CoreConfig(
     isa.privilegeModes.subsetOf(AetherCoreCapabilities.privilegeModes),
     s"unsupported AetherCore privilege-mode set: ${isa.privilegeModes}"
   )
+  require(
+    isa.virtualMemoryModes.subsetOf(AetherCoreCapabilities.virtualMemoryModes),
+    s"virtual-memory modes ${isa.virtualMemoryModes} are not yet integrated into the production AetherCore"
+  )
   require(!isa.hasA || isa.xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!isa.hasC || isa.xlen == 32, "the current compressed frontend implements RV32C only")
-  require(
-    !isa.hasSv32 || platform.paddrBits >= 34,
-    s"Sv32 requires at least 34 physical address bits, got ${platform.paddrBits}"
-  )
+  isa.pageTableGeometries.foreach { geometry =>
+    require(
+      platform.paddrBits >= geometry.architecturalPhysicalAddressBits,
+      s"${geometry.name} requires at least ${geometry.architecturalPhysicalAddressBits} physical address bits, got ${platform.paddrBits}"
+    )
+  }
   require(
     !isa.hasPmp || isa.pmpEntries == 16,
     "the current AetherCore PMP implementation exposes the bounded standard PMP16 surface"
