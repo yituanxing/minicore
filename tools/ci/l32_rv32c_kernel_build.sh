@@ -26,7 +26,8 @@ FW_TEXT_START=0x80000000
 FW_PAYLOAD_OFFSET=0x400000
 FW_PAYLOAD_FDT_ADDR=0x87f00000
 BOOTARGS="earlycon=uart8250,mmio,0x10000000 console=ttyS0,115200"
-INPUT_KEY_FILE="${BUILD_DIR}/.aethercore-input-key"
+KERNEL_INPUT_KEY_FILE="${BUILD_DIR}/.aethercore-kernel-input-key"
+PAYLOAD_CACHE_FILE="${BUILD_DIR}/.aethercore-payload-cache"
 
 mkdir -p "${BUILD_DIR}" "${EVIDENCE_DIR}" "${LINUX_CACHE}" "${CACHE_ROOT}/opensbi"
 
@@ -149,25 +150,33 @@ require_c_arch() {
   fi
 }
 
+cache_field() {
+  local file="$1" key="$2"
+  sed -n "s/^${key}=//p" "${file}" 2>/dev/null | head -n 1
+}
+
 fetch_linux_source
 fetch_opensbi_source
 
-input_key="$({
+# Kernel ownership deliberately excludes the DTB implementation and bootargs.
+# A platform-description refactor must not destroy a qualified Linux OBJ tree.
+kernel_input_key="$({
   sha256sum \
     "${ROOT_DIR}/software/l32/manifest.env" \
     "${ROOT_DIR}/software/l32/linux-freeze.env" \
     "${ROOT_DIR}/tools/ci/l32_rv32c_kernel_build.sh" \
-    "${ROOT_DIR}/tools/ci/make_l32_dtb.py" \
     "${ROOT_DIR}/tools/ensure_l32_riscv32_linux_gcc.sh"
-  printf 'profile=%s\nlinux_isa=%s\ndtb_isa=%s\nfw_payload_fdt_addr=%s\nbootargs=%s\n' \
-    "${PROFILE}" "${LINUX_ISA}" "${DTB_ISA}" "${FW_PAYLOAD_FDT_ADDR}" "${BOOTARGS}"
+  printf 'profile=%s\nlinux_isa=%s\n' "${PROFILE}" "${LINUX_ISA}"
 } | sha256sum | awk '{print $1}')"
 
-if [[ ! -f "${INPUT_KEY_FILE}" ]] || [[ "$(cat "${INPUT_KEY_FILE}" 2>/dev/null)" != "${input_key}" ]]; then
-  rm -rf "${OBJ_DIR}" "${OPENSBI_OUT}" "${EVIDENCE_DIR}"
+if [[ ! -f "${KERNEL_INPUT_KEY_FILE}" ]] || \
+   [[ "$(cat "${KERNEL_INPUT_KEY_FILE}" 2>/dev/null)" != "${kernel_input_key}" ]]; then
+  echo "RV32C_LINUX_KERNEL_CACHE_MISS key=${kernel_input_key}"
+  rm -rf "${OBJ_DIR}" "${EVIDENCE_DIR}"
   mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}"
-  printf '%s\n' "${input_key}" > "${INPUT_KEY_FILE}"
+  printf '%s\n' "${kernel_input_key}" > "${KERNEL_INPUT_KEY_FILE}"
 else
+  echo "RV32C_LINUX_KERNEL_CACHE_HIT key=${kernel_input_key}"
   mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}"
 fi
 
@@ -237,6 +246,8 @@ linux_atomic_instructions="$(count_mnemonic_family "${VMLINUX}" '^(lr|sc|amo[a-z
 }
 cp "${OBJ_DIR}/.config" "${EVIDENCE_DIR}/linux.config"
 
+# DTB generation stays cheap and explicit. Payload reuse keys the generated
+# bytes, not the implementation file that happened to produce those bytes.
 python3 "${ROOT_DIR}/tools/ci/make_l32_dtb.py" \
   --isa "${DTB_ISA}" \
   --bootargs "${BOOTARGS}" \
@@ -245,24 +256,56 @@ python3 "${ROOT_DIR}/tools/ci/make_l32_dtb.py" \
 grep -qx "isa=${DTB_ISA}" "${EVIDENCE_DIR}/aethercore-rv32imac-dtb.txt"
 grep -Fxq "bootargs=${BOOTARGS}" "${EVIDENCE_DIR}/aethercore-rv32imac-dtb.txt"
 
-rm -rf "${OPENSBI_OUT}"
-mkdir -p "${OPENSBI_OUT}"
-make -C "${OPENSBI_SOURCE}" \
-  O="${OPENSBI_OUT}" \
-  PLATFORM="${L32_PLATFORM}" \
-  PLATFORM_RISCV_XLEN="${L32_XLEN}" \
-  PLATFORM_RISCV_ISA="${LINUX_ISA}" \
-  PLATFORM_RISCV_ABI="${OPENSBI_RV32_ABI}" \
-  FW_TEXT_START="${FW_TEXT_START}" \
-  FW_FDT_PATH="${DTB}" \
-  FW_PAYLOAD_PATH="${IMAGE}" \
-  FW_PAYLOAD_OFFSET="${FW_PAYLOAD_OFFSET}" \
-  FW_PAYLOAD_FDT_ADDR="${FW_PAYLOAD_FDT_ADDR}" \
-  CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
-  -j"${JOBS}" 2>&1 | tee "${BUILD_DIR}/opensbi-build.log"
+linux_image_sha256="$(sha256sum "${IMAGE}" | awk '{print $1}')"
+dtb_sha256="$(sha256sum "${DTB}" | awk '{print $1}')"
+payload_input_key="$({
+  sha256sum \
+    "${ROOT_DIR}/software/l32/manifest.env" \
+    "${ROOT_DIR}/software/l32/linux-freeze.env" \
+    "${ROOT_DIR}/tools/ci/l32_rv32c_kernel_build.sh" \
+    "${ROOT_DIR}/tools/ensure_l32_riscv32_linux_gcc.sh"
+  printf 'profile=%s\nlinux_isa=%s\ndtb_isa=%s\nplatform=%s\nxlen=%s\nabi=%s\n' \
+    "${PROFILE}" "${LINUX_ISA}" "${DTB_ISA}" "${L32_PLATFORM}" "${L32_XLEN}" "${OPENSBI_RV32_ABI}"
+  printf 'fw_text_start=%s\nfw_payload_offset=%s\nfw_payload_fdt_addr=%s\nbootargs=%s\n' \
+    "${FW_TEXT_START}" "${FW_PAYLOAD_OFFSET}" "${FW_PAYLOAD_FDT_ADDR}" "${BOOTARGS}"
+  printf 'linux_image_sha256=%s\ndtb_sha256=%s\n' "${linux_image_sha256}" "${dtb_sha256}"
+} | sha256sum | awk '{print $1}')"
 
 FW_ELF="${OPENSBI_OUT}/platform/${L32_PLATFORM}/firmware/fw_payload.elf"
 FW_BIN="${OPENSBI_OUT}/platform/${L32_PLATFORM}/firmware/fw_payload.bin"
+
+payload_cache_valid() {
+  [[ -s "${PAYLOAD_CACHE_FILE}" && -s "${FW_ELF}" && -s "${FW_BIN}" ]] || return 1
+  [[ "$(cache_field "${PAYLOAD_CACHE_FILE}" payload_input_key)" == "${payload_input_key}" ]] || return 1
+  [[ "$(cache_field "${PAYLOAD_CACHE_FILE}" linux_image_sha256)" == "${linux_image_sha256}" ]] || return 1
+  [[ "$(cache_field "${PAYLOAD_CACHE_FILE}" dtb_sha256)" == "${dtb_sha256}" ]] || return 1
+  [[ "$(cache_field "${PAYLOAD_CACHE_FILE}" fw_elf_sha256)" == "$(sha256sum "${FW_ELF}" | awk '{print $1}')" ]] || return 1
+  [[ "$(cache_field "${PAYLOAD_CACHE_FILE}" fw_bin_sha256)" == "$(sha256sum "${FW_BIN}" | awk '{print $1}')" ]] || return 1
+}
+
+payload_cache_hit=0
+if payload_cache_valid; then
+  payload_cache_hit=1
+  echo "RV32C_LINUX_PAYLOAD_CACHE_HIT key=${payload_input_key}"
+else
+  echo "RV32C_LINUX_PAYLOAD_CACHE_MISS key=${payload_input_key}"
+  rm -rf "${OPENSBI_OUT}"
+  mkdir -p "${OPENSBI_OUT}"
+  make -C "${OPENSBI_SOURCE}" \
+    O="${OPENSBI_OUT}" \
+    PLATFORM="${L32_PLATFORM}" \
+    PLATFORM_RISCV_XLEN="${L32_XLEN}" \
+    PLATFORM_RISCV_ISA="${LINUX_ISA}" \
+    PLATFORM_RISCV_ABI="${OPENSBI_RV32_ABI}" \
+    FW_TEXT_START="${FW_TEXT_START}" \
+    FW_FDT_PATH="${DTB}" \
+    FW_PAYLOAD_PATH="${IMAGE}" \
+    FW_PAYLOAD_OFFSET="${FW_PAYLOAD_OFFSET}" \
+    FW_PAYLOAD_FDT_ADDR="${FW_PAYLOAD_FDT_ADDR}" \
+    CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
+    -j"${JOBS}" 2>&1 | tee "${BUILD_DIR}/opensbi-build.log"
+fi
+
 [[ -s "${FW_ELF}" && -s "${FW_BIN}" ]] || {
   echo "ERROR: RV32IMAC OpenSBI+Linux payload was not produced" >&2
   exit 27
@@ -290,9 +333,24 @@ entry="$(${L32_CROSS_COMPILE_PREFIX}readelf -h "${FW_ELF}" | awk '/Entry point a
   exit 29
 }
 
+fw_elf_sha256="$(sha256sum "${FW_ELF}" | awk '{print $1}')"
+fw_bin_sha256="$(sha256sum "${FW_BIN}" | awk '{print $1}')"
+if [[ "${payload_cache_hit}" -eq 0 ]]; then
+  payload_tmp="${PAYLOAD_CACHE_FILE}.tmp.$$"
+  {
+    echo "payload_input_key=${payload_input_key}"
+    echo "linux_image_sha256=${linux_image_sha256}"
+    echo "dtb_sha256=${dtb_sha256}"
+    echo "fw_elf_sha256=${fw_elf_sha256}"
+    echo "fw_bin_sha256=${fw_bin_sha256}"
+  } > "${payload_tmp}"
+  mv "${payload_tmp}" "${PAYLOAD_CACHE_FILE}"
+fi
+
 sha256sum "${VMLINUX}" "${IMAGE}" "${FW_ELF}" "${FW_BIN}" "${DTB}" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
 
+combined_input_key="$(printf 'kernel=%s\npayload=%s\n' "${kernel_input_key}" "${payload_input_key}" | sha256sum | awk '{print $1}')"
 {
   echo "RV32C_LINUX_KERNEL_RESULT: status=PASS"
   echo "profile=${PROFILE}"
@@ -302,16 +360,18 @@ sha256sum "${VMLINUX}" "${IMAGE}" "${FW_ELF}" "${FW_BIN}" "${DTB}" \
   echo "linux_m_instructions=${linux_m_instructions}"
   echo "linux_atomic_instructions=${linux_atomic_instructions}"
   echo "linux_vmlinux_sha256=$(sha256sum "${VMLINUX}" | awk '{print $1}')"
-  echo "linux_image_sha256=$(sha256sum "${IMAGE}" | awk '{print $1}')"
+  echo "linux_image_sha256=${linux_image_sha256}"
   echo "opensbi_version=${OPENSBI_VERSION}"
   echo "opensbi_commit=${OPENSBI_COMMIT}"
   echo "opensbi_arch=${opensbi_arch}"
   echo "opensbi_compressed_instructions=${opensbi_compressed}"
-  echo "fw_payload_sha256=$(sha256sum "${FW_ELF}" | awk '{print $1}')"
-  echo "fw_payload_bin_sha256=$(sha256sum "${FW_BIN}" | awk '{print $1}')"
+  echo "fw_payload_sha256=${fw_elf_sha256}"
+  echo "fw_payload_bin_sha256=${fw_bin_sha256}"
   echo "dtb_isa=${DTB_ISA}"
-  echo "dtb_sha256=$(sha256sum "${DTB}" | awk '{print $1}')"
+  echo "dtb_sha256=${dtb_sha256}"
   echo "fw_payload_fdt_addr=${FW_PAYLOAD_FDT_ADDR}"
   echo "bootargs=${BOOTARGS}"
-  echo "input_key=${input_key}"
+  echo "kernel_input_key=${kernel_input_key}"
+  echo "payload_input_key=${payload_input_key}"
+  echo "input_key=${combined_input_key}"
 } | tee "${BUILD_DIR}/result.txt"
