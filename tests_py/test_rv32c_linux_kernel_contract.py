@@ -58,6 +58,33 @@ class Rv32CLinuxKernelContractTest(unittest.TestCase):
         self.assertIn('FW_PAYLOAD_FDT_ADDR="${FW_PAYLOAD_FDT_ADDR}"', text)
         self.assertIn('grep -Fxq "bootargs=${BOOTARGS}"', text)
 
+    def test_kernel_and_payload_cache_ownership_are_separate(self) -> None:
+        text = BUILD_SCRIPT.read_text()
+        self.assertIn('KERNEL_INPUT_KEY_FILE=', text)
+        self.assertIn('PAYLOAD_CACHE_FILE=', text)
+
+        kernel_key = text.split('kernel_input_key="$({', 1)[1].split('} | sha256sum', 1)[0]
+        self.assertIn('software/l32/manifest.env', kernel_key)
+        self.assertIn('software/l32/linux-freeze.env', kernel_key)
+        self.assertIn('l32_rv32c_kernel_build.sh', kernel_key)
+        self.assertNotIn('make_l32_dtb.py', kernel_key)
+        self.assertNotIn('DTB_ISA', kernel_key)
+        self.assertNotIn('BOOTARGS', kernel_key)
+
+        dtb_build = text.index('python3 "${ROOT_DIR}/tools/ci/make_l32_dtb.py"')
+        payload_key_pos = text.index('payload_input_key="$({')
+        self.assertLess(dtb_build, payload_key_pos)
+        payload_key = text[payload_key_pos:].split('} | sha256sum', 1)[0]
+        self.assertIn('linux_image_sha256=', payload_key)
+        self.assertIn('dtb_sha256=', payload_key)
+        self.assertNotIn('make_l32_dtb.py', payload_key)
+
+        self.assertIn('payload_cache_valid()', text)
+        self.assertIn('RV32C_LINUX_PAYLOAD_CACHE_HIT', text)
+        self.assertIn('RV32C_LINUX_PAYLOAD_CACHE_MISS', text)
+        self.assertIn('fw_elf_sha256=', text)
+        self.assertIn('fw_bin_sha256=', text)
+
     def test_kernel_probe_does_not_rewrite_historical_freeze(self) -> None:
         text = BUILD_SCRIPT.read_text()
         self.assertNotIn('L32_LINUX_VMLINUX_SHA256=', text)
