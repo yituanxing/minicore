@@ -8,7 +8,8 @@ class Rv32cParcelFetchContract(unittest.TestCase):
     def test_state_stays_above_mmu_and_pmp(self):
         core = (ROOT / "src/main/scala/aethercore/core/AetherCore.scala").read_text()
         parcel = (ROOT / "src/main/scala/aethercore/core/Rv32CParcelController.scala").read_text()
-        self.assertIn("fetch.io.virtualAddress := fetchVirtualAddress(31, 0)", core)
+        self.assertIn("fetch.io.virtualAddress := fetchVirtualAddress", core)
+        self.assertNotIn("fetch.io.virtualAddress := fetchVirtualAddress(31, 0)", core)
         self.assertIn("fetchVirtualAddress := parcel.io.parcelRequestAddress", core)
         self.assertIn("instructionPmp.io.bytes := instructionTransactionBytes", core)
         self.assertIn("io.instructionPc + 2.U", parcel)
