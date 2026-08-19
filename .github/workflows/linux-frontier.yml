@@ -1,0 +1,141 @@
+name: Linux Frontier First
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/**'
+      - 'build.mill'
+      - 'mill'
+      - 'Makefile.l32-linux-boot'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'tools/ci/l32_linux_frontier_input.sh'
+      - 'tools/ensure_verilator_5_024.sh'
+      - 'tests_py/test_linux_frontier_contract.py'
+      - '.github/workflows/linux-frontier.yml'
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: 'UART milestone to stop at'
+        required: false
+        default: 'Linux version 6.6.143'
+      max_cycles:
+        description: 'Maximum simulated cycles'
+        required: false
+        default: '50000000'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-frontier-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontier:
+    name: Frozen Linux first-failure frontier
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 15
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      FRONTIER_MILESTONE: ${{ inputs.milestone || 'Linux version 6.6.143' }}
+      FRONTIER_MAX_CYCLES: ${{ inputs.max_cycles || '50000000' }}
+
+    steps:
+      - name: Checkout exact head without deleting persistent qualified artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala sim tools tests_py .github/workflows || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill
+          echo "exact_head=$actual"
+
+      - name: Validate frontier contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_linux_frontier_input.sh
+          python3 -m unittest tests_py.test_linux_frontier_contract -v
+
+      - name: Require frozen qualified Linux payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_frontier_input.sh tools/ci/l32_linux_cache_key.sh
+          tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run Linux frontier and stop at first requested milestone
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/linux-frontier"
+          rm -rf "$build/rtl" "$build/obj" "$build/logs"
+          mkdir -p "$build"
+
+          set +e
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            FW_BIN="$GITHUB_WORKSPACE/build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin" \
+            JOBS="$(nproc)" \
+            MAX_CYCLES="$FRONTIER_MAX_CYCLES" \
+            MILESTONE="$FRONTIER_MILESTONE" \
+            PROGRESS_INTERVAL_CYCLES=0 \
+            run-local
+          rc=$?
+          set -e
+
+          if [[ "$rc" -ne 0 ]]; then
+            echo "LINUX_FRONTIER_RESULT: status=FAIL exact_head=$TARGET_SHA rc=$rc milestone=$FRONTIER_MILESTONE" >&2
+            if [[ -f "$build/logs/boot-probe.log" ]]; then
+              echo '--- Linux frontier tail ---' >&2
+              tail -n 200 "$build/logs/boot-probe.log" >&2
+            fi
+            exit "$rc"
+          fi
+
+          grep -q 'L32_RUNTIME_MILESTONE_PASS' "$build/logs/boot-probe.log"
+          echo "LINUX_FRONTIER_RESULT: status=PASS exact_head=$TARGET_SHA milestone=$FRONTIER_MILESTONE"
+
+      - name: Write frontier summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Linux frontier first'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo "- milestone: \`${FRONTIER_MILESTONE}\`"
+            echo "- max cycles: \`${FRONTIER_MAX_CYCLES}\`"
+            echo '- software: pre-qualified frozen payload only; this lane never builds Linux/OpenSBI/userspace'
+            echo '- success artifacts: none; the runner log is the discovery result'
+          } >> "$GITHUB_STEP_SUMMARY"
