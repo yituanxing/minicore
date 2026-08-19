@@ -33,6 +33,7 @@ class L32CiTopologyContractTest(unittest.TestCase):
             "sim/l32_opensbi_runtime.h",
             "sim/opensbi_boot_main.cpp",
             "sim/opensbi_forkserver_main.cpp",
+            "tools/ci/make_l32_dtb.py",
             "tests_py/test_l32_sim_runtime_contract.py",
             ".github/workflows/l32-busybox-build.yml",
         ):
@@ -44,7 +45,7 @@ class L32CiTopologyContractTest(unittest.TestCase):
         self.assertIn("Run cumulative Linux functional matrix from warm shell", text)
         self.assertIn("python3 tools/ci/l32_linux_runtime_suite.py verify-log", text)
 
-    def test_prefix_milestones_do_not_shadow_shared_hardware_changes(self):
+    def test_prefix_milestones_do_not_shadow_shared_platform_changes(self):
         prefix_workflows = (
             "l32-opensbi.yml",
             "l32-linux-handoff.yml",
@@ -63,6 +64,11 @@ class L32CiTopologyContractTest(unittest.TestCase):
                 self.assertFalse(
                     any(item.startswith("src/main/scala/aethercore/") for item in paths),
                     msg=f"{filename} must leave shared AetherCore hardware PR signoff to l32-busybox-build.yml",
+                )
+                self.assertNotIn(
+                    "tools/ci/make_l32_dtb.py",
+                    paths,
+                    msg=f"{filename} must leave shared DTB implementation PR signoff to the canonical deep runtime lane",
                 )
 
     def test_kernel_init_remains_historical_manual_self_validation(self):
