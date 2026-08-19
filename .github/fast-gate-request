@@ -1,0 +1,5 @@
+qualification=linux-frontier-first-policy-v1
+scope=cross-xlen-vm-privilege-interrupt-freertos
+reason=prove-explicit-milestone-request-runs-the-complete-fast-pack
+frontier_owner=.github/workflows/linux-frontier.yml
+freeze_owner=.github/workflows/full-gate.yml

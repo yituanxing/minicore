@@ -2,6 +2,9 @@ name: AetherCore Fast Gate
 
 on:
   pull_request:
+    paths:
+      - .github/fast-gate-request
+      - .github/workflows/fast-gate.yml
   workflow_dispatch:
 
 permissions:
@@ -48,7 +51,11 @@ jobs:
           run_smode_v1=false
           run_freertos=false
 
-          if grep -Eq '^(src/main/scala/|src/test/scala/|build\.mill$|mill$)' <<<"$changed"; then
+          # Fast Gate is a milestone regression pack. Normal hardware PRs are
+          # owned by Linux Frontier First; an explicit milestone request or a
+          # manual dispatch deliberately runs the complete fast pack.
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] || \
+             grep -Eq '^\.github/fast-gate-request$' <<<"$changed"; then
             run_chisel=true
             run_smode_v1=true
             run_freertos=true
@@ -314,5 +321,6 @@ jobs:
             echo '- the historical FreeRTOS exact WFI DiffTest runs at stall=0 and stall=5 with negative injection'
             echo '- incremental outputs are isolated per pull request under ~/.cache/aethercore/fast-gate'
             echo '- source contracts are enumerated from the current Git tree and stale untracked Scala sources are removed selectively, so persistent-runner residue cannot become qualification input'
-            echo '- the consolidated Full Gate remains milestone-triggered through .github/full-gate-request'
+            echo '- normal hardware PRs are owned by Linux Frontier First; this Fast Gate runs only for explicit milestone requests, manual dispatch, or self-modification'
+            echo '- the consolidated Full Gate remains freeze-triggered through .github/full-gate-request'
           } >> "$GITHUB_STEP_SUMMARY"
