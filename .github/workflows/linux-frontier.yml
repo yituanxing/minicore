@@ -76,17 +76,11 @@ jobs:
           chmod +x ./mill
           echo "exact_head=$actual"
 
-      - name: Validate frontier contracts
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash -n tools/ci/l32_linux_frontier_input.sh
-          python3 -m unittest tests_py.test_linux_frontier_contract -v
-
       - name: Require frozen qualified Linux payload
         shell: bash
         run: |
           set -euo pipefail
+          bash -n tools/ci/l32_linux_frontier_input.sh
           chmod +x tools/ci/l32_linux_frontier_input.sh tools/ci/l32_linux_cache_key.sh
           tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
 
@@ -126,6 +120,12 @@ jobs:
           grep -q 'L32_RUNTIME_MILESTONE_PASS' "$build/logs/boot-probe.log"
           echo "LINUX_FRONTIER_RESULT: status=PASS exact_head=$TARGET_SHA milestone=$FRONTIER_MILESTONE"
 
+      - name: Validate frontier contracts after Linux passes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_linux_frontier_contract -v
+
       - name: Write frontier summary
         if: always()
         shell: bash
@@ -136,6 +136,7 @@ jobs:
             echo "- exact head: \`${TARGET_SHA}\`"
             echo "- milestone: \`${FRONTIER_MILESTONE}\`"
             echo "- max cycles: \`${FRONTIER_MAX_CYCLES}\`"
+            echo '- ordering: frozen-input identity -> Linux frontier -> frontier source contract'
             echo '- software: pre-qualified frozen payload only; this lane never builds Linux/OpenSBI/userspace'
             echo '- success artifacts: none; the runner log is the discovery result'
           } >> "$GITHUB_STEP_SUMMARY"
