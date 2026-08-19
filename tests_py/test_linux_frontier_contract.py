@@ -25,9 +25,19 @@ class LinuxFrontierContractTest(unittest.TestCase):
         regression = text.index("Validate frontier contracts after Linux passes")
         self.assertLess(linux, regression)
 
+    def test_frontier_uses_the_deep_frozen_rv32imac_profile(self) -> None:
+        text = WORKFLOW.read_text()
+        self.assertIn("AETHERCORE_L32_USERSPACE_PROFILE: 'rv32imac'", text)
+        self.assertIn("TOP=AetherCoreOpenSbiCSimTop", text)
+        self.assertIn("ELABORATE_MAIN=aethercore.ElaborateOpenSbiC", text)
+        self.assertIn("-DAETHERCORE_L32_C_TOP", text)
+        self.assertIn("REQUIRE_LAYERED_COMPRESSED=1", text)
+        self.assertIn("build/l32-busybox-shell-boot-rv32imac/opensbi/platform/generic/firmware/fw_payload.bin", text)
+        self.assertIn("L32_LAYERED_COMPRESSED_PASS", text)
+
     def test_frontier_consumes_only_prequalified_software(self) -> None:
         text = WORKFLOW.read_text()
-        self.assertIn("Require frozen qualified Linux payload", text)
+        self.assertIn("Require frozen qualified RV32IMAC Linux payload", text)
         self.assertIn("tools/ci/l32_linux_frontier_input.sh", text)
         self.assertNotIn("l32_linux_build.sh", text)
         self.assertNotIn("l32_linux_payload_build.sh", text)
@@ -35,17 +45,18 @@ class LinuxFrontierContractTest(unittest.TestCase):
         self.assertNotIn("l32_rv32c_kernel_build.sh", text)
         self.assertNotIn("actions/upload-artifact", text)
 
-    def test_frontier_input_is_fail_closed_on_frozen_artifact_identity(self) -> None:
+    def test_frontier_input_is_fail_closed_on_deep_freeze_identity(self) -> None:
         text = INPUT_CHECK.read_text()
-        self.assertIn('l32_linux_cache_key.sh" check', text)
+        self.assertIn("AETHERCORE_L32_USERSPACE_PROFILE", text)
+        self.assertIn("frontier-profile-must-be-rv32imac", text)
+        self.assertIn("l32_busybox_runtime_freeze.sh", text)
+        self.assertIn("L32_BUSYBOX_RUNTIME_FREEZE: status=PASS", text)
+        self.assertIn("profile=rv32imac", text)
+        self.assertIn("require_c=1", text)
+        self.assertIn("firmware-sha", text)
+        self.assertIn("linux-sha", text)
         self.assertIn("L32_LINUX_FRONTIER_INPUT: status=MISS", text)
         self.assertIn("L32_LINUX_FRONTIER_INPUT: status=PASS", text)
-        self.assertIn("payload-linux-sha-mismatch", text)
-        self.assertIn("sha-mismatch:", text)
-        self.assertIn("entry=0x80000000", text)
-        self.assertIn("next_addr=0x80400000", text)
-        self.assertIn("next_mode=S-mode", text)
-        self.assertIn("fdt_addr=0x87f00000", text)
 
     def test_success_path_keeps_evidence_in_logs_not_artifacts(self) -> None:
         text = WORKFLOW.read_text()
