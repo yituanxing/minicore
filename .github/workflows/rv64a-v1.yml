@@ -12,6 +12,7 @@ on:
       - 'src/test/scala/aethercore/CoreConfigSpec.scala'
       - 'src/test/scala/aethercore/DecoderSpec.scala'
       - 'src/test/scala/aethercore/RV32AtomicCoreSpec.scala'
+      - 'src/test/scala/aethercore/Sv32AtomicScSpec.scala'
       - 'src/test/scala/aethercore/RV64AtomicCoreSpec.scala'
       - 'src/test/scala/aethercore/RV64AtomicDwordOpsSpec.scala'
       - 'src/test/scala/aethercore/RV64AtomicMisaSpec.scala'
@@ -90,6 +91,7 @@ jobs:
             aethercore.CoreConfigSpec \
             aethercore.DecoderSpec \
             aethercore.RV32AtomicCoreSpec \
+            aethercore.Sv32AtomicScSpec \
             aethercore.RV64AtomicCoreSpec \
             aethercore.RV64AtomicDwordOpsSpec \
             aethercore.RV64AtomicMisaSpec
@@ -122,6 +124,7 @@ jobs:
             echo '- AMO.D execution: Swap/Add/Xor/And/Or/Min/Max/Minu/Maxu all run through the shared RMW state machine with full 64-bit write masks'
             echo '- comparison semantics: signed/unsigned W min/max consume the low 32-bit operand with architectural sign/zero interpretation'
             echo '- bounded reservation policy: this implementation pairs the reservation with address plus W/D access width, so cross-width SC conservatively fails without a data write'
+            echo '- failed-SC VM boundary: translation and protection are still checked, while a reservation-miss SC is consumed before the final physical data bus and cannot appear as a synthetic load'
             echo '- real executable: M→S→U through three-level Sv39; U-mode runs LR.W/LR.D/SC.D/AMOADD.D/AMOMAX.W/AMOMAXU.W behind PMP16'
             echo '- runner contract: real 8-byte PTW traffic is required; stall=0 and stall=3 must both self-check exit 0'
           } >> "$GITHUB_STEP_SUMMARY"
