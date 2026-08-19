@@ -1,0 +1,164 @@
+name: Linux Frontier First
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/**'
+      - 'build.mill'
+      - 'mill'
+      - 'Makefile.l32-linux-boot'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'validation/linux-frontier-rv32imac.env'
+      - 'tools/ci/l32_linux_frontier_artifact.sh'
+      - 'tools/ci/l32_linux_frontier_input.sh'
+      - 'tools/ci/l32_userspace_profile.sh'
+      - 'tools/ensure_verilator_5_024.sh'
+      - 'tests_py/test_linux_frontier_contract.py'
+      - '.github/workflows/linux-frontier.yml'
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: 'UART milestone to stop at'
+        required: false
+        default: 'Linux version 6.6.143'
+      max_cycles:
+        description: 'Maximum simulated cycles'
+        required: false
+        default: '50000000'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-frontier-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontier:
+    name: Frozen RV32IMAC Linux first-failure frontier
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 15
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_L32_USERSPACE_PROFILE: 'rv32imac'
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      FRONTIER_MILESTONE: ${{ inputs.milestone || 'Linux version 6.6.143' }}
+      FRONTIER_MAX_CYCLES: ${{ inputs.max_cycles || '50000000' }}
+
+    steps:
+      - name: Checkout exact head without deleting persistent qualified artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala sim tools tests_py .github/workflows || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill
+          echo "exact_head=$actual"
+
+      - name: Require frozen qualified RV32IMAC Linux payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          bash -n tools/ci/l32_linux_frontier_artifact.sh
+          bash -n tools/ci/l32_linux_frontier_input.sh
+          bash tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
+          grep -qx 'profile=rv32imac' build/l32-linux-frontier-input.txt
+          grep -qx 'require_c=1' build/l32-linux-frontier-input.txt
+          firmware_bin="$(sed -n 's/^firmware_bin=//p' build/l32-linux-frontier-input.txt | head -n 1)"
+          [[ -n "$firmware_bin" && -s "$firmware_bin" ]]
+          echo "qualified_firmware=$firmware_bin"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run Linux frontier and stop at first requested milestone
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/linux-frontier-rv32imac"
+          input="$GITHUB_WORKSPACE/build/l32-linux-frontier-input.txt"
+          firmware_bin="$(sed -n 's/^firmware_bin=//p' "$input" | head -n 1)"
+          [[ -n "$firmware_bin" && -s "$firmware_bin" ]] || {
+            echo 'ERROR: resolved qualified frontier firmware is missing' >&2
+            exit 42
+          }
+          rm -rf "$build/rtl" "$build/obj" "$build/logs"
+          mkdir -p "$build"
+
+          set +e
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            TOP=AetherCoreOpenSbiCSimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiC \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_L32_C_TOP" \
+            FW_BIN="$firmware_bin" \
+            JOBS="$(nproc)" \
+            MAX_CYCLES="$FRONTIER_MAX_CYCLES" \
+            MILESTONE="$FRONTIER_MILESTONE" \
+            REQUIRE_LAYERED_COMPRESSED=1 \
+            PROGRESS_INTERVAL_CYCLES=0 \
+            run-local
+          rc=$?
+          set -e
+
+          if [[ "$rc" -ne 0 ]]; then
+            echo "LINUX_FRONTIER_RESULT: status=FAIL exact_head=$TARGET_SHA rc=$rc profile=rv32imac milestone=$FRONTIER_MILESTONE" >&2
+            if [[ -f "$build/logs/boot-probe.log" ]]; then
+              echo '--- Linux frontier tail ---' >&2
+              tail -n 200 "$build/logs/boot-probe.log" >&2
+            fi
+            exit "$rc"
+          fi
+
+          grep -q 'L32_RUNTIME_MILESTONE_PASS' "$build/logs/boot-probe.log"
+          grep -q 'L32_LAYERED_COMPRESSED_PASS' "$build/logs/boot-probe.log"
+          echo "LINUX_FRONTIER_RESULT: status=PASS exact_head=$TARGET_SHA profile=rv32imac milestone=$FRONTIER_MILESTONE"
+
+      - name: Validate frontier contracts after Linux passes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_linux_frontier_contract -v
+
+      - name: Write frontier summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Linux frontier first'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- profile: `rv32imac` with real I/M/A/C + Sv32 + PMP + M/S/U Linux pressure'
+            echo "- milestone: \`${FRONTIER_MILESTONE}\`"
+            echo "- max cycles: \`${FRONTIER_MAX_CYCLES}\`"
+            echo '- ordering: repo freeze + persistent qualified payload -> Linux frontier -> frontier source contract'
+            echo '- software: restore-only qualified Linux+BusyBox+OpenSBI payload; this lane never builds software on cache miss'
+            echo '- success artifacts: none; the runner log is the discovery result'
+          } >> "$GITHUB_STEP_SUMMARY"
