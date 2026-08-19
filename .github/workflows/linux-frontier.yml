@@ -10,10 +10,12 @@ on:
       - 'sim/l32_opensbi_runtime.h'
       - 'sim/opensbi_boot_main.cpp'
       - 'tools/ci/l32_linux_frontier_input.sh'
+      - 'tools/ci/l32_linux_frontier_watchdog.py'
       - 'tools/ci/l32_busybox_runtime_freeze.sh'
       - 'tools/ci/l32_userspace_profile.sh'
       - 'tools/ensure_verilator_5_024.sh'
       - 'tests_py/test_linux_frontier_contract.py'
+      - 'tests_py/test_linux_frontier_watchdog.py'
       - '.github/workflows/linux-frontier.yml'
   workflow_dispatch:
     inputs:
@@ -25,6 +27,10 @@ on:
         description: 'Maximum simulated cycles'
         required: false
         default: '50000000'
+      stall_cycles:
+        description: 'Guest cycles without commit/UART progress before fail-fast; 0 disables'
+        required: false
+        default: '10000000'
 
 permissions:
   contents: read
@@ -45,6 +51,7 @@ jobs:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       FRONTIER_MILESTONE: ${{ inputs.milestone || 'Linux version 6.6.143' }}
       FRONTIER_MAX_CYCLES: ${{ inputs.max_cycles || '50000000' }}
+      FRONTIER_STALL_CYCLES: ${{ inputs.stall_cycles || '10000000' }}
 
     steps:
       - name: Checkout exact head without deleting persistent qualified artifacts
@@ -84,6 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n tools/ci/l32_linux_frontier_input.sh
+          python3 -m py_compile tools/ci/l32_linux_frontier_watchdog.py
           bash tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
           grep -qx 'profile=rv32imac' build/l32-linux-frontier-input.txt
           grep -qx 'require_c=1' build/l32-linux-frontier-input.txt
@@ -92,7 +100,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run Linux frontier and stop at first requested milestone
+      - name: Run Linux frontier and fail fast on guest stall
         shell: bash
         run: |
           set -euo pipefail
@@ -101,18 +109,20 @@ jobs:
           mkdir -p "$build"
 
           set +e
-          make -f Makefile.l32-linux-boot \
-            BUILD_DIR="$build" \
-            TOP=AetherCoreOpenSbiCSimTop \
-            ELABORATE_MAIN=aethercore.ElaborateOpenSbiC \
-            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_L32_C_TOP" \
-            FW_BIN="$GITHUB_WORKSPACE/build/l32-busybox-shell-boot-rv32imac/opensbi/platform/generic/firmware/fw_payload.bin" \
-            JOBS="$(nproc)" \
-            MAX_CYCLES="$FRONTIER_MAX_CYCLES" \
-            MILESTONE="$FRONTIER_MILESTONE" \
-            REQUIRE_LAYERED_COMPRESSED=1 \
-            PROGRESS_INTERVAL_CYCLES=0 \
-            run-local
+          python3 tools/ci/l32_linux_frontier_watchdog.py \
+            --stall-cycles "$FRONTIER_STALL_CYCLES" -- \
+            make -f Makefile.l32-linux-boot \
+              BUILD_DIR="$build" \
+              TOP=AetherCoreOpenSbiCSimTop \
+              ELABORATE_MAIN=aethercore.ElaborateOpenSbiC \
+              SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_L32_C_TOP" \
+              FW_BIN="$GITHUB_WORKSPACE/build/l32-busybox-shell-boot-rv32imac/opensbi/platform/generic/firmware/fw_payload.bin" \
+              JOBS="$(nproc)" \
+              MAX_CYCLES="$FRONTIER_MAX_CYCLES" \
+              MILESTONE="$FRONTIER_MILESTONE" \
+              REQUIRE_LAYERED_COMPRESSED=1 \
+              PROGRESS_INTERVAL_CYCLES=1000000 \
+              run-local
           rc=$?
           set -e
 
@@ -133,7 +143,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest tests_py.test_linux_frontier_contract -v
+          python3 -m unittest \
+            tests_py.test_linux_frontier_contract \
+            tests_py.test_linux_frontier_watchdog -v
 
       - name: Write frontier summary
         if: always()
@@ -146,6 +158,7 @@ jobs:
             echo '- profile: `rv32imac` with real I/M/A/C + Sv32 + PMP + M/S/U Linux pressure'
             echo "- milestone: \`${FRONTIER_MILESTONE}\`"
             echo "- max cycles: \`${FRONTIER_MAX_CYCLES}\`"
+            echo "- stall fail-fast: \`${FRONTIER_STALL_CYCLES}\` guest cycles without commit/UART-visible progress"
             echo '- ordering: frozen-input identity -> Linux frontier -> frontier source contract'
             echo '- software: pre-qualified frozen Linux+BusyBox/OpenSBI payload only; this lane never builds Linux/OpenSBI/userspace'
             echo '- success artifacts: none; the runner log is the discovery result'
