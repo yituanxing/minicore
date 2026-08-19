@@ -231,16 +231,29 @@ user_entry:
   li t2, 0x11223344ffffffff
   bne t1, t2, user_fail
 
-  // A reservation includes the architectural access width. LR.W followed by
-  // SC.D at the same address must fail without touching the upper word.
+  // OpenSBI-style RV64 word locks need a matching LR.W/SC.W execution path,
+  // not only decoder coverage inherited from the RV32A oracle.
   lr.w.aq t3, (t0)
   li t2, -1
+  bne t3, t2, user_fail
+  li t4, 2
+  sc.w.rl t5, t4, (t0)
+  bnez t5, user_fail
+  ld t1, 0(t0)
+  li t2, 0x1122334400000002
+  bne t1, t2, user_fail
+
+  // This implementation's bounded reservation policy pairs a reservation
+  // with address plus access width. LR.W followed by SC.D therefore fails
+  // without touching either word of the translated data location.
+  lr.w.aq t3, (t0)
+  li t2, 2
   bne t3, t2, user_fail
   li t4, 0
   sc.d.rl t5, t4, (t0)
   beqz t5, user_fail
   ld t1, 0(t0)
-  li t2, 0x11223344ffffffff
+  li t2, 0x1122334400000002
   bne t1, t2, user_fail
 
   // A matching full-width reservation must then succeed.
