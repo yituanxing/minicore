@@ -116,8 +116,10 @@ def adapt(source: str, trace: bool) -> str:
     text = replace_once(
         text,
         "      if (!top.reset) {\n"
+        "        if (ptwAccepted) ++ptwReads;\n\n"
         "        if (top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault) {\n",
         "      if (!top.reset) {\n"
+        "        if (ptwAccepted) ++ptwReads;\n\n"
         "        if (options.selfCheckExit && top.io_halted) {\n"
         "          ++wfiSleepCycles;\n"
         "          if (top.io_rxReady) ++uartRxReadySleepCycles;\n"
