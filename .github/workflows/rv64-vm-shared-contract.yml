@@ -21,6 +21,9 @@ on:
       - 'src/main/scala/aethercore/core/Sv32InstructionFetchAdapter.scala'
       - 'src/main/scala/aethercore/core/Sv32DataPathAdapter.scala'
       - 'src/main/scala/aethercore/core/Sv32PtwArbiter.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreSimTop.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreRV64IMSv39PmpSimTop.scala'
+      - 'src/main/scala/aethercore/ElaborateRV64IMSv39Pmp.scala'
       - 'src/test/scala/aethercore/RV64SharedVirtualMemorySpec.scala'
       - 'src/test/scala/aethercore/RV64Sv39CoreSpec.scala'
       - 'src/test/scala/aethercore/TranslationUnitSpec.scala'
@@ -88,6 +91,18 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
+      - name: Elaborate production RV64 Sv39 simulation top
+        shell: bash
+        run: |
+          set -euo pipefail
+          rtl_dir="$HOME/.cache/aethercore/rv64-sv39-elaboration/$TARGET_SHA"
+          rm -rf "$rtl_dir"
+          ./mill aethercore.runMain aethercore.ElaborateRV64IMSv39Pmp --target-dir "$rtl_dir"
+          test -n "$(find "$rtl_dir" -maxdepth 1 -type f -name '*.sv' -print -quit)" || {
+            echo 'ERROR: RV64 Sv39 production top emitted no SystemVerilog' >&2
+            exit 1
+          }
+
       - name: Run frozen Sv32 oracle and RV64 shared plus production Sv39 contracts
         shell: bash
         run: |
@@ -113,6 +128,7 @@ jobs:
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
             echo '- production profile: RV64IM + Zicsr + M/S/U + Sv39 + PMP16 over PA56'
+            echo '- simulation composition: one shared AetherCoreSimTop exposes geometry-width PTW traffic; the RV64 Sv39 top is only a profile wrapper'
             echo '- Sv32 oracle: historical walker, TLB, translation unit, adapters and core-facing VM specs still execute through the shared machinery'
             echo '- Sv39 shared machinery: three-level walk, 64-bit PTE stride, shared TLB/translation unit, instruction adapter, data adapter and PTW arbitration'
             echo '- Sv39 production core: M-mode programs PMP16 and satp, MRET enters an S-mode VA above 4 GiB, then 64-bit LD/SD execute through a second translated VA above 4 GiB'
