@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-FREEZE_MANIFEST="${ROOT_DIR}/software/l32/linux-frontier-freeze.env"
+FREEZE_MANIFEST="${ROOT_DIR}/validation/linux-frontier-rv32imac.env"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
 
 fail() {
