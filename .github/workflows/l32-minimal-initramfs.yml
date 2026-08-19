@@ -7,7 +7,6 @@ on:
       - Makefile.l32-linux-boot
       - sim/opensbi_boot_main.cpp
       - software/l32_userspace/**
-      - tools/ci/make_l32_dtb.py
       - tools/ci/l32_minimal_initramfs_build.sh
       - tools/ci/l32_minimal_init_payload_build.sh
       - tools/ci/l32_software_artifact_cache.sh
