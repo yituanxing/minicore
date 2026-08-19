@@ -68,9 +68,9 @@ publish() {
   grep -qx 'profile=rv32imac' "${runtime_freeze}" || fail "producer-profile"
   grep -qx 'isa=rv32imac_zicsr_zifencei' "${runtime_freeze}" || fail "producer-isa"
   grep -qx 'require_c=1' "${runtime_freeze}" || fail "producer-compressed"
-  grep -qx 'L32_FORKSERVER_RESULT cases=25 passed=25 failed=0 boot-cycles='"$(sed -n 's/^L32_FORKSERVER_RESULT cases=25 passed=25 failed=0 boot-cycles=//p' "${forkserver_log}" | tail -n 1)" "${forkserver_log}" \
+  grep -Eq '^L32_FORKSERVER_RESULT cases=25 passed=25 failed=0 boot-cycles=[0-9]+$' "${forkserver_log}" \
     || fail "producer-25-case-result"
-  grep -qx 'L32_FORKSERVER_PASS cases=25 boot-cycles='"$(sed -n 's/^L32_FORKSERVER_PASS cases=25 boot-cycles=//p' "${forkserver_log}" | tail -n 1)" "${forkserver_log}" \
+  grep -Eq '^L32_FORKSERVER_PASS cases=25 boot-cycles=[0-9]+$' "${forkserver_log}" \
     || fail "producer-25-case-pass"
 
   local producer_linux producer_firmware source_firmware
@@ -83,11 +83,17 @@ publish() {
   [[ "$(sha256sum "${source_firmware}" | awk '{print $1}')" == "${firmware_sha}" ]] \
     || fail "producer-firmware-bytes"
 
+  if verify_cache; then
+    echo "L32_LINUX_FRONTIER_ARTIFACT_PUBLISH: status=PASS cache=${CACHE_DIR} reused=1"
+    print_resolved
+    return 0
+  fi
+
   local parent tmpdir
   parent="$(dirname "${CACHE_DIR}")"
   mkdir -p "${parent}"
   tmpdir="$(mktemp -d "${parent}/.${firmware_sha}.tmp.XXXXXX")"
-  trap 'rm -rf "${tmpdir}"' RETURN
+  trap 'rm -rf "${tmpdir}"' EXIT
   install -m 0644 "${source_firmware}" "${tmpdir}/fw_payload.bin"
   [[ "$(sha256sum "${tmpdir}/fw_payload.bin" | awk '{print $1}')" == "${firmware_sha}" ]] \
     || fail "publish-copy-sha"
@@ -103,9 +109,9 @@ publish() {
 
   rm -rf "${CACHE_DIR}"
   mv "${tmpdir}" "${CACHE_DIR}"
-  trap - RETURN
+  trap - EXIT
   verify_cache || fail "published-cache-verification"
-  echo "L32_LINUX_FRONTIER_ARTIFACT_PUBLISH: status=PASS cache=${CACHE_DIR}"
+  echo "L32_LINUX_FRONTIER_ARTIFACT_PUBLISH: status=PASS cache=${CACHE_DIR} reused=0"
   print_resolved
 }
 
