@@ -20,7 +20,7 @@ permissions:
 jobs:
   apply:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 5
     steps:
       - name: Checkout mutable head branch without external actions
