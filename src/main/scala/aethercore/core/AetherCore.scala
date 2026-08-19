@@ -83,6 +83,9 @@ class AetherCore(
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val vmGeometry = config.isa.orderedPageTableGeometries.headOption
+  private val vmPteBits = vmGeometry.map(_.pteBits).getOrElse(32)
+  private val vmPteBytes = vmGeometry.map(_.pteBytes).getOrElse(4)
   private val supervisorTimerCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorTimerInterrupt)
   private val machineTimerCause =
@@ -94,14 +97,21 @@ class AetherCore(
 
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
   require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
-  require(!config.isa.hasSv32 || paddrBits >= 34, "Sv32 requires a PA width of at least 34 bits")
+  vmGeometry.foreach { geometry =>
+    require(
+      paddrBits >= geometry.architecturalPhysicalAddressBits,
+      s"${geometry.name} requires PA>=${geometry.architecturalPhysicalAddressBits}, got $paddrBits"
+    )
+  }
   require(!withSupervisorExternalInterrupt || config.isa.hasS,
     "supervisor external interrupt requires an S-mode profile")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
     val dmem = new DataBusIO(paddrBits, busDataBits)
-    val ptw = if (config.isa.hasSv32) Some(new PageTableReadBusIO(paddrBits)) else None
+    val ptw = if (config.isa.hasPagedVirtualMemory)
+      Some(new PageTableReadBusIO(paddrBits, vmPteBits))
+    else None
     val timerInterrupt = Input(Bool())
     val time = if (config.isa.hasSstc) Some(Input(UInt(64.W))) else None
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
@@ -133,15 +143,17 @@ class AetherCore(
   ))
   val instructionPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
   val dataPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
-  val dataVm = if (config.isa.hasSv32) Some(Module(new Sv32DataPathAdapter(paddrBits))) else None
-  val fetchVm = if (config.isa.hasSv32) Some(Module(new Sv32InstructionFetchAdapter(paddrBits))) else None
+  val dataVm = vmGeometry.map(geometry => Module(new DataPathAdapter(geometry, paddrBits)))
+  val fetchVm = vmGeometry.map(geometry => Module(new InstructionFetchAdapter(geometry, paddrBits)))
   val compressedFetch = if (config.isa.hasC) Some(Module(new Rv32CParcelController(xlen))) else None
-  val ptwArbiter = if (config.isa.hasSv32) Some(Module(new Sv32PtwArbiter(paddrBits))) else None
-  val ptwPmp = if (config.isa.hasSv32) Some(Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))) else None
+  val ptwArbiter = vmGeometry.map(geometry => Module(new PtwArbiter(geometry, paddrBits)))
+  val ptwPmp = if (config.isa.hasPagedVirtualMemory)
+    Some(Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits)))
+  else None
 
-  val ifIdSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(ifId.inst) else false.B
-  val idExSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(idEx.inst) else false.B
-  val memWbSfenceVma = if (config.isa.hasSv32) Sv32SystemInstruction.isSfenceVma(memWb.inst) else false.B
+  val ifIdSfenceVma = if (config.isa.hasPagedVirtualMemory) SystemInstruction.isSfenceVma(ifId.inst) else false.B
+  val idExSfenceVma = if (config.isa.hasPagedVirtualMemory) SystemInstruction.isSfenceVma(idEx.inst) else false.B
+  val memWbSfenceVma = if (config.isa.hasPagedVirtualMemory) SystemInstruction.isSfenceVma(memWb.inst) else false.B
 
   val takingTrap = memWb.valid && memWb.trap.valid
   val takingXret = memWb.valid && memWb.xret =/= XRetOp.None && !memWb.trap.valid
@@ -193,15 +205,15 @@ class AetherCore(
   val dataPteValid = WireDefault(false.B)
   val dataPteAddress = WireDefault(0.U(paddrBits.W))
   val dataPteReady = WireDefault(false.B)
-  val dataPteRdata = WireDefault(0.U(32.W))
+  val dataPteRdata = WireDefault(0.U(vmPteBits.W))
   val dataPteFault = WireDefault(false.B)
 
-  if (config.isa.hasSv32) {
+  if (config.isa.hasPagedVirtualMemory) {
     val fetch = fetchVm.get
     fetch.io.requestValid := !fetchKill
     fetch.io.kill := fetchKill
     fetch.io.flush := takingSfence
-    fetch.io.virtualAddress := fetchVirtualAddress(31, 0)
+    fetch.io.virtualAddress := fetchVirtualAddress
     fetch.io.privilege := csrFile.io.currentPrivilege
     fetch.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
     fetch.io.satpRootPpn := csrFile.io.satpRootPpn
@@ -224,7 +236,7 @@ class AetherCore(
     val pmp = ptwPmp.get
     pmp.io.privilege := PrivilegeMode.Supervisor.U
     pmp.io.address := arbiter.io.memoryAddress
-    pmp.io.bytes := 4.U
+    pmp.io.bytes := vmPteBytes.U
     pmp.io.write := false.B
     pmp.io.execute := false.B
     pmp.io.config := csrFile.io.pmpConfig
@@ -264,7 +276,7 @@ class AetherCore(
     fetchFaultAddress := parcel.io.faultAddress
     fetchInstructionPageFault := parcel.io.pageFault
     fetchInstructionAccessFault := parcel.io.accessFault
-    if (config.isa.hasSv32) {
+    if (config.isa.hasPagedVirtualMemory) {
       fetchResponseReady := parcel.io.parcelResponseReady
     }
   }
@@ -562,7 +574,7 @@ class AetherCore(
 
   val dataAddressRangeFault = WireDefault(false.B)
   val dataPmpFault = WireDefault(false.B)
-  val atomicScBusRequest = if (config.isa.hasSv32) atomicSc else atomicSc && scReservationMatch
+  val atomicScBusRequest = if (config.isa.hasPagedVirtualMemory) atomicSc else atomicSc && scReservationMatch
   val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
   val rawDataRequest = alignedDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
   val dataBusWrite = Mux(
@@ -571,7 +583,7 @@ class AetherCore(
     exMem.ctrl.memWrite
   )
 
-  val vmCsrHazard = if (config.isa.hasSv32) {
+  val vmCsrHazard = if (config.isa.hasPagedVirtualMemory) {
     memWb.valid && memWb.csrWrite && !memWb.trap.valid && (
       memWb.csrAddr === SupervisorCsrAddress.Satp.U ||
         memWb.csrAddr === SupervisorCsrAddress.Sstatus.U ||
@@ -583,16 +595,16 @@ class AetherCore(
   val vmPageFault = WireDefault(false.B)
   val vmAccessFault = WireDefault(false.B)
 
-  if (config.isa.hasSv32) {
+  if (config.isa.hasPagedVirtualMemory) {
     val vm = dataVm.get
     vm.io.requestValid := rawDataRequest && !vmCsrHazard
     vm.io.flush := takingSfence
-    vm.io.virtualAddress := exMem.result(31, 0)
+    vm.io.virtualAddress := exMem.result
     vm.io.privilege := csrFile.io.effectiveDataPrivilege
     vm.io.translateWrite := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
     vm.io.write := dataBusWrite
-    vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)(31, 0)
-    vm.io.wmask := storeMask(3, 0)
+    vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
+    vm.io.wmask := storeMask
     vm.io.size := exMem.ctrl.memSize
     vm.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
     vm.io.satpRootPpn := csrFile.io.satpRootPpn
@@ -617,7 +629,7 @@ class AetherCore(
     io.dmem.wmask := vm.io.dataWmask
     io.dmem.size := vm.io.dataSize
     vm.io.dataReady := Mux(translatedDataPmpFault, true.B, io.dmem.ready)
-    vm.io.dataRdata := io.dmem.rdata(31, 0)
+    vm.io.dataRdata := io.dmem.rdata
     vm.io.dataFault := translatedDataPmpFault || (io.dmem.valid && io.dmem.fault)
 
     translatedPhysicalAddress := vm.io.physicalAddress
@@ -661,14 +673,14 @@ class AetherCore(
     is(MemSize.DWord) { loadData := io.dmem.rdata }
   }
 
-  val memoryStall = if (config.isa.hasSv32) {
+  val memoryStall = if (config.isa.hasPagedVirtualMemory) {
     alignedDataAccess && (vmCsrHazard || !vmRequestComplete)
   } else {
     io.dmem.valid && !io.dmem.ready
   }
-  val memoryPageFault = if (config.isa.hasSv32) vmPageFault else false.B
+  val memoryPageFault = if (config.isa.hasPagedVirtualMemory) vmPageFault else false.B
   val memoryFault = dataAddressRangeFault || dataPmpFault ||
-    (if (config.isa.hasSv32) vmAccessFault else io.dmem.valid && io.dmem.fault)
+    (if (config.isa.hasPagedVirtualMemory) vmAccessFault else io.dmem.valid && io.dmem.fault)
   val atomicReadHold = atomicReadPhase && io.dmem.valid && io.dmem.ready && !io.dmem.fault
   val lateResultHazard = idEx.ctrl.memRead || idEx.ctrl.atomicOp =/= AtomicOp.None
   val loadUseHazard = idEx.valid && lateResultHazard && idEx.rd =/= 0.U && ifId.valid && (
@@ -715,7 +727,7 @@ class AetherCore(
     !instructionPmpFault
   frontendAdvance := !takingTrap && !takingInterrupt && !takingXret && !takingSfence &&
     !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
-  if (config.isa.hasSv32 && !config.isa.hasC) {
+  if (config.isa.hasPagedVirtualMemory && !config.isa.hasC) {
     fetchResponseReady := frontendAdvance && fetchResponseValid
   }
 
@@ -889,7 +901,7 @@ class AetherCore(
       idEx.ctrl := decoder.io.ctrl
       idEx.trap := decodedTrap
 
-      if (config.isa.hasSv32) {
+      if (config.isa.hasPagedVirtualMemory) {
         when(fetchInstructionValid) {
           ifId.valid := true.B
           ifId.pc := pc
