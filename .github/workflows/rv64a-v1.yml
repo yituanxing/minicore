@@ -6,12 +6,14 @@ on:
       - 'src/main/scala/aethercore/config/CoreConfig.scala'
       - 'src/main/scala/aethercore/core/AetherCore.scala'
       - 'src/main/scala/aethercore/core/Decoder.scala'
+      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreRV64IMASv39PmpSimTop.scala'
       - 'src/main/scala/aethercore/ElaborateRV64IMASv39Pmp.scala'
       - 'src/test/scala/aethercore/CoreConfigSpec.scala'
       - 'src/test/scala/aethercore/DecoderSpec.scala'
       - 'src/test/scala/aethercore/RV32AtomicCoreSpec.scala'
       - 'src/test/scala/aethercore/RV64AtomicCoreSpec.scala'
+      - 'src/test/scala/aethercore/RV64AtomicMisaSpec.scala'
       - 'software/rv64/rv64a_sv39_pmp_v1_workload.S'
       - 'software/rv64/sv39_pmp_v1_linker.ld'
       - 'tools/build_rv64a_sv39_pmp_v1.sh'
@@ -87,7 +89,8 @@ jobs:
             aethercore.CoreConfigSpec \
             aethercore.DecoderSpec \
             aethercore.RV32AtomicCoreSpec \
-            aethercore.RV64AtomicCoreSpec
+            aethercore.RV64AtomicCoreSpec \
+            aethercore.RV64AtomicMisaSpec
 
       - name: Validate RV64A builder shell contract
         shell: bash
@@ -111,10 +114,11 @@ jobs:
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
             echo '- production profile: RV64IMA + Zicsr + M/S/U + Sv39 + PMP16 over PA56'
+            echo '- capability discovery: misa reports RV64 MXL plus I/M/A/S/U exactly for the bounded profile'
             echo '- shared execution: one atomic FSM serves RV32A and RV64A; RV32 remains the historical oracle'
             echo '- RV64 widths: LR/SC and all AMO operations decode as W or D; AMO.W/LR.W results sign-extend to XLEN'
             echo '- comparison semantics: signed/unsigned W min/max consume the low 32-bit operand with architectural sign/zero interpretation'
-            echo '- reservation ownership: address plus W/D access width; cross-width SC is required to fail without a data write'
+            echo '- bounded reservation policy: this implementation pairs the reservation with address plus W/D access width, so cross-width SC conservatively fails without a data write'
             echo '- real executable: M→S→U through three-level Sv39; U-mode runs LR.W/LR.D/SC.D/AMOADD.D/AMOMAX.W/AMOMAXU.W behind PMP16'
             echo '- runner contract: real 8-byte PTW traffic is required; stall=0 and stall=3 must both self-check exit 0'
           } >> "$GITHUB_STEP_SUMMARY"
