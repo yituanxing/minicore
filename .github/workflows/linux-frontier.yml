@@ -9,8 +9,9 @@ on:
       - 'Makefile.l32-linux-boot'
       - 'sim/l32_opensbi_runtime.h'
       - 'sim/opensbi_boot_main.cpp'
+      - 'software/l32/linux-frontier-freeze.env'
+      - 'tools/ci/l32_linux_frontier_artifact.sh'
       - 'tools/ci/l32_linux_frontier_input.sh'
-      - 'tools/ci/l32_busybox_runtime_freeze.sh'
       - 'tools/ci/l32_userspace_profile.sh'
       - 'tools/ensure_verilator_5_024.sh'
       - 'tests_py/test_linux_frontier_contract.py'
@@ -83,10 +84,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p build
+          bash -n tools/ci/l32_linux_frontier_artifact.sh
           bash -n tools/ci/l32_linux_frontier_input.sh
           bash tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
           grep -qx 'profile=rv32imac' build/l32-linux-frontier-input.txt
           grep -qx 'require_c=1' build/l32-linux-frontier-input.txt
+          firmware_bin="$(sed -n 's/^firmware_bin=//p' build/l32-linux-frontier-input.txt | head -n 1)"
+          [[ -n "$firmware_bin" && -s "$firmware_bin" ]]
+          echo "qualified_firmware=$firmware_bin"
 
       - name: Provision fixed Verilator
         shell: bash
@@ -97,6 +103,12 @@ jobs:
         run: |
           set -euo pipefail
           build="$HOME/.cache/aethercore/linux-frontier-rv32imac"
+          input="$GITHUB_WORKSPACE/build/l32-linux-frontier-input.txt"
+          firmware_bin="$(sed -n 's/^firmware_bin=//p' "$input" | head -n 1)"
+          [[ -n "$firmware_bin" && -s "$firmware_bin" ]] || {
+            echo 'ERROR: resolved qualified frontier firmware is missing' >&2
+            exit 42
+          }
           rm -rf "$build/rtl" "$build/obj" "$build/logs"
           mkdir -p "$build"
 
@@ -106,7 +118,7 @@ jobs:
             TOP=AetherCoreOpenSbiCSimTop \
             ELABORATE_MAIN=aethercore.ElaborateOpenSbiC \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_L32_C_TOP" \
-            FW_BIN="$GITHUB_WORKSPACE/build/l32-busybox-shell-boot-rv32imac/opensbi/platform/generic/firmware/fw_payload.bin" \
+            FW_BIN="$firmware_bin" \
             JOBS="$(nproc)" \
             MAX_CYCLES="$FRONTIER_MAX_CYCLES" \
             MILESTONE="$FRONTIER_MILESTONE" \
@@ -146,7 +158,7 @@ jobs:
             echo '- profile: `rv32imac` with real I/M/A/C + Sv32 + PMP + M/S/U Linux pressure'
             echo "- milestone: \`${FRONTIER_MILESTONE}\`"
             echo "- max cycles: \`${FRONTIER_MAX_CYCLES}\`"
-            echo '- ordering: frozen-input identity -> Linux frontier -> frontier source contract'
-            echo '- software: pre-qualified frozen Linux+BusyBox/OpenSBI payload only; this lane never builds Linux/OpenSBI/userspace'
+            echo '- ordering: repo freeze + persistent qualified payload -> Linux frontier -> frontier source contract'
+            echo '- software: restore-only qualified Linux+BusyBox+OpenSBI payload; this lane never builds software on cache miss'
             echo '- success artifacts: none; the runner log is the discovery result'
           } >> "$GITHUB_STEP_SUMMARY"
