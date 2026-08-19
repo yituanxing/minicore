@@ -17,38 +17,20 @@ source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
 [[ "${L32_USERSPACE_PROFILE}" == "rv32imac" ]] || fail "profile"
 [[ "${L32_USERSPACE_REQUIRE_C}" == "1" ]] || fail "compressed-contract"
 
-# This is validation only. The freeze script hashes and cross-checks the already
-# produced BusyBox, real-program, Linux and OpenSBI outputs; it never builds them.
-bash "${ROOT_DIR}/tools/ci/l32_busybox_runtime_freeze.sh" >/dev/null \
-  || fail "runtime-freeze"
+# Frontier is a restore-only consumer. The repository freeze manifest owns the
+# accepted software identity; the persistent runner cache owns bytes only.
+# Missing or mismatched bytes fail closed here and never trigger a software build.
+resolved="$(bash "${ROOT_DIR}/tools/ci/l32_linux_frontier_artifact.sh" resolve)" \
+  || fail "qualified-artifact"
 
-FREEZE="${L32_USERSPACE_PAYLOAD_BUILD_DIR}/runtime-freeze.txt"
-FW_BIN="${L32_USERSPACE_PAYLOAD_BUILD_DIR}/opensbi/platform/generic/firmware/fw_payload.bin"
-LINUX_IMAGE="${L32_USERSPACE_LINUX_BUSYBOX_BUILD_DIR}/obj/arch/riscv/boot/Image"
+grep -qx 'L32_LINUX_FRONTIER_ARTIFACT: status=PASS' <<<"${resolved}" \
+  || fail "artifact-status"
+grep -qx 'profile=rv32imac' <<<"${resolved}" || fail "artifact-profile"
+grep -qx 'isa=rv32imac_zicsr_zifencei' <<<"${resolved}" || fail "artifact-isa"
+grep -qx 'require_c=1' <<<"${resolved}" || fail "artifact-compressed"
 
-[[ -f "${FREEZE}" ]] || fail "freeze-record"
-grep -qx 'L32_BUSYBOX_RUNTIME_FREEZE: status=PASS' "${FREEZE}" \
-  || fail "freeze-marker"
-grep -qx 'profile=rv32imac' "${FREEZE}" || fail "freeze-profile"
-grep -qx 'isa=rv32imac_zicsr_zifencei' "${FREEZE}" || fail "freeze-isa"
-grep -qx 'require_c=1' "${FREEZE}" || fail "freeze-compressed"
-[[ -s "${FW_BIN}" ]] || fail "firmware-bin"
-[[ -s "${LINUX_IMAGE}" ]] || fail "linux-image"
-
-expected_fw="$(sed -n 's/^firmware_sha256=//p' "${FREEZE}" | head -n 1)"
-actual_fw="$(sha256sum "${FW_BIN}" | awk '{print $1}')"
-[[ -n "${expected_fw}" && "${expected_fw}" == "${actual_fw}" ]] \
-  || fail "firmware-sha"
-
-expected_linux="$(sed -n 's/^linux_image_sha256=//p' "${FREEZE}" | head -n 1)"
-actual_linux="$(sha256sum "${LINUX_IMAGE}" | awk '{print $1}')"
-[[ -n "${expected_linux}" && "${expected_linux}" == "${actual_linux}" ]] \
-  || fail "linux-sha"
+firmware_bin="$(sed -n 's/^firmware_bin=//p' <<<"${resolved}" | head -n 1)"
+[[ -n "${firmware_bin}" && -s "${firmware_bin}" ]] || fail "artifact-firmware-bin"
 
 printf 'L32_LINUX_FRONTIER_INPUT: status=PASS\n'
-printf 'profile=%s\n' "${L32_USERSPACE_PROFILE}"
-printf 'isa=%s\n' "${L32_USERSPACE_EFFECTIVE_ISA}"
-printf 'require_c=%s\n' "${L32_USERSPACE_REQUIRE_C}"
-printf 'linux_image_sha256=%s\n' "${actual_linux}"
-printf 'fw_payload_sha256=%s\n' "${actual_fw}"
-printf 'firmware_bin=%s\n' "${FW_BIN#${ROOT_DIR}/}"
+printf '%s\n' "${resolved}" | grep -E '^(profile|isa|require_c|linux_image_sha256|fw_payload_sha256|qualification|firmware_bin)='
