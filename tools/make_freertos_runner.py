@@ -116,8 +116,10 @@ def adapt(source: str, trace: bool) -> str:
     text = replace_once(
         text,
         "      if (!top.reset) {\n"
+        "        if (ptwAccepted) ++ptwReads;\n\n"
         "        if (top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault) {\n",
         "      if (!top.reset) {\n"
+        "        if (ptwAccepted) ++ptwReads;\n\n"
         "        if (options.selfCheckExit && top.io_halted) {\n"
         "          ++wfiSleepCycles;\n"
         "          if (top.io_rxReady) ++uartRxReadySleepCycles;\n"
@@ -197,6 +199,10 @@ def adapt(source: str, trace: bool) -> str:
         "                  << \" requested UART RX bytes\\n\";\n"
         "        return 10;\n"
         "      }\n"
+        "      if (options.requirePtw && ptwReads == 0) {\n"
+        "        std::cerr << \"FAIL: self-check program completed without an accepted PTW read\\n\";\n"
+        "        return 11;\n"
+        "      }\n"
         "      std::cout << \"PASS: self-check exit=0 after \" << cycles << \" cycles, \" << committed\n"
         "                << \" committed instructions\";\n",
         "      if (exitCode != 0) {\n"
@@ -207,6 +213,10 @@ def adapt(source: str, trace: bool) -> str:
         "        std::cerr << \"FAIL: accepted \" << rxIndex << \" of \" << options.rxBytes.size()\n"
         "                  << \" requested UART RX bytes\\n\";\n"
         "        return 10;\n"
+        "      }\n"
+        "      if (options.requirePtw && ptwReads == 0) {\n"
+        "        std::cerr << \"FAIL: self-check program completed without an accepted PTW read\\n\";\n"
+        "        return 11;\n"
         "      }\n"
         "      if (options.uartRxByte && !uartRxInjected) {\n"
         "        std::cerr << \"FAIL: UART RX byte was never injected during WFI sleep\\n\";\n"

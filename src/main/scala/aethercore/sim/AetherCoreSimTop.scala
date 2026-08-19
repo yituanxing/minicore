@@ -25,6 +25,8 @@ class AetherCoreSimTop(
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val vmPteBits =
+    config.isa.orderedPageTableGeometries.headOption.map(_.pteBits).getOrElse(busDataBits)
   private val plicBase = BigInt("0c000000", 16)
   private val plicLimit = plicBase + BigInt("00400000", 16)
   private val uartRxBase = config.platform.uartAddress + BigInt(0x100)
@@ -63,11 +65,11 @@ class AetherCoreSimTop(
     val memRdata = Input(UInt(busDataBits.W))
     val memFault = Input(Bool())
 
-    val ptwValid = if (config.isa.hasSv32) Some(Output(Bool())) else None
-    val ptwAddr = if (config.isa.hasSv32) Some(Output(UInt(paddrBits.W))) else None
-    val ptwReady = if (config.isa.hasSv32) Some(Input(Bool())) else None
-    val ptwRdata = if (config.isa.hasSv32) Some(Input(UInt(32.W))) else None
-    val ptwFault = if (config.isa.hasSv32) Some(Input(Bool())) else None
+    val ptwValid = if (config.isa.hasPagedVirtualMemory) Some(Output(Bool())) else None
+    val ptwAddr = if (config.isa.hasPagedVirtualMemory) Some(Output(UInt(paddrBits.W))) else None
+    val ptwReady = if (config.isa.hasPagedVirtualMemory) Some(Input(Bool())) else None
+    val ptwRdata = if (config.isa.hasPagedVirtualMemory) Some(Input(UInt(vmPteBits.W))) else None
+    val ptwFault = if (config.isa.hasPagedVirtualMemory) Some(Input(Bool())) else None
 
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
@@ -167,7 +169,7 @@ class AetherCoreSimTop(
   io.imemAddr := core.io.imem.addr
   io.imemBytes := core.io.imem.bytes
 
-  if (config.isa.hasSv32) {
+  if (config.isa.hasPagedVirtualMemory) {
     io.ptwValid.get := core.io.ptw.get.valid
     io.ptwAddr.get := core.io.ptw.get.addr
     core.io.ptw.get.ready := io.ptwReady.get

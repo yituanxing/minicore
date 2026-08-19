@@ -19,21 +19,11 @@ final case class IsaConfig(
     s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
   )
 
-  // Validate specification-level paging geometry independently from the set of
-  // modes already wired into the production core. This lets CSR/MMU building
-  // blocks be qualified ahead of capability advertisement without weakening the
-  // fail-closed CoreConfig boundary.
   val pageTableGeometries: Set[PageTableGeometry] =
     PageTableGeometry.validateArchitecturalModes(xlen, privilegeModes, virtualMemoryModes)
 
-  require(
-    !sstc || privilegeModes.contains('S'),
-    "Sstc requires Supervisor mode"
-  )
-  require(
-    !sstc || xlen == 32,
-    "the current bounded Sstc implementation is RV32-only"
-  )
+  require(!sstc || privilegeModes.contains('S'), "Sstc requires Supervisor mode")
+  require(!sstc || xlen == 32, "the current bounded Sstc implementation is RV32-only")
   require(
     Set(0, 16, 64).contains(pmpEntries),
     s"standard PMP implementation count must be 0, 16 or 64, got $pmpEntries"
@@ -100,10 +90,7 @@ object AetherCoreCapabilities {
   val instructionExtensions: Set[Char] = Set('I', 'M', 'A', 'C')
   val zExtensions: Set[String] = Set("Zicsr", "Zifencei")
   val privilegeModes: Set[Char] = Set('M', 'S', 'U')
-
-  // Keep production capability advertisement fail-closed until the RV64 satp,
-  // adapters and AetherCore integration slice is qualified end-to-end.
-  val virtualMemoryModes: Set[String] = Set("Sv32")
+  val virtualMemoryModes: Set[String] = Set("Sv32", "Sv39")
 }
 
 final case class CoreConfig(
@@ -128,7 +115,11 @@ final case class CoreConfig(
   )
   require(
     isa.virtualMemoryModes.subsetOf(AetherCoreCapabilities.virtualMemoryModes),
-    s"virtual-memory modes ${isa.virtualMemoryModes} are not yet integrated into the production AetherCore"
+    s"virtual-memory modes ${isa.virtualMemoryModes} are not integrated into the production AetherCore"
+  )
+  require(
+    isa.pageTableGeometries.size <= 1,
+    "the current production translation datapath supports one active page-table geometry per core profile"
   )
   require(!isa.hasA || isa.xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!isa.hasC || isa.xlen == 32, "the current compressed frontend implements RV32C only")
@@ -174,8 +165,7 @@ object CoreProfiles {
     mtimecmpAddress = mtimecmpAddress
   )
 
-  // PMP address CSRs on RV64 encode PA55:2. Keep the 64-bit data bus while
-  // bounding the protected physical domain independently to 56 bits.
+  // RV64 PMP and Sv39 both terminate in the architectural PA56 domain.
   private val rv64PmpPlatform: PlatformConfig = rv64Platform.copy(paddrBits = 56)
 
   val rv32iMinimal: CoreConfig = CoreConfig(
@@ -244,8 +234,6 @@ object CoreProfiles {
     platform = rv32Sv32Platform
   )
 
-  // N5 real-paging profile: same frozen Sv32/MMU contract, with the RV32A
-  // atomics and Sstc timer facility emitted by the pinned NuttX workload.
   val rv32imasuSv32Software: CoreConfig = CoreConfig(
     name = "rv32imasu-sv32-software",
     isa = IsaConfig(
@@ -273,9 +261,6 @@ object CoreProfiles {
     platform = rv32Sv32Platform
   )
 
-  // RV32C N5 qualification profile. This is deliberately a peer of the
-  // historical RV32IMA profile rather than a mutation of it so the old N5
-  // executable remains an independent non-C regression baseline.
   val rv32imacsuSv32PmpSoftware: CoreConfig = CoreConfig(
     name = "rv32imacsu-sv32-pmp-software",
     isa = IsaConfig(
@@ -346,6 +331,20 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'S', 'U'),
       zExtensions = Set("Zicsr"),
+      pmpEntries = 16
+    ),
+    platform = rv64PmpPlatform
+  )
+
+  /** First production RV64 paged profile: Sv39 + PMP16 over the shared PA56 domain. */
+  val rv64imsuSv39PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv64imsu-sv39-pmp-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv39"),
       pmpEntries = 16
     ),
     platform = rv64PmpPlatform

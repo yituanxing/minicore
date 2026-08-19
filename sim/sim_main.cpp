@@ -35,6 +35,8 @@ struct Options {
   bool trace = false;
   bool commitTrace = false;
   bool selfCheckExit = false;
+  bool requirePtw = false;
+  std::optional<std::size_t> expectedPtwBytes;
   std::vector<std::uint8_t> rxBytes;
   std::uint64_t rxStartCycle = 0;
   std::uint64_t rxGapCycles = 1;
@@ -54,6 +56,7 @@ Options parseOptions(int argc, char** argv) {
     throw std::runtime_error(
         "usage: VAetherCoreSimTop <image.bin> [--max-cycles N] [--stall-period N] "
         "[--trace] [--commit-trace] [--self-check-exit] "
+        "[--require-ptw] [--expect-ptw-bytes 4|8] "
         "[--rx-byte N ... --rx-start-cycle N --rx-gap-cycles N] [--difftest NEMU_SO] "
         "[--expect-exception-pc N --expect-exception-inst N --expected-commits N] "
         "[--forbid-rd N] [--expect-memory64 ADDRESS VALUE]");
@@ -76,6 +79,15 @@ Options parseOptions(int argc, char** argv) {
       options.commitTrace = true;
     } else if (arg == "--self-check-exit") {
       options.selfCheckExit = true;
+    } else if (arg == "--require-ptw") {
+      options.requirePtw = true;
+    } else if (arg == "--expect-ptw-bytes" && i + 1 < argc) {
+      const auto bytes = parseInteger(argv[++i]);
+      if (bytes != 4 && bytes != 8) {
+        throw std::runtime_error("--expect-ptw-bytes must be 4 or 8");
+      }
+      options.expectedPtwBytes = static_cast<std::size_t>(bytes);
+      options.requirePtw = true;
     } else if (arg == "--rx-byte" && i + 1 < argc) {
       const auto byte = parseInteger(argv[++i]);
       if (byte > 0xffU) throw std::runtime_error("--rx-byte must be in the range 0..255");
@@ -179,7 +191,56 @@ class Memory {
   std::vector<std::uint8_t> bytes_;
 };
 
-void driveInputs(VAetherCoreSimTop& top, const Memory& memory, bool memoryReady) {
+template <typename Top>
+constexpr bool hasPtwPort() {
+  return requires(Top& top) {
+    top.io_ptwValid;
+    top.io_ptwAddr;
+    top.io_ptwReady;
+    top.io_ptwRdata;
+    top.io_ptwFault;
+  };
+}
+
+template <typename Top>
+std::size_t ptwPortBytes(const Top& top) {
+  if constexpr (hasPtwPort<Top>()) {
+    return sizeof(top.io_ptwRdata);
+  }
+  return 0;
+}
+
+template <typename Top>
+void drivePtw(Top& top, const Memory& memory, bool memoryReady) {
+  if constexpr (hasPtwPort<Top>()) {
+    constexpr std::size_t pteBytes = sizeof(top.io_ptwRdata);
+    static_assert(pteBytes == 4 || pteBytes == 8,
+                  "AetherCore PTW response must carry one 32-bit or 64-bit PTE");
+    const bool valid = top.io_ptwValid;
+    const auto address = static_cast<std::uint64_t>(top.io_ptwAddr);
+    const bool fault = valid && !memory.contains(address, pteBytes);
+    top.io_ptwReady = memoryReady;
+    top.io_ptwFault = fault;
+    if (!valid || fault) {
+      top.io_ptwRdata = 0;
+    } else if constexpr (pteBytes == 4) {
+      top.io_ptwRdata = memory.read32(address);
+    } else {
+      top.io_ptwRdata = memory.read64(address);
+    }
+  }
+}
+
+template <typename Top>
+bool ptwRequestAccepted(const Top& top) {
+  if constexpr (hasPtwPort<Top>()) {
+    return top.io_ptwValid && top.io_ptwReady && !top.io_ptwFault;
+  }
+  return false;
+}
+
+template <typename Top>
+void driveInputs(Top& top, const Memory& memory, bool memoryReady) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
@@ -196,6 +257,8 @@ void driveInputs(VAetherCoreSimTop& top, const Memory& memory, bool memoryReady)
   top.io_memReady = memoryReady;
   top.io_memFault = dfault;
   top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read64(daddr);
+
+  drivePtw(top, memory, memoryReady);
 }
 
 template <typename Top>
@@ -265,6 +328,17 @@ int main(int argc, char** argv) {
     if (!options.rxBytes.empty() && !hasUartRxPort<VAetherCoreSimTop>()) {
       throw std::runtime_error("UART RX injection requested for a top without RX ports");
     }
+    if (options.requirePtw && !hasPtwPort<VAetherCoreSimTop>()) {
+      throw std::runtime_error("PTW traffic required for a top without PTW ports");
+    }
+    if (options.expectedPtwBytes) {
+      const auto actualBytes = ptwPortBytes(top);
+      if (actualBytes != *options.expectedPtwBytes) {
+        throw std::runtime_error(
+            "PTW response width mismatch: expected " + std::to_string(*options.expectedPtwBytes) +
+            " bytes, got " + std::to_string(actualBytes));
+      }
+    }
 
     Memory memory;
     memory.load(options.image);
@@ -285,6 +359,7 @@ int main(int argc, char** argv) {
 
     std::uint64_t committed = 0;
     std::uint64_t exceptions = 0;
+    std::uint64_t ptwReads = 0;
     std::uint64_t cycles = 0;
     std::uint64_t exitCode = 0;
     std::uint64_t exceptionPc = 0;
@@ -317,11 +392,14 @@ int main(int argc, char** argv) {
       driveUartRx(top, rxValid, rxByte);
       top.eval();
       const bool rxAccepted = rxValid && uartRxReady(top);
+      const bool ptwAccepted = !top.reset && ptwRequestAccepted(top);
 
       if (wave) wave->dump(context.time());
       context.timeInc(1);
 
       if (!top.reset) {
+        if (ptwAccepted) ++ptwReads;
+
         if (top.io_memValid && top.io_memWrite && top.io_memReady && !top.io_memFault) {
           memory.writeMasked(top.io_memAddr, top.io_memWdata,
                              static_cast<std::uint8_t>(top.io_memWmask));
@@ -437,6 +515,7 @@ int main(int argc, char** argv) {
                 << " inst=0x" << exceptionInst << std::dec << " after " << cycles
                 << " cycles, " << committed << " committed instructions";
       if (options.stallPeriod != 0) std::cout << ", stall-period=" << options.stallPeriod;
+      if (ptwReads != 0) std::cout << ", ptw-reads=" << ptwReads;
       std::cout << '\n';
       return 0;
     }
@@ -455,10 +534,16 @@ int main(int argc, char** argv) {
                   << " requested UART RX bytes\n";
         return 10;
       }
+      if (options.requirePtw && ptwReads == 0) {
+        std::cerr << "FAIL: self-check program completed without an accepted PTW read\n";
+        return 11;
+      }
       std::cout << "PASS: self-check exit=0 after " << cycles << " cycles, " << committed
                 << " committed instructions";
       if (options.stallPeriod != 0) std::cout << ", stall-period=" << options.stallPeriod;
       if (!options.rxBytes.empty()) std::cout << ", rx-bytes=" << rxIndex;
+      if (ptwReads != 0) std::cout << ", ptw-reads=" << ptwReads;
+      if (options.expectedPtwBytes) std::cout << ", ptw-bytes=" << *options.expectedPtwBytes;
       if (difftest) std::cout << ", difftest=" << difftest->checkedCommits();
       std::cout << '\n';
       return 0;
