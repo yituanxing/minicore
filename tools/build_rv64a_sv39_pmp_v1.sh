@@ -67,7 +67,7 @@ for mnemonic in mret sret ecall ld sd; do
     exit 1
   }
 done
-for mnemonic in 'amoadd\.d' 'lr\.d' 'sc\.d' 'amomax\.w' 'amomaxu\.w' 'lr\.w'; do
+for mnemonic in 'amoadd\.d' 'lr\.d' 'sc\.d' 'amomax\.w' 'amomaxu\.w' 'lr\.w' 'sc\.w'; do
   grep -Eq "[[:space:]]${mnemonic}(\.[a-z]+)?([[:space:]]|$)" "$out_dir/rv64a-sv39-pmp-v1.dis" || {
     echo "ERROR: RV64A Sv39 PMP V1 workload is missing required atomic instruction: $mnemonic" >&2
     exit 1
@@ -133,7 +133,7 @@ digest="$(sha256sum "$bin" | awk '{print $1}')"
   echo 'pte_bytes=8'
   echo 'pmp_entries=16'
   echo 'paddr_bits=56'
-  echo 'atomics=LR.W,LR.D,SC.D,AMOADD.D,AMOMAX.W,AMOMAXU.W'
+  echo 'atomics=LR.W,SC.W,LR.D,SC.D,AMOADD.D,AMOMAX.W,AMOMAXU.W'
   echo 'reservation=address+width'
   printf 'bytes=%s\nsha256=%s\n' "$bytes" "$digest"
 } > "$out_dir/result.txt"
