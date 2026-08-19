@@ -657,24 +657,30 @@ class AetherCore(
     vm.io.pteData := dataPteRdata
     vm.io.pteFault := dataPteFault
 
+    translatedPhysicalAddress := vm.io.physicalAddress
+    scReservationMatch := reservationValid && reservationSize === exMem.ctrl.memSize &&
+      reservationAddress === vm.io.physicalAddress
+    val suppressFailedScDataAccess = atomicSc && !scReservationMatch
+
     dataPmpAddress := vm.io.dataAddress
     val translatedDataPmpFault = vm.io.dataValid &&
       (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
     dataPmpFault := translatedDataPmpFault
 
-    io.dmem.valid := vm.io.dataValid && !translatedDataPmpFault
+    io.dmem.valid := vm.io.dataValid && !translatedDataPmpFault && !suppressFailedScDataAccess
     io.dmem.write := vm.io.dataWrite
     io.dmem.addr := vm.io.dataAddress
     io.dmem.wdata := vm.io.dataWdata
     io.dmem.wmask := vm.io.dataWmask
     io.dmem.size := vm.io.dataSize
-    vm.io.dataReady := Mux(translatedDataPmpFault, true.B, io.dmem.ready)
+    vm.io.dataReady := Mux(
+      translatedDataPmpFault || suppressFailedScDataAccess,
+      true.B,
+      io.dmem.ready
+    )
     vm.io.dataRdata := io.dmem.rdata
     vm.io.dataFault := translatedDataPmpFault || (io.dmem.valid && io.dmem.fault)
 
-    translatedPhysicalAddress := vm.io.physicalAddress
-    scReservationMatch := reservationValid && reservationSize === exMem.ctrl.memSize &&
-      reservationAddress === vm.io.physicalAddress
     vmRequestComplete := vm.io.requestComplete
     vmPageFault := vm.io.pageFault
     vmAccessFault := vm.io.accessFault
