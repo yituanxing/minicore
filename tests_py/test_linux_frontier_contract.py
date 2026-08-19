@@ -7,7 +7,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "linux-frontier.yml"
 PRODUCER_WORKFLOW = ROOT / ".github" / "workflows" / "rv32c-linux-userspace.yml"
 INPUT_CHECK = ROOT / "tools" / "ci" / "l32_linux_frontier_input.sh"
 ARTIFACT_HELPER = ROOT / "tools" / "ci" / "l32_linux_frontier_artifact.sh"
-FREEZE_MANIFEST = ROOT / "software" / "l32" / "linux-frontier-freeze.env"
+FREEZE_MANIFEST = ROOT / "validation" / "linux-frontier-rv32imac.env"
 
 
 class LinuxFrontierContractTest(unittest.TestCase):
@@ -47,6 +47,7 @@ class LinuxFrontierContractTest(unittest.TestCase):
         helper = ARTIFACT_HELPER.read_text()
         self.assertIn("Require frozen qualified RV32IMAC Linux payload", workflow)
         self.assertIn("tools/ci/l32_linux_frontier_input.sh", workflow)
+        self.assertIn("validation/linux-frontier-rv32imac.env", workflow)
         self.assertIn("l32_linux_frontier_artifact.sh\" resolve", input_text)
         self.assertIn("CACHE_ROOT=", helper)
         self.assertIn("l32/linux-frontier/${profile}/${firmware_sha}", helper)
@@ -76,7 +77,7 @@ class LinuxFrontierContractTest(unittest.TestCase):
             "L32_LINUX_FRONTIER_FIRMWARE_SHA256=33921ee4fc7e8f4f7b282adf9cea1c87b98e10e7dc373f25231e5e66eba86159",
             manifest,
         )
-        self.assertIn("FREEZE_MANIFEST=", helper)
+        self.assertIn("validation/linux-frontier-rv32imac.env", helper)
         self.assertIn('sha256sum "${CACHE_FIRMWARE}"', helper)
         self.assertIn("verify_cache || fail \"qualified-cache\"", helper)
         self.assertIn("L32_LINUX_FRONTIER_ARTIFACT: status=MISS", helper)
@@ -89,6 +90,7 @@ class LinuxFrontierContractTest(unittest.TestCase):
         )
         publish = producer.index("Publish 25-case-qualified Linux frontier artifact")
         self.assertLess(matrix, publish)
+        self.assertIn("- validation/linux-frontier-rv32imac.env", producer)
         self.assertIn("tools/ci/l32_linux_frontier_artifact.sh publish", producer)
         helper = ARTIFACT_HELPER.read_text()
         self.assertIn("producer-25-case-result", helper)
