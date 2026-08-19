@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 import unittest
@@ -13,8 +14,16 @@ assert spec is not None and spec.loader is not None
 make_dtb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(make_dtb)
 
+FROZEN_L32_DTB_BYTES = 1536
+FROZEN_L32_DTB_SHA256 = "764411e519b2b4423081ec4e637241403e66e112a0199691c740afda81b1391e"
+
 
 class OpenSbiDtbProfileTest(unittest.TestCase):
+    def test_frozen_l32_default_has_independent_historical_anchor(self) -> None:
+        blob = make_dtb.build_l32_dtb()
+        self.assertEqual(len(blob), FROZEN_L32_DTB_BYTES)
+        self.assertEqual(hashlib.sha256(blob).hexdigest(), FROZEN_L32_DTB_SHA256)
+
     def test_generic_default_is_byte_identical_to_frozen_l32_entry(self) -> None:
         legacy = make_dtb.build_l32_dtb()
         generic = make_dtb.build_profile_dtb(
@@ -22,6 +31,17 @@ class OpenSbiDtbProfileTest(unittest.TestCase):
             mmu="sv32",
         )
         self.assertEqual(generic, legacy)
+
+        # Keep the conditional chosen/bootargs property on the same shared path.
+        bootargs = "console=ttyS0 earlycon"
+        self.assertEqual(
+            make_dtb.build_profile_dtb(
+                bootargs=bootargs,
+                isa=make_dtb.DEFAULT_CPU_ISA,
+                mmu="sv32",
+            ),
+            make_dtb.build_l32_dtb(bootargs=bootargs),
+        )
 
     def test_rv64_sv39_profile_reuses_the_same_board_description(self) -> None:
         blob = make_dtb.build_profile_dtb(
