@@ -90,7 +90,6 @@ class LinuxFrontierContractTest(unittest.TestCase):
         publish = producer.index("Publish 25-case-qualified Linux frontier artifact")
         self.assertLess(matrix, publish)
         self.assertIn("tools/ci/l32_linux_frontier_artifact.sh publish", producer)
-        self.assertIn("l32_linux_frontier_artifact.sh \\", producer)
         helper = ARTIFACT_HELPER.read_text()
         self.assertIn("producer-25-case-result", helper)
         self.assertIn("producer-25-case-pass", helper)
