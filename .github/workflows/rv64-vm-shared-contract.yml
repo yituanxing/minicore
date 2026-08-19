@@ -34,6 +34,11 @@ on:
       - 'src/test/scala/aethercore/Sv32InstructionTranslationSpec.scala'
       - 'src/test/scala/aethercore/Sv32InstructionFetchCoreSpec.scala'
       - 'src/test/scala/aethercore/Sv32DataPathCoreSpec.scala'
+      - 'sim/sim_main.cpp'
+      - 'software/rv64/sv39_pmp_v1_linker.ld'
+      - 'software/rv64/sv39_pmp_v1_workload.S'
+      - 'tools/build_rv64im_sv39_pmp_v1.sh'
+      - 'Makefile.rv64im-sv39-pmp-v1'
       - '.github/workflows/rv64-vm-shared-contract.yml'
   workflow_dispatch:
 
@@ -48,7 +53,7 @@ jobs:
   qualify:
     name: Sv32 oracle + RV64 Sv39 production core
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
@@ -64,7 +69,8 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
           if [[ -d .git ]]; then
-            git clean -fd -- src/main/scala src/test/scala .github/workflows || true
+            git clean -fd -- src/main/scala src/test/scala sim software tools .github/workflows || true
+            git clean -f -- Makefile.rv64im-sv39-pmp-v1 || true
           else
             git init .
           fi
@@ -84,24 +90,16 @@ jobs:
             echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
             exit 1
           }
-          chmod +x ./mill
+          chmod +x ./mill tools/build_rv64im_sv39_pmp_v1.sh
           echo "exact_head=$actual"
 
       - name: Provision fixed Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Elaborate production RV64 Sv39 simulation top
+      - name: Provision pinned RISC-V newlib toolchain
         shell: bash
-        run: |
-          set -euo pipefail
-          rtl_dir="$HOME/.cache/aethercore/rv64-sv39-elaboration/$TARGET_SHA"
-          rm -rf "$rtl_dir"
-          ./mill aethercore.runMain aethercore.ElaborateRV64IMSv39Pmp --target-dir "$rtl_dir"
-          test -n "$(find "$rtl_dir" -maxdepth 1 -type f -name '*.sv' -print -quit)" || {
-            echo 'ERROR: RV64 Sv39 production top emitted no SystemVerilog' >&2
-            exit 1
-          }
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
 
       - name: Run frozen Sv32 oracle and RV64 shared plus production Sv39 contracts
         shell: bash
@@ -119,6 +117,15 @@ jobs:
             aethercore.RV64VirtualMemoryAdapterSpec \
             aethercore.RV64Sv39CoreSpec
 
+      - name: Run real RV64 M-S-U Sv39 executable contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          jobs="$(nproc)"
+          build="$HOME/.cache/aethercore/rv64-sv39-pmp-v1/$TARGET_SHA"
+          make -j"$jobs" -f Makefile.rv64im-sv39-pmp-v1 \
+            BUILD_DIR="$build" JOBS="$jobs" run-local
+
       - name: Write qualification summary
         if: always()
         shell: bash
@@ -131,8 +138,9 @@ jobs:
             echo '- simulation composition: one shared AetherCoreSimTop exposes geometry-width PTW traffic; the RV64 Sv39 top is only a profile wrapper'
             echo '- Sv32 oracle: historical walker, TLB, translation unit, adapters and core-facing VM specs still execute through the shared machinery'
             echo '- Sv39 shared machinery: three-level walk, 64-bit PTE stride, shared TLB/translation unit, instruction adapter, data adapter and PTW arbitration'
-            echo '- Sv39 production core: M-mode programs PMP16 and satp, MRET enters an S-mode VA above 4 GiB, then 64-bit LD/SD execute through a second translated VA above 4 GiB'
-            echo '- production physical proof: leaf PTE payloads exceed 32 bits and final code/data requests land above 4 GiB inside the PA56 domain'
+            echo '- Sv39 production core: M-mode programs PMP16 and satp, MRET enters S-mode through three-level translation, then SRET enters a U page and performs 64-bit LD/SD'
+            echo '- real runner contract: PTW must be exercised and the generated Sv39 top must expose an 8-byte PTE response port; stall=0 and stall=3 both exit 0'
+            echo '- focused full-width proof: leaf PTE payloads and final code/data physical requests exceed 32 bits while remaining inside PA56'
             echo '- Sv48 remains shared-contract-only and is still not advertised as a production CoreConfig capability'
             echo '- bare RV64 PA56 boundary: high architectural bits fault instead of aliasing low physical bits'
             echo '- PTE correctness: non-leaf U/A/D are reserved and ancestor G is inherited by descendants'
