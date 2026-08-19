@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n tools/ci/l32_linux_frontier_input.sh
-          tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
+          bash tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
           grep -qx 'profile=rv32imac' build/l32-linux-frontier-input.txt
           grep -qx 'require_c=1' build/l32-linux-frontier-input.txt
 
