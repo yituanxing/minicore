@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "linux-frontier.yml"
 INPUT_CHECK = ROOT / "tools" / "ci" / "l32_linux_frontier_input.sh"
+WATCHDOG = ROOT / "tools" / "ci" / "l32_linux_frontier_watchdog.py"
 
 
 class LinuxFrontierContractTest(unittest.TestCase):
@@ -14,14 +15,16 @@ class LinuxFrontierContractTest(unittest.TestCase):
         self.assertIn("- 'src/main/scala/aethercore/**'", text)
         self.assertIn("cancel-in-progress: true", text)
         self.assertIn("TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}", text)
-        self.assertIn("Run Linux frontier and stop at first requested milestone", text)
+        self.assertIn("Run Linux frontier and fail fast on guest stall", text)
         self.assertIn('MILESTONE="$FRONTIER_MILESTONE"', text)
         self.assertIn('MAX_CYCLES="$FRONTIER_MAX_CYCLES"', text)
-        self.assertIn("PROGRESS_INTERVAL_CYCLES=0", text)
+        self.assertIn("PROGRESS_INTERVAL_CYCLES=1000000", text)
+        self.assertIn("FRONTIER_STALL_CYCLES", text)
+        self.assertIn("default: '10000000'", text)
 
     def test_linux_behavior_runs_before_frontier_regression_contract(self) -> None:
         text = WORKFLOW.read_text()
-        linux = text.index("Run Linux frontier and stop at first requested milestone")
+        linux = text.index("Run Linux frontier and fail fast on guest stall")
         regression = text.index("Validate frontier contracts after Linux passes")
         self.assertLess(linux, regression)
 
@@ -57,6 +60,17 @@ class LinuxFrontierContractTest(unittest.TestCase):
         self.assertIn("linux-sha", text)
         self.assertIn("L32_LINUX_FRONTIER_INPUT: status=MISS", text)
         self.assertIn("L32_LINUX_FRONTIER_INPUT: status=PASS", text)
+
+    def test_frontier_watchdog_is_optional_and_guest_cycle_based(self) -> None:
+        workflow = WORKFLOW.read_text()
+        watchdog = WATCHDOG.read_text()
+        self.assertIn("l32_linux_frontier_watchdog.py", workflow)
+        self.assertIn('--stall-cycles "$FRONTIER_STALL_CYCLES"', workflow)
+        self.assertIn("PROGRESS_RE", watchdog)
+        self.assertIn("L32_SIM_PROGRESS cycles=", watchdog)
+        self.assertIn("L32_FRONTIER_STALL", watchdog)
+        self.assertIn("return 86", watchdog)
+        self.assertIn("stall_cycles > 0", watchdog)
 
     def test_success_path_keeps_evidence_in_logs_not_artifacts(self) -> None:
         text = WORKFLOW.read_text()
