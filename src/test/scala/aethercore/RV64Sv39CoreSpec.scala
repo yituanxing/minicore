@@ -16,7 +16,8 @@ class RV64Sv39CoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
   // cannot accidentally pass this core-level qualification.
   private val supervisorEntry = BigInt("100000080", 16)
   private val supervisorPageBase = supervisorEntry & ~BigInt("fff", 16)
-  private val dataVa = BigInt("140403024", 16)
+  private val dataVa = BigInt("140403020", 16)
+  require((dataVa & 7) == 0, "the RV64 LD/SD Sv39 probe must remain naturally 8-byte aligned")
 
   private val rootPpn = BigInt("20000", 16)
   private val codeLevel1Ppn = BigInt("21000", 16)
@@ -201,11 +202,11 @@ class RV64Sv39CoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
     val supervisorBody = place(
       supervisorEntry,
       Seq(
-        // x7 = 0x0000000140403024: another canonical Sv39 VA above 4 GiB.
+        // x7 = 0x0000000140403020: another canonical Sv39 VA above 4 GiB.
         iType(1, 0, 0, 7, 0x13),
         slli(7, 7, 32),
         uType(0x40403, 8),
-        iType(0x24, 8, 0, 8, 0x13),
+        iType(0x20, 8, 0, 8, 0x13),
         add(7, 7, 8),
         iType(0, 7, 3, 9, 0x03),
         iType(1, 9, 0, 10, 0x13),
