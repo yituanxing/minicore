@@ -199,8 +199,7 @@ class RV64AtomicCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       retired(19) shouldBe BigInt("11223344ffffffff", 16)
       retired(20) shouldBe 0
 
-      wordWriteMasks.take(4).foreach(_ shouldBe BigInt(0xf))
-      wordWriteMasks.last shouldBe BigInt(0xff)
+      wordWriteMasks.toSeq shouldBe Seq(BigInt(0xf), BigInt(0xf), BigInt(0xf), BigInt(0xff))
       read64(dwordAddress) shouldBe BigInt("0000000100000002", 16)
       read64(wordAddress) shouldBe 1
     }
