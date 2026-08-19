@@ -121,7 +121,6 @@ final case class CoreConfig(
     isa.pageTableGeometries.size <= 1,
     "the current production translation datapath supports one active page-table geometry per core profile"
   )
-  require(!isa.hasA || isa.xlen == 32, "the current atomic execution path implements RV32A word operations only")
   require(!isa.hasC || isa.xlen == 32, "the current compressed frontend implements RV32C only")
   isa.pageTableGeometries.foreach { geometry =>
     require(
@@ -342,6 +341,20 @@ object CoreProfiles {
     isa = IsaConfig(
       xlen = 64,
       extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv39"),
+      pmpEntries = 16
+    ),
+    platform = rv64PmpPlatform
+  )
+
+  /** RV64A V1: retain the production Sv39/PMP16 system profile and add shared W/D atomics. */
+  val rv64imasuSv39PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv64imasu-sv39-pmp-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M', 'A'),
       privilegeModes = Set('M', 'S', 'U'),
       zExtensions = Set("Zicsr"),
       virtualMemoryModes = Set("Sv39"),
