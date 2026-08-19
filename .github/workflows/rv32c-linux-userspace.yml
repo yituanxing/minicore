@@ -3,6 +3,7 @@ name: RV32C Linux Userspace Qualification
 on:
   pull_request:
     paths:
+      - validation/linux-frontier-rv32imac.env
       - software/l32/**
       - software/l32_busybox/**
       - software/l32_real/**
