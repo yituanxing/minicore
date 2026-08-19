@@ -83,6 +83,14 @@ class LinuxFrontierContractTest(unittest.TestCase):
         self.assertIn("L32_LINUX_FRONTIER_ARTIFACT: status=MISS", helper)
         self.assertIn("L32_LINUX_FRONTIER_ARTIFACT: status=PASS", helper)
 
+    def test_validation_identity_has_independent_ci_ownership(self) -> None:
+        frontier = WORKFLOW.read_text()
+        producer = PRODUCER_WORKFLOW.read_text()
+        self.assertIn("validation/linux-frontier-rv32imac.env", frontier)
+        self.assertIn("- validation/linux-frontier-rv32imac.env", producer)
+        self.assertNotIn("software/l32/linux-frontier-freeze.env", frontier)
+        self.assertNotIn("software/l32/linux-frontier-freeze.env", producer)
+
     def test_producer_publishes_only_after_unchanged_25_case_passes(self) -> None:
         producer = PRODUCER_WORKFLOW.read_text()
         matrix = producer.index(
