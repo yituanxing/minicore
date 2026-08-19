@@ -26,6 +26,7 @@ on:
       - 'src/main/scala/aethercore/ElaborateRV64IMSv39Pmp.scala'
       - 'src/test/scala/aethercore/RV64SharedVirtualMemorySpec.scala'
       - 'src/test/scala/aethercore/RV64Sv39CoreSpec.scala'
+      - 'src/test/scala/aethercore/RV64Sv39ProtectionSpec.scala'
       - 'src/test/scala/aethercore/TranslationUnitSpec.scala'
       - 'src/test/scala/aethercore/RV64VirtualMemoryAdapterSpec.scala'
       - 'src/test/scala/aethercore/Sv32PageTableWalkerSpec.scala'
@@ -34,6 +35,8 @@ on:
       - 'src/test/scala/aethercore/Sv32InstructionTranslationSpec.scala'
       - 'src/test/scala/aethercore/Sv32InstructionFetchCoreSpec.scala'
       - 'src/test/scala/aethercore/Sv32DataPathCoreSpec.scala'
+      - 'src/test/scala/aethercore/Sv32PmpCompositionSpec.scala'
+      - 'src/test/scala/aethercore/Sv32SfenceCoreSpec.scala'
       - 'sim/sim_main.cpp'
       - 'software/rv64/sv39_pmp_v1_linker.ld'
       - 'software/rv64/sv39_pmp_v1_workload.S'
@@ -53,7 +56,7 @@ jobs:
   qualify:
     name: Sv32 oracle + RV64 Sv39 production core
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
@@ -112,10 +115,13 @@ jobs:
             aethercore.Sv32InstructionTranslationSpec \
             aethercore.Sv32InstructionFetchCoreSpec \
             aethercore.Sv32DataPathCoreSpec \
+            aethercore.Sv32PmpCompositionSpec \
+            aethercore.Sv32SfenceCoreSpec \
             aethercore.RV64SharedVirtualMemorySpec \
             aethercore.TranslationUnitSpec \
             aethercore.RV64VirtualMemoryAdapterSpec \
-            aethercore.RV64Sv39CoreSpec
+            aethercore.RV64Sv39CoreSpec \
+            aethercore.RV64Sv39ProtectionSpec
 
       - name: Run real RV64 M-S-U Sv39 executable contract
         shell: bash
@@ -136,9 +142,10 @@ jobs:
             echo "- exact head: \`${TARGET_SHA}\`"
             echo '- production profile: RV64IM + Zicsr + M/S/U + Sv39 + PMP16 over PA56'
             echo '- simulation composition: one shared AetherCoreSimTop exposes geometry-width PTW traffic; the RV64 Sv39 top is only a profile wrapper'
-            echo '- Sv32 oracle: historical walker, TLB, translation unit, adapters and core-facing VM specs still execute through the shared machinery'
+            echo '- Sv32 oracle: historical walker, TLB, translation unit, PMP-composition and SFENCE core specs still execute through the shared machinery'
             echo '- Sv39 shared machinery: three-level walk, 64-bit PTE stride, shared TLB/translation unit, instruction adapter, data adapter and PTW arbitration'
             echo '- Sv39 production core: M-mode programs PMP16 and satp, MRET enters S-mode through three-level translation, then SRET enters a U page and performs 64-bit LD/SD'
+            echo '- Sv39 negative paths: page faults suppress final physical requests; PMP suppresses denied implicit PTW and translated instruction requests; SFENCE.VMA invalidates stale data translation'
             echo '- real runner contract: PTW must be exercised and the generated Sv39 top must expose an 8-byte PTE response port; stall=0 and stall=3 both exit 0'
             echo '- focused full-width proof: leaf PTE payloads and final code/data physical requests exceed 32 bits while remaining inside PA56'
             echo '- Sv48 remains shared-contract-only and is still not advertised as a production CoreConfig capability'
