@@ -35,9 +35,13 @@ class AetherCoreSimTop(
 
   require(!(withMachineInterruptPlatform && withSupervisorInterruptPlatform),
     "machine and supervisor interrupt platforms are mutually exclusive in one simulation top")
-  if (withMachineInterruptPlatform || withSupervisorInterruptPlatform) {
+  // The historical machine-side interrupt transport is still a 32-bit-only
+  // simulation surface. The Supervisor PLIC below is a 32-bit register bank
+  // behind an explicit narrow/pad bridge, so it is valid on both 32- and
+  // 64-bit core data buses.
+  if (withMachineInterruptPlatform) {
     require(busDataBits == 32,
-      s"the interrupt platform requires a 32-bit data bus, got $busDataBits")
+      s"the machine interrupt platform requires a 32-bit data bus, got $busDataBits")
   }
   if (withSupervisorInterruptPlatform) {
     require(withNs16550Uart,
@@ -357,7 +361,6 @@ class AetherCoreSimTop(
   io.memWdata := core.io.dmem.wdata
   io.memWmask := core.io.dmem.wmask
   io.memSize := core.io.dmem.size
-
   val interruptReady =
     if (withMachineInterruptPlatform) interruptPlatform.get.io.ready
     else if (withSupervisorInterruptPlatform) supervisorPlic.get.io.ready

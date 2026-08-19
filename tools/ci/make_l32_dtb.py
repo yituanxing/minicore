@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the frozen single-hart L32 FDT as a DTB without host dtc."""
+"""Generate the frozen single-hart AetherCore FDT as a DTB without host dtc."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ FDT_LAST_COMP_VERSION = 16
 CPU_INTC_PHANDLE = 1
 PLIC_PHANDLE = 2
 DEFAULT_CPU_ISA = "rv32ima_zicsr_zifencei_sstc"
+DEFAULT_MMU = "sv32"
 
 
 def be32(value: int) -> bytes:
@@ -90,6 +91,7 @@ class DtbBuilder:
 
 
 def validate_cpu_isa(isa: str) -> str:
+    """Preserve the historical L32 validator as a compatibility contract."""
     normalized = isa.strip().lower()
     if not normalized.startswith("rv32i"):
         raise ValueError(f"L32 CPU ISA must be an RV32I-derived profile: {isa!r}")
@@ -102,17 +104,44 @@ def validate_cpu_isa(isa: str) -> str:
     return normalized
 
 
-def build_l32_dtb(
-    bootargs: str | None = None,
-    isa: str = DEFAULT_CPU_ISA,
+def validate_cpu_profile(isa: str, mmu: str) -> tuple[str, str]:
+    """Validate the bounded production ISA/MMU pairs used by the shared board."""
+    normalized_isa = isa.strip().lower()
+    normalized_mmu = mmu.strip().lower()
+    try:
+        normalized_isa.encode("ascii")
+        normalized_mmu.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("CPU ISA and MMU profile must be ASCII") from exc
+    if "\x00" in normalized_isa or "\x00" in normalized_mmu:
+        raise ValueError("CPU ISA and MMU profile must not contain NUL")
+
+    expected_prefix = {
+        "sv32": "rv32i",
+        "sv39": "rv64i",
+    }.get(normalized_mmu)
+    if expected_prefix is None:
+        raise ValueError(f"unsupported AetherCore MMU profile: {mmu!r}")
+    if not normalized_isa.startswith(expected_prefix):
+        raise ValueError(
+            f"{normalized_mmu} requires an {expected_prefix.upper()}-derived CPU profile: {isa!r}"
+        )
+    return normalized_isa, normalized_mmu
+
+
+def _build_aethercore_dtb(
+    bootargs: str | None,
+    cpu_isa: str,
+    mmu: str,
+    machine_compatible: str,
+    model: str,
 ) -> bytes:
-    cpu_isa = validate_cpu_isa(isa)
     b = DtbBuilder()
     b.begin_node("")
     b.prop("#address-cells", cells(2))
     b.prop("#size-cells", cells(2))
-    b.prop("compatible", string("aethercore,l32"))
-    b.prop("model", string("AetherCore RV32 L32"))
+    b.prop("compatible", string(machine_compatible))
+    b.prop("model", string(model))
 
     b.begin_node("chosen")
     b.prop("stdout-path", string("/soc/serial@10000000"))
@@ -131,7 +160,7 @@ def build_l32_dtb(
     b.prop("status", string("okay"))
     b.prop("compatible", string("riscv"))
     b.prop("riscv,isa", string(cpu_isa))
-    b.prop("mmu-type", string("riscv,sv32"))
+    b.prop("mmu-type", string(f"riscv,{mmu}"))
 
     b.begin_node("interrupt-controller")
     b.prop("#interrupt-cells", cells(1))
@@ -197,6 +226,44 @@ def build_l32_dtb(
     return b.finish()
 
 
+def build_l32_dtb(
+    bootargs: str | None = None,
+    isa: str = DEFAULT_CPU_ISA,
+) -> bytes:
+    """Frozen compatibility entry point: bytes remain identical for the L32 profile."""
+    cpu_isa = validate_cpu_isa(isa)
+    return _build_aethercore_dtb(
+        bootargs,
+        cpu_isa,
+        "sv32",
+        "aethercore,l32",
+        "AetherCore RV32 L32",
+    )
+
+
+def build_profile_dtb(
+    bootargs: str | None = None,
+    isa: str = DEFAULT_CPU_ISA,
+    mmu: str = DEFAULT_MMU,
+) -> bytes:
+    cpu_isa, cpu_mmu = validate_cpu_profile(isa, mmu)
+    if cpu_mmu == "sv32":
+        return _build_aethercore_dtb(
+            bootargs,
+            cpu_isa,
+            cpu_mmu,
+            "aethercore,l32",
+            "AetherCore RV32 L32",
+        )
+    return _build_aethercore_dtb(
+        bootargs,
+        cpu_isa,
+        cpu_mmu,
+        "aethercore,rv64",
+        "AetherCore RV64 Sv39",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=Path)
@@ -207,24 +274,31 @@ def main() -> int:
         default=DEFAULT_CPU_ISA,
         help="CPU riscv,isa property; defaults to the frozen RV32IMA profile",
     )
+    parser.add_argument(
+        "--mmu",
+        default=DEFAULT_MMU,
+        choices=("sv32", "sv39"),
+        help="CPU MMU type; defaults to the frozen Sv32 profile",
+    )
     args = parser.parse_args()
 
     try:
-        cpu_isa = validate_cpu_isa(args.isa)
+        cpu_isa, cpu_mmu = validate_cpu_profile(args.isa, args.mmu)
     except ValueError as exc:
         parser.error(str(exc))
-    blob = build_l32_dtb(args.bootargs, cpu_isa)
+    blob = build_profile_dtb(args.bootargs, cpu_isa, cpu_mmu)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(blob)
     digest = hashlib.sha256(blob).hexdigest()
 
+    result_label = "L32_DTB_RESULT" if cpu_mmu == "sv32" else "AETHERCORE_DTB_RESULT"
     lines = [
-        "L32_DTB_RESULT: status=PASS",
+        f"{result_label}: status=PASS",
         f"bytes={len(blob)}",
         f"sha256={digest}",
         "hart=0",
         f"isa={cpu_isa}",
-        "mmu=sv32",
+        f"mmu={cpu_mmu}",
         "ram=0x80000000+0x10000000",
         "plic=0x0c000000+0x00400000",
         "plic_ndev=52",

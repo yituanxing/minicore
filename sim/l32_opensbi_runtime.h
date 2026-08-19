@@ -16,11 +16,12 @@ constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kEbreak = 0x00100073U;
 
 /**
- * Shared byte-addressed RAM for the L32 OpenSBI/Linux simulation boundary.
+ * Shared byte-addressed RAM for the OpenSBI/Linux simulation boundary.
  *
  * This owns only simulator transport semantics. Runtime milestones, commit
  * accounting, interrupt qualification and forkserver policy remain in their
- * scenario-specific runners.
+ * scenario-specific runners. The historical l32sim namespace is retained as
+ * a compatibility surface while the transport itself is XLEN-neutral.
  */
 class Memory {
  public:
@@ -42,27 +43,40 @@ class Memory {
   std::uint32_t readInstruction(std::uint64_t address, std::size_t size) const {
     if (size != 2 && size != 4)
       throw std::runtime_error("instruction transaction must be 2 or 4 bytes");
+    return static_cast<std::uint32_t>(readData(address, size));
+  }
+
+  std::uint64_t readData(std::uint64_t address, std::size_t size) const {
+    if (size != 1 && size != 2 && size != 4 && size != 8)
+      throw std::runtime_error("data transaction must be 1, 2, 4 or 8 bytes");
     const auto offset = checkedOffset(address, size);
-    std::uint32_t value = 0;
+    std::uint64_t value = 0;
     for (std::size_t i = 0; i < size; ++i)
-      value |= std::uint32_t(bytes_[offset + i]) << (8 * i);
+      value |= std::uint64_t(bytes_[offset + i]) << (8 * i);
     return value;
   }
 
   std::uint32_t read32(std::uint64_t address) const {
-    const auto offset = checkedOffset(address, 4);
-    return std::uint32_t(bytes_[offset]) |
-           (std::uint32_t(bytes_[offset + 1]) << 8) |
-           (std::uint32_t(bytes_[offset + 2]) << 16) |
-           (std::uint32_t(bytes_[offset + 3]) << 24);
+    return static_cast<std::uint32_t>(readData(address, 4));
+  }
+
+  void writeMasked(std::uint64_t address, std::uint64_t data,
+                   std::uint64_t mask, std::size_t size) {
+    if (size != 1 && size != 2 && size != 4 && size != 8)
+      throw std::runtime_error("store transaction must be 1, 2, 4 or 8 bytes");
+    const std::uint64_t validMask =
+        size == 8 ? 0xffULL : ((std::uint64_t{1} << size) - 1ULL);
+    if ((mask & ~validMask) != 0)
+      throw std::runtime_error("store byte mask exceeds architectural access width");
+    const auto offset = checkedOffset(address, size);
+    for (std::size_t i = 0; i < size; ++i) {
+      if ((mask >> i) & 1ULL)
+        bytes_[offset + i] = static_cast<std::uint8_t>(data >> (8 * i));
+    }
   }
 
   void write32Masked(std::uint64_t address, std::uint32_t data, std::uint8_t mask) {
-    const auto offset = checkedOffset(address, 4);
-    for (unsigned i = 0; i < 4; ++i) {
-      if ((mask >> i) & 1U)
-        bytes_[offset + i] = static_cast<std::uint8_t>(data >> (8 * i));
-    }
+    writeMasked(address, data, mask, 4);
   }
 
  private:
@@ -74,7 +88,18 @@ class Memory {
   std::vector<std::uint8_t> bytes_;
 };
 
-/** Drive the complete current L32 physical-memory boundary for one low phase. */
+/** Chisel MemSize encodes Byte/Half/Word/DWord in declaration order. */
+inline std::size_t dataBytesFromMemSize(std::uint32_t encoded) {
+  switch (encoded) {
+    case 0: return 1;
+    case 1: return 2;
+    case 2: return 4;
+    case 3: return 8;
+    default: throw std::runtime_error("unknown architectural memory-size encoding");
+  }
+}
+
+/** Drive the shared RV32/RV64 physical-memory boundary for one low phase. */
 template <typename Top>
 void driveMemory(Top& top, const Memory& memory) {
   const bool ivalid = top.io_imemValid;
@@ -89,21 +114,28 @@ void driveMemory(Top& top, const Memory& memory) {
 
   const bool dvalid = top.io_memValid;
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
-  const bool dfault = dvalid && !memory.contains(daddr, 4);
+  const auto dbytes = dataBytesFromMemSize(
+      static_cast<std::uint32_t>(top.io_memSize));
+  const bool dfault = dvalid && !memory.contains(daddr, dbytes);
   top.io_memReady = true;
   top.io_memFault = dfault;
-  top.io_memRdata = (!dvalid || dfault) ? 0 : memory.read32(daddr);
+  top.io_memRdata =
+      (!dvalid || dfault) ? 0 : memory.readData(daddr, dbytes);
 
   const bool ptwValid = top.io_ptwValid;
   const auto ptwAddr = static_cast<std::uint64_t>(top.io_ptwAddr);
-  const bool ptwFault = ptwValid && !memory.contains(ptwAddr, 4);
+  constexpr std::size_t ptwBytes = sizeof(top.io_ptwRdata);
+  static_assert(ptwBytes == 4 || ptwBytes == 8,
+                "page-table response port must carry a 4- or 8-byte PTE");
+  const bool ptwFault = ptwValid && !memory.contains(ptwAddr, ptwBytes);
   top.io_ptwReady = true;
   top.io_ptwFault = ptwFault;
-  top.io_ptwRdata = (!ptwValid || ptwFault) ? 0 : memory.read32(ptwAddr);
+  top.io_ptwRdata =
+      (!ptwValid || ptwFault) ? 0 : memory.readData(ptwAddr, ptwBytes);
 }
 
 /**
- * Execute one complete simulator cycle while preserving the qualified L32
+ * Execute one complete simulator cycle while preserving the qualified runtime
  * ordering: drive/evaluate twice at clock-low, commit an accepted physical
  * store into host RAM, then evaluate the rising edge and advance Verilator
  * time. The caller owns architectural observation after the rising edge.
@@ -122,10 +154,13 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
 
   if (!top.reset && top.io_memValid && top.io_memWrite && top.io_memReady &&
       !top.io_memFault) {
-    memory.write32Masked(
+    const auto dbytes = dataBytesFromMemSize(
+        static_cast<std::uint32_t>(top.io_memSize));
+    memory.writeMasked(
         static_cast<std::uint64_t>(top.io_memAddr),
-        static_cast<std::uint32_t>(top.io_memWdata),
-        static_cast<std::uint8_t>(top.io_memWmask));
+        static_cast<std::uint64_t>(top.io_memWdata),
+        static_cast<std::uint64_t>(top.io_memWmask),
+        dbytes);
   }
 
   top.clock = 1;

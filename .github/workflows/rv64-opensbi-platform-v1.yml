@@ -1,0 +1,122 @@
+name: RV64 OpenSBI Platform V1
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/sim/AetherCoreSimTop.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala'
+      - 'src/main/scala/aethercore/ElaborateOpenSbiRV64.scala'
+      - 'src/test/scala/aethercore/RV64SupervisorPlatformMmioSpec.scala'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/opensbi_runtime_compile_probe.cpp'
+      - 'tools/ci/make_l32_dtb.py'
+      - 'tests_py/test_opensbi_dtb_profiles.py'
+      - '.github/workflows/rv64-opensbi-platform-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-opensbi-platform-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Shared RV32 compatibility + RV64 OpenSBI platform
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 30
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala sim tools tests_py .github/workflows || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill
+          echo "exact_head=$actual"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Validate shared DTB profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_opensbi_dtb_profiles
+
+      - name: Run RV64 Supervisor platform MMIO contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly aethercore.RV64SupervisorPlatformMmioSpec
+
+      - name: Elaborate RV64 OpenSBI shared platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-opensbi-platform-v1/$TARGET_SHA"
+          rm -rf "$build/rtl" "$build/obj"
+          mkdir -p "$build/rtl" "$build/obj"
+          ./mill aethercore.runMain aethercore.ElaborateOpenSbiRV64 --target-dir "$build/rtl"
+          find "$build/rtl" -maxdepth 1 -name '*.sv' -print | sort > "$build/rtl-sources.txt"
+          test -s "$build/rtl-sources.txt"
+
+      - name: Compile and execute shared OpenSBI runtime on RV64
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-opensbi-platform-v1/$TARGET_SHA"
+          mapfile -t rtl_sources < "$build/rtl-sources.txt"
+          verilator --cc --exe --build -Wall -Wno-fatal \
+            --top-module AetherCoreOpenSbiRV64SimTop \
+            -Mdir "$build/obj" -j "$(nproc)" \
+            -CFLAGS "-std=c++20 -O2 -I$GITHUB_WORKSPACE/sim" \
+            -LDFLAGS "-ldl" \
+            "${rtl_sources[@]}" \
+            "$GITHUB_WORKSPACE/sim/opensbi_runtime_compile_probe.cpp"
+          "$build/obj/VAetherCoreOpenSbiRV64SimTop"
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 OpenSBI platform V1'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- DTB: frozen RV32/Sv32 entry remains byte-identical; RV64/Sv39 reuses the same board description and rejects cross-XLEN VM pairs'
+            echo '- platform: RV64 core bus bridges into the existing 32-bit Supervisor PLIC and ns16550 register banks; ACLINT mtime/mtimecmp retains native 64-bit access'
+            echo '- runtime: instruction width remains 2/4 bytes, data width follows MemSize 1/2/4/8, and PTW width follows the generated 4/8-byte PTE port'
+            echo '- RV64 firmware shell: shared OpenSBI top uses RV64IMA + Zicsr + Zifencei + M/S/U + Sv39 + PMP16 without duplicating the platform'
+            echo '- generated-top proof: the shared host runtime is compiled and executed against the real RV64 Verilator top with 64-bit data and 8-byte PTW ports'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -15,34 +15,55 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "class Memory",
             "kRamBase = 0x80000000ULL",
             "kRamSize = 256ULL * 1024ULL * 1024ULL",
+            "std::uint32_t readInstruction",
+            "std::uint64_t readData",
+            "void writeMasked",
+            # Historical RV32 callers retain the narrow compatibility wrapper,
+            # while the shared transport itself is width-generic.
+            "void write32Masked",
+            "dataBytesFromMemSize",
             "void driveMemory",
             "top.io_imemAddr",
-            "top.io_imemInst",
+            "top.io_imemBytes",
+            "memory.readInstruction(iaddr, ibytes)",
             "top.io_memValid",
+            "top.io_memSize",
+            "memory.contains(daddr, dbytes)",
             "top.io_memReady = true",
-            "top.io_memRdata",
+            "memory.readData(daddr, dbytes)",
             "top.io_ptwValid",
+            "constexpr std::size_t ptwBytes = sizeof(top.io_ptwRdata);",
+            "memory.contains(ptwAddr, ptwBytes)",
             "top.io_ptwReady = true",
-            "top.io_ptwRdata",
-            "void write32Masked",
+            "memory.readData(ptwAddr, ptwBytes)",
             "bool step",
             "void initialize",
         ):
             self.assertIn(required, text)
 
+        # Preserve the qualified simulator ordering while requiring accepted
+        # stores to use the same architectural MemSize-derived width as reads.
         low = text.index("top.clock = 0;")
         first_eval = text.index("top.eval();", low)
         second_eval = text.index("top.eval();", first_eval + 1)
-        store = text.index("memory.write32Masked", second_eval)
+        store_width = text.index("const auto dbytes = dataBytesFromMemSize", second_eval)
+        store = text.index("memory.writeMasked", store_width)
         high = text.index("top.clock = 1;", store)
         high_eval = text.index("top.eval();", high)
         time_inc = text.index("context.timeInc(1);", high_eval)
         self.assertLess(low, first_eval)
         self.assertLess(first_eval, second_eval)
-        self.assertLess(second_eval, store)
+        self.assertLess(second_eval, store_width)
+        self.assertLess(store_width, store)
         self.assertLess(store, high)
         self.assertLess(high, high_eval)
         self.assertLess(high_eval, time_inc)
+
+        store_call = text[store:high]
+        self.assertIn("static_cast<std::uint64_t>(top.io_memAddr)", store_call)
+        self.assertIn("static_cast<std::uint64_t>(top.io_memWdata)", store_call)
+        self.assertIn("static_cast<std::uint64_t>(top.io_memWmask)", store_call)
+        self.assertIn("dbytes", store_call)
 
     def test_cold_and_warm_runners_share_transport_but_keep_their_oracles(self):
         cold = COLD.read_text()
