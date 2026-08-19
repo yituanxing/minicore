@@ -1,0 +1,53 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/rv64a-sv39-pmp-v1
+RTL_DIR := $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+SOFTWARE_DIR := $(BUILD_DIR)/software
+GENERATED_MAIN := $(BUILD_DIR)/sim_main_rv64a_sv39_pmp_v1.cpp
+TOP := AetherCoreRV64IMASv39PmpSimTop
+VERILATOR ?= verilator
+JOBS ?= 6
+
+RTL_SOURCES = $(wildcard $(RTL_DIR)/*.sv)
+
+.PHONY: all rtl workload runner-source sim run-local clean
+
+all: run-local
+
+rtl:
+	./mill aethercore.runMain aethercore.ElaborateRV64IMASv39Pmp --target-dir $(RTL_DIR)
+
+workload:
+	bash tools/build_rv64a_sv39_pmp_v1.sh $(SOFTWARE_DIR)
+
+runner-source:
+	mkdir -p $(BUILD_DIR)
+	sed 's/VAetherCoreSimTop/V$(TOP)/g' sim/sim_main.cpp > $(GENERATED_MAIN)
+
+sim: rtl runner-source
+	@test -n "$(RTL_SOURCES)" || { echo "ERROR: no RV64A Sv39 SystemVerilog files in $(RTL_DIR)"; exit 1; }
+	$(VERILATOR) --cc --exe --build --trace -Wall -Wno-fatal \
+		--top-module $(TOP) -Mdir $(OBJ_DIR) \
+		-j $(JOBS) \
+		-CFLAGS "-std=c++20 -O2 -I$(abspath sim)" -LDFLAGS "-ldl" \
+		$(RTL_SOURCES) $(abspath $(GENERATED_MAIN)) $(abspath sim/nemu_difftest.cpp)
+
+run-local: sim workload
+	mkdir -p $(BUILD_DIR)/logs
+	@for stall in 0 3; do \
+		echo "== RV64A Sv39 PMP V1: stall=$$stall =="; \
+		$(OBJ_DIR)/V$(TOP) $(SOFTWARE_DIR)/rv64a-sv39-pmp-v1.bin \
+			--max-cycles 75000 --self-check-exit --require-ptw --expect-ptw-bytes 8 \
+			--stall-period $$stall \
+			2>&1 | tee $(BUILD_DIR)/logs/stall-$$stall.log; \
+	done
+	sha256sum \
+		$(SOFTWARE_DIR)/rv64a-sv39-pmp-v1.elf \
+		$(SOFTWARE_DIR)/rv64a-sv39-pmp-v1.bin \
+		$(BUILD_DIR)/logs/stall-0.log \
+		$(BUILD_DIR)/logs/stall-3.log
+
+clean:
+	rm -rf $(BUILD_DIR)

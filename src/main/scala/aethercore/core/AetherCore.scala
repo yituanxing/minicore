@@ -96,7 +96,6 @@ class AetherCore(
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineExternal)
 
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
-  require(!config.isa.hasA || xlen == 32, "the current atomic execution path implements RV32A word operations only")
   vmGeometry.foreach { geometry =>
     require(
       paddrBits >= geometry.architecturalPhysicalAddressBits,
@@ -129,6 +128,7 @@ class AetherCore(
 
   val reservationValid = RegInit(false.B)
   val reservationAddress = RegInit(0.U(paddrBits.W))
+  val reservationSize = RegInit(MemSize.Word)
   val atomicWritePhase = RegInit(false.B)
   val atomicOldData = RegInit(0.U(xlen.W))
 
@@ -529,7 +529,8 @@ class AetherCore(
 
   val translatedPhysicalAddress = WireDefault(bareDataPhysicalAddress)
   val scReservationMatch = WireDefault(
-    reservationValid && !bareDataOutOfRange && reservationAddress === bareDataPhysicalAddress
+    reservationValid && reservationSize === exMem.ctrl.memSize &&
+      !bareDataOutOfRange && reservationAddress === bareDataPhysicalAddress
   )
 
   val atomicInstruction = exMem.ctrl.atomicOp =/= AtomicOp.None
@@ -538,6 +539,29 @@ class AetherCore(
   val atomicRmw = atomicInstruction && !atomicLr && !atomicSc
   val atomicReadPhase = atomicRmw && !atomicWritePhase
   val atomicWriteRequest = atomicRmw && atomicWritePhase
+  val atomicWordOperation = exMem.ctrl.memSize === MemSize.Word
+
+  val atomicSignedOperand = if (xlen == 64) {
+    Mux(
+      atomicWordOperation,
+      Cat(Fill(32, exMem.storeData(31)), exMem.storeData(31, 0)),
+      exMem.storeData
+    )
+  } else exMem.storeData
+  val atomicUnsignedOperand = if (xlen == 64) {
+    Mux(
+      atomicWordOperation,
+      Cat(0.U(32.W), exMem.storeData(31, 0)),
+      exMem.storeData
+    )
+  } else exMem.storeData
+  val atomicUnsignedOldData = if (xlen == 64) {
+    Mux(
+      atomicWordOperation,
+      Cat(0.U(32.W), atomicOldData(31, 0)),
+      atomicOldData
+    )
+  } else atomicOldData
 
   val atomicWriteData = WireDefault(exMem.storeData)
   switch(exMem.ctrl.atomicOp) {
@@ -547,16 +571,32 @@ class AetherCore(
     is(AtomicOp.And) { atomicWriteData := atomicOldData & exMem.storeData }
     is(AtomicOp.Or) { atomicWriteData := atomicOldData | exMem.storeData }
     is(AtomicOp.Min) {
-      atomicWriteData := Mux(atomicOldData.asSInt < exMem.storeData.asSInt, atomicOldData, exMem.storeData)
+      atomicWriteData := Mux(
+        atomicOldData.asSInt < atomicSignedOperand.asSInt,
+        atomicOldData,
+        atomicSignedOperand
+      )
     }
     is(AtomicOp.Max) {
-      atomicWriteData := Mux(atomicOldData.asSInt > exMem.storeData.asSInt, atomicOldData, exMem.storeData)
+      atomicWriteData := Mux(
+        atomicOldData.asSInt > atomicSignedOperand.asSInt,
+        atomicOldData,
+        atomicSignedOperand
+      )
     }
     is(AtomicOp.Minu) {
-      atomicWriteData := Mux(atomicOldData < exMem.storeData, atomicOldData, exMem.storeData)
+      atomicWriteData := Mux(
+        atomicUnsignedOldData < atomicUnsignedOperand,
+        atomicUnsignedOldData,
+        atomicUnsignedOperand
+      )
     }
     is(AtomicOp.Maxu) {
-      atomicWriteData := Mux(atomicOldData > exMem.storeData, atomicOldData, exMem.storeData)
+      atomicWriteData := Mux(
+        atomicUnsignedOldData > atomicUnsignedOperand,
+        atomicUnsignedOldData,
+        atomicUnsignedOperand
+      )
     }
   }
 
@@ -617,23 +657,30 @@ class AetherCore(
     vm.io.pteData := dataPteRdata
     vm.io.pteFault := dataPteFault
 
+    translatedPhysicalAddress := vm.io.physicalAddress
+    scReservationMatch := reservationValid && reservationSize === exMem.ctrl.memSize &&
+      reservationAddress === vm.io.physicalAddress
+    val suppressFailedScDataAccess = atomicSc && !scReservationMatch
+
     dataPmpAddress := vm.io.dataAddress
     val translatedDataPmpFault = vm.io.dataValid &&
       (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
     dataPmpFault := translatedDataPmpFault
 
-    io.dmem.valid := vm.io.dataValid && !translatedDataPmpFault
+    io.dmem.valid := vm.io.dataValid && !translatedDataPmpFault && !suppressFailedScDataAccess
     io.dmem.write := vm.io.dataWrite
     io.dmem.addr := vm.io.dataAddress
     io.dmem.wdata := vm.io.dataWdata
     io.dmem.wmask := vm.io.dataWmask
     io.dmem.size := vm.io.dataSize
-    vm.io.dataReady := Mux(translatedDataPmpFault, true.B, io.dmem.ready)
+    vm.io.dataReady := Mux(
+      translatedDataPmpFault || suppressFailedScDataAccess,
+      true.B,
+      io.dmem.ready
+    )
     vm.io.dataRdata := io.dmem.rdata
     vm.io.dataFault := translatedDataPmpFault || (io.dmem.valid && io.dmem.fault)
 
-    translatedPhysicalAddress := vm.io.physicalAddress
-    scReservationMatch := reservationValid && reservationAddress === vm.io.physicalAddress
     vmRequestComplete := vm.io.requestComplete
     vmPageFault := vm.io.pageFault
     vmAccessFault := vm.io.accessFault
@@ -800,6 +847,7 @@ class AetherCore(
       when(atomicLr && !memoryFault && io.dmem.valid && io.dmem.ready && !io.dmem.fault) {
         reservationValid := true.B
         reservationAddress := translatedPhysicalAddress
+        reservationSize := exMem.ctrl.memSize
       }.elsewhen(!atomicLr) {
         reservationValid := false.B
       }.otherwise {

@@ -196,6 +196,28 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.platform.busDataBits shouldBe 64
   }
 
+  it should "describe the bounded RV64A Sv39 PMP16 production profile" in {
+    val config = CoreProfiles.rv64imasuSv39PmpSoftware
+    config.name shouldBe "rv64imasu-sv39-pmp-software"
+    config.isa.xlen shouldBe 64
+    config.isa.hasM shouldBe true
+    config.isa.hasA shouldBe true
+    config.isa.hasS shouldBe true
+    config.isa.hasU shouldBe true
+    config.isa.hasPmp shouldBe true
+    config.isa.pmpEntries shouldBe 16
+    config.isa.hasZicsr shouldBe true
+    config.isa.hasZifencei shouldBe false
+    config.isa.hasSv39 shouldBe true
+    config.isa.hasSv48 shouldBe false
+    config.isa.hasC shouldBe false
+    config.isa.hasSstc shouldBe false
+    config.isa.march shouldBe "rv64ima_zicsr"
+    config.isa.mabi shouldBe "lp64"
+    config.platform.paddrBits shouldBe 56
+    config.platform.busDataBits shouldBe 64
+  }
+
   it should "derive an independent RV32I software contract" in {
     val isa = IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'))
     isa.xBytes shouldBe 4
@@ -220,8 +242,9 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
       privilegeModes = Set('M')
     )
     rv64ima.march shouldBe "rv64ima"
-    an[IllegalArgumentException] should be thrownBy
-      CoreConfig("unsupported-rv64a", rv64ima, rv64Platform)
+    val supportedRv64A = CoreConfig("supported-rv64a", rv64ima, rv64Platform)
+    supportedRv64A.isa.hasA shouldBe true
+    supportedRv64A.platform.busDataBits shouldBe 64
 
     val rv64Pmp16 = IsaConfig(
       xlen = 64,
