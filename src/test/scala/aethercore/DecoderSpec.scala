@@ -240,28 +240,81 @@ class DecoderSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "reject atomic encodings when A is absent or when the unimplemented RV64A profile is selected" in {
-    val rv32im = IsaConfig(
-      xlen = 32,
-      extensions = Set('I', 'M'),
-      privilegeModes = Set('M')
-    )
+  it should "decode complete RV64A W and D operation families with typed widths" in {
     val rv64ima = IsaConfig(
       xlen = 64,
       extensions = Set('I', 'M', 'A'),
       privilegeModes = Set('M')
     )
-
-    simulate(new Decoder(rv32im)) { dut =>
-      dut.io.inst.poke(amo(0x01, rs2 = 2).U)
-      dut.io.ctrl.illegal.expect(true.B)
-      dut.io.ctrl.atomicOp.expect(AtomicOp.None)
-    }
+    val cases = Seq(
+      (0x02, 0, AtomicOp.Lr, true, false, false),
+      (0x03, 2, AtomicOp.Sc, false, true, true),
+      (0x01, 2, AtomicOp.Swap, true, true, true),
+      (0x00, 2, AtomicOp.Add, true, true, true),
+      (0x04, 2, AtomicOp.Xor, true, true, true),
+      (0x0c, 2, AtomicOp.And, true, true, true),
+      (0x08, 2, AtomicOp.Or, true, true, true),
+      (0x10, 2, AtomicOp.Min, true, true, true),
+      (0x14, 2, AtomicOp.Max, true, true, true),
+      (0x18, 2, AtomicOp.Minu, true, true, true),
+      (0x1c, 2, AtomicOp.Maxu, true, true, true)
+    )
 
     simulate(new Decoder(rv64ima)) { dut =>
-      dut.io.inst.poke(amo(0x01, rs2 = 2).U)
+      for ((funct3, size) <- Seq(2 -> MemSize.Word, 3 -> MemSize.DWord)) {
+        for (((funct5, rs2, operation, reads, writes, usesRs2), index) <- cases.zipWithIndex) {
+          dut.io.inst.poke(amo(
+            funct5,
+            rs2,
+            aq = index == 3,
+            rl = index == 3,
+            funct3 = funct3
+          ).U)
+          dut.io.ctrl.illegal.expect(false.B)
+          dut.io.ctrl.atomicOp.expect(operation)
+          dut.io.ctrl.regWrite.expect(true.B)
+          dut.io.ctrl.memRead.expect(reads.B)
+          dut.io.ctrl.memWrite.expect(writes.B)
+          dut.io.ctrl.memSize.expect(size)
+          dut.io.ctrl.usesRs1.expect(true.B)
+          dut.io.ctrl.usesRs2.expect(usesRs2.B)
+          dut.io.ctrl.wbSel.expect(WbSel.Memory)
+        }
+      }
+
+      // LR.W and LR.D both require rs2=x0.
+      for (funct3 <- Seq(2, 3)) {
+        dut.io.inst.poke(amo(0x02, rs2 = 2, funct3 = funct3).U)
+        dut.io.ctrl.illegal.expect(true.B)
+        dut.io.ctrl.atomicOp.expect(AtomicOp.None)
+      }
+
+      // No other funct3 is part of RV64A's W/D integer atomic surface.
+      dut.io.inst.poke(amo(0x01, rs2 = 2, funct3 = 1).U)
       dut.io.ctrl.illegal.expect(true.B)
-      dut.io.ctrl.atomicOp.expect(AtomicOp.None)
+      dut.io.inst.poke(amo(0x01, rs2 = 2, funct3 = 4).U)
+      dut.io.ctrl.illegal.expect(true.B)
+    }
+  }
+
+  it should "reject atomic encodings when A is absent" in {
+    val rv32im = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M')
+    )
+    val rv64im = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M')
+    )
+
+    for (isa <- Seq(rv32im, rv64im)) {
+      simulate(new Decoder(isa)) { dut =>
+        dut.io.inst.poke(amo(0x01, rs2 = 2).U)
+        dut.io.ctrl.illegal.expect(true.B)
+        dut.io.ctrl.atomicOp.expect(AtomicOp.None)
+      }
     }
   }
 }
