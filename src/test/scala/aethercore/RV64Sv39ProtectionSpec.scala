@@ -191,7 +191,7 @@ class RV64Sv39ProtectionSpec extends AnyFlatSpec with Matchers with ChiselSim {
     simulate(new AetherCore(CoreProfiles.rv64imsuSv39PmpSoftware)) { dut =>
       initialize(dut)
       var cycles = 0
-      var pteReads = 0
+      var pteAddresses = Vector.empty[BigInt]
       var leakedFinalFetch = false
       var sawFault = false
 
@@ -215,7 +215,7 @@ class RV64Sv39ProtectionSpec extends AnyFlatSpec with Matchers with ChiselSim {
           }
           dut.io.ptw.get.rdata.poke(value.U)
           dut.io.ptw.get.ready.poke(true.B)
-          pteReads += 1
+          pteAddresses :+= address
         }
 
         dut.clock.step()
@@ -230,7 +230,15 @@ class RV64Sv39ProtectionSpec extends AnyFlatSpec with Matchers with ChiselSim {
         }
       }
 
-      pteReads shouldBe 3
+      // The faulting fetch itself must complete exactly the Sv39 root/L1/leaf
+      // walk. Younger speculative fetches may begin before this older fault
+      // reaches retirement, so total PTW traffic is intentionally not frozen.
+      pteAddresses.take(3) shouldBe Vector(
+        codeRootPteAddress,
+        codeLevel1PteAddress,
+        codeLeafPteAddress
+      )
+      pteAddresses.size should be >= 3
       leakedFinalFetch shouldBe false
       sawFault shouldBe true
     }
