@@ -18,6 +18,7 @@ on:
       - tools/ci/l32_busybox_initramfs_build.sh
       - tools/ci/l32_busybox_payload_build.sh
       - tools/ci/l32_busybox_runtime_freeze.sh
+      - tools/ci/l32_linux_frontier_artifact.sh
       - tools/ci/l32_rv32c_kernel_build.sh
       - tools/ci/l32_linux_runtime_suite.py
       - tools/ci/make_l32_dtb.py
@@ -80,6 +81,7 @@ jobs:
             tools/ci/l32_busybox_initramfs_build.sh \
             tools/ci/l32_busybox_payload_build.sh \
             tools/ci/l32_busybox_runtime_freeze.sh \
+            tools/ci/l32_linux_frontier_artifact.sh \
             tools/ci/l32_rv32c_kernel_build.sh; do
             bash -n "$script"
           done
@@ -279,6 +281,18 @@ jobs:
           )
           PY
 
+      - name: Publish 25-case-qualified Linux frontier artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_frontier_artifact.sh
+          tools/ci/l32_linux_frontier_artifact.sh publish \
+            | tee build/l32-linux-frontier-publish.txt
+          grep -q '^L32_LINUX_FRONTIER_ARTIFACT_PUBLISH: status=PASS ' \
+            build/l32-linux-frontier-publish.txt
+          grep -qx 'L32_LINUX_FRONTIER_ARTIFACT: status=PASS' \
+            build/l32-linux-frontier-publish.txt
+
       - name: Upload exact-head RV32C userspace evidence
         if: always()
         continue-on-error: true
@@ -310,3 +324,4 @@ jobs:
             build/l32-busybox-forkserver-rv32imac/workloads.tsv
             build/l32-busybox-forkserver-rv32imac/firmware.sha256
             build/l32-busybox-forkserver-rv32imac/logs/**
+            build/l32-linux-frontier-publish.txt
