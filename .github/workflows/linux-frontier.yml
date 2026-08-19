@@ -9,7 +9,7 @@ on:
       - 'Makefile.l32-linux-boot'
       - 'sim/l32_opensbi_runtime.h'
       - 'sim/opensbi_boot_main.cpp'
-      - 'software/l32/linux-frontier-freeze.env'
+      - 'validation/linux-frontier-rv32imac.env'
       - 'tools/ci/l32_linux_frontier_artifact.sh'
       - 'tools/ci/l32_linux_frontier_input.sh'
       - 'tools/ci/l32_userspace_profile.sh'
