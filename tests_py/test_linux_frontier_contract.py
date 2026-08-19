@@ -19,6 +19,12 @@ class LinuxFrontierContractTest(unittest.TestCase):
         self.assertIn('MAX_CYCLES="$FRONTIER_MAX_CYCLES"', text)
         self.assertIn("PROGRESS_INTERVAL_CYCLES=0", text)
 
+    def test_linux_behavior_runs_before_frontier_regression_contract(self) -> None:
+        text = WORKFLOW.read_text()
+        linux = text.index("Run Linux frontier and stop at first requested milestone")
+        regression = text.index("Validate frontier contracts after Linux passes")
+        self.assertLess(linux, regression)
+
     def test_frontier_consumes_only_prequalified_software(self) -> None:
         text = WORKFLOW.read_text()
         self.assertIn("Require frozen qualified Linux payload", text)
