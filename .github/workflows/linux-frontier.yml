@@ -10,6 +10,8 @@ on:
       - 'sim/l32_opensbi_runtime.h'
       - 'sim/opensbi_boot_main.cpp'
       - 'tools/ci/l32_linux_frontier_input.sh'
+      - 'tools/ci/l32_busybox_runtime_freeze.sh'
+      - 'tools/ci/l32_userspace_profile.sh'
       - 'tools/ensure_verilator_5_024.sh'
       - 'tests_py/test_linux_frontier_contract.py'
       - '.github/workflows/linux-frontier.yml'
@@ -33,12 +35,13 @@ concurrency:
 
 jobs:
   frontier:
-    name: Frozen Linux first-failure frontier
+    name: Frozen RV32IMAC Linux first-failure frontier
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 15
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_L32_USERSPACE_PROFILE: 'rv32imac'
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       FRONTIER_MILESTONE: ${{ inputs.milestone || 'Linux version 6.6.143' }}
       FRONTIER_MAX_CYCLES: ${{ inputs.max_cycles || '50000000' }}
@@ -76,13 +79,14 @@ jobs:
           chmod +x ./mill
           echo "exact_head=$actual"
 
-      - name: Require frozen qualified Linux payload
+      - name: Require frozen qualified RV32IMAC Linux payload
         shell: bash
         run: |
           set -euo pipefail
           bash -n tools/ci/l32_linux_frontier_input.sh
-          chmod +x tools/ci/l32_linux_frontier_input.sh tools/ci/l32_linux_cache_key.sh
           tools/ci/l32_linux_frontier_input.sh | tee build/l32-linux-frontier-input.txt
+          grep -qx 'profile=rv32imac' build/l32-linux-frontier-input.txt
+          grep -qx 'require_c=1' build/l32-linux-frontier-input.txt
 
       - name: Provision fixed Verilator
         shell: bash
@@ -92,24 +96,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/linux-frontier"
+          build="$HOME/.cache/aethercore/linux-frontier-rv32imac"
           rm -rf "$build/rtl" "$build/obj" "$build/logs"
           mkdir -p "$build"
 
           set +e
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$build" \
-            FW_BIN="$GITHUB_WORKSPACE/build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin" \
+            TOP=AetherCoreOpenSbiCSimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiC \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_L32_C_TOP" \
+            FW_BIN="$GITHUB_WORKSPACE/build/l32-busybox-shell-boot-rv32imac/opensbi/platform/generic/firmware/fw_payload.bin" \
             JOBS="$(nproc)" \
             MAX_CYCLES="$FRONTIER_MAX_CYCLES" \
             MILESTONE="$FRONTIER_MILESTONE" \
+            REQUIRE_LAYERED_COMPRESSED=1 \
             PROGRESS_INTERVAL_CYCLES=0 \
             run-local
           rc=$?
           set -e
 
           if [[ "$rc" -ne 0 ]]; then
-            echo "LINUX_FRONTIER_RESULT: status=FAIL exact_head=$TARGET_SHA rc=$rc milestone=$FRONTIER_MILESTONE" >&2
+            echo "LINUX_FRONTIER_RESULT: status=FAIL exact_head=$TARGET_SHA rc=$rc profile=rv32imac milestone=$FRONTIER_MILESTONE" >&2
             if [[ -f "$build/logs/boot-probe.log" ]]; then
               echo '--- Linux frontier tail ---' >&2
               tail -n 200 "$build/logs/boot-probe.log" >&2
@@ -118,7 +126,8 @@ jobs:
           fi
 
           grep -q 'L32_RUNTIME_MILESTONE_PASS' "$build/logs/boot-probe.log"
-          echo "LINUX_FRONTIER_RESULT: status=PASS exact_head=$TARGET_SHA milestone=$FRONTIER_MILESTONE"
+          grep -q 'L32_LAYERED_COMPRESSED_PASS' "$build/logs/boot-probe.log"
+          echo "LINUX_FRONTIER_RESULT: status=PASS exact_head=$TARGET_SHA profile=rv32imac milestone=$FRONTIER_MILESTONE"
 
       - name: Validate frontier contracts after Linux passes
         shell: bash
@@ -134,9 +143,10 @@ jobs:
             echo '## Linux frontier first'
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- profile: `rv32imac` with real I/M/A/C + Sv32 + PMP + M/S/U Linux pressure'
             echo "- milestone: \`${FRONTIER_MILESTONE}\`"
             echo "- max cycles: \`${FRONTIER_MAX_CYCLES}\`"
             echo '- ordering: frozen-input identity -> Linux frontier -> frontier source contract'
-            echo '- software: pre-qualified frozen payload only; this lane never builds Linux/OpenSBI/userspace'
+            echo '- software: pre-qualified frozen Linux+BusyBox/OpenSBI payload only; this lane never builds Linux/OpenSBI/userspace'
             echo '- success artifacts: none; the runner log is the discovery result'
           } >> "$GITHUB_STEP_SUMMARY"
