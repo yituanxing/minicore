@@ -3,6 +3,7 @@ name: RV64 Linux Minimal Initramfs V1
 on:
   pull_request:
     paths:
+      - .github/workflows/hosted-verilator-cache.yml
       - .github/workflows/rv64-minimal-initramfs-v1.yml
       - software/rv64/linux_early.env
       - software/rv64/opensbi_first_exec.env
@@ -26,8 +27,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
   minimal-initramfs:
     name: RV64 Linux PID 1 UART/SEIP proof
+    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -66,7 +72,6 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
-            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
 
       - name: Restore RV64 Linux GCC cache
         id: rv64-gcc-cache
@@ -111,11 +116,11 @@ jobs:
           path: ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-minimal-sim-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
 
-      - name: Provision fixed Verilator
+      - name: Revalidate fixed Verilator from producer cache
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Save fixed Verilator immediately
+      - name: Save fixed Verilator fallback checkpoint
         if: steps.verilator-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
@@ -236,7 +241,7 @@ jobs:
             echo '## RV64 minimal userspace hosted-runner cache'
             echo
             echo "- head: \`$TARGET_SHA\`"
-            echo "- Verilator exact cache hit: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
+            echo "- Verilator exact cache hit after producer: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
             echo "- RV64 GCC exact cache hit: \`${{ steps.rv64-gcc-cache.outputs.cache-hit }}\`"
             echo "- Scala dependency cache hit: \`${{ steps.scala-cache.outputs.cache-hit }}\`"
             echo "- RV64 Linux/OpenSBI cache hit: \`${{ steps.rv64-software-cache.outputs.cache-hit }}\`"
@@ -244,6 +249,7 @@ jobs:
             echo "- focused checks: \`${{ steps.focused_checks.outcome }}\`"
             echo "- Linux baseline: \`${{ steps.linux_baseline.outcome }}\`"
             echo "- PID1 proof: \`${{ steps.pid1_proof.outcome }}\`"
+            echo '- fixed Verilator cold compilation is owned by the shared reusable producer; this job restores and revalidates it before use'
             echo '- immutable tools are checkpointed immediately after repository-owned validation, before deeper software/runtime probes can fail'
             echo '- restored simulation state remains only an accelerator: the real PID1/UART/STIP/SEIP proof is always executed for qualification'
           } >> "$GITHUB_STEP_SUMMARY"
