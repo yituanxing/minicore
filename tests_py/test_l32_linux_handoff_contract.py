@@ -50,8 +50,8 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
 
         self.assertIn("L32 OpenSBI to Linux Handoff", text)
         self.assertIn("uses: ./.github/workflows/l32-linux-build.yml", text)
-        self.assertIn("uses: ./.github/workflows/hosted-verilator-cache.yml", text)
-        self.assertIn("needs: [linux-software, verilator-tool]", text)
+        self.assertIn("needs: linux-software", text)
+        self.assertNotIn("uses: ./.github/workflows/hosted-verilator-cache.yml", text)
         self.assertIn("Restore qualified canonical L32 Linux output", text)
         self.assertIn("l32-linux-qualified-v2", text)
         self.assertIn("fail-on-cache-miss: true", text)
@@ -73,17 +73,16 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
 
     def test_handoff_preserves_validated_layers_before_runtime_failure(self):
         text = (ROOT / ".github/workflows/l32-linux-handoff.yml").read_text()
-        verilator_producer = (ROOT / ".github/workflows/hosted-verilator-cache.yml").read_text()
         self.assertIn("actions/cache/restore@v4", text)
         self.assertIn("actions/cache/save@v4", text)
         self.assertIn("Save validated RV32 Linux GCC immediately", text)
         self.assertIn("Save validated OpenSBI source immediately", text)
-        self.assertIn("Revalidate fixed Verilator from producer cache", text)
+        self.assertIn("Revalidate or build fixed Verilator", text)
+        self.assertIn("Save fixed Verilator immediately after validation", text)
         self.assertIn("Save Scala dependencies after handoff elaboration", text)
         self.assertIn("Save exact-head handoff simulation build", text)
         self.assertIn("real OpenSBI to Linux physical-entry probe still executes every qualification run", text)
-        self.assertIn("Save exact validated Verilator immediately", verilator_producer)
-        self.assertIn("aethercore-hosted-verilator-5-024-v1", verilator_producer)
+        self.assertIn("Handoff restores the same exact Verilator cache as Fast/PID1", text)
 
 
 if __name__ == "__main__":
