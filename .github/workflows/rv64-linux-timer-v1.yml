@@ -1,6 +1,9 @@
 name: RV64 Linux Timer V1
 
 on:
+  push:
+    branches:
+      - explore/rv64-linux-timer-v1
   pull_request:
     paths:
       - 'src/main/scala/aethercore/config/CoreConfig.scala'
