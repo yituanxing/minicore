@@ -44,18 +44,42 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
         self.assertIn("L32_LINUX_ENTRY_PASS", text)
         self.assertIn("MAX_CYCLES ?= 12000000", text)
 
-    def test_workflow_repairs_invalid_canonical_linux_cache_before_handoff(self):
+    def test_workflow_uses_single_owner_linux_producer_and_fail_closed_consumer(self):
         text = (ROOT / ".github/workflows/l32-linux-handoff.yml").read_text()
+        producer = (ROOT / ".github/workflows/l32-linux-build.yml").read_text()
+
         self.assertIn("L32 OpenSBI to Linux Handoff", text)
+        self.assertIn("uses: ./.github/workflows/l32-linux-build.yml", text)
+        self.assertIn("needs: linux-software", text)
+        self.assertIn("Restore qualified canonical L32 Linux output", text)
+        self.assertIn("l32-linux-qualified-v2", text)
+        self.assertIn("fail-on-cache-miss: true", text)
         self.assertIn("Restore or verify canonical Linux software image", text)
-        self.assertIn("if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux", text)
-        self.assertIn("tools/ci/l32_linux_build.sh", text)
-        self.assertIn("tools/ci/l32_linux_cache_key.sh mark build/l32-linux", text)
+        self.assertIn("tools/ci/l32_linux_cache_key.sh check build/l32-linux", text)
+        self.assertNotIn("if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux", text)
+        self.assertNotIn("tools/ci/l32_linux_build.sh\n", text)
+        self.assertNotIn("tools/ci/l32_linux_cache_key.sh mark build/l32-linux", text)
         self.assertIn("L32_LINUX_IMAGE_SHA256", text)
         self.assertIn("L32_LINUX_VMLINUX_SHA256", text)
         self.assertIn("L32_LINUX_CONFIG_SHA256", text)
         self.assertIn("l32_linux_handoff_build.sh", text)
         self.assertIn("Makefile.l32-linux-handoff", text)
+
+        self.assertIn("workflow_call:", producer)
+        self.assertIn("aethercore-l32-linux-qualified-v2-", producer)
+        self.assertIn("cancel-in-progress: false", producer)
+        self.assertIn("reusable single owner", producer)
+
+    def test_handoff_preserves_validated_layers_before_runtime_failure(self):
+        text = (ROOT / ".github/workflows/l32-linux-handoff.yml").read_text()
+        self.assertIn("actions/cache/restore@v4", text)
+        self.assertIn("actions/cache/save@v4", text)
+        self.assertIn("Save validated RV32 Linux GCC immediately", text)
+        self.assertIn("Save validated OpenSBI source immediately", text)
+        self.assertIn("Save fixed Verilator immediately", text)
+        self.assertIn("Save Scala dependencies after handoff elaboration", text)
+        self.assertIn("Save exact-head handoff simulation build", text)
+        self.assertIn("real OpenSBI to Linux physical-entry probe still executes every qualification run", text)
 
 
 if __name__ == "__main__":
