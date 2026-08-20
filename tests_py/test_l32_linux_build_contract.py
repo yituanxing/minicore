@@ -88,20 +88,18 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertNotIn("PREVIOUS_BUILD_DIR", text)
         self.assertNotIn(".aethercore-object-inputs", text)
 
-    def test_self_hosted_classifiers_preserve_persistent_outputs(self):
+    def test_fast_gate_uses_fresh_hosted_workspace_and_explicit_cache(self):
         fast = (ROOT / ".github/workflows/fast-gate.yml").read_text()
-        for step_name in (
-            "Checkout for path classification",
-            "Checkout without deleting persistent outputs",
-            "Checkout without deleting incremental outputs",
-        ):
-            with self.subTest(workflow="fast-gate", step=step_name):
-                marker = f"      - name: {step_name}\n"
-                self.assertIn(marker, fast)
-                block = fast.split(marker, 1)[1].split("\n      - name:", 1)[0]
-                self.assertIn("clean: false", block)
+        self.assertIn("runs-on: ubuntu-24.04", fast)
+        self.assertIn("clean: true", fast)
+        self.assertNotIn("clean: false", fast)
+        self.assertIn("uses: actions/cache@v4", fast)
+        self.assertIn("~/.cache/aethercore/toolchains", fast)
+        self.assertIn("~/.cache/aethercore/references", fast)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-fast"', fast)
         self.assertNotIn("git clean -ffdx", fast)
 
+    def test_remaining_self_hosted_busybox_classifier_preserves_persistent_outputs(self):
         busybox = (ROOT / ".github/workflows/l32-busybox-build.yml").read_text()
         marker = "      - name: Checkout for path classification\n"
         self.assertIn(marker, busybox)
