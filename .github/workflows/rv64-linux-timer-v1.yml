@@ -11,8 +11,10 @@ on:
       - 'src/main/scala/aethercore/config/CoreConfig.scala'
       - 'src/main/scala/aethercore/core/AetherCore.scala'
       - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreSimTop.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala'
       - 'src/test/scala/aethercore/LegacySupervisorTimerSpec.scala'
+      - 'src/test/scala/aethercore/SupervisorTimeCounterSpec.scala'
       - '.github/workflows/rv64-linux-timer-v1.yml'
   workflow_dispatch:
 
@@ -72,6 +74,10 @@ jobs:
         shell: bash
         run: ./mill aethercore.test.testOnly aethercore.LegacySupervisorTimerSpec
 
+      - name: Run focused supervisor time-counter regression
+        shell: bash
+        run: ./mill aethercore.test.testOnly aethercore.SupervisorTimeCounterSpec
+
       - name: Preserve frozen Supervisor V1 boundary
         shell: bash
         run: ./mill aethercore.test.testOnly aethercore.SupervisorModeSpec
@@ -127,9 +133,10 @@ jobs:
             echo '## RV64 Linux Timer V1'
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- time source: shared platform mtime exposed through architectural time CSR'
             echo '- focused path: M-mode software mip.STIP -> delegated supervisor timer interrupt cause 5'
             echo '- preserved path: RV32 Sstc stimecmp-driven STIP'
-            echo '- preserved boundary: minimal Supervisor V1 profile remains without supervisor interrupts'
+            echo '- preserved boundary: minimal Supervisor V1 profile remains without timer facilities'
             echo '- real software: unchanged OpenSBI 1.6 + unchanged Linux 6.6.143'
             echo '- acceptance: Linux banner plus retired RV64 supervisor timer interrupt'
           } >> "$GITHUB_STEP_SUMMARY"

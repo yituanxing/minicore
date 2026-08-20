@@ -149,7 +149,7 @@ class AetherCoreSimTop(
 
   val mtime = RegInit(0.U(64.W))
   val mtimecmp = RegInit("hffffffffffffffff".U(64.W))
-  if (config.isa.hasSstc) {
+  if (config.isa.hasTimeCounter) {
     core.io.time.get := mtime
   }
 

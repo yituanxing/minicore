@@ -28,8 +28,9 @@ class AetherCoreOpenSbiSimTop(
 /** First bounded RV64 OpenSBI shell.
   *
   * Zifencei is added here as firmware pressure rather than folded backward
-  * into the pure RV64A qualification slice. Without Sstc, OpenSBI also needs
-  * the base privileged mip.STIP injection path for S-mode timer delivery.
+  * into the pure RV64A qualification slice. Without Sstc, OpenSBI needs the
+  * base mip.STIP injection path, while Linux also reads the architectural time
+  * CSR backed by the same platform mtime counter.
   */
 class AetherCoreOpenSbiRV64SimTop
     extends AetherCoreOpenSbiSimTop(
@@ -37,7 +38,8 @@ class AetherCoreOpenSbiRV64SimTop
         name = "rv64imasu-sv39-pmp-opensbi",
         isa = CoreProfiles.rv64imasuSv39PmpSoftware.isa.copy(
           zExtensions = CoreProfiles.rv64imasuSv39PmpSoftware.isa.zExtensions + "Zifencei",
-          machineProvidedSupervisorTimer = true
+          machineProvidedSupervisorTimer = true,
+          timeCounter = true
         )
       )
     )

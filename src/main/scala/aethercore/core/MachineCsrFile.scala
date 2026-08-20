@@ -142,7 +142,7 @@ object MachineCsrWarl {
       else BigInt(0)
     val supervisorInterruptMask = supervisorTimerMask | supervisorExternalMask
     val timeCounterMask =
-      if (isa.hasSstc) BigInt(1) << Rv32SstcBit.McounterenTime else BigInt(0)
+      if (isa.hasTimeCounter) BigInt(1) << Rv32SstcBit.McounterenTime else BigInt(0)
     val machineInterruptMask =
       supervisorInterruptMask |
         (BigInt(1) << MachineCsrBit.MachineTimerInterrupt) |
@@ -339,7 +339,7 @@ class MachineCsrFile(
 
     val timerInterrupt = Input(Bool())
     val machineTimerInterrupt = Output(Bool())
-    val time = if (isa.hasSstc) Some(Input(UInt(64.W))) else None
+    val time = if (isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
     val supervisorTimerPending =
       if (isa.hasSupervisorTimerInterrupt) Some(Output(Bool())) else None
     val supervisorTimerInterrupt =
@@ -403,7 +403,7 @@ class MachineCsrFile(
   val ordinaryWrite = io.writeEnable
 
   val sstc = if (isa.hasSstc) Some(Module(new Rv32SstcTimer)) else None
-  val timeAccessAllowed = if (isa.hasSstc) {
+  val timeAccessAllowed = if (isa.hasTimeCounter) {
     privilege === PrivilegeMode.Machine.U ||
       (privilege === PrivilegeMode.Supervisor.U && mcounteren(Rv32SstcBit.McounterenTime)) ||
       (privilege === PrivilegeMode.User.U &&
@@ -685,13 +685,26 @@ class MachineCsrFile(
     }
   }
 
+  if (isa.hasTimeCounter) {
+    when(io.readAddr === MachineCsrAddress.Mcounteren.U) {
+      io.readData := mcounteren
+      io.readImplemented := true.B
+      io.readWritable := true.B
+    }
+    when(io.readAddr === Rv32SstcCsrAddress.Time.U && timeAccessAllowed) {
+      io.readData := (if (xlen == 32) io.time.get(31, 0) else io.time.get)
+      io.readImplemented := true.B
+    }
+    if (xlen == 32) {
+      when(io.readAddr === Rv32SstcCsrAddress.Timeh.U && timeAccessAllowed) {
+        io.readData := io.time.get(63, 32)
+        io.readImplemented := true.B
+      }
+    }
+  }
+
   if (isa.hasSstc) {
     switch(io.readAddr) {
-      is(MachineCsrAddress.Mcounteren.U) {
-        io.readData := mcounteren
-        io.readImplemented := true.B
-        io.readWritable := true.B
-      }
       is(MachineCsrAddress.Mcountinhibit.U) {
         // This core currently implements no mcycle/minstret/HPM state to
         // inhibit, so all implemented bits have the legal WARL value zero.
@@ -723,18 +736,6 @@ class MachineCsrFile(
           io.readData := sstc.get.io.readHigh
           io.readImplemented := true.B
           io.readWritable := true.B
-        }
-      }
-      is(Rv32SstcCsrAddress.Time.U) {
-        when(timeAccessAllowed) {
-          io.readData := io.time.get(31, 0)
-          io.readImplemented := true.B
-        }
-      }
-      is(Rv32SstcCsrAddress.Timeh.U) {
-        when(timeAccessAllowed) {
-          io.readData := io.time.get(63, 32)
-          io.readImplemented := true.B
         }
       }
     }

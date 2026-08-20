@@ -10,7 +10,8 @@ final case class IsaConfig(
     virtualMemoryModes: Set[String] = Set.empty,
     pmpEntries: Int = 0,
     sstc: Boolean = false,
-    machineProvidedSupervisorTimer: Boolean = false
+    machineProvidedSupervisorTimer: Boolean = false,
+    timeCounter: Boolean = false
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
@@ -25,6 +26,10 @@ final case class IsaConfig(
 
   require(!sstc || privilegeModes.contains('S'), "Sstc requires Supervisor mode")
   require(!sstc || xlen == 32, "the current bounded Sstc implementation is RV32-only")
+  require(
+    !(timeCounter || sstc) || zExtensions.contains("Zicsr"),
+    "time counter CSR access requires Zicsr"
+  )
   require(
     !machineProvidedSupervisorTimer || privilegeModes.contains('S'),
     "machine-provided supervisor timer delivery requires Supervisor mode"
@@ -52,6 +57,7 @@ final case class IsaConfig(
   val hasSv39: Boolean = virtualMemoryModes.contains("Sv39")
   val hasSv48: Boolean = virtualMemoryModes.contains("Sv48")
   val hasSstc: Boolean = sstc
+  val hasTimeCounter: Boolean = timeCounter || hasSstc
   val hasMachineProvidedSupervisorTimer: Boolean = machineProvidedSupervisorTimer
   val hasSupervisorTimerInterrupt: Boolean = hasSstc || hasMachineProvidedSupervisorTimer
   val hasWordOps: Boolean = xlen == 64

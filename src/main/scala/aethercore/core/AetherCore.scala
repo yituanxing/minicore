@@ -112,7 +112,7 @@ class AetherCore(
       Some(new PageTableReadBusIO(paddrBits, vmPteBits))
     else None
     val timerInterrupt = Input(Bool())
-    val time = if (config.isa.hasSstc) Some(Input(UInt(64.W))) else None
+    val time = if (config.isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val supervisorExternalInterrupt =
       if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
@@ -294,7 +294,7 @@ class AetherCore(
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
   csrFile.io.timerInterrupt := io.timerInterrupt
-  if (config.isa.hasSstc) {
+  if (config.isa.hasTimeCounter) {
     csrFile.io.time.get := io.time.get
   }
   val rawExternalInterrupt =
