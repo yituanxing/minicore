@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   linux-deeper-boot:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && github.head_ref != 'trigger/rv64-linux-deeper-hosted-v1'
     name: Linux 6.6.143 first real timer interrupt
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 50
@@ -114,7 +114,9 @@ jobs:
             build/l32-linux-probe/logs/*.log
 
   rv64-deeper-frontier:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/explore/rv64-linux-deeper-v1'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/explore/rv64-linux-deeper-v1') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1')
     name: RV64 unchanged Linux post-timer frontier
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -122,13 +124,14 @@ jobs:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
-      TARGET_SHA: ${{ github.sha }}
+      TARGET_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
 
     steps:
-      - name: Checkout exact head
+      - name: Checkout exact target head
         uses: actions/checkout@v4
         with:
           clean: true
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
 
       - name: Publish pending frontier status
         shell: bash
