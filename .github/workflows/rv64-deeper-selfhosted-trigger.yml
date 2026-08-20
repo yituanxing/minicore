@@ -16,9 +16,9 @@ concurrency:
 jobs:
   rv64-deeper-frontier:
     if: github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1'
-    name: RV64 deeper frontier only
+    name: RV64 silent-frontier diagnostic
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 50
+    timeout-minutes: 30
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
@@ -46,15 +46,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           echo "exact_head=$TARGET_SHA"
 
-      - name: Run focused RV64 interrupt and userspace contracts first
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x mill
-          ./mill aethercore.test.testOnly aethercore.SupervisorExternalInterruptSpec
-          ./mill aethercore.test.testOnly aethercore.RV64SupervisorWfiExternalInterruptSpec
-          ./mill aethercore.test.testOnly aethercore.RV64UserEcallSupervisorSpec
-
       - name: Provision fixed Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
@@ -63,7 +54,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Reuse or build unchanged Linux 6.6.143 plus OpenSBI 1.6
+      - name: Reuse unchanged Linux 6.6.143 plus OpenSBI 1.6
         shell: bash
         env:
           RV64_LINUX_JOBS: '6'
@@ -72,37 +63,106 @@ jobs:
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
 
-      - name: Discover post-timer retirement frontier
+      - name: Force timeout after silent boot and symbolicate recent PCs
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/rv64-linux-deeper/$TARGET_SHA"
+          build="$HOME/.cache/aethercore/rv64-linux-silent-frontier/$TARGET_SHA"
+          set +e
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$build" \
             TOP=AetherCoreOpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
             FW_BIN="$GITHUB_WORKSPACE/build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin" \
-            MAX_CYCLES=240000000 \
-            MILESTONE='Linux version 6.6.143' \
-            MIN_INTERRUPTS=1 \
-            MIN_STIP=1 \
-            MIN_POST_MILESTONE_COMMITS=80000000 \
+            MAX_CYCLES=140000000 \
+            MILESTONE='__AETHERCORE_FRONTIER_DIAGNOSTIC_NEVER_MATCH__' \
+            MIN_INTERRUPTS=0 \
+            MIN_STIP=0 \
+            MIN_POST_MILESTONE_COMMITS=0 \
             PROGRESS_INTERVAL_CYCLES=20000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             JOBS="$(nproc)" \
             run-local
-          log="$build/logs/boot-probe.log"
-          grep -Fq 'OpenSBI v1.6' "$log"
-          grep -Fq '[    0.000000] Linux version 6.6.143' "$log"
-          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
-          grep -Eq 'L32_RUNTIME_MILESTONE_PASS .*min-post-milestone-commits=80000000 .*post-milestone-commits=80000000' "$log"
-          echo '--- deepest Linux UART lines ---'
-          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 140 || true
-          echo '--- runtime markers ---'
-          grep -E 'L32_' "$log" | tail -n 80 || true
+          probe_rc=$?
+          set -e
 
-      - name: Publish result status
+          log="$build/logs/boot-probe.log"
+          echo "diagnostic_make_rc=$probe_rc"
+          test -s "$log"
+          grep -Fq 'L32_OPENSBI_TIMEOUT' "$log"
+          grep -Fq '[    6.014815] io scheduler bfq registered' "$log"
+
+          echo '--- timeout frontier ---'
+          grep 'L32_OPENSBI_TIMEOUT' "$log" | tail -n 1
+          echo '--- deepest Linux UART lines ---'
+          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 60 || true
+
+          kernel_image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n 1 | cut -d= -f2-)"
+          vmlinux="${kernel_image%/arch/riscv/boot/Image}/vmlinux"
+          test -s "$vmlinux"
+          nm_file="$build/vmlinux.nm"
+          "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}nm" -n "$vmlinux" > "$nm_file"
+
+          python3 - "$log" "$nm_file" <<'PY'
+          import bisect
+          import collections
+          import re
+          import sys
+
+          log_path, nm_path = sys.argv[1:]
+          timeout_lines = [line.strip() for line in open(log_path, errors="replace") if "L32_OPENSBI_TIMEOUT" in line]
+          if not timeout_lines:
+              raise SystemExit("missing timeout frontier")
+          line = timeout_lines[-1]
+          match = re.search(r"recent-pcs=([^\s]+)", line)
+          if not match:
+              raise SystemExit("missing recent-pcs")
+          pcs = [int(token, 16) for token in match.group(1).split(",") if token]
+
+          symbols = []
+          with open(nm_path, errors="replace") as handle:
+              for raw in handle:
+                  fields = raw.strip().split(None, 2)
+                  if len(fields) != 3:
+                      continue
+                  try:
+                      address = int(fields[0], 16)
+                  except ValueError:
+                      continue
+                  if fields[1].upper() == "U":
+                      continue
+                  symbols.append((address, fields[2]))
+          symbols.sort()
+          addresses = [address for address, _ in symbols]
+
+          resolved = []
+          for pc in pcs:
+              index = bisect.bisect_right(addresses, pc) - 1
+              if index < 0:
+                  name = "<no-symbol>"
+                  offset = 0
+              else:
+                  base, candidate = symbols[index]
+                  offset = pc - base
+                  if offset > 0x1000000:
+                      name = "<no-near-symbol>"
+                  else:
+                      name = candidate
+              resolved.append(name)
+              print(f"L32_FRONTIER_SYMBOL pc=0x{pc:016x} symbol={name}+0x{offset:x}")
+
+          counts = collections.Counter(resolved)
+          for name, count in counts.most_common():
+              print(f"L32_FRONTIER_HOT_SYMBOL symbol={name} samples={count}/{len(resolved)}")
+
+          for field in ("last-exception-pc", "last-exception-cause", "last-exception-value"):
+              m = re.search(rf"{field}=(0x[0-9a-fA-F]+)", line)
+              if m:
+                  print(f"L32_FRONTIER_{field.upper().replace('-', '_')}={m.group(1)}")
+          PY
+
+      - name: Publish diagnostic status
         if: always()
         shell: bash
         env:
@@ -110,12 +170,12 @@ jobs:
         run: |
           set -euo pipefail
           state='failure'
-          description='RV64 deeper frontier failed'
+          description='RV64 silent-frontier diagnostic failed'
           if [[ "${{ job.status }}" == 'success' ]]; then
             state='success'
-            description='RV64 deeper frontier passed'
+            description='RV64 silent-frontier diagnostic captured'
           fi
-          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-deeper-frontier/diagnostic\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
           curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H 'Accept: application/vnd.github+json' \
