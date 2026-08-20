@@ -4,7 +4,12 @@ on:
   pull_request:
     paths:
       - .github/workflows/rv64-minimal-initramfs-v1.yml
+      - software/rv64/linux_early.env
+      - software/rv64/opensbi_first_exec.env
       - software/rv64_userspace/minimal_init.S
+      - tools/ensure_verilator_5_024.sh
+      - tools/ensure_riscv64_linux_gcc_13_3.sh
+      - tools/ci/rv64_linux_early_build.sh
       - tools/ci/rv64_minimal_initramfs_build.sh
       - tools/ci/rv64_minimal_init_payload_build.sh
       - tests_py/test_rv64_minimal_initramfs_contract.py
@@ -50,18 +55,34 @@ jobs:
             libreadline-dev pkg-config curl xz-utils git python3 \
             openjdk-17-jdk-headless device-tree-compiler dwarves
 
-      - name: Restore pinned toolchain cache
-        id: toolchain-cache
-        uses: actions/cache@v4
+      - name: Restore fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/aethercore/toolchains
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
           restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        id: rv64-gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
             aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
 
       - name: Restore Scala dependency cache
         id: scala-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/coursier
@@ -72,19 +93,20 @@ jobs:
 
       - name: Restore qualified RV64 software cache
         id: rv64-software-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/aethercore/rv64/linux
             ~/.cache/aethercore/rv64/linux-build
             ~/.cache/aethercore/l32/opensbi
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
           restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
 
       - name: Restore exact-head Verilator simulation cache
         id: rv64-sim-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-minimal-sim-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
@@ -93,11 +115,25 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
+      - name: Save fixed Verilator immediately
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
       - name: Fail fast on RV64 userspace contracts
+        id: focused_checks
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           chmod +x ./mill tools/ci/rv64_minimal_initramfs_build.sh tools/ci/rv64_minimal_init_payload_build.sh
+          bash -n tools/ci/rv64_linux_early_build.sh
           bash -n tools/ci/rv64_minimal_initramfs_build.sh
           bash -n tools/ci/rv64_minimal_init_payload_build.sh
           python3 -m unittest tests_py.test_rv64_minimal_initramfs_contract -v
@@ -105,23 +141,67 @@ jobs:
           ./mill aethercore.test.testOnly aethercore.RV64SupervisorWfiExternalInterruptSpec
           ./mill aethercore.test.testOnly aethercore.RV64UserEcallSupervisorSpec
 
+      - name: Save Scala dependencies after focused bootstrap
+        if: always() && steps.scala-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
       - name: Provision exact RV64 Linux toolchain
+        if: steps.focused_checks.outcome == 'success'
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
+      - name: Save validated RV64 Linux GCC immediately
+        if: steps.focused_checks.outcome == 'success' && steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
       - name: Reuse qualified unchanged Linux 6.6.143 baseline
+        id: linux_baseline
+        if: steps.focused_checks.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: bash tools/ci/rv64_linux_early_build.sh
 
+      - name: Save qualified RV64 Linux/OpenSBI baseline immediately
+        if: steps.linux_baseline.outcome == 'success' && steps.rv64-software-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
       - name: Build deterministic ELF64 PID 1 initramfs Image
+        id: initramfs_build
+        if: steps.linux_baseline.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: bash tools/ci/rv64_minimal_initramfs_build.sh
 
       - name: Build OpenSBI payload for RV64 initramfs Image
+        id: payload_build
+        if: steps.initramfs_build.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
 
       - name: Run real RV64 PID 1 UART interrupt proof
+        id: pid1_proof
+        if: steps.payload_build.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -140,6 +220,14 @@ jobs:
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             run-local
 
+      - name: Save exact-head simulation build after any executed proof
+        if: always() && steps.pid1_proof.outcome != 'skipped' && steps.rv64-sim-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-minimal-sim-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
+
       - name: Write hosted-cache summary
         if: always()
         shell: bash
@@ -148,11 +236,16 @@ jobs:
             echo '## RV64 minimal userspace hosted-runner cache'
             echo
             echo "- head: \`$TARGET_SHA\`"
-            echo "- toolchain cache hit: \`${{ steps.toolchain-cache.outputs.cache-hit }}\`"
+            echo "- Verilator exact cache hit: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
+            echo "- RV64 GCC exact cache hit: \`${{ steps.rv64-gcc-cache.outputs.cache-hit }}\`"
             echo "- Scala dependency cache hit: \`${{ steps.scala-cache.outputs.cache-hit }}\`"
             echo "- RV64 Linux/OpenSBI cache hit: \`${{ steps.rv64-software-cache.outputs.cache-hit }}\`"
             echo "- exact-head simulation cache hit: \`${{ steps.rv64-sim-cache.outputs.cache-hit }}\`"
-            echo '- every restored tool/software payload is revalidated by repository-owned version/SHA/recipe contracts before use'
+            echo "- focused checks: \`${{ steps.focused_checks.outcome }}\`"
+            echo "- Linux baseline: \`${{ steps.linux_baseline.outcome }}\`"
+            echo "- PID1 proof: \`${{ steps.pid1_proof.outcome }}\`"
+            echo '- immutable tools are checkpointed immediately after repository-owned validation, before deeper software/runtime probes can fail'
+            echo '- restored simulation state remains only an accelerator: the real PID1/UART/STIP/SEIP proof is always executed for qualification'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload RV64 minimal userspace evidence
@@ -164,6 +257,9 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            build/rv64-linux-early/opensbi-linux-build.log
             build/rv64-linux-initramfs/result.txt
             build/rv64-linux-initramfs/evidence/
             build/rv64-minimal-init-boot/result.txt
@@ -171,3 +267,31 @@ jobs:
             build/rv64-minimal-init-boot/opensbi-initramfs-build.log
             ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/firmware.sha256
             ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/logs/*.log
+
+      - name: Propagate focused-check failure after preserving caches
+        if: steps.focused_checks.outcome == 'failure'
+        shell: bash
+        run: |
+          echo 'ERROR: focused RV64 contracts failed; Verilator/Scala cache checkpoints were preserved.' >&2
+          exit 1
+
+      - name: Propagate Linux baseline failure after preserving caches
+        if: steps.focused_checks.outcome == 'success' && steps.linux_baseline.outcome == 'failure'
+        shell: bash
+        run: |
+          echo 'ERROR: RV64 Linux/OpenSBI baseline failed; validated Verilator/Scala/GCC caches were preserved.' >&2
+          exit 1
+
+      - name: Propagate initramfs or payload build failure
+        if: steps.initramfs_build.outcome == 'failure' || steps.payload_build.outcome == 'failure'
+        shell: bash
+        run: |
+          echo 'ERROR: RV64 PID1 software payload construction failed.' >&2
+          exit 1
+
+      - name: Propagate real PID1 proof failure after saving simulation build
+        if: steps.pid1_proof.outcome == 'failure'
+        shell: bash
+        run: |
+          echo 'ERROR: real RV64 PID1 UART/STIP/SEIP proof failed; exact-head simulation build was preserved only as a rebuild accelerator.' >&2
+          exit 1
