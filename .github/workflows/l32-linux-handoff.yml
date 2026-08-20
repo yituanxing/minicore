@@ -15,6 +15,7 @@ on:
       - tests_py/test_l32_linux_handoff_contract.py
       - sim/linux_handoff_main.cpp
       - Makefile.l32-linux-handoff
+      - .github/workflows/hosted-verilator-cache.yml
       - .github/workflows/l32-linux-build.yml
       - .github/workflows/l32-linux-handoff.yml
   workflow_dispatch:
@@ -31,9 +32,13 @@ jobs:
     name: Produce or restore exact L32 Linux input
     uses: ./.github/workflows/l32-linux-build.yml
 
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
   handoff:
     name: Validated OpenSBI to Linux 6.6.143 physical entry
-    needs: linux-software
+    needs: [linux-software, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -83,7 +88,6 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
-            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
 
       - name: Restore Scala dependency cache
         id: scala-cache
@@ -190,12 +194,12 @@ jobs:
           path: ~/.cache/aethercore/l32/opensbi
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-opensbi-source-v1-${{ hashFiles('software/l32/manifest.env') }}
 
-      - name: Provision fixed Verilator
+      - name: Revalidate fixed Verilator from producer cache
         if: steps.payload_build.outcome == 'success'
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Save fixed Verilator immediately
+      - name: Save fixed Verilator fallback checkpoint
         if: steps.payload_build.outcome == 'success' && steps.verilator-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
@@ -241,7 +245,7 @@ jobs:
             echo '## L32 OpenSBI/Linux hosted handoff cache'
             echo
             echo "- RV32 GCC exact cache hit: \`${{ steps.rv32-gcc-cache.outputs.cache-hit }}\`"
-            echo "- fixed Verilator exact cache hit: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
+            echo "- fixed Verilator exact cache hit after producer: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
             echo "- Scala dependency cache hit: \`${{ steps.scala-cache.outputs.cache-hit }}\`"
             echo "- OpenSBI source cache hit: \`${{ steps.opensbi-cache.outputs.cache-hit }}\`"
             echo "- canonical Linux qualified cache hit: \`${{ steps.linux-cache.outputs.cache-hit }}\`"
@@ -249,6 +253,7 @@ jobs:
             echo "- OpenSBI payload build: \`${{ steps.payload_build.outcome }}\`"
             echo "- real handoff probe: \`${{ steps.handoff_probe.outcome }}\`"
             echo '- canonical Linux production is owned by the reusable L32 Linux workflow; this consumer only accepts its exact frozen output hashes'
+            echo '- fixed Verilator cold compilation is owned by the shared reusable producer; this job only restores and revalidates it'
             echo '- restored OpenSBI, GCC and Verilator payloads are revalidated by repository-owned commit/version/SHA contracts before use'
             echo '- exact-head simulation cache is only a build accelerator; the real OpenSBI to Linux physical-entry probe still executes every qualification run'
           } >> "$GITHUB_STEP_SUMMARY"
