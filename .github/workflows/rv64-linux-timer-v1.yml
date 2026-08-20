@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: rv64-linux-timer-v1-${{ github.event.pull_request.number || github.ref }}
@@ -89,3 +90,26 @@ jobs:
             echo '- preserved path: RV32 Sstc stimecmp-driven STIP'
             echo '- preserved boundary: minimal Supervisor V1 profile remains without supervisor interrupts'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish focused commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='RV64 legacy STIP focused gate failed'
+          if [[ "$JOB_STATUS" == success ]]; then
+            state=success
+            description='RV64 legacy STIP focused gate passed'
+          fi
+          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-timer-v1/focused\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$state" "$description" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload"
