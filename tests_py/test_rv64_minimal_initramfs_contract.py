@@ -23,10 +23,10 @@ class Rv64MinimalInitramfsContractTest(unittest.TestCase):
         self.assertIn("-march=rv64ima_zicsr_zifencei -mabi=lp64", text)
         self.assertIn("Class:[[:space:]]*ELF64", text)
 
-    def test_payload_keeps_exact_rv64_handoff_and_rdinit(self):
+    def test_payload_keeps_exact_rv64_handoff_and_default_pty_path(self):
         text = (ROOT / "tools/ci/rv64_minimal_init_payload_build.sh").read_text()
         self.assertIn("rdinit=/init", text)
-        self.assertIn("pty.legacy_count=0", text)
+        self.assertNotIn("pty.legacy_count=0", text)
         self.assertIn("RV64_OPENSBI_PAYLOAD_OFFSET", text)
         self.assertIn("RV64_LINUX_PHYS_ENTRY", text)
         self.assertIn("RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS", text)

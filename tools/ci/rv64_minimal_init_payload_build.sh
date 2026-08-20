@@ -16,9 +16,9 @@ OPENSBI_BUILD_DIR="${BUILD_DIR}/opensbi"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 DTB="${BUILD_DIR}/aethercore-rv64-initramfs.dtb"
 JOBS="${RV64_LINUX_JOBS:-$(nproc)}"
-# Exploratory performance shortcut only. The kernel Image and CPU remain exact;
-# freeze qualification must also prove the workload without this argument.
-BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init pty.legacy_count=0"
+# Freeze-path bootargs: prove the same userspace/interrupt workload through the
+# kernel's default legacy PTY registration path, with no exploration shortcut.
+BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
