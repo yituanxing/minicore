@@ -65,11 +65,12 @@ class Rv64BusyboxContractTest(unittest.TestCase):
         self.assertIn("RV64_LINUX_PHYS_ENTRY", text)
         self.assertIn("RV64_BUSYBOX_PAYLOAD_BUILD_RESULT: status=PASS", text)
 
-    def test_qualification_is_manual_only_and_requires_real_interrupts(self):
+    def test_qualification_waits_for_pr_and_requires_real_interrupts(self):
         text = (ROOT / ".github/workflows/rv64-busybox-shell-v1.yml").read_text()
+        self.assertIn("pull_request:", text)
         self.assertIn("workflow_dispatch:", text)
-        self.assertNotIn("pull_request:", text)
         self.assertNotIn("push:", text)
+        self.assertIn("software/rv64_busybox/manifest.env", text)
         self.assertIn('MILESTONE="RV64 BUSYBOX SHELL READY"', text)
         self.assertIn("MIN_STIP=1", text)
         self.assertIn("MIN_SEIP=1", text)
