@@ -34,12 +34,23 @@ grep -qx 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' "${BASELINE_RESULT}" || \
 BASELINE_IMAGE="$(sed -n 's/^kernel_image=//p' "${BASELINE_RESULT}" | head -n 1)"
 BASELINE_OBJ="${BASELINE_IMAGE%/arch/riscv/boot/Image}"
 [[ -s "${BASELINE_OBJ}/.config" ]] || fail "qualified RV64 baseline config is missing"
+[[ -s "${BASELINE_OBJ}/vmlinux" ]] || fail "qualified RV64 baseline vmlinux is missing"
 [[ -d "${SOURCE_DIR}" ]] || fail "qualified RV64 Linux source cache is missing"
 [[ "$(cat "${SOURCE_DIR}/.aethercore-linux-source-sha256" 2>/dev/null)" == "${RV64_LINUX_SHA256}" ]] || \
   fail "RV64 Linux source cache identity drifted"
 
 rm -rf "${BUILD_DIR}"
-mkdir -p "${OBJ_DIR}" "${EVIDENCE_DIR}" "${INIT_BUILD_DIR}"
+mkdir -p "${BUILD_DIR}"
+
+# The minimal-initramfs kernel differs from the already-qualified baseline only
+# by BLK_DEV_INITRD and INITRAMFS_SOURCE. Seed a private object tree from the
+# qualified baseline instead of compiling the unchanged kernel twice. GNU cp
+# uses a reflink when the hosted filesystem supports it and falls back to an
+# ordinary byte copy otherwise; hard links are deliberately not used because
+# Kbuild must never mutate the qualified baseline cache through shared inodes.
+printf 'Seeding RV64 initramfs object tree from qualified baseline: %s\n' "${BASELINE_OBJ}"
+cp -a --reflink=auto "${BASELINE_OBJ}" "${OBJ_DIR}"
+mkdir -p "${EVIDENCE_DIR}" "${INIT_BUILD_DIR}"
 
 "${CROSS}gcc" \
   -march=rv64ima_zicsr_zifencei -mabi=lp64 \
@@ -115,6 +126,7 @@ sha256sum "${INIT_ELF}" "${INIT_SPEC}" "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/
   echo "linux_version=${RV64_LINUX_VERSION}"
   echo "linux_source_sha256=${RV64_LINUX_SHA256}"
   echo "baseline_image=${BASELINE_IMAGE}"
+  echo "baseline_object_seed=${BASELINE_OBJ}"
   echo "init=${INIT_ELF}"
   echo "init_arch=${init_arch}"
   echo "initramfs_spec=${INIT_SPEC}"
