@@ -1,0 +1,17 @@
+name: Cancel stale A528 work
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/cancel-stale-a528.yml
+
+concurrency:
+  group: l32-minimal-initramfs-132
+  cancel-in-progress: true
+
+jobs:
+  cancel-only:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
