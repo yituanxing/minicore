@@ -822,6 +822,20 @@ class AetherCore(
     exMem.valid := false.B
     memWb.valid := false.B
     atomicWritePhase := false.B
+  }.elsewhen(vmCsrHazard) {
+    // A retiring VM-context CSR write changes the architectural translation or
+    // permission context for every younger instruction/data access.  Kill the
+    // old-context younger pipeline and restart exactly at the next PC, just as
+    // SFENCE.VMA serializes its boundary.  This is required for SATP changes
+    // and also keeps sstatus/mstatus permission-context writes precise.
+    // VM 上下文 CSR 在退休点生效；旧上下文下已进入流水线的年轻指令必须丢弃，
+    // 并从该 CSR 的下一条指令精确重新取指。
+    pc := memWb.pc + memWb.instBytes
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    memWb.valid := false.B
+    atomicWritePhase := false.B
   }.elsewhen(waitingForInterrupt) {
     pc := memWb.pc + memWb.instBytes
     ifId.valid := false.B
