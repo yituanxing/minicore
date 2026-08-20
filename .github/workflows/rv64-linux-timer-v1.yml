@@ -6,6 +6,8 @@ on:
       - explore/rv64-linux-timer-v1
   pull_request:
     paths:
+      - 'Makefile.l32-linux-boot'
+      - 'sim/opensbi_boot_main.cpp'
       - 'src/main/scala/aethercore/config/CoreConfig.scala'
       - 'src/main/scala/aethercore/core/AetherCore.scala'
       - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
@@ -23,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  focused-timer:
-    name: Legacy STIP and inherited supervisor timer contracts
+  qualify-timer:
+    name: Legacy STIP and real Linux supervisor timer
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 30
     env:
@@ -41,7 +43,7 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           if [[ -d .git ]]; then
-            git clean -fd -- src/main/scala src/test/scala .github/workflows || true
+            git clean -fd -- src/main/scala src/test/scala sim tools/ci .github/workflows || true
           else
             git init .
           fi
@@ -78,20 +80,61 @@ jobs:
         shell: bash
         run: ./mill aethercore.test.testOnly aethercore.Rv32SstcCsrSpec
 
-      - name: Write focused qualification summary
+      - name: Provision pinned RV64 Linux-target GCC
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build unchanged Linux 6.6.143 and unchanged OpenSBI 1.6
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: '6'
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Execute real RV64 Linux supervisor timer probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/rv64-linux-timer \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            MAX_CYCLES=50000000 \
+            MILESTONE='Linux version 6.6.143' \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
+            PROGRESS_INTERVAL_CYCLES=5000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+
+          log=build/rv64-linux-timer/logs/boot-probe.log
+          grep -Fq 'OpenSBI v1.6' "$log"
+          grep -Fq '[    0.000000] Linux version 6.6.143' "$log"
+          grep -Fq 'Boot HART MIDELEG           : 0x0000000000000220' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
+          grep -Eq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT .*cause=0x8000000000000005' "$log"
+          grep -Eq 'L32_RUNTIME_MILESTONE_PASS .*stip=[1-9][0-9]* .*min-stip=1' "$log"
+
+      - name: Write qualification summary
         if: always()
         shell: bash
         run: |
           {
-            echo '## RV64 legacy supervisor timer focused gate'
+            echo '## RV64 Linux Timer V1'
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
-            echo '- new path: M-mode software mip.STIP -> delegated supervisor timer interrupt'
+            echo '- focused path: M-mode software mip.STIP -> delegated supervisor timer interrupt cause 5'
             echo '- preserved path: RV32 Sstc stimecmp-driven STIP'
             echo '- preserved boundary: minimal Supervisor V1 profile remains without supervisor interrupts'
+            echo '- real software: unchanged OpenSBI 1.6 + unchanged Linux 6.6.143'
+            echo '- acceptance: Linux banner plus retired RV64 supervisor timer interrupt'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish focused commit status
+      - name: Publish qualification commit status
         if: always()
         shell: bash
         env:
@@ -100,12 +143,12 @@ jobs:
         run: |
           set -euo pipefail
           state=failure
-          description='RV64 legacy STIP focused gate failed'
+          description='RV64 Linux supervisor timer qualification failed'
           if [[ "$JOB_STATUS" == success ]]; then
             state=success
-            description='RV64 legacy STIP focused gate passed'
+            description='RV64 Linux supervisor timer qualification passed'
           fi
-          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-timer-v1/focused\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-timer-v1/qualification\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
             "$state" "$description" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
           curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
