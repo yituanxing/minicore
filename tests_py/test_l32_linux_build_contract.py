@@ -58,10 +58,22 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn('export KBUILD_BUILD_VERSION="${L32_LINUX_BUILD_VERSION}"', text)
         self.assertIn('export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"', text)
         self.assertIn('export TZ="${L32_LINUX_BUILD_TZ}"', text)
+        self.assertIn('PAHOLE_BIN="${L32_LINUX_PAHOLE:-/bin/false}"', text)
+        self.assertIn('PAHOLE="${PAHOLE_BIN}"', text)
+        self.assertIn("CONFIG_PAHOLE_VERSION=0", text)
+        self.assertIn("pahole_version=0", text)
         self.assertIn("recipe_version=${L32_LINUX_RECIPE_VERSION}", text)
         self.assertIn("kbuild_user=${KBUILD_BUILD_USER}", text)
         self.assertIn("kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}", text)
         self.assertIn("kbuild_tz=${TZ}", text)
+
+    def test_linux_archive_fetch_fails_over_without_weakening_sha_identity(self):
+        text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
+        self.assertIn("https://mirrors.edge.kernel.org", text)
+        self.assertIn("https://www.kernel.org", text)
+        self.assertIn('printf \'%s  %s\\n\' "${LINUX_SHA256}" "${tmp}" | sha256sum -c -', text)
+        self.assertIn("trying next mirror", text)
+        self.assertIn("unable to fetch the exact Linux", text)
 
     def test_canonical_base_rebuild_is_transactional_and_resumable(self):
         text = (ROOT / "tools/ci/l32_linux_build.sh").read_text()
@@ -87,6 +99,18 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn('> "${CANONICAL_BUILD_DIR}/evidence/sha256.txt"', text)
         self.assertNotIn("PREVIOUS_BUILD_DIR", text)
         self.assertNotIn(".aethercore-object-inputs", text)
+
+    def test_hosted_l32_workflow_checkpoints_validated_inputs_before_deep_failure(self):
+        text = (ROOT / ".github/workflows/l32-linux-build.yml").read_text()
+        self.assertIn("uses: actions/cache/restore@v4", text)
+        self.assertIn("uses: actions/cache/save@v4", text)
+        self.assertIn("Save validated RV32 Linux toolchain immediately", text)
+        self.assertIn("Save validated Linux source immediately", text)
+        self.assertIn("Save interrupted same-recipe Kbuild for resume", text)
+        self.assertIn("l32-linux-recovery-v1", text)
+        self.assertIn("build/.l32-linux-staging/obj/vmlinux", text)
+        self.assertIn("Propagate fresh Linux build failure after preserving caches", text)
+        self.assertNotIn("dwarves curl", text)
 
     def test_fast_gate_uses_fresh_hosted_workspace_and_explicit_cache(self):
         fast = (ROOT / ".github/workflows/fast-gate.yml").read_text()
