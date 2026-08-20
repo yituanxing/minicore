@@ -19,6 +19,7 @@ class SupervisorTimeCounterSpec extends AnyFlatSpec with Matchers with ChiselSim
   behavior of "supervisor architectural time counter"
 
   private val timeMask = BigInt(1) << Rv32SstcBit.McounterenTime
+  private val allOnes64 = (BigInt(1) << 64) - 1
   private val sampleTime = BigInt("1122334455667788", 16)
   private val timeIsa = CoreProfiles.rv64imsuSoftware.isa.copy(timeCounter = true)
 
@@ -86,7 +87,7 @@ class SupervisorTimeCounterSpec extends AnyFlatSpec with Matchers with ChiselSim
     simulate(new MachineCsrFile(timeIsa)) { dut =>
       initialize(dut)
 
-      write(dut, MachineCsrAddress.Mcounteren, BigInt(-1))
+      write(dut, MachineCsrAddress.Mcounteren, allOnes64)
       select(dut, MachineCsrAddress.Mcounteren)
       dut.io.readImplemented.expect(true.B)
       dut.io.readWritable.expect(true.B)
@@ -98,7 +99,7 @@ class SupervisorTimeCounterSpec extends AnyFlatSpec with Matchers with ChiselSim
       dut.io.readWritable.expect(false.B)
       dut.io.readData.expect(sampleTime.U)
 
-      write(dut, SupervisorCsrAddress.Scounteren, BigInt(-1))
+      write(dut, SupervisorCsrAddress.Scounteren, allOnes64)
       select(dut, SupervisorCsrAddress.Scounteren)
       dut.io.readData.expect(timeMask.U)
     }
