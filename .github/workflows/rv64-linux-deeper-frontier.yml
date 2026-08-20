@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: rv64-linux-deeper-frontier-${{ github.ref }}
@@ -16,15 +17,16 @@ concurrency:
 jobs:
   frontier:
     name: Unchanged Linux post-timer retirement frontier
-    runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
       TARGET_SHA: ${{ github.sha }}
 
     steps:
-      - name: Checkout exact head without deleting persistent caches
+      - name: Checkout exact head
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -32,7 +34,7 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           if [[ -d .git ]]; then
-            git clean -fd -- src/main/scala src/test/scala sim tools/ci .github/workflows || true
+            git clean -fdx || true
           else
             git init .
           fi
@@ -53,6 +55,32 @@ jobs:
           chmod +x ./mill
           echo "exact_head=$actual"
 
+      - name: Publish pending frontier status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload="$(printf '{\"state\":\"pending\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"Hosted RV64 Linux deeper frontier running\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload"
+
+      - name: Install hosted-runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves
+
       - name: Provision fixed Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
@@ -64,7 +92,7 @@ jobs:
       - name: Build unchanged Linux 6.6.143 and unchanged OpenSBI 1.6
         shell: bash
         env:
-          RV64_LINUX_JOBS: '6'
+          RV64_LINUX_JOBS: '4'
         run: |
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
@@ -87,6 +115,7 @@ jobs:
             PROGRESS_INTERVAL_CYCLES=10000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            JOBS=4 \
             run-local
 
           log=build/rv64-linux-deeper-frontier/logs/boot-probe.log
@@ -100,6 +129,37 @@ jobs:
           echo '--- runtime markers ---'
           grep -E '^L32_|L32_' "$log" | tail -n 40 || true
 
+      - name: Publish successful frontier status
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload="$(printf '{\"state\":\"success\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"Hosted RV64 Linux deeper frontier passed\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload"
+
+      - name: Publish failed frontier status
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          payload="$(printf '{\"state\":\"failure\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"Hosted RV64 Linux deeper frontier failed\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload" || true
+
       - name: Write frontier summary
         if: always()
         shell: bash
@@ -108,6 +168,7 @@ jobs:
             echo '## RV64 Linux Deeper Frontier'
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- execution: GitHub-hosted Ubuntu 24.04, independent of the self-hosted backlog'
             echo '- real software: unchanged OpenSBI 1.6 + unchanged Linux 6.6.143'
             echo '- baseline: Linux banner + at least one retired Supervisor timer interrupt'
             echo '- frontier requirement: 30,000,000 additional retired instructions after the Linux banner'
