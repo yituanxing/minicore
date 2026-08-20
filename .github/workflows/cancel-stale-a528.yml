@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: rv64-vm-csr-133
+  group: rv64-linux-timer-v1-refs/heads/explore/rv64-linux-timer-v1
   cancel-in-progress: true
 
 jobs:
