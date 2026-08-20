@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: l32-linux-deeper-132
+  group: l32-opensbi-132
   cancel-in-progress: true
 
 jobs:
