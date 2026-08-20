@@ -26,6 +26,13 @@ class LegacySupervisorTimerSpec extends AnyFlatSpec with Matchers with ChiselSim
   private val stipMask = BigInt(1) << MachineCsrBit.SupervisorTimerInterrupt
   private val rv64SupervisorTimerCause =
     (BigInt(1) << 63) | BigInt(MachineCsrBit.SupervisorTimerInterrupt)
+  private val legacyTimerIsa =
+    CoreProfiles.rv64imsuSoftware.isa.copy(machineProvidedSupervisorTimer = true)
+  private val legacyTimerConfig =
+    CoreProfiles.rv64imsuSoftware.copy(
+      name = "rv64imsu-machine-provided-supervisor-timer",
+      isa = legacyTimerIsa
+    )
 
   private def initializeCsr(dut: MachineCsrFile): Unit = {
     dut.io.readAddr.poke(0.U)
@@ -62,7 +69,7 @@ class LegacySupervisorTimerSpec extends AnyFlatSpec with Matchers with ChiselSim
   }
 
   it should "make STIP software-writable in mip but read-only in sip when S-mode has no stimecmp" in {
-    simulate(new MachineCsrFile(CoreProfiles.rv64imsuSoftware.isa)) { dut =>
+    simulate(new MachineCsrFile(legacyTimerIsa)) { dut =>
       initializeCsr(dut)
 
       write(dut, MachineCsrAddress.Mideleg, stipMask)
@@ -145,7 +152,7 @@ class LegacySupervisorTimerSpec extends AnyFlatSpec with Matchers with ChiselSim
       supervisorTrap -> ebreak
     )
 
-    simulate(new AetherCoreSimTop(CoreProfiles.rv64imsuSoftware, stopOnTrap = false)) { dut =>
+    simulate(new AetherCoreSimTop(legacyTimerConfig, stopOnTrap = false)) { dut =>
       initializeCore(dut)
       var sawSupervisorTimer = false
       var cycles = 0
