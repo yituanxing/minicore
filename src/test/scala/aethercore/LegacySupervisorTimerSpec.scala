@@ -114,6 +114,11 @@ class LegacySupervisorTimerSpec extends AnyFlatSpec with Matchers with ChiselSim
       (BigInt(rd & 0x1f) << 7) |
       BigInt(0x37)
 
+  private def auipc(imm20: Int, rd: Int): BigInt =
+    (BigInt(imm20 & 0xfffff) << 12) |
+      (BigInt(rd & 0x1f) << 7) |
+      BigInt(0x17)
+
   private def csr(address: Int, source: Int, funct3: Int, rd: Int): BigInt =
     (BigInt(address & 0xfff) << 20) |
       (BigInt(source & 0x1f) << 15) |
@@ -133,15 +138,16 @@ class LegacySupervisorTimerSpec extends AnyFlatSpec with Matchers with ChiselSim
 
   it should "retire a delegated RV64 supervisor timer interrupt from software STIP" in {
     val program = Map(
-      base -> uType(0x80000, 1),
+      // AUIPC avoids RV64 LUI sign-extension of 0x80000000.
+      base -> auipc(0, 1),
       (base + 4) -> iType(0x100, 1, 0, 1, 0x13),
       (base + 8) -> csr(SupervisorCsrAddress.Stvec, 1, 1, 0),
       (base + 12) -> iType(0x20, 0, 0, 2, 0x13),
       (base + 16) -> csr(MachineCsrAddress.Mideleg, 2, 1, 0),
       (base + 20) -> csr(MachineCsrAddress.Mie, 2, 1, 0),
       (base + 24) -> csr(MachineCsrAddress.Mip, 2, 1, 0),
-      (base + 28) -> uType(0x80000, 3),
-      (base + 32) -> iType(0x80, 3, 0, 3, 0x13),
+      (base + 28) -> auipc(0, 3),
+      (base + 32) -> iType(0x64, 3, 0, 3, 0x13),
       (base + 36) -> csr(MachineCsrAddress.Mepc, 3, 1, 0),
       (base + 40) -> uType(0x1, 4),
       (base + 44) -> iType(-2046, 4, 0, 4, 0x13), // x4 = MPP=S | SIE = 0x802
