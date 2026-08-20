@@ -5,13 +5,17 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.common.PrivilegeMode
-import aethercore.config.CoreProfiles
+import aethercore.config.{CoreConfig, CoreProfiles}
 import aethercore.core.{AetherCore, MachineCsrAddress, MachineCsrBit, MachineCsrFile, SupervisorCsrAddress}
 
 class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "Supervisor external interrupts"
 
   private val seip = BigInt(1) << MachineCsrBit.SupervisorExternalInterrupt
+  private val supervisorProfiles = Seq(
+    CoreProfiles.rv32imsuSoftware,
+    CoreProfiles.rv64imsuSoftware
+  )
 
   private def initialize(dut: MachineCsrFile): Unit = {
     dut.io.readAddr.poke(0.U)
@@ -63,6 +67,11 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
       (BigInt(rd & 0x1f) << 7) |
       BigInt(0x37)
 
+  private def auipc(imm20: Int, rd: Int): BigInt =
+    (BigInt(imm20 & 0xfffff) << 12) |
+      (BigInt(rd & 0x1f) << 7) |
+      BigInt(0x17)
+
   private def csr(address: Int, source: Int, funct3: Int, rd: Int): BigInt =
     (BigInt(address & 0xfff) << 20) |
       (BigInt(source & 0x1f) << 15) |
@@ -70,74 +79,80 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
       (BigInt(rd & 0x1f) << 7) |
       BigInt(0x73)
 
-  it should "expose SEIP through mip/sip and qualify a delegated S-mode external interrupt" in {
-    simulate(
-      new MachineCsrFile(
-        CoreProfiles.rv32imsuSv32Software.isa,
-        false,
-        true
-      )
-    ) { dut =>
-      initialize(dut)
+  it should "expose SEIP through mip/sip and qualify a delegated S-mode external interrupt for both XLENs" in {
+    supervisorProfiles.foreach { profile =>
+      simulate(
+        new MachineCsrFile(
+          profile.isa,
+          false,
+          true
+        )
+      ) { dut =>
+        initialize(dut)
 
-      write(dut, MachineCsrAddress.Mideleg, seip)
-      read(dut, MachineCsrAddress.Mideleg) shouldBe seip
-      write(dut, SupervisorCsrAddress.Sie, seip)
-      read(dut, SupervisorCsrAddress.Sie) shouldBe seip
+        write(dut, MachineCsrAddress.Mideleg, seip)
+        read(dut, MachineCsrAddress.Mideleg) shouldBe seip
+        write(dut, SupervisorCsrAddress.Sie, seip)
+        read(dut, SupervisorCsrAddress.Sie) shouldBe seip
 
-      dut.io.supervisorExternalInterruptPending.get.poke(true.B)
-      read(dut, MachineCsrAddress.Mip) shouldBe seip
-      read(dut, SupervisorCsrAddress.Sip) shouldBe seip
-      dut.io.supervisorExternalInterrupt.get.expect(false.B)
+        dut.io.supervisorExternalInterruptPending.get.poke(true.B)
+        read(dut, MachineCsrAddress.Mip) shouldBe seip
+        read(dut, SupervisorCsrAddress.Sip) shouldBe seip
+        dut.io.supervisorExternalInterrupt.get.expect(false.B)
 
-      enterSupervisor(dut, supervisorInterruptEnable = true)
-      dut.io.supervisorExternalInterrupt.get.expect(true.B)
+        enterSupervisor(dut, supervisorInterruptEnable = true)
+        dut.io.supervisorExternalInterrupt.get.expect(true.B)
 
-      write(dut, SupervisorCsrAddress.Sstatus, 0)
-      dut.io.supervisorExternalInterrupt.get.expect(false.B)
+        write(dut, SupervisorCsrAddress.Sstatus, 0)
+        dut.io.supervisorExternalInterrupt.get.expect(false.B)
+      }
     }
   }
 
-  it should "require mideleg.SEIP before delivering the external interrupt to S-mode" in {
-    simulate(
-      new MachineCsrFile(
-        CoreProfiles.rv32imsuSv32Software.isa,
-        false,
-        true
-      )
-    ) { dut =>
-      initialize(dut)
-      write(dut, MachineCsrAddress.Mie, seip)
-      enterSupervisor(dut, supervisorInterruptEnable = true)
-      dut.io.supervisorExternalInterruptPending.get.poke(true.B)
+  it should "require mideleg.SEIP before delivering the external interrupt to S-mode for both XLENs" in {
+    supervisorProfiles.foreach { profile =>
+      simulate(
+        new MachineCsrFile(
+          profile.isa,
+          false,
+          true
+        )
+      ) { dut =>
+        initialize(dut)
+        write(dut, MachineCsrAddress.Mie, seip)
+        enterSupervisor(dut, supervisorInterruptEnable = true)
+        dut.io.supervisorExternalInterruptPending.get.poke(true.B)
 
-      read(dut, MachineCsrAddress.Mip) shouldBe seip
-      read(dut, SupervisorCsrAddress.Sip) shouldBe 0
-      dut.io.supervisorExternalInterrupt.get.expect(false.B)
+        read(dut, MachineCsrAddress.Mip) shouldBe seip
+        read(dut, SupervisorCsrAddress.Sip) shouldBe 0
+        dut.io.supervisorExternalInterrupt.get.expect(false.B)
 
-      write(dut, MachineCsrAddress.Mideleg, seip)
-      read(dut, SupervisorCsrAddress.Sip) shouldBe seip
-      dut.io.supervisorExternalInterrupt.get.expect(true.B)
+        write(dut, MachineCsrAddress.Mideleg, seip)
+        read(dut, SupervisorCsrAddress.Sip) shouldBe seip
+        dut.io.supervisorExternalInterrupt.get.expect(true.B)
+      }
     }
   }
 
-  it should "deliver cause 9 through the core, record scause/sepc and return with SRET" in {
-    val base = BigInt("80000000", 16)
+  private def proveCoreDelivery(profile: CoreConfig): Unit = {
+    val base = profile.platform.resetVector
     val handler = base + 0x100
     val supervisorEntry = base + 0x38
+    val expectedCause =
+      (BigInt(1) << (profile.isa.xlen - 1)) | BigInt(MachineCsrBit.SupervisorExternalInterrupt)
 
     val program = Map(
-      // stvec = handler
-      base -> uType(0x80000, 1),
+      // AUIPC keeps the workload XLEN-neutral: RV64 LUI 0x80000 would sign-extend.
+      base -> auipc(0, 1),
       (base + 0x04) -> iType(0x100, 1, 0, 1, 0x13),
       (base + 0x08) -> csr(0x105, 1, 1, 0),
-      // mideleg.SEIP = 1, then sie.SEIE = 1
+      // mideleg.SEIP = 1, then sie.SEIE = 1.
       (base + 0x0c) -> iType(0x200, 0, 0, 2, 0x13),
       (base + 0x10) -> csr(0x303, 2, 1, 0),
       (base + 0x14) -> csr(0x104, 2, 1, 0),
-      // mepc = supervisorEntry
-      (base + 0x18) -> uType(0x80000, 3),
-      (base + 0x1c) -> iType(0x38, 3, 0, 3, 0x13),
+      // mepc = supervisorEntry using a second PC-relative address.
+      (base + 0x18) -> auipc(0, 3),
+      (base + 0x1c) -> iType(0x20, 3, 0, 3, 0x13),
       (base + 0x20) -> csr(0x341, 3, 1, 0),
       // mstatus.MPP=S plus sstatus.SIE, then MRET.
       (base + 0x24) -> uType(0x1, 4),
@@ -155,7 +170,7 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
     )
 
     simulate(new AetherCore(
-      CoreProfiles.rv32imsuSoftware,
+      profile,
       withSupervisorExternalInterrupt = true
     )) { dut =>
       dut.io.imem.fault.poke(false.B)
@@ -186,7 +201,7 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
 
         if (dut.io.commit.valid.peek().litToBoolean) {
           if (dut.io.commit.interrupt.peek().litToBoolean) {
-            dut.io.commit.interruptCause.expect(BigInt("80000009", 16).U)
+            dut.io.commit.interruptCause.expect(expectedCause.U)
             expectedEpc = dut.io.commit.interruptPc.peek().litValue
             sawInterrupt = true
           }
@@ -197,7 +212,7 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
           if (dut.io.commit.rdWrite.peek().litToBoolean) {
             val rd = dut.io.commit.rd.peek().litValue
             val value = dut.io.commit.rdData.peek().litValue
-            if (rd == 6 && value == BigInt("80000009", 16)) sawCause = true
+            if (rd == 6 && value == expectedCause) sawCause = true
             if (rd == 7 && expectedEpc != 0 && value == expectedEpc) sawEpc = true
           }
 
@@ -218,5 +233,9 @@ class SupervisorExternalInterruptSpec extends AnyFlatSpec with Matchers with Chi
       sawSret shouldBe true
       resumed shouldBe true
     }
+  }
+
+  it should "deliver XLEN-wide cause 9 through the core, record scause/sepc and return with SRET" in {
+    supervisorProfiles.foreach(proveCoreDelivery)
   }
 }
