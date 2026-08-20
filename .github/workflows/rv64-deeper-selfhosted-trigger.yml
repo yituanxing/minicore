@@ -50,6 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          chmod +x mill
           ./mill aethercore.test.testOnly aethercore.SupervisorExternalInterruptSpec
           ./mill aethercore.test.testOnly aethercore.RV64SupervisorWfiExternalInterruptSpec
           ./mill aethercore.test.testOnly aethercore.RV64UserEcallSupervisorSpec
