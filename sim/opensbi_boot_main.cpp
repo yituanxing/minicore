@@ -39,9 +39,9 @@ bool isInterruptCause(std::uint64_t cause, std::uint64_t code) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 12)
+    if (argc < 2 || argc > 13)
       throw std::runtime_error(
-          "usage: L32_OPENSBI_SIM FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES] [REQUIRE_LAYERED_COMPRESSED] [MIN_STIP]");
+          "usage: L32_OPENSBI_SIM FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES] [REQUIRE_LAYERED_COMPRESSED] [MIN_STIP] [MIN_POST_MILESTONE_COMMITS]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
@@ -61,6 +61,8 @@ int main(int argc, char** argv) {
         argc >= 11 ? std::stoull(argv[10], nullptr, 0) != 0 : false;
     const std::uint64_t minStip =
         argc >= 12 ? std::stoull(argv[11], nullptr, 0) : 0ULL;
+    const std::uint64_t minPostMilestoneCommits =
+        argc >= 13 ? std::stoull(argv[12], nullptr, 0) : 0ULL;
     std::string uartInput;
     if (!uartCommand.empty()) {
       uartInput = uartCommand;
@@ -85,6 +87,7 @@ int main(int argc, char** argv) {
     std::uint64_t lastExceptionCause = 0;
     std::uint64_t lastExceptionValue = 0;
     std::uint64_t lastExceptionPc = 0;
+    std::uint64_t milestoneCommitCount = 0;
     std::string uart;
     bool sawOpenSbiBanner = false;
     bool sawMilestone = false;
@@ -179,6 +182,7 @@ int main(int argc, char** argv) {
         }
         if (!sawMilestone && endsWith(uart, milestone)) {
           sawMilestone = true;
+          milestoneCommitCount = commits;
           std::cerr << "\nL32_UART_MILESTONE cycles=" << cycles
                     << " commits=" << commits
                     << " interrupts=" << interrupts
@@ -278,9 +282,13 @@ int main(int argc, char** argv) {
 
       const bool inputSatisfied = uartInput.empty() ||
           (inputStarted && inputIndex == uartInput.size() && sawRxInterrupt && sawPostInputSeip);
+      const bool postMilestoneCommitsSatisfied = minPostMilestoneCommits == 0 ||
+          (sawMilestone && commits >= milestoneCommitCount &&
+           commits - milestoneCommitCount >= minPostMilestoneCommits);
       if (sawMilestone && interrupts >= minInterrupts &&
           supervisorExternalInterrupts >= minSeip &&
-          supervisorTimerInterrupts >= minStip && inputSatisfied) {
+          supervisorTimerInterrupts >= minStip && inputSatisfied &&
+          postMilestoneCommitsSatisfied) {
         std::cout.flush();
         if (requireLayeredCompressed &&
             (opensbiCompressedCommits == 0 || linuxCompressedCommits == 0)) {
@@ -319,6 +327,11 @@ int main(int argc, char** argv) {
                   << " min-interrupts=" << minInterrupts
                   << " min-stip=" << minStip
                   << " min-seip=" << minSeip
+                  << " min-post-milestone-commits=" << minPostMilestoneCommits
+                  << " post-milestone-commits="
+                  << (sawMilestone && commits >= milestoneCommitCount
+                          ? commits - milestoneCommitCount
+                          : 0)
                   << " banner=" << (sawOpenSbiBanner ? 1 : 0)
                   << " input-bytes=" << inputIndex << '/' << uartInput.size()
                   << " rx-irq=" << (sawRxInterrupt ? 1 : 0)
@@ -355,6 +368,11 @@ int main(int argc, char** argv) {
               << " min-interrupts=" << minInterrupts
               << " min-stip=" << minStip
               << " min-seip=" << minSeip
+              << " min-post-milestone-commits=" << minPostMilestoneCommits
+              << " post-milestone-commits="
+              << (sawMilestone && commits >= milestoneCommitCount
+                      ? commits - milestoneCommitCount
+                      : 0)
               << " input-started=" << (inputStarted ? 1 : 0)
               << " input-bytes=" << inputIndex << '/' << uartInput.size()
               << " rx-irq=" << (sawRxInterrupt ? 1 : 0)
