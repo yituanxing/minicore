@@ -1,0 +1,76 @@
+name: RV64 PTY Frontier Symbolicate
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv64-pty-symbolicate-trigger.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-pty-symbolicate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  symbolicate:
+    if: github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1'
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 5
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Checkout exact RV64 exploration head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          if [[ ! -d .git ]]; then git init .; fi
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Provision exact RV64 Linux toolchain and cached kernel identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' build/rv64-linux-early/result.txt
+
+      - name: Symbolicate PTY frontier PCs against exact vmlinux
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n1 | cut -d= -f2-)"
+          vmlinux="${image%/arch/riscv/boot/Image}/vmlinux"
+          test -s "$vmlinux"
+          a2l="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}addr2line"
+          nm="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}nm"
+          pcs=(
+            ffffffff80bcd538 ffffffff80bcd53c ffffffff80bcd540 ffffffff80bcd544
+            ffffffff80bcd548 ffffffff80bcd54c ffffffff80bcd550 ffffffff80bcd554
+            ffffffff80bcd558 ffffffff800c2fa4 ffffffff800c2fc0 ffffffff800c2fc4
+            ffffffff800c2fc8 ffffffff800c2fcc ffffffff800c2fd0 ffffffff80bf5998
+            ffffffff80008c94
+          )
+          echo '--- exact symbols ---'
+          for pc in "${pcs[@]}"; do
+            echo "L32_PTY_PC 0x$pc"
+            "$a2l" -e "$vmlinux" -f -C -i "0x$pc"
+          done
+          echo '--- nearby symbols around three regions ---'
+          "$nm" -n -S "$vmlinux" | awk '
+            $1 >= "ffffffff800c2000" && $1 <= "ffffffff800c4000" {print}
+            $1 >= "ffffffff80bcc000" && $1 <= "ffffffff80bce000" {print}
+            $1 >= "ffffffff80bf4000" && $1 <= "ffffffff80bf7000" {print}
+          '
