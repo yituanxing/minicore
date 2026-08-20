@@ -18,7 +18,8 @@ using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 namespace {
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
-constexpr std::uint64_t kSupervisorExternalInterruptCause = 0x80000009ULL;
+constexpr std::uint64_t kSupervisorTimerInterruptCode = 5;
+constexpr std::uint64_t kSupervisorExternalInterruptCode = 9;
 constexpr std::uint64_t kLinuxPayloadBase = 0x80400000ULL;
 
 using aethercore::l32sim::Memory;
@@ -29,13 +30,18 @@ bool endsWith(const std::string& text, const std::string& suffix) {
   return !suffix.empty() && text.size() >= suffix.size() &&
       text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
+
+bool isInterruptCause(std::uint64_t cause, std::uint64_t code) {
+  return cause == (0x80000000ULL | code) ||
+      cause == (0x8000000000000000ULL | code);
+}
 }  // namespace
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 2 || argc > 11)
+    if (argc < 2 || argc > 12)
       throw std::runtime_error(
-          "usage: L32_OPENSBI_SIM FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES] [REQUIRE_LAYERED_COMPRESSED]");
+          "usage: L32_OPENSBI_SIM FW_PAYLOAD.bin [MAX_CYCLES] [UART_MILESTONE] [MIN_INTERRUPTS] [MIN_SEIP] [UART_TRIGGER] [UART_COMMAND] [POST_INPUT_MAX_CYCLES] [PROGRESS_INTERVAL_CYCLES] [REQUIRE_LAYERED_COMPRESSED] [MIN_STIP]");
 
     const std::string image = argv[1];
     const std::uint64_t maxCycles =
@@ -53,6 +59,8 @@ int main(int argc, char** argv) {
         argc >= 10 ? std::stoull(argv[9], nullptr, 0) : 0ULL;
     const bool requireLayeredCompressed =
         argc >= 11 ? std::stoull(argv[10], nullptr, 0) != 0 : false;
+    const std::uint64_t minStip =
+        argc >= 12 ? std::stoull(argv[11], nullptr, 0) : 0ULL;
     std::string uartInput;
     if (!uartCommand.empty()) {
       uartInput = uartCommand;
@@ -72,6 +80,7 @@ int main(int argc, char** argv) {
     std::uint64_t linuxCompressedCommits = 0;
     std::uint64_t exceptions = 0;
     std::uint64_t interrupts = 0;
+    std::uint64_t supervisorTimerInterrupts = 0;
     std::uint64_t supervisorExternalInterrupts = 0;
     std::uint64_t lastExceptionCause = 0;
     std::uint64_t lastExceptionValue = 0;
@@ -173,6 +182,7 @@ int main(int argc, char** argv) {
           std::cerr << "\nL32_UART_MILESTONE cycles=" << cycles
                     << " commits=" << commits
                     << " interrupts=" << interrupts
+                    << " stip=" << supervisorTimerInterrupts
                     << " seip=" << supervisorExternalInterrupts
                     << " marker=" << milestone << "\n";
         }
@@ -233,7 +243,18 @@ int main(int argc, char** argv) {
                       << " cause=0x" << interruptCause
                       << std::dec << "\n";
           }
-          if (interruptCause == kSupervisorExternalInterruptCause) {
+          if (isInterruptCause(interruptCause, kSupervisorTimerInterruptCode)) {
+            ++supervisorTimerInterrupts;
+            if (supervisorTimerInterrupts == 1) {
+              std::cerr << "\nL32_FIRST_SUPERVISOR_TIMER_INTERRUPT cycles=" << cycles
+                        << " commits=" << commits
+                        << " pc=0x" << std::hex
+                        << static_cast<std::uint64_t>(top.io_commit_interruptPc)
+                        << " cause=0x" << interruptCause
+                        << std::dec << "\n";
+            }
+          }
+          if (isInterruptCause(interruptCause, kSupervisorExternalInterruptCode)) {
             ++supervisorExternalInterrupts;
             if (supervisorExternalInterrupts == 1) {
               std::cerr << "\nL32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT cycles=" << cycles
@@ -258,7 +279,8 @@ int main(int argc, char** argv) {
       const bool inputSatisfied = uartInput.empty() ||
           (inputStarted && inputIndex == uartInput.size() && sawRxInterrupt && sawPostInputSeip);
       if (sawMilestone && interrupts >= minInterrupts &&
-          supervisorExternalInterrupts >= minSeip && inputSatisfied) {
+          supervisorExternalInterrupts >= minSeip &&
+          supervisorTimerInterrupts >= minStip && inputSatisfied) {
         std::cout.flush();
         if (requireLayeredCompressed &&
             (opensbiCompressedCommits == 0 || linuxCompressedCommits == 0)) {
@@ -281,6 +303,7 @@ int main(int argc, char** argv) {
                     << " commits=" << commits
                     << " exceptions=" << exceptions
                     << " interrupts=" << interrupts
+                    << " stip=" << supervisorTimerInterrupts
                     << " seip=" << supervisorExternalInterrupts
                     << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
         }
@@ -291,8 +314,10 @@ int main(int argc, char** argv) {
                   << " linux-compressed=" << linuxCompressedCommits
                   << " exceptions=" << exceptions
                   << " interrupts=" << interrupts
+                  << " stip=" << supervisorTimerInterrupts
                   << " seip=" << supervisorExternalInterrupts
                   << " min-interrupts=" << minInterrupts
+                  << " min-stip=" << minStip
                   << " min-seip=" << minSeip
                   << " banner=" << (sawOpenSbiBanner ? 1 : 0)
                   << " input-bytes=" << inputIndex << '/' << uartInput.size()
@@ -311,6 +336,7 @@ int main(int argc, char** argv) {
                   << " budget=" << postInputMaxCycles
                   << " milestone=" << (sawMilestone ? 1 : 0)
                   << " interrupts=" << interrupts
+                  << " stip=" << supervisorTimerInterrupts
                   << " seip=" << supervisorExternalInterrupts
                   << " marker=" << milestone << "\n";
         return 12;
@@ -327,6 +353,7 @@ int main(int argc, char** argv) {
               << " banner=" << (sawOpenSbiBanner ? 1 : 0)
               << " milestone=" << (sawMilestone ? 1 : 0)
               << " min-interrupts=" << minInterrupts
+              << " min-stip=" << minStip
               << " min-seip=" << minSeip
               << " input-started=" << (inputStarted ? 1 : 0)
               << " input-bytes=" << inputIndex << '/' << uartInput.size()
@@ -334,6 +361,7 @@ int main(int argc, char** argv) {
               << " post-input-seip=" << (sawPostInputSeip ? 1 : 0)
               << " exceptions=" << exceptions
               << " interrupts=" << interrupts
+              << " stip=" << supervisorTimerInterrupts
               << " seip=" << supervisorExternalInterrupts
               << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
               << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)

@@ -19,6 +19,7 @@ MAX_CYCLES ?= 50000000
 MILESTONE ?= Linux version 6.6.143
 MIN_INTERRUPTS ?= 0
 MIN_SEIP ?= 0
+MIN_STIP ?= 0
 UART_TRIGGER ?=
 UART_COMMAND ?=
 UART_COMMAND_FILE ?=
@@ -124,7 +125,7 @@ run-local: $(RUN_DEPS)
 		if [[ -n "$(UART_COMMAND_FILE)" ]]; then \
 			uart_command="$$(cat "$(UART_COMMAND_FILE)")"; \
 		fi; \
-		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$$uart_command" "$(POST_INPUT_MAX_CYCLES)" "$(PROGRESS_INTERVAL_CYCLES)" "$(REQUIRE_LAYERED_COMPRESSED)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$$uart_command" "$(POST_INPUT_MAX_CYCLES)" "$(PROGRESS_INTERVAL_CYCLES)" "$(REQUIRE_LAYERED_COMPRESSED)" "$(MIN_STIP)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
 		rc=$${PIPESTATUS[0]}; \
 	set -e; \
 	if [[ $$rc -ne 0 ]]; then \
@@ -150,6 +151,11 @@ run-local: $(RUN_DEPS)
 	if [[ "$(MIN_SEIP)" -gt 0 ]]; then \
 		grep -q 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
 			echo "ERROR: Linux reached UART marker without a retired SEIP interrupt"; exit 8; \
+		}; \
+	fi
+	if [[ "$(MIN_STIP)" -gt 0 ]]; then \
+		grep -q 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux reached UART marker without a retired STIP interrupt"; exit 14; \
 		}; \
 	fi
 	if [[ "$(UART_INPUT_ENABLED)" == "1" ]]; then \

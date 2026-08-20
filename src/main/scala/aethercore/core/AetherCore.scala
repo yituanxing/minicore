@@ -112,7 +112,7 @@ class AetherCore(
       Some(new PageTableReadBusIO(paddrBits, vmPteBits))
     else None
     val timerInterrupt = Input(Bool())
-    val time = if (config.isa.hasSstc) Some(Input(UInt(64.W))) else None
+    val time = if (config.isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
     val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
     val supervisorExternalInterrupt =
       if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
@@ -294,7 +294,7 @@ class AetherCore(
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
   csrFile.io.timerInterrupt := io.timerInterrupt
-  if (config.isa.hasSstc) {
+  if (config.isa.hasTimeCounter) {
     csrFile.io.time.get := io.time.get
   }
   val rawExternalInterrupt =
@@ -312,7 +312,7 @@ class AetherCore(
 
   val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
   val rawSupervisorTimerPending =
-    if (config.isa.hasSstc) csrFile.io.supervisorTimerPending.get else false.B
+    if (config.isa.hasSupervisorTimerInterrupt) csrFile.io.supervisorTimerPending.get else false.B
   val rawInterruptPending =
     io.timerInterrupt || rawExternalInterrupt || rawSupervisorExternalInterrupt || rawSupervisorTimerPending
   val waitingForInterrupt = wfiRetiring && !rawInterruptPending
@@ -328,7 +328,7 @@ class AetherCore(
   val takingSupervisorExternalInterrupt =
     if (withSupervisorExternalInterrupt) csrFile.io.supervisorExternalInterrupt.get else false.B
   val takingSupervisorTimerInterrupt =
-    if (config.isa.hasSstc) csrFile.io.supervisorTimerInterrupt.get else false.B
+    if (config.isa.hasSupervisorTimerInterrupt) csrFile.io.supervisorTimerInterrupt.get else false.B
   val qualifiedInterrupt =
     takingExternalInterrupt || takingTimerInterrupt ||
       takingSupervisorExternalInterrupt || takingSupervisorTimerInterrupt
@@ -777,7 +777,6 @@ class AetherCore(
   if (config.isa.hasPagedVirtualMemory && !config.isa.hasC) {
     fetchResponseReady := frontendAdvance && fetchResponseValid
   }
-
   io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
   io.commit.inst := memWb.inst
