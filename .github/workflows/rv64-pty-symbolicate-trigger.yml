@@ -127,7 +127,7 @@ jobs:
             ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
             FW_BIN="$fw" \
             MAX_CYCLES=180000000 \
-            MILESTONE='initcall pty_init' \
+            MILESTONE='initcall pty_init+0x0/0x400 returned 0' \
             MIN_INTERRUPTS=1 \
             MIN_STIP=1 \
             MIN_POST_MILESTONE_COMMITS=0 \
@@ -140,7 +140,7 @@ jobs:
           log="$build/logs/boot-probe.log"
           test -s "$log"
           grep -Fq 'pty.legacy_count=0' "$log"
-          grep -Eq 'initcall pty_init\+0x0/0x[0-9a-f]+ returned 0' "$log"
+          grep -Fq 'initcall pty_init+0x0/0x400 returned 0' "$log"
           grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
           echo '--- PTY proof ---'
           grep -E 'calling  pty_init|initcall pty_init|L32_UART_MILESTONE|L32_RUNTIME_MILESTONE_PASS' "$log" | tail -n 20
