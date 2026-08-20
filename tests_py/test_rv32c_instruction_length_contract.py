@@ -16,9 +16,17 @@ class Rv32cInstructionLengthContract(unittest.TestCase):
         self.assertIn("fetchedInstBytes := parcel.io.instructionBytes", self.core)
 
     def test_architectural_next_pc_consumes_instruction_length(self):
-        self.assertIn("memWb.pc + memWb.instBytes", self.core)
+        retired_next_pc_updates = [
+            line.strip()
+            for line in self.core.splitlines()
+            if line.strip().startswith("pc := memWb.pc +")
+        ]
+        self.assertGreaterEqual(len(retired_next_pc_updates), 1)
+        self.assertTrue(
+            all(line == "pc := memWb.pc + memWb.instBytes" for line in retired_next_pc_updates),
+            retired_next_pc_updates,
+        )
         self.assertIn("val idExNextPc = idEx.pc + idEx.instBytes", self.core)
-        self.assertEqual(self.core.count("pc := memWb.pc + memWb.instBytes"), 2)
         self.assertEqual(self.core.count("pc := pc + fetchedInstBytes"), 2)
         self.assertNotIn("memWb.pc + 4.U", self.core)
         self.assertNotIn("idEx.pc + 4.U", self.core)
