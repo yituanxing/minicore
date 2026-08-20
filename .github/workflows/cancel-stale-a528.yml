@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: rv64a-v1-133
+  group: rv32c-linux-userspace-133
   cancel-in-progress: true
 
 jobs:
