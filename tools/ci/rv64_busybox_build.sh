@@ -74,6 +74,7 @@ PY
 )"
   (( (flags & 0x7) == 0 )) || fail "${name} retained RVC/float ELF flags: 0x$(printf '%x' "${flags}")"
   compressed="$("${OBJDUMP}" -d "${elf}" | python3 -c 'import re,sys; print(sum(bool(re.match(r"^\s*[0-9a-f]+:\s+[0-9a-f]{4}\s", line, re.I)) for line in sys.stdin))')"
+  [[ "${compressed}" == "0" ]] || fail "${name} contains unexpected 16-bit instruction encodings: ${compressed}"
   {
     echo "RV64_ELF_PROFILE_PASS"
     echo "name=${name}"
