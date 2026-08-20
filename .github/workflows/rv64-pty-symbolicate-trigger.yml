@@ -1,0 +1,228 @@
+name: RV64 Linux Root Frontier Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv64-pty-symbolicate-trigger.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-pty-symbolicate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1'
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 15
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+
+    steps:
+      - name: Checkout exact RV64 exploration head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          if [[ ! -d .git ]]; then git init .; fi
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          echo "exact_head=$TARGET_SHA"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision exact RV64 Linux toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse exact unchanged Linux 6.6.143 Image
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: '6'
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          result=build/rv64-linux-early/result.txt
+          config=build/rv64-linux-early/evidence/resolved.config
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' "$result"
+          grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' "$result"
+          grep -qx 'CONFIG_LEGACY_PTYS=y' "$config"
+          grep -qx 'CONFIG_LEGACY_PTY_COUNT=256' "$config"
+          echo 'L32_ROOT_FRONTIER_KERNEL_IMAGE_SHA=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26'
+
+      - name: Build diagnostic payload with only the known PTY performance shortcut
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/rv64/opensbi_first_exec.env
+          source software/rv64/linux_early.env
+          cross="$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
+          image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n1 | cut -d= -f2-)"
+          test -s "$image"
+          image_sha="$(sha256sum "$image" | awk '{print $1}')"
+          test "$image_sha" = 'e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26'
+
+          diag=build/rv64-linux-root-frontier-diag
+          rm -rf "$diag"
+          mkdir -p "$diag"
+          dtb="$diag/aethercore-rv64-root-frontier.dtb"
+          bootargs="$RV64_LINUX_BOOTARGS initcall_debug loglevel=8 pty.legacy_count=0"
+          python3 tools/ci/make_l32_dtb.py \
+            --output "$dtb" \
+            --summary "$diag/dtb-summary.txt" \
+            --isa "$RV64_OPENSBI_ISA" \
+            --mmu "$RV64_OPENSBI_MMU" \
+            --bootargs "$bootargs"
+
+          opensbi_source="$HOME/.cache/aethercore/l32/opensbi/$RV64_OPENSBI_COMMIT"
+          test -d "$opensbi_source/.git"
+          test "$(git -C "$opensbi_source" rev-parse HEAD)" = "$RV64_OPENSBI_COMMIT"
+          opensbi_build="$diag/opensbi"
+          make -C "$opensbi_source" \
+            O="$GITHUB_WORKSPACE/$opensbi_build" \
+            PLATFORM="$RV64_OPENSBI_PLATFORM" \
+            PLATFORM_RISCV_XLEN="$RV64_OPENSBI_XLEN" \
+            PLATFORM_RISCV_ISA="$RV64_OPENSBI_ISA" \
+            PLATFORM_RISCV_ABI="$RV64_OPENSBI_ABI" \
+            FW_TEXT_START="$RV64_OPENSBI_FW_TEXT_START" \
+            FW_FDT_PATH="$GITHUB_WORKSPACE/$dtb" \
+            FW_PAYLOAD_PATH="$image" \
+            FW_PAYLOAD_OFFSET="$RV64_OPENSBI_PAYLOAD_OFFSET" \
+            FW_PAYLOAD_FDT_ADDR="$RV64_OPENSBI_FDT_ADDR" \
+            CROSS_COMPILE="$cross" \
+            -j6 > "$diag/opensbi-build.log" 2>&1
+
+          fw="$opensbi_build/platform/$RV64_OPENSBI_PLATFORM/firmware/fw_payload.bin"
+          test -s "$fw"
+          echo "L32_ROOT_FRONTIER_BOOTARGS=$bootargs"
+          echo "L32_ROOT_FRONTIER_FIRMWARE=$fw"
+
+      - name: Run through late init toward the root mount boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-linux-root-frontier/$TARGET_SHA"
+          fw="$GITHUB_WORKSPACE/build/rv64-linux-root-frontier-diag/opensbi/platform/generic/firmware/fw_payload.bin"
+          image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n1 | cut -d= -f2-)"
+          vmlinux="${image%/arch/riscv/boot/Image}/vmlinux"
+          test -s "$fw"
+          test -s "$vmlinux"
+
+          set +e
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN="$fw" \
+            MAX_CYCLES=480000000 \
+            MILESTONE='VFS: Unable to mount root fs' \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
+            MIN_POST_MILESTONE_COMMITS=0 \
+            PROGRESS_INTERVAL_CYCLES=40000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            JOBS="$(nproc)" \
+            run-local
+          probe_rc=$?
+          set -e
+
+          log="$build/logs/boot-probe.log"
+          test -s "$log"
+          grep -Fq 'pty.legacy_count=0' "$log"
+          grep -Fq 'initcall pty_init+0x0/0x400 returned 0' "$log"
+
+          if [[ "$probe_rc" -eq 0 ]]; then
+            grep -Fq 'VFS: Unable to mount root fs' "$log"
+            grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+            outcome=root-boundary
+          else
+            grep -Fq 'L32_OPENSBI_TIMEOUT' "$log"
+            outcome=timeout
+          fi
+
+          echo '--- strongest late-boot markers ---'
+          grep -E 'Freeing unused kernel image|Run /init as init process|Starting init:|No working init found|VFS: Cannot open root device|VFS: Unable to mount root fs|Kernel panic|devtmpfs: mounted|console \[ttyS0\]|ttyS0 at MMIO' "$log" | tail -n 100 || true
+          echo '--- latest initcall trace ---'
+          grep -E 'calling  .* @|initcall .* returned' "$log" | tail -n 180 || true
+          echo '--- terminal runtime evidence ---'
+          grep -E 'L32_UART_MILESTONE|L32_RUNTIME_MILESTONE_PASS|L32_OPENSBI_TIMEOUT' "$log" | tail -n 5 || true
+
+          python3 - "$log" <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+          calls = []
+          returns = []
+          last_return_line = -1
+          timeout = ''
+          strong = []
+          with open(path, errors='replace') as handle:
+              for idx, raw in enumerate(handle):
+                  line = raw.strip()
+                  m = re.search(r'calling\s+([^+\s]+)\+', line)
+                  if m:
+                      calls.append((idx, m.group(1)))
+                  m = re.search(r'initcall\s+([^+\s]+)\+.* returned\s+(-?\d+)', line)
+                  if m:
+                      returns.append((idx, m.group(1), int(m.group(2))))
+                      last_return_line = idx
+                  if 'L32_OPENSBI_TIMEOUT' in line:
+                      timeout = line
+                  for marker in (
+                      'Freeing unused kernel image',
+                      'Run /init as init process',
+                      'No working init found',
+                      'VFS: Unable to mount root fs',
+                      'Kernel panic',
+                  ):
+                      if marker in line:
+                          strong.append(line)
+
+          print(f'L32_ROOT_FRONTIER_INITCALL_TRACE calls={len(calls)} returns={len(returns)}')
+          if calls:
+              print(f'L32_ROOT_FRONTIER_LAST_CALLED={calls[-1][1]}')
+          if returns:
+              print(f'L32_ROOT_FRONTIER_LAST_RETURNED={returns[-1][1]} rc={returns[-1][2]}')
+          pending_tail = [name for idx, name in calls if idx > last_return_line]
+          print('L32_ROOT_FRONTIER_PENDING_AFTER_LAST_RETURN=' + (','.join(pending_tail[-12:]) if pending_tail else 'none'))
+          print('L32_ROOT_FRONTIER_RECENT_CALLS=' + ','.join(name for _, name in calls[-20:]))
+          print('L32_ROOT_FRONTIER_RECENT_RETURNS=' + ','.join(name for _, name, _ in returns[-20:]))
+          if strong:
+              print('L32_ROOT_FRONTIER_STRONGEST=' + strong[-1])
+          m = re.search(r'recent-pcs=([^\s]+)', timeout)
+          if m:
+              print('L32_ROOT_FRONTIER_RECENT_PCS=' + m.group(1))
+          PY
+
+          if [[ "$outcome" == timeout ]]; then
+            echo '--- timeout recent PC symbols ---'
+            timeout_line="$(grep 'L32_OPENSBI_TIMEOUT' "$log" | tail -n1)"
+            pcs="$(printf '%s\n' "$timeout_line" | sed -n 's/.*recent-pcs=\([^ ]*\).*/\1/p')"
+            if [[ -n "$pcs" ]]; then
+              IFS=',' read -r -a pc_array <<< "$pcs"
+              for pc in "${pc_array[@]}"; do
+                printf '%s ' "$pc"
+                "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"addr2line -f -C -e "$vmlinux" "$pc" | paste -sd' | ' -
+              done
+            fi
+          fi
+
+          echo "L32_ROOT_FRONTIER_DIAGNOSTIC=PASS outcome=$outcome"

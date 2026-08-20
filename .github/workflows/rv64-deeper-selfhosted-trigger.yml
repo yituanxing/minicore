@@ -1,0 +1,13 @@
+name: RV64 Deeper Self-Hosted Trigger
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv64-deeper-selfhosted-trigger.yml
+
+jobs:
+  parked:
+    if: ${{ false }}
+    runs-on: [self-hosted, Linux, X64, minicore]
+    steps:
+      - run: true
