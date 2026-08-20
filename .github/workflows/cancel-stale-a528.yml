@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: rv32c-linux-kernel-132
+  group: rv32c-freertos-132
   cancel-in-progress: true
 
 jobs:
