@@ -1,4 +1,4 @@
-name: RV64 PTY Frontier Symbolicate
+name: RV64 PTY Legacy Frontier Diagnostic
 
 on:
   pull_request:
@@ -13,12 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  symbolicate:
+  diagnose:
     if: github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1'
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 5
+    timeout-minutes: 12
     env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+
     steps:
       - name: Checkout exact RV64 exploration head
         shell: bash
@@ -38,42 +41,107 @@ jobs:
             fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
           git checkout --detach --force FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          echo "exact_head=$TARGET_SHA"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
 
       - name: Provision exact RV64 Linux toolchain
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Reuse exact cached Linux identity
+      - name: Reuse exact unchanged Linux 6.6.143 Image and prove legacy PTY config
         shell: bash
+        env:
+          RV64_LINUX_JOBS: '6'
         run: |
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
-          grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' build/rv64-linux-early/result.txt
+          result=build/rv64-linux-early/result.txt
+          config=build/rv64-linux-early/evidence/resolved.config
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' "$result"
+          grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' "$result"
+          grep -qx 'CONFIG_LEGACY_PTYS=y' "$config"
+          grep -qx 'CONFIG_LEGACY_PTY_COUNT=256' "$config"
+          echo 'L32_PTY_CONFIG legacy_ptys=y legacy_count=256'
 
-      - name: Symbolicate PTY frontier PCs against exact vmlinux
+      - name: Build diagnostic DTB and OpenSBI payload with legacy PTYs disabled by bootarg only
         shell: bash
         run: |
           set -euo pipefail
+          source software/rv64/opensbi_first_exec.env
+          source software/rv64/linux_early.env
+          cross="$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
           image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n1 | cut -d= -f2-)"
-          vmlinux="${image%/arch/riscv/boot/Image}/vmlinux"
-          test -s "$vmlinux"
-          a2l="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}addr2line"
-          nm="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}nm"
-          pcs=(
-            ffffffff80bcd538 ffffffff80bcd53c ffffffff80bcd540 ffffffff80bcd544
-            ffffffff80bcd548 ffffffff80bcd54c ffffffff80bcd550 ffffffff80bcd554
-            ffffffff80bcd558 ffffffff800c2fa4 ffffffff800c2fc0 ffffffff800c2fc4
-            ffffffff800c2fc8 ffffffff800c2fcc ffffffff800c2fd0 ffffffff80bf5998
-            ffffffff80008c94
-          )
-          echo '--- exact symbols ---'
-          for pc in "${pcs[@]}"; do
-            echo "L32_PTY_PC 0x$pc"
-            "$a2l" -e "$vmlinux" -f -C -i "0x$pc"
-          done
-          echo '--- nearby symbols around three regions ---'
-          "$nm" -n -S "$vmlinux" | awk '
-            $1 >= "ffffffff800c2000" && $1 <= "ffffffff800c4000" {print}
-            $1 >= "ffffffff80bcc000" && $1 <= "ffffffff80bce000" {print}
-            $1 >= "ffffffff80bf4000" && $1 <= "ffffffff80bf7000" {print}
-          '
+          test -s "$image"
+          image_sha="$(sha256sum "$image" | awk '{print $1}')"
+          test "$image_sha" = 'e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26'
+
+          diag=build/rv64-linux-pty-legacy-diag
+          rm -rf "$diag"
+          mkdir -p "$diag"
+          dtb="$diag/aethercore-rv64-pty-legacy.dtb"
+          bootargs="$RV64_LINUX_BOOTARGS initcall_debug loglevel=8 pty.legacy_count=0"
+          python3 tools/ci/make_l32_dtb.py \
+            --output "$dtb" \
+            --summary "$diag/dtb-summary.txt" \
+            --isa "$RV64_OPENSBI_ISA" \
+            --mmu "$RV64_OPENSBI_MMU" \
+            --bootargs "$bootargs"
+
+          opensbi_source="$HOME/.cache/aethercore/l32/opensbi/$RV64_OPENSBI_COMMIT"
+          test -d "$opensbi_source/.git"
+          test "$(git -C "$opensbi_source" rev-parse HEAD)" = "$RV64_OPENSBI_COMMIT"
+          opensbi_build="$diag/opensbi"
+          make -C "$opensbi_source" \
+            O="$GITHUB_WORKSPACE/$opensbi_build" \
+            PLATFORM="$RV64_OPENSBI_PLATFORM" \
+            PLATFORM_RISCV_XLEN="$RV64_OPENSBI_XLEN" \
+            PLATFORM_RISCV_ISA="$RV64_OPENSBI_ISA" \
+            PLATFORM_RISCV_ABI="$RV64_OPENSBI_ABI" \
+            FW_TEXT_START="$RV64_OPENSBI_FW_TEXT_START" \
+            FW_FDT_PATH="$GITHUB_WORKSPACE/$dtb" \
+            FW_PAYLOAD_PATH="$image" \
+            FW_PAYLOAD_OFFSET="$RV64_OPENSBI_PAYLOAD_OFFSET" \
+            FW_PAYLOAD_FDT_ADDR="$RV64_OPENSBI_FDT_ADDR" \
+            CROSS_COMPILE="$cross" \
+            -j6 > "$diag/opensbi-build.log" 2>&1
+
+          fw="$opensbi_build/platform/$RV64_OPENSBI_PLATFORM/firmware/fw_payload.bin"
+          test -s "$fw"
+          echo "L32_PTY_DIAG_KERNEL_SHA=$image_sha"
+          echo "L32_PTY_DIAG_BOOTARGS=$bootargs"
+          echo "L32_PTY_DIAG_FIRMWARE=$fw"
+
+      - name: Prove pty_init returns when only legacy_count is zeroed
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-linux-pty-legacy-frontier/$TARGET_SHA"
+          fw="$GITHUB_WORKSPACE/build/rv64-linux-pty-legacy-diag/opensbi/platform/generic/firmware/fw_payload.bin"
+          test -s "$fw"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN="$fw" \
+            MAX_CYCLES=180000000 \
+            MILESTONE='initcall pty_init' \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
+            MIN_POST_MILESTONE_COMMITS=0 \
+            PROGRESS_INTERVAL_CYCLES=20000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            JOBS="$(nproc)" \
+            run-local
+
+          log="$build/logs/boot-probe.log"
+          test -s "$log"
+          grep -Fq 'pty.legacy_count=0' "$log"
+          grep -Eq 'initcall pty_init\+0x0/0x[0-9a-f]+ returned 0' "$log"
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          echo '--- PTY proof ---'
+          grep -E 'calling  pty_init|initcall pty_init|L32_UART_MILESTONE|L32_RUNTIME_MILESTONE_PASS' "$log" | tail -n 20
+          echo 'L32_PTY_LEGACY_COUNT_ZERO_PROOF=PASS'
