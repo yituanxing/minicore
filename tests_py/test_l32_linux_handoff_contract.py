@@ -57,7 +57,7 @@ class L32LinuxHandoffContractTest(unittest.TestCase):
         self.assertIn("Restore or verify canonical Linux software image", text)
         self.assertIn("tools/ci/l32_linux_cache_key.sh check build/l32-linux", text)
         self.assertNotIn("if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux", text)
-        self.assertNotIn("tools/ci/l32_linux_build.sh\n", text)
+        self.assertNotIn("bash tools/ci/l32_linux_build.sh", text)
         self.assertNotIn("tools/ci/l32_linux_cache_key.sh mark build/l32-linux", text)
         self.assertIn("L32_LINUX_IMAGE_SHA256", text)
         self.assertIn("L32_LINUX_VMLINUX_SHA256", text)
