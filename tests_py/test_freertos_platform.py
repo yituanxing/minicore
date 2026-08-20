@@ -161,14 +161,18 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertLess(freertos, isolated)
         self.assertIn("bash tools/ci/full_gate_freertos.sh", text)
 
-    def test_fast_gate_preserves_per_pr_outputs_and_skips_wave_traces(self) -> None:
+    def test_fast_gate_uses_hosted_ephemeral_outputs_and_skips_wave_traces(self) -> None:
         text = FAST_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("clean: false", text)
+        self.assertIn("runs-on: ubuntu-24.04", text)
+        self.assertIn("clean: true", text)
+        self.assertNotIn("clean: false", text)
         self.assertIn('AETHERCORE_VERILATOR_FAST_VERIFY: "1"', text)
         self.assertIn("chmod +x mill", text)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-fast"', text)
         self.assertIn("MILL_OUTPUT_DIR=", text)
         self.assertIn("FAST_FREERTOS_BUILD=", text)
         self.assertIn("AETHERCORE_JOBS=$(nproc)", text)
+        self.assertIn("uses: actions/cache@v4", text)
         self.assertIn("TRACE=0 run-local", text)
         self.assertIn("aethercore.WaitForInterruptCoreSpec", text)
         self.assertNotIn("full_gate_freertos_difftest.sh", text)
