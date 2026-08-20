@@ -45,9 +45,9 @@ jobs:
           bash -n tools/ci/rv64_minimal_initramfs_build.sh
           bash -n tools/ci/rv64_minimal_init_payload_build.sh
           python3 -m unittest tests_py.test_rv64_minimal_initramfs_contract -v
-          ./mill aethercore.testOnly aethercore.SupervisorExternalInterruptSpec
-          ./mill aethercore.testOnly aethercore.RV64SupervisorWfiExternalInterruptSpec
-          ./mill aethercore.testOnly aethercore.RV64UserEcallSupervisorSpec
+          ./mill aethercore.test.testOnly aethercore.SupervisorExternalInterruptSpec
+          ./mill aethercore.test.testOnly aethercore.RV64SupervisorWfiExternalInterruptSpec
+          ./mill aethercore.test.testOnly aethercore.RV64UserEcallSupervisorSpec
 
       - name: Provision exact RV64 Linux toolchain
         shell: bash
