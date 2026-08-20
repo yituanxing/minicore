@@ -73,7 +73,7 @@ jobs:
         shell: bash
         env:
           RV64_LINUX_JOBS: "6"
-        run: bash tools/ci/rv64_minimal_init_payload_build.sh
+        run: timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
 
       - name: Run real RV64 PID 1 UART interrupt proof
         shell: bash
@@ -107,5 +107,6 @@ jobs:
             build/rv64-linux-initramfs/evidence/
             build/rv64-minimal-init-boot/result.txt
             build/rv64-minimal-init-boot/evidence/
+            build/rv64-minimal-init-boot/opensbi-initramfs-build.log
             ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/firmware.sha256
             ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/logs/*.log
