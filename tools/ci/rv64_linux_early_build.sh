@@ -37,11 +37,34 @@ fi
 if [[ ! -f "${ARCHIVE}" ]]; then
   tmp="${ARCHIVE}.part.$$"
   rm -f "${tmp}"
-  curl --http1.1 -fL --retry 8 --retry-delay 2 --retry-all-errors \
-    --connect-timeout 30 --max-time 3600 \
-    "${RV64_LINUX_ARCHIVE}" -o "${tmp}"
-  printf '%s  %s\n' "${RV64_LINUX_SHA256}" "${tmp}" | sha256sum -c -
-  mv "${tmp}" "${ARCHIVE}"
+  archive_urls=("${RV64_LINUX_ARCHIVE}")
+  if [[ "${RV64_LINUX_ARCHIVE}" == https://cdn.kernel.org/* ]]; then
+    kernel_path="${RV64_LINUX_ARCHIVE#https://cdn.kernel.org}"
+    archive_urls+=(
+      "https://mirrors.edge.kernel.org${kernel_path}"
+      "https://www.kernel.org${kernel_path}"
+    )
+  fi
+
+  downloaded=0
+  for archive_url in "${archive_urls[@]}"; do
+    rm -f "${tmp}"
+    echo "RV64 Linux source fetch: ${archive_url}"
+    if curl --http1.1 -fL --retry 4 --retry-delay 2 --retry-all-errors \
+        --connect-timeout 30 --max-time 1200 \
+        "${archive_url}" -o "${tmp}"; then
+      if printf '%s  %s\n' "${RV64_LINUX_SHA256}" "${tmp}" | sha256sum -c -; then
+        mv "${tmp}" "${ARCHIVE}"
+        downloaded=1
+        break
+      fi
+      echo "RV64 Linux source checksum mismatch from ${archive_url}; trying next mirror." >&2
+    else
+      echo "RV64 Linux source fetch failed from ${archive_url}; trying next mirror." >&2
+    fi
+  done
+  rm -f "${tmp}"
+  [[ "${downloaded}" == "1" ]] || fail "unable to fetch the exact Linux ${RV64_LINUX_VERSION} archive from all pinned mirrors"
 fi
 printf '%s  %s\n' "${RV64_LINUX_SHA256}" "${ARCHIVE}" | sha256sum -c -
 
