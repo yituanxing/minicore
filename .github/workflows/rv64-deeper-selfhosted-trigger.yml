@@ -82,12 +82,12 @@ jobs:
             TOP=AetherCoreOpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
             FW_BIN="$GITHUB_WORKSPACE/build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin" \
-            MAX_CYCLES=120000000 \
+            MAX_CYCLES=240000000 \
             MILESTONE='Linux version 6.6.143' \
             MIN_INTERRUPTS=1 \
             MIN_STIP=1 \
-            MIN_POST_MILESTONE_COMMITS=30000000 \
-            PROGRESS_INTERVAL_CYCLES=10000000 \
+            MIN_POST_MILESTONE_COMMITS=80000000 \
+            PROGRESS_INTERVAL_CYCLES=20000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             JOBS="$(nproc)" \
@@ -96,11 +96,11 @@ jobs:
           grep -Fq 'OpenSBI v1.6' "$log"
           grep -Fq '[    0.000000] Linux version 6.6.143' "$log"
           grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
-          grep -Eq 'L32_RUNTIME_MILESTONE_PASS .*min-post-milestone-commits=30000000 .*post-milestone-commits=30000000' "$log"
+          grep -Eq 'L32_RUNTIME_MILESTONE_PASS .*min-post-milestone-commits=80000000 .*post-milestone-commits=80000000' "$log"
           echo '--- deepest Linux UART lines ---'
-          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 100 || true
+          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 140 || true
           echo '--- runtime markers ---'
-          grep -E 'L32_' "$log" | tail -n 60 || true
+          grep -E 'L32_' "$log" | tail -n 80 || true
 
       - name: Publish result status
         if: always()
