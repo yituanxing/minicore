@@ -1,0 +1,115 @@
+name: RV64 Linux Deeper Frontier
+
+on:
+  push:
+    branches:
+      - explore/rv64-linux-deeper-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-linux-deeper-frontier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontier:
+    name: Unchanged Linux post-timer retirement frontier
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 30
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact head without deleting persistent caches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala sim tools/ci .github/workflows || true
+          else
+            git init .
+          fi
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill
+          echo "exact_head=$actual"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RV64 Linux-target GCC
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build unchanged Linux 6.6.143 and unchanged OpenSBI 1.6
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: '6'
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Discover post-timer Linux retirement frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/rv64-linux-deeper-frontier \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            MAX_CYCLES=120000000 \
+            MILESTONE='Linux version 6.6.143' \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
+            MIN_POST_MILESTONE_COMMITS=30000000 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+
+          log=build/rv64-linux-deeper-frontier/logs/boot-probe.log
+          grep -Fq 'OpenSBI v1.6' "$log"
+          grep -Fq '[    0.000000] Linux version 6.6.143' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
+          grep -Eq 'L32_RUNTIME_MILESTONE_PASS .*min-post-milestone-commits=30000000 .*post-milestone-commits=30000000' "$log"
+
+          echo '--- deepest Linux UART lines ---'
+          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 80 || true
+          echo '--- runtime markers ---'
+          grep -E '^L32_|L32_' "$log" | tail -n 40 || true
+
+      - name: Write frontier summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 Linux Deeper Frontier'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- real software: unchanged OpenSBI 1.6 + unchanged Linux 6.6.143'
+            echo '- baseline: Linux banner + at least one retired Supervisor timer interrupt'
+            echo '- frontier requirement: 30,000,000 additional retired instructions after the Linux banner'
+            echo '- no PR regression fan-out is attached to this exploration branch'
+          } >> "$GITHUB_STEP_SUMMARY"
