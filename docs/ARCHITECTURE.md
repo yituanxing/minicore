@@ -17,3 +17,7 @@ Every retired instruction emits one `CommitTrace` record containing PC, instruct
 ## Temporary traps
 
 S0.1 marks illegal instructions, bus faults, ECALL and EBREAK as commit exceptions and halts. Precise trap entry and CSR updates are deferred to the privileged-architecture stage.
+
+## Future microarchitecture notes
+
+The current v1 pipeline remains the correctness/reference architecture. Working notes for the next-generation core, including multiple candidate paths rather than a frozen v2 specification, are maintained in [`AETHERCORE_V2_DESIGN_NOTES.md`](AETHERCORE_V2_DESIGN_NOTES.md).
