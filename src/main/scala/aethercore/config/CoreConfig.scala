@@ -9,7 +9,8 @@ final case class IsaConfig(
     zExtensions: Set[String] = Set.empty,
     virtualMemoryModes: Set[String] = Set.empty,
     pmpEntries: Int = 0,
-    sstc: Boolean = false
+    sstc: Boolean = false,
+    machineProvidedSupervisorTimer: Boolean = false
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
@@ -24,6 +25,14 @@ final case class IsaConfig(
 
   require(!sstc || privilegeModes.contains('S'), "Sstc requires Supervisor mode")
   require(!sstc || xlen == 32, "the current bounded Sstc implementation is RV32-only")
+  require(
+    !machineProvidedSupervisorTimer || privilegeModes.contains('S'),
+    "machine-provided supervisor timer delivery requires Supervisor mode"
+  )
+  require(
+    !(machineProvidedSupervisorTimer && sstc),
+    "machine-provided mip.STIP delivery and Sstc stimecmp delivery are mutually exclusive"
+  )
   require(
     Set(0, 16, 64).contains(pmpEntries),
     s"standard PMP implementation count must be 0, 16 or 64, got $pmpEntries"
@@ -43,6 +52,8 @@ final case class IsaConfig(
   val hasSv39: Boolean = virtualMemoryModes.contains("Sv39")
   val hasSv48: Boolean = virtualMemoryModes.contains("Sv48")
   val hasSstc: Boolean = sstc
+  val hasMachineProvidedSupervisorTimer: Boolean = machineProvidedSupervisorTimer
+  val hasSupervisorTimerInterrupt: Boolean = hasSstc || hasMachineProvidedSupervisorTimer
   val hasWordOps: Boolean = xlen == 64
   val hasPmp: Boolean = pmpEntries > 0
 
