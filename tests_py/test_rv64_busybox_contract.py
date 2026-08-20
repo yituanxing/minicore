@@ -40,6 +40,8 @@ class Rv64BusyboxContractTest(unittest.TestCase):
         self.assertIn("RV64_ELF_PROFILE_PASS", text)
         self.assertIn("RV64_BUSYBOX_BUILD_RESULT: status=PASS", text)
         self.assertIn("flags & 0x7", text)
+        self.assertIn('[[ "${compressed}" == "0" ]]', text)
+        self.assertIn("unexpected 16-bit instruction encodings", text)
         for forbidden in ("sqlite-smoke", "/opt/l32", "l32_real_programs", "opensbi_forkserver"):
             self.assertNotIn(forbidden, text)
 
