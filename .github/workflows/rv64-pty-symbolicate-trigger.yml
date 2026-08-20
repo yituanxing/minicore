@@ -1,4 +1,4 @@
-name: RV64 Post-PTY Frontier Diagnostic
+name: RV64 Linux Root Frontier Diagnostic
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ jobs:
   diagnose:
     if: github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1'
     runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 12
+    timeout-minutes: 15
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Reuse exact unchanged Linux 6.6.143 Image and prove legacy PTY config
+      - name: Reuse exact unchanged Linux 6.6.143 Image
         shell: bash
         env:
           RV64_LINUX_JOBS: '6'
@@ -64,9 +64,9 @@ jobs:
           grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' "$result"
           grep -qx 'CONFIG_LEGACY_PTYS=y' "$config"
           grep -qx 'CONFIG_LEGACY_PTY_COUNT=256' "$config"
-          echo 'L32_PTY_CONFIG legacy_ptys=y legacy_count=256'
+          echo 'L32_ROOT_FRONTIER_KERNEL_IMAGE_SHA=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26'
 
-      - name: Build diagnostic DTB and OpenSBI payload with legacy PTYs disabled by bootarg only
+      - name: Build diagnostic payload with only the known PTY performance shortcut
         shell: bash
         run: |
           set -euo pipefail
@@ -78,10 +78,10 @@ jobs:
           image_sha="$(sha256sum "$image" | awk '{print $1}')"
           test "$image_sha" = 'e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26'
 
-          diag=build/rv64-linux-pty-legacy-diag
+          diag=build/rv64-linux-root-frontier-diag
           rm -rf "$diag"
           mkdir -p "$diag"
-          dtb="$diag/aethercore-rv64-pty-legacy.dtb"
+          dtb="$diag/aethercore-rv64-root-frontier.dtb"
           bootargs="$RV64_LINUX_BOOTARGS initcall_debug loglevel=8 pty.legacy_count=0"
           python3 tools/ci/make_l32_dtb.py \
             --output "$dtb" \
@@ -110,16 +110,15 @@ jobs:
 
           fw="$opensbi_build/platform/$RV64_OPENSBI_PLATFORM/firmware/fw_payload.bin"
           test -s "$fw"
-          echo "L32_POST_PTY_DIAG_KERNEL_SHA=$image_sha"
-          echo "L32_POST_PTY_DIAG_BOOTARGS=$bootargs"
-          echo "L32_POST_PTY_DIAG_FIRMWARE=$fw"
+          echo "L32_ROOT_FRONTIER_BOOTARGS=$bootargs"
+          echo "L32_ROOT_FRONTIER_FIRMWARE=$fw"
 
-      - name: Capture the first frontier after pty_init
+      - name: Run through late init toward the root mount boundary
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/rv64-linux-post-pty-frontier/$TARGET_SHA"
-          fw="$GITHUB_WORKSPACE/build/rv64-linux-pty-legacy-diag/opensbi/platform/generic/firmware/fw_payload.bin"
+          build="$HOME/.cache/aethercore/rv64-linux-root-frontier/$TARGET_SHA"
+          fw="$GITHUB_WORKSPACE/build/rv64-linux-root-frontier-diag/opensbi/platform/generic/firmware/fw_payload.bin"
           image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n1 | cut -d= -f2-)"
           vmlinux="${image%/arch/riscv/boot/Image}/vmlinux"
           test -s "$fw"
@@ -131,12 +130,12 @@ jobs:
             TOP=AetherCoreOpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
             FW_BIN="$fw" \
-            MAX_CYCLES=240000000 \
-            MILESTONE='__AETHERCORE_POST_PTY_DIAGNOSTIC_NEVER_MATCH__' \
-            MIN_INTERRUPTS=0 \
-            MIN_STIP=0 \
+            MAX_CYCLES=480000000 \
+            MILESTONE='VFS: Unable to mount root fs' \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
             MIN_POST_MILESTONE_COMMITS=0 \
-            PROGRESS_INTERVAL_CYCLES=20000000 \
+            PROGRESS_INTERVAL_CYCLES=40000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             JOBS="$(nproc)" \
@@ -146,19 +145,24 @@ jobs:
 
           log="$build/logs/boot-probe.log"
           test -s "$log"
-          test "$probe_rc" -ne 0
-          grep -Fq 'L32_OPENSBI_TIMEOUT' "$log"
           grep -Fq 'pty.legacy_count=0' "$log"
           grep -Fq 'initcall pty_init+0x0/0x400 returned 0' "$log"
 
-          echo '--- strongest later boot markers ---'
-          grep -E 'Run /init as init process|Starting init:|No working init found|Kernel panic|Freeing unused kernel image|devtmpfs: mounted|console \[ttyS0\]|serial8250|ttyS0' "$log" | tail -n 60 || true
-          echo '--- deepest ordinary Linux UART lines ---'
-          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | grep -vE 'calling  |initcall .* returned' | tail -n 80 || true
+          if [[ "$probe_rc" -eq 0 ]]; then
+            grep -Fq 'VFS: Unable to mount root fs' "$log"
+            grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+            outcome=root-boundary
+          else
+            grep -Fq 'L32_OPENSBI_TIMEOUT' "$log"
+            outcome=timeout
+          fi
+
+          echo '--- strongest late-boot markers ---'
+          grep -E 'Freeing unused kernel image|Run /init as init process|Starting init:|No working init found|VFS: Cannot open root device|VFS: Unable to mount root fs|Kernel panic|devtmpfs: mounted|console \[ttyS0\]|ttyS0 at MMIO' "$log" | tail -n 100 || true
           echo '--- latest initcall trace ---'
-          grep -E 'calling  .* @|initcall .* returned' "$log" | tail -n 140 || true
-          echo '--- timeout evidence ---'
-          grep 'L32_OPENSBI_TIMEOUT' "$log" | tail -n 1
+          grep -E 'calling  .* @|initcall .* returned' "$log" | tail -n 180 || true
+          echo '--- terminal runtime evidence ---'
+          grep -E 'L32_UART_MILESTONE|L32_RUNTIME_MILESTONE_PASS|L32_OPENSBI_TIMEOUT' "$log" | tail -n 5 || true
 
           python3 - "$log" <<'PY'
           import re
@@ -167,49 +171,58 @@ jobs:
           path = sys.argv[1]
           calls = []
           returns = []
+          last_return_line = -1
           timeout = ''
+          strong = []
           with open(path, errors='replace') as handle:
-              for raw in handle:
+              for idx, raw in enumerate(handle):
                   line = raw.strip()
                   m = re.search(r'calling\s+([^+\s]+)\+', line)
                   if m:
-                      calls.append(m.group(1))
+                      calls.append((idx, m.group(1)))
                   m = re.search(r'initcall\s+([^+\s]+)\+.* returned\s+(-?\d+)', line)
                   if m:
-                      returns.append((m.group(1), int(m.group(2))))
+                      returns.append((idx, m.group(1), int(m.group(2))))
+                      last_return_line = idx
                   if 'L32_OPENSBI_TIMEOUT' in line:
                       timeout = line
+                  for marker in (
+                      'Freeing unused kernel image',
+                      'Run /init as init process',
+                      'No working init found',
+                      'VFS: Unable to mount root fs',
+                      'Kernel panic',
+                  ):
+                      if marker in line:
+                          strong.append(line)
 
-          print(f'L32_POST_PTY_INITCALL_TRACE calls={len(calls)} returns={len(returns)}')
+          print(f'L32_ROOT_FRONTIER_INITCALL_TRACE calls={len(calls)} returns={len(returns)}')
           if calls:
-              print(f'L32_POST_PTY_LAST_CALLED={calls[-1]}')
+              print(f'L32_ROOT_FRONTIER_LAST_CALLED={calls[-1][1]}')
           if returns:
-              print(f'L32_POST_PTY_LAST_RETURNED={returns[-1][0]} rc={returns[-1][1]}')
-          print('L32_POST_PTY_RECENT_CALLS=' + ','.join(calls[-20:]))
-          print('L32_POST_PTY_RECENT_RETURNS=' + ','.join(name for name, _ in returns[-20:]))
-
-          returned_names = {name for name, _ in returns}
-          pending = [name for name in calls if name not in returned_names]
-          if pending:
-              print('L32_POST_PTY_UNMATCHED=' + ','.join(pending[-20:]))
-          else:
-              print('L32_POST_PTY_UNMATCHED=none')
-
+              print(f'L32_ROOT_FRONTIER_LAST_RETURNED={returns[-1][1]} rc={returns[-1][2]}')
+          pending_tail = [name for idx, name in calls if idx > last_return_line]
+          print('L32_ROOT_FRONTIER_PENDING_AFTER_LAST_RETURN=' + (','.join(pending_tail[-12:]) if pending_tail else 'none'))
+          print('L32_ROOT_FRONTIER_RECENT_CALLS=' + ','.join(name for _, name in calls[-20:]))
+          print('L32_ROOT_FRONTIER_RECENT_RETURNS=' + ','.join(name for _, name, _ in returns[-20:]))
+          if strong:
+              print('L32_ROOT_FRONTIER_STRONGEST=' + strong[-1])
           m = re.search(r'recent-pcs=([^\s]+)', timeout)
           if m:
-              pcs = [pc for pc in m.group(1).split(',') if pc]
-              print('L32_POST_PTY_RECENT_PCS=' + ','.join(pcs))
+              print('L32_ROOT_FRONTIER_RECENT_PCS=' + m.group(1))
           PY
 
-          echo '--- recent PC symbols ---'
-          timeout_line="$(grep 'L32_OPENSBI_TIMEOUT' "$log" | tail -n1)"
-          pcs="$(printf '%s\n' "$timeout_line" | sed -n 's/.*recent-pcs=\([^ ]*\).*/\1/p')"
-          if [[ -n "$pcs" ]]; then
-            IFS=',' read -r -a pc_array <<< "$pcs"
-            for pc in "${pc_array[@]}"; do
-              printf '%s ' "$pc"
-              "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"addr2line -f -C -e "$vmlinux" "$pc" | paste -sd' | ' -
-            done
+          if [[ "$outcome" == timeout ]]; then
+            echo '--- timeout recent PC symbols ---'
+            timeout_line="$(grep 'L32_OPENSBI_TIMEOUT' "$log" | tail -n1)"
+            pcs="$(printf '%s\n' "$timeout_line" | sed -n 's/.*recent-pcs=\([^ ]*\).*/\1/p')"
+            if [[ -n "$pcs" ]]; then
+              IFS=',' read -r -a pc_array <<< "$pcs"
+              for pc in "${pc_array[@]}"; do
+                printf '%s ' "$pc"
+                "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"addr2line -f -C -e "$vmlinux" "$pc" | paste -sd' | ' -
+              done
+            fi
           fi
 
-          echo 'L32_POST_PTY_FRONTIER_DIAGNOSTIC=PASS'
+          echo "L32_ROOT_FRONTIER_DIAGNOSTIC=PASS outcome=$outcome"
