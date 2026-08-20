@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: l32-busybox-shell-133
+  group: l32-minimal-initramfs-133
   cancel-in-progress: true
 
 jobs:
