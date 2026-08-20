@@ -55,9 +55,10 @@ jobs:
             run_freertos=true
           fi
 
-          # Changes to the fast-gate definition must exercise the Chisel path
-          # they are modifying, but should not pull unrelated software gates in.
-          if grep -Eq '^\.github/workflows/fast-gate\.yml$' <<<"$changed"; then
+          # Changes to the fast-gate definition or its shared hosted Verilator
+          # producer must exercise the Chisel path they are modifying, without
+          # pulling unrelated software gates in.
+          if grep -Eq '^\.github/workflows/(fast-gate|hosted-verilator-cache)\.yml$' <<<"$changed"; then
             run_chisel=true
           fi
 
@@ -122,9 +123,15 @@ jobs:
             echo '- source contracts run on a fresh GitHub-hosted workspace, so persistent-runner residue cannot become qualification input'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    needs: [classify, source-contract]
+    if: needs.classify.outputs.run_hardware == 'true'
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
   fast-gate:
     name: Incremental cross-XLEN, VM, privilege, interrupt and FreeRTOS checks
-    needs: [classify, source-contract]
+    needs: [classify, source-contract, verilator-tool]
     if: needs.classify.outputs.run_hardware == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -163,14 +170,26 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-      - name: Restore pinned toolchain cache
-        id: toolchain-cache
-        uses: actions/cache@v4
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/aethercore/toolchains
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv_none_elf_gcc_15_2.sh') }}
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Restore pinned RISC-V newlib toolchain cache
+        id: newlib-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/xpack-riscv-none-elf-gcc-15.2.0-1
+            ~/.cache/aethercore/toolchains/downloads/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-riscv-none-elf-gcc-v1-${{ hashFiles('tools/ensure_riscv_none_elf_gcc_15_2.sh') }}
           restore-keys: |
-            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-riscv-none-elf-gcc-v1-
 
       - name: Restore verified reference cache
         id: reference-cache
@@ -198,8 +217,7 @@ jobs:
           echo "hosted_build_root=$root"
           echo "parallel_jobs=$(nproc)"
 
-      - name: Provision fixed Verilator
-        if: needs.classify.outputs.run_chisel == 'true' || needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
+      - name: Revalidate fixed Verilator from producer cache
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
@@ -218,6 +236,16 @@ jobs:
         if: needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
         shell: bash
         run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Save validated RISC-V newlib toolchain immediately
+        if: (needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true') && steps.newlib-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/xpack-riscv-none-elf-gcc-15.2.0-1
+            ~/.cache/aethercore/toolchains/downloads/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-riscv-none-elf-gcc-v1-${{ hashFiles('tools/ensure_riscv_none_elf_gcc_15_2.sh') }}
 
       - name: Focused VM, configuration, privilege, RV32A, interrupt and WFI Chisel tests
         if: needs.classify.outputs.run_chisel == 'true'
@@ -336,9 +364,11 @@ jobs:
             echo "- Supervisor V1 executable selected: \`${{ needs.classify.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS selected: \`${{ needs.classify.outputs.run_freertos }}\`"
             echo "- Scala dependency cache hit: \`${{ steps.scala-cache.outputs.cache-hit }}\`"
-            echo "- pinned toolchain cache hit: \`${{ steps.toolchain-cache.outputs.cache-hit }}\`"
+            echo "- fixed Verilator cache hit after producer: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
+            echo "- pinned RISC-V newlib cache hit: \`${{ steps.newlib-cache.outputs.cache-hit }}\`"
             echo "- verified reference cache hit: \`${{ steps.reference-cache.outputs.cache-hit }}\`"
             echo "- parallel jobs: \`${AETHERCORE_JOBS:-not-configured}\`"
+            echo '- fixed Verilator cold compilation is owned by the shared reusable producer; Fast Gate restores and revalidates the exact payload'
             echo '- hosted runners use fresh workspaces; only immutable/versioned dependencies and independently verified reference inputs are persisted through Actions cache'
             echo '- Verilator, RISC-V toolchains, NEMU and SoftFloat are revalidated by repository-owned revision/SHA contracts after every restore'
             echo '- mutable RTL/workload build outputs remain ephemeral in this first hosted-runner revision to avoid stale-build qualification risk'
