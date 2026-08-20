@@ -1,0 +1,74 @@
+name: Hosted Verilator 5.024 Cache
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verilator:
+    name: Produce or verify fixed Verilator 5.024
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: aethercore-hosted-verilator-5-024-v1
+      cancel-in-progress: false
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+
+    steps:
+      - name: Checkout exact caller head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore exact Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Validate or build exact Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Save exact validated Verilator immediately
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Write producer summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Hosted fixed Verilator producer'
+            echo
+            echo "- exact cache hit: \`${{ steps.verilator-cache.outputs.cache-hit }}\`"
+            echo '- one global producer slot owns cold compilation; consuming hardware jobs remain parallel after this short prerequisite finishes'
+            echo '- tools/ensure_verilator_5_024.sh revalidates the pinned source revision, installed binary and runtime assets before consumers can proceed'
+          } >> "$GITHUB_STEP_SUMMARY"
