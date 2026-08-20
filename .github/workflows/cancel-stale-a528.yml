@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: rv64-pmp-v1-132
+  group: rv64-opensbi-platform-v1-132
   cancel-in-progress: true
 
 jobs:
