@@ -1,0 +1,111 @@
+name: RV64 Linux Minimal Initramfs V1
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/rv64-minimal-initramfs-v1.yml
+      - software/rv64_userspace/minimal_init.S
+      - tools/ci/rv64_minimal_initramfs_build.sh
+      - tools/ci/rv64_minimal_init_payload_build.sh
+      - tests_py/test_rv64_minimal_initramfs_contract.py
+      - Makefile.l32-linux-boot
+      - sim/opensbi_boot_main.cpp
+      - src/main/scala/aethercore/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-minimal-initramfs-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minimal-initramfs:
+    name: RV64 Linux PID 1 UART/SEIP proof
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 60
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+
+    steps:
+      - name: Checkout exact exploration head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: false
+
+      - name: Fail fast on RV64 userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill tools/ci/rv64_minimal_initramfs_build.sh tools/ci/rv64_minimal_init_payload_build.sh
+          bash -n tools/ci/rv64_minimal_initramfs_build.sh
+          bash -n tools/ci/rv64_minimal_init_payload_build.sh
+          python3 -m unittest tests_py.test_rv64_minimal_initramfs_contract -v
+          ./mill aethercore.test.testOnly aethercore.SupervisorExternalInterruptSpec
+          ./mill aethercore.test.testOnly aethercore.RV64SupervisorWfiExternalInterruptSpec
+          ./mill aethercore.test.testOnly aethercore.RV64UserEcallSupervisorSpec
+
+      - name: Provision exact RV64 Linux toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse qualified unchanged Linux 6.6.143 baseline
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: "6"
+        run: bash tools/ci/rv64_linux_early_build.sh
+
+      - name: Build deterministic ELF64 PID 1 initramfs Image
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: "6"
+        run: bash tools/ci/rv64_minimal_initramfs_build.sh
+
+      - name: Build OpenSBI payload for RV64 initramfs Image
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: "6"
+        run: bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run real RV64 PID 1 UART interrupt proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$HOME/.cache/aethercore/rv64-linux-minimal-initramfs/$TARGET_SHA" \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=600000000 \
+            MILESTONE="RV64 USER UART IRQ OK" \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
+            MIN_SEIP=1 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+
+      - name: Upload RV64 minimal userspace evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-rv64-minimal-init-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-linux-initramfs/evidence/
+            build/rv64-minimal-init-boot/result.txt
+            build/rv64-minimal-init-boot/evidence/
+            ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/firmware.sha256
+            ~/.cache/aethercore/rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/logs/*.log
