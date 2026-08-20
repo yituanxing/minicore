@@ -41,9 +41,12 @@ class Rv64MinimalInitramfsContractTest(unittest.TestCase):
 
     def test_hosted_workflow_checkpoints_each_validated_layer_before_deep_proof(self):
         text = (ROOT / ".github/workflows/rv64-minimal-initramfs-v1.yml").read_text()
+        producer = (ROOT / ".github/workflows/hosted-verilator-cache.yml").read_text()
         self.assertIn("uses: actions/cache/restore@v4", text)
         self.assertIn("uses: actions/cache/save@v4", text)
-        self.assertIn("Save fixed Verilator immediately", text)
+        self.assertIn("uses: ./.github/workflows/hosted-verilator-cache.yml", text)
+        self.assertIn("needs: verilator-tool", text)
+        self.assertIn("Revalidate fixed Verilator from producer cache", text)
         self.assertIn("Save Scala dependencies after focused bootstrap", text)
         self.assertIn("Save validated RV64 Linux GCC immediately", text)
         self.assertIn("Save qualified RV64 Linux/OpenSBI baseline immediately", text)
@@ -53,6 +56,11 @@ class Rv64MinimalInitramfsContractTest(unittest.TestCase):
         self.assertIn("rv64-linux-gcc-v1", text)
         self.assertIn("verilator-5.024-v1", text)
         self.assertIn("build/rv64-linux-early/evidence/", text)
+
+        self.assertIn("aethercore-hosted-verilator-5-024-v1", producer)
+        self.assertIn("cancel-in-progress: false", producer)
+        self.assertIn("Save exact validated Verilator immediately", producer)
+        self.assertIn("tools/ensure_verilator_5_024.sh", producer)
 
 
 if __name__ == "__main__":
