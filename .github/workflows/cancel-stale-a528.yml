@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: nuttx-sv32-paging-132
+  group: l32-busybox-shell-132
   cancel-in-progress: true
 
 jobs:
