@@ -37,6 +37,21 @@ jobs:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
+      - name: Publish pending qualification status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload="$(printf '{\"state\":\"pending\",\"context\":\"rv64-linux-timer-v1/qualification\",\"description\":\"RV64 Linux supervisor timer qualification running\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload"
+
       - name: Checkout exact head without deleting persistent caches
         shell: bash
         env:
