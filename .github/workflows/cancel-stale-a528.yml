@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: rv32c-nuttx-sv32-133
+  group: l32-opensbi-133
   cancel-in-progress: true
 
 jobs:
