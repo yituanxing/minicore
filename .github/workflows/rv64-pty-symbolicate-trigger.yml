@@ -39,11 +39,14 @@ jobs:
           git checkout --detach --force FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
 
-      - name: Provision exact RV64 Linux toolchain and cached kernel identity
+      - name: Provision exact RV64 Linux toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse exact cached Linux identity
         shell: bash
         run: |
           set -euo pipefail
-          bash tools/ensure_riscv64_linux_gcc_13_3.sh
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' build/rv64-linux-early/result.txt
 
