@@ -37,6 +37,10 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: false
 
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
       - name: Fail fast on RV64 userspace contracts
         shell: bash
         run: |
@@ -70,10 +74,6 @@ jobs:
         env:
           RV64_LINUX_JOBS: "6"
         run: bash tools/ci/rv64_minimal_init_payload_build.sh
-
-      - name: Provision fixed Verilator
-        shell: bash
-        run: bash tools/ensure_verilator_5_024.sh
 
       - name: Run real RV64 PID 1 UART interrupt proof
         shell: bash
