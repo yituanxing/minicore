@@ -1,13 +1,26 @@
 name: RV64 Linux BusyBox Shell V1
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/rv64-busybox-shell-v1.yml
+      - software/rv64_busybox/manifest.env
+      - tools/ci/rv64_busybox_build.sh
+      - tools/ci/rv64_busybox_initramfs_build.sh
+      - tools/ci/rv64_busybox_payload_build.sh
+      - tests_py/test_rv64_busybox_contract.py
+      - tools/ci/rv64_linux_early_build.sh
+      - tools/ci/make_l32_dtb.py
+      - Makefile.l32-linux-boot
+      - sim/opensbi_boot_main.cpp
+      - src/main/scala/aethercore/**
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64-busybox-shell-v1-${{ github.ref }}
+  group: rv64-busybox-shell-v1-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -16,7 +29,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 90
     env:
-      TARGET_SHA: ${{ github.sha }}
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       AETHERCORE_MILL_NO_DAEMON: "1"
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
 
