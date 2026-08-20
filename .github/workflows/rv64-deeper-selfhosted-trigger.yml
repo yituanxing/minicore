@@ -16,7 +16,7 @@ concurrency:
 jobs:
   rv64-deeper-frontier:
     if: github.head_ref == 'trigger/rv64-linux-deeper-hosted-v1'
-    name: RV64 cross-time silent-frontier diagnostic
+    name: RV64 Linux initcall frontier diagnostic
     runs-on: [self-hosted, Linux, X64, minicore]
     timeout-minutes: 35
     env:
@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Reuse unchanged Linux 6.6.143 plus OpenSBI 1.6
+      - name: Reuse exact unchanged Linux 6.6.143 Image
         shell: bash
         env:
           RV64_LINUX_JOBS: '6'
@@ -62,59 +62,75 @@ jobs:
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^kernel_image_sha256=e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26$' build/rv64-linux-early/result.txt
 
-      - name: Inspect exact Linux crypto configuration
+      - name: Build diagnostic DTB and OpenSBI payload with initcall_debug only
         shell: bash
         run: |
           set -euo pipefail
-          config=build/rv64-linux-early/evidence/resolved.config
-          test -s "$config"
-          echo '--- exact crypto/BLAKE2-related config ---'
-          grep -E '^(CONFIG_|# CONFIG_).*(BLAKE2|CRYPTO_MANAGER|CRYPTO_TEST|CRYPTO_SELF_TEST|WIREGUARD|CRYPTO_LIB|CRYPTO_HASH)' "$config" || true
+          source software/rv64/opensbi_first_exec.env
+          source software/rv64/linux_early.env
+          cross="$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
+          image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n 1 | cut -d= -f2-)"
+          test -s "$image"
+          image_sha="$(sha256sum "$image" | awk '{print $1}')"
+          test "$image_sha" = 'e79adb001a3537e35372f77c6705239414253acce937cfcf4eb23df3da2e0b26'
 
-      - name: Add diagnostic-only progress PC sampling
+          diag=build/rv64-linux-initcall-diag
+          rm -rf "$diag"
+          mkdir -p "$diag"
+          dtb="$diag/aethercore-rv64-initcall.dtb"
+          bootargs="$RV64_LINUX_BOOTARGS initcall_debug loglevel=8"
+          python3 tools/ci/make_l32_dtb.py \
+            --output "$dtb" \
+            --summary "$diag/dtb-summary.txt" \
+            --isa "$RV64_OPENSBI_ISA" \
+            --mmu "$RV64_OPENSBI_MMU" \
+            --bootargs "$bootargs"
+
+          opensbi_source="$HOME/.cache/aethercore/l32/opensbi/$RV64_OPENSBI_COMMIT"
+          test -d "$opensbi_source/.git"
+          test "$(git -C "$opensbi_source" rev-parse HEAD)" = "$RV64_OPENSBI_COMMIT"
+          opensbi_build="$diag/opensbi"
+          make -C "$opensbi_source" \
+            O="$GITHUB_WORKSPACE/$opensbi_build" \
+            PLATFORM="$RV64_OPENSBI_PLATFORM" \
+            PLATFORM_RISCV_XLEN="$RV64_OPENSBI_XLEN" \
+            PLATFORM_RISCV_ISA="$RV64_OPENSBI_ISA" \
+            PLATFORM_RISCV_ABI="$RV64_OPENSBI_ABI" \
+            FW_TEXT_START="$RV64_OPENSBI_FW_TEXT_START" \
+            FW_FDT_PATH="$GITHUB_WORKSPACE/$dtb" \
+            FW_PAYLOAD_PATH="$image" \
+            FW_PAYLOAD_OFFSET="$RV64_OPENSBI_PAYLOAD_OFFSET" \
+            FW_PAYLOAD_FDT_ADDR="$RV64_OPENSBI_FDT_ADDR" \
+            CROSS_COMPILE="$cross" \
+            -j6 > "$diag/opensbi-build.log" 2>&1
+
+          fw="$opensbi_build/platform/$RV64_OPENSBI_PLATFORM/firmware/fw_payload.bin"
+          test -s "$fw"
+          printf 'diagnostic_kernel_image_sha256=%s\n' "$image_sha"
+          printf 'diagnostic_bootargs=%s\n' "$bootargs"
+          printf 'diagnostic_firmware=%s\n' "$fw"
+
+      - name: Run initcall-debug frontier and report last completed initcalls
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('sim/opensbi_boot_main.cpp')
-          text = path.read_text()
-          old = '                  << " milestone=" << (sawMilestone ? 1 : 0) << "\\n";'
-          new = '''                  << " milestone=" << (sawMilestone ? 1 : 0);
-                if (recentCount != 0) {
-                  const auto sampleSlot =
-                      (recentIndex + kRecentCommitCount - 1) % kRecentCommitCount;
-                  std::cerr << " sample-pc=0x" << std::hex << recentPcs[sampleSlot]
-                            << std::dec;
-                }
-                std::cerr << "\\n";'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one progress-print anchor, found {text.count(old)}')
-          path.write_text(text.replace(old, new))
-          PY
-          echo '--- diagnostic-only host runner diff ---'
-          git diff -- sim/opensbi_boot_main.cpp
-          test -z "$(git diff --name-only -- ':!sim/opensbi_boot_main.cpp')"
-
-      - name: Sample the unchanged Linux frontier across time
-        shell: bash
-        run: |
-          set -euo pipefail
-          build="$HOME/.cache/aethercore/rv64-linux-cross-time-frontier/$TARGET_SHA"
+          build="$HOME/.cache/aethercore/rv64-linux-initcall-frontier/$TARGET_SHA"
+          fw="$GITHUB_WORKSPACE/build/rv64-linux-initcall-diag/opensbi/platform/generic/firmware/fw_payload.bin"
+          test -s "$fw"
           set +e
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$build" \
             TOP=AetherCoreOpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
-            FW_BIN="$GITHUB_WORKSPACE/build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin" \
-            MAX_CYCLES=160000000 \
-            MILESTONE='__AETHERCORE_FRONTIER_DIAGNOSTIC_NEVER_MATCH__' \
+            FW_BIN="$fw" \
+            MAX_CYCLES=220000000 \
+            MILESTONE='__AETHERCORE_INITCALL_DIAGNOSTIC_NEVER_MATCH__' \
             MIN_INTERRUPTS=0 \
             MIN_STIP=0 \
             MIN_POST_MILESTONE_COMMITS=0 \
-            PROGRESS_INTERVAL_CYCLES=10000000 \
+            PROGRESS_INTERVAL_CYCLES=20000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             JOBS="$(nproc)" \
@@ -126,88 +142,44 @@ jobs:
           echo "diagnostic_make_rc=$probe_rc"
           test -s "$log"
           grep -Fq 'L32_OPENSBI_TIMEOUT' "$log"
-          grep -Fq '[    6.014815] io scheduler bfq registered' "$log"
+          grep -Fq 'initcall_debug loglevel=8' "$log"
 
-          kernel_image="$(grep '^kernel_image=' build/rv64-linux-early/result.txt | tail -n 1 | cut -d= -f2-)"
-          vmlinux="${kernel_image%/arch/riscv/boot/Image}/vmlinux"
-          test -s "$vmlinux"
-          nm_file="$build/vmlinux.nm"
-          "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}nm" -n -S "$vmlinux" > "$nm_file"
+          echo '--- deepest ordinary Linux UART lines ---'
+          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | grep -vE 'calling  |initcall .* returned' | tail -n 70 || true
+          echo '--- latest initcall trace ---'
+          grep -E 'calling  .* @|initcall .* returned' "$log" | tail -n 120 || true
+          echo '--- timeout evidence ---'
+          grep 'L32_OPENSBI_TIMEOUT' "$log" | tail -n 1
 
-          python3 - "$log" "$nm_file" <<'PY'
-          import bisect
-          import collections
+          python3 - "$log" <<'PY'
           import re
           import sys
 
-          log_path, nm_path = sys.argv[1:]
-          symbols = []
-          with open(nm_path, errors='replace') as handle:
-              for raw in handle:
-                  fields = raw.strip().split(None, 3)
-                  if len(fields) != 4:
-                      continue
-                  try:
-                      address = int(fields[0], 16)
-                      size = int(fields[1], 16)
-                  except ValueError:
-                      continue
-                  if fields[2].upper() == 'U':
-                      continue
-                  symbols.append((address, size, fields[3]))
-          symbols.sort()
-          addresses = [address for address, _, _ in symbols]
-
-          def resolve(pc):
-              index = bisect.bisect_right(addresses, pc) - 1
-              if index < 0:
-                  return '<no-symbol>', 0, 0
-              base, size, name = symbols[index]
-              offset = pc - base
-              if size and offset >= size:
-                  return '<between-symbols>', offset, size
-              return name, offset, size
-
-          samples = []
-          progress_re = re.compile(r'L32_SIM_PROGRESS cycles=(\d+) commits=(\d+).*sample-pc=(0x[0-9a-fA-F]+)')
+          log_path = sys.argv[1]
+          calls = []
+          returns = []
           with open(log_path, errors='replace') as handle:
-              for line in handle:
-                  match = progress_re.search(line)
-                  if match:
-                      cycles = int(match.group(1))
-                      commits = int(match.group(2))
-                      pc = int(match.group(3), 16)
-                      name, offset, size = resolve(pc)
-                      samples.append((cycles, commits, pc, name, offset, size))
+              for raw in handle:
+                  line = raw.strip()
+                  m = re.search(r'calling\s+([^+\s]+)\+', line)
+                  if m:
+                      calls.append(m.group(1))
+                  m = re.search(r'initcall\s+([^+\s]+)\+.* returned\s+(-?\d+)', line)
+                  if m:
+                      returns.append((m.group(1), int(m.group(2))))
 
-          if len(samples) < 10:
-              raise SystemExit(f'expected >=10 progress samples, got {len(samples)}')
-
-          print('--- cross-time PC samples ---')
-          for cycles, commits, pc, name, offset, size in samples:
-              print(f'L32_FRONTIER_TIME_SAMPLE cycles={cycles} commits={commits} pc=0x{pc:016x} symbol={name}+0x{offset:x} symbol-size=0x{size:x}')
-
-          late = [sample for sample in samples if sample[0] >= 100_000_000]
-          counts = collections.Counter(sample[3] for sample in late)
-          for name, count in counts.most_common():
-              print(f'L32_FRONTIER_LATE_HOT_SYMBOL symbol={name} samples={count}/{len(late)}')
-
-          timeout_lines = [line.strip() for line in open(log_path, errors='replace') if 'L32_OPENSBI_TIMEOUT' in line]
-          line = timeout_lines[-1]
-          match = re.search(r'recent-pcs=([^\s]+)', line)
-          pcs = [int(token, 16) for token in match.group(1).split(',') if token] if match else []
-          recent_names = []
-          for pc in pcs:
-              name, offset, size = resolve(pc)
-              recent_names.append(name)
-              print(f'L32_FRONTIER_FINAL_SYMBOL pc=0x{pc:016x} symbol={name}+0x{offset:x} symbol-size=0x{size:x}')
-          for name, count in collections.Counter(recent_names).most_common():
-              print(f'L32_FRONTIER_FINAL_HOT_SYMBOL symbol={name} samples={count}/{len(recent_names)}')
-          print(line)
+          print(f'L32_INITCALL_TRACE calls={len(calls)} returns={len(returns)}')
+          if calls:
+              print(f'L32_INITCALL_LAST_CALLED={calls[-1]}')
+          if returns:
+              print(f'L32_INITCALL_LAST_RETURNED={returns[-1][0]} rc={returns[-1][1]}')
+          returned_names = {name for name, _ in returns}
+          pending = [name for name in calls if name not in returned_names]
+          print('L32_INITCALL_RECENT_CALLS=' + ','.join(calls[-16:]))
+          print('L32_INITCALL_RECENT_RETURNS=' + ','.join(name for name, _ in returns[-16:]))
+          if pending:
+              print('L32_INITCALL_UNMATCHED=' + ','.join(pending[-16:]))
           PY
-
-          echo '--- deepest Linux UART lines ---'
-          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 70 || true
 
       - name: Publish diagnostic status
         if: always()
@@ -217,12 +189,12 @@ jobs:
         run: |
           set -euo pipefail
           state='failure'
-          description='RV64 cross-time frontier diagnostic failed'
+          description='RV64 initcall frontier diagnostic failed'
           if [[ "${{ job.status }}" == 'success' ]]; then
             state='success'
-            description='RV64 cross-time frontier diagnostic captured'
+            description='RV64 initcall frontier diagnostic captured'
           fi
-          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-deeper-frontier/cross-time\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          payload="$(printf '{\"state\":\"%s\",\"context\":\"rv64-linux-deeper-frontier/initcall\",\"description\":\"%s\",\"target_url\":\"%s/%s/actions/runs/%s\"}' "$state" "$description" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
           curl -fsS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H 'Accept: application/vnd.github+json' \
