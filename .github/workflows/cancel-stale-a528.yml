@@ -6,7 +6,7 @@ on:
       - .github/workflows/cancel-stale-a528.yml
 
 concurrency:
-  group: aethercore-fast-132
+  group: rv32c-nuttx-sv32-132
   cancel-in-progress: true
 
 jobs:
