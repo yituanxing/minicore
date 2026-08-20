@@ -1,6 +1,7 @@
 name: L32 Linux 6.6.143 Build
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - software/l32/manifest.env
@@ -24,6 +25,9 @@ jobs:
     name: Pinned Linux 6.6.143 RV32 build and ISA audit
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    concurrency:
+      group: aethercore-l32-linux-qualified-v2-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout exact head
@@ -204,6 +208,7 @@ jobs:
             echo "- fresh build outcome: \`${{ steps.linux_build.outcome }}\`"
             echo '- tool/source caches are saved as soon as their own identity is validated; failed kernel qualification cannot discard them'
             echo '- incomplete Kbuild is stored only under a run-scoped recovery key and can never masquerade as the qualified-output cache'
+            echo '- this job is the reusable single owner for the canonical L32 Linux software artifact on one exact head'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload L32 Linux build evidence
