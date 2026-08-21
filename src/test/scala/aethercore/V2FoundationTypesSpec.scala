@@ -77,6 +77,8 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
   it should "separate architectural decode semantics from backend execution classification" in {
     for (xlen <- Seq(32, 64)) {
       simulate(new V2ExecutionHarness(xlen)) { dut =>
+        val wordOperation = xlen == 64
+
         dut.io.uopIn.executionClass.poke(ExecutionClass.Integer)
         dut.io.uopIn.robToken.index.poke(3.U)
         dut.io.uopIn.robToken.generation.poke(1.U)
@@ -91,6 +93,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.uopIn.decoded.rawInst.poke("h002081b3".U)
         dut.io.uopIn.decoded.instBytes.poke(4.U)
         dut.io.uopIn.decoded.aluOp.poke(AluOp.Add)
+        dut.io.uopIn.decoded.wordOp.poke(wordOperation.B)
         dut.io.uopIn.decoded.rs1.poke(1.U)
         dut.io.uopIn.decoded.rs2.poke(2.U)
         dut.io.uopIn.decoded.rd.poke(3.U)
@@ -120,6 +123,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.uopOut.robToken.index.expect(3.U)
         dut.io.uopOut.valueRef.id.expect(6.U)
         dut.io.uopOut.decoded.aluOp.expect(AluOp.Add)
+        dut.io.uopOut.decoded.wordOp.expect(wordOperation.B)
         dut.io.uopOut.decoded.rs1.expect(1.U)
         dut.io.uopOut.decoded.rs2.expect(2.U)
         dut.io.uopOut.decoded.rd.expect(3.U)
@@ -132,6 +136,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.requestIn.valueRef.generation.poke(3.U)
         dut.io.requestIn.executionClass.poke(ExecutionClass.Integer)
         dut.io.requestIn.aluOp.poke(AluOp.Add)
+        dut.io.requestIn.wordOp.poke(wordOperation.B)
         dut.io.requestIn.controlFlowKind.poke(ControlFlowKind.None)
         dut.io.requestIn.branchType.poke(BranchType.None)
         dut.io.requestIn.lhs.poke(7.U)
@@ -145,6 +150,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.requestOut.valueRef.generation.expect(3.U)
         dut.io.requestOut.executionClass.expect(ExecutionClass.Integer)
         dut.io.requestOut.aluOp.expect(AluOp.Add)
+        dut.io.requestOut.wordOp.expect(wordOperation.B)
         dut.io.requestOut.lhs.expect(7.U)
         dut.io.requestOut.rhs.expect(9.U)
 
@@ -175,6 +181,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.decodedIn.rawInst.poke("h002081b3".U)
         dut.io.decodedIn.instBytes.poke(4.U)
         dut.io.decodedIn.aluOp.poke(AluOp.Add)
+        dut.io.decodedIn.wordOp.poke(wordOperation.B)
         dut.io.decodedIn.rs1.poke(1.U)
         dut.io.decodedIn.rs2.poke(2.U)
         dut.io.decodedIn.rd.poke(3.U)
@@ -201,6 +208,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.decodedIn.exception.value.poke(0.U)
 
         dut.io.decodedOut.pc.expect("h80000000".U)
+        dut.io.decodedOut.wordOp.expect(wordOperation.B)
         dut.io.decodedOut.rs1.expect(1.U)
         dut.io.decodedOut.rs2.expect(2.U)
         dut.io.decodedOut.rd.expect(3.U)
