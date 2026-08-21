@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXECUTION = ROOT / "src/main/scala/aethercore/core/v2/TinyExecution.scala"
 WIDTH_SPEC = ROOT / "src/test/scala/aethercore/DatapathWidthSpec.scala"
 F3_CHECKS = ROOT / "src/test/scala/aethercore/V2F3ExecutionChecks.scala"
+F3_SEMANTICS = ROOT / "src/test/scala/aethercore/V2F3ExecutionSemanticChecks.scala"
 
 
 def test_f3_composes_the_frozen_dependency_backend_instead_of_forking_it() -> None:
@@ -56,8 +57,6 @@ def test_divider_is_iterative_and_does_not_inherit_combinational_division() -> N
     assert "val nextRemainder" in divider
     assert "val nextQuotient" in divider
     assert "count := count + 1.U" in divider
-    assert '" / "' not in divider
-    assert '" % "' not in divider
     assert " / " not in divider
     assert " % " not in divider
 
@@ -81,11 +80,17 @@ def test_f3_does_not_pull_future_scheduling_recovery_or_memory_machinery_forward
         assert name not in text
 
 
-def test_fast_gate_suite_contains_f3_behavior_checks() -> None:
+def test_fast_gate_suite_contains_f3_behavior_and_semantic_parity_checks() -> None:
     width = WIDTH_SPEC.read_text(encoding="utf-8")
     checks = F3_CHECKS.read_text(encoding="utf-8")
+    semantics = F3_SEMANTICS.read_text(encoding="utf-8")
     assert "with V2F3ExecutionChecks" in width
+    assert "with V2F3ExecutionSemanticChecks" in width
     assert "RAW chain automatically" in checks
     assert "remember an issued RobToken" in checks
     assert "genuinely iterative divider" in checks
     assert "compressed jump links" in checks
+    assert "simple integer and RV64W arithmetic" in semantics
+    assert "low and high multiply variants" in semantics
+    assert "signed unsigned quotient and remainder" in semantics
+    assert "taken conditional control transfer" in semantics
