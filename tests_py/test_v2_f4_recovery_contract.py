@@ -17,6 +17,8 @@ def test_recovery_is_derived_only_after_full_rob_completion_identity_validation(
     assert "completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation" in rob
     assert "val recoveryMatches = completionMatches" in rob
     assert "completionIndex === head" in rob
+    assert "!completionEntry.exception.valid" in rob
+    assert "!io.completion.bits.exception.valid" in rob
     assert "io.acceptedRecovery.valid := recoveryMatches" in rob
 
 
@@ -32,15 +34,19 @@ def test_head_only_recovery_squashes_younger_and_renews_killed_lifetimes() -> No
         assert name not in rob
 
 
-def test_dependency_repair_consumes_rob_accepted_completion_and_restores_only_survivor() -> None:
+def test_dependency_repair_uses_rob_accepted_recovery_as_its_only_trigger() -> None:
     dep = DEPENDENCY.read_text(encoding="utf-8")
     assert "dependencyState.io.completion := rob.io.acceptedCompletion" in dep
+    assert "dependencyState.io.recovery := rob.io.acceptedRecovery" in dep
     assert "io.acceptedRecovery := rob.io.acceptedRecovery" in dep
-    assert "validatedHeadRecovery = io.completion.valid" in dep
-    assert "rename(register).valid := false.B" in dep
-    assert "index.U =/= survivor.robToken.index" in dep
-    assert "index.U =/= survivor.producerTag.id" in dep
-    assert "rename(survivor.decoded.rd).producerTag := survivor.producerTag" in dep
+    assert "when(io.recovery.valid)" in dep
+    recovery = dep.split("when(io.recovery.valid)", 1)[1]
+    assert "branchTaken" not in recovery
+    assert "branchValid" not in recovery
+    assert "rename(register).valid := false.B" in recovery
+    assert "index.U =/= survivor.robToken.index" in recovery
+    assert "index.U =/= survivor.producerTag.id" in recovery
+    assert "rename(survivor.decoded.rd).producerTag := survivor.producerTag" in recovery
 
 
 def test_redirect_seam_carries_only_surviving_order_identity_and_target() -> None:
