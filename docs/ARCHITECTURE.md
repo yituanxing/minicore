@@ -20,4 +20,8 @@ S0.1 marks illegal instructions, bus faults, ECALL and EBREAK as commit exceptio
 
 ## Future microarchitecture notes
 
-The current v1 pipeline remains the correctness/reference architecture. Working notes for the next-generation core, including multiple candidate paths rather than a frozen v2 specification, are maintained in [`AETHERCORE_V2_DESIGN_NOTES.md`](AETHERCORE_V2_DESIGN_NOTES.md).
+The current v1 pipeline remains the correctness/reference architecture.
+
+- [`AETHERCORE_V2_KICKOFF_CONSTITUTION.md`](AETHERCORE_V2_KICKOFF_CONSTITUTION.md) records the implementation-start rules: architectural parameters, microarchitectural seams, identity/Commit ownership, the preferred hybrid selective-OoO target and staged bring-up sequence.
+- [`AETHERCORE_V2_DESIGN_NOTES.md`](AETHERCORE_V2_DESIGN_NOTES.md) preserves broader alternatives, reference-core lessons and open performance questions rather than acting as a frozen specification.
+- [`AETHERCORE_V2_REUSE_AUDIT.md`](AETHERCORE_V2_REUSE_AUDIT.md) records the current KEEP / WRAP / EARLY-ONLY / REWRITE boundary against the qualified v1 implementation.
