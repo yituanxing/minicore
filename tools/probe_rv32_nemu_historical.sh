@@ -9,10 +9,19 @@ evidence_dir="$work_dir/evidence"
 config_name="riscv32-minicore-ref_defconfig"
 expected_reg_bytes=132
 single_step="${NEMU_SINGLE_STEP:-0}"
+expected_build_composition_sha256="a218e0ee1b15a461ff27e1bda133d43bf21ccf14977463faf4b872f071c788fa"
 
 if [[ "$single_step" != "0" && "$single_step" != "1" ]]; then
   echo "ERROR: NEMU_SINGLE_STEP must be 0 or 1" >&2
   exit 2
+fi
+
+if [[ "$single_step" == "1" ]]; then
+  expected_derived_defconfig_sha256="9221c1979f056b978179d36404ab3801aa474b67560efcb8093d2da0fef4791a"
+  expected_generated_config_sha256="52ed03a1c6e9c57b6fac319d245c5e0af31589f7d305519cea6eabee0e68ca56"
+else
+  expected_derived_defconfig_sha256="7f27aa6b6bb4125f0fedd0d481e89503252977bb34c52891ba4c5e983cf18759"
+  expected_generated_config_sha256="c828336eb50ae4bc9a34d264ef2c37779726c550796992b7b3fcde9048b94ddf"
 fi
 
 rm -rf "$work_dir"
@@ -41,6 +50,12 @@ export LC_ALL=C
 export TZ=UTC
 
 git -C "$source_dir" rev-parse HEAD | tee "$evidence_dir/revision.txt"
+{
+  gcc --version | head -n 1
+  ld --version | head -n 1
+  bison --version | head -n 1
+  flex --version | head -n 1
+} > "$evidence_dir/host-toolchain.txt"
 
 cat > "$source_dir/configs/$config_name" <<'EOF'
 CONFIG_ISA_riscv32=y
@@ -63,8 +78,8 @@ EOF
 # boundaries. Even with instruction counting enabled, difftest_exec(1) can
 # overshoot the requested architectural instruction. The exact DiffTest mode
 # selects NEMU's own non-PERF_OPT interpreter loop, whose execute() decrements
-# n once per decoded instruction. The default ABI probe keeps its original
-# optimized configuration and hash.
+# n once per decoded instruction. The default ABI probe keeps its optimized
+# configuration.
 if [[ "$single_step" == "1" ]]; then
   cat >> "$source_dir/configs/$config_name" <<'EOF'
 # CONFIG_PERF_OPT is not set
@@ -106,15 +121,49 @@ cp "$source_dir/src/cpu/difftest/ref.c" "$evidence_dir/cpu-difftest-ref.c"
 cp "$source_dir/lib-include/difftest.h" "$evidence_dir/difftest-layout.h"
 cp "$source_dir/src/cpu/cpu-exec.c" "$evidence_dir/cpu-exec.c"
 
+derived_defconfig_sha256="$(sha256sum "$evidence_dir/derived.defconfig" | awk '{print $1}')"
+build_composition_sha256="$(sha256sum "$evidence_dir/build-composition.patch" | awk '{print $1}')"
+if [[ "$derived_defconfig_sha256" != "$expected_derived_defconfig_sha256" ]]; then
+  echo "ERROR: exact RV32 NEMU derived defconfig drifted: expected=$expected_derived_defconfig_sha256 actual=$derived_defconfig_sha256" >&2
+  exit 8
+fi
+if [[ "$build_composition_sha256" != "$expected_build_composition_sha256" ]]; then
+  echo "ERROR: exact RV32 NEMU build composition drifted: expected=$expected_build_composition_sha256 actual=$build_composition_sha256" >&2
+  exit 9
+fi
+
 build_reference() {
   local label="$1"
   local reference_so
+  local config_log="$evidence_dir/config-$label.log"
+  local generated_config_sha256
 
   rm -f "$source_dir/.config"
   rm -rf "$source_dir/build"
 
-  make -C "$source_dir" "$config_name" \
-    > "$evidence_dir/config-$label.log" 2>&1
+  # LDFLAGS is intentionally exported for the final NEMU shared object. It must
+  # not reach the recursively built Kconfig host utility: before .config exists
+  # this historical top-level Makefile appends target-only SDL/PIE flags, and
+  # environment-origin make variables remain exported to recursive make.
+  # Strip only LDFLAGS for config bootstrap. CONFIG_SHARE remains owned by the
+  # pinned defconfig and the final reference build sees the normal LDFLAGS.
+  if ! env -u LDFLAGS make -C "$source_dir" "$config_name" > "$config_log" 2>&1; then
+    echo "ERROR: exact RV32 NEMU config generation failed in $label build" >&2
+    cat "$config_log" >&2
+    return 6
+  fi
+  if [[ ! -f "$source_dir/.config" ]]; then
+    echo "ERROR: exact RV32 NEMU config target succeeded without producing .config in $label build" >&2
+    cat "$config_log" >&2
+    return 7
+  fi
+
+  generated_config_sha256="$(sha256sum "$source_dir/.config" | awk '{print $1}')"
+  if [[ "$generated_config_sha256" != "$expected_generated_config_sha256" ]]; then
+    echo "ERROR: exact RV32 NEMU generated config drifted in $label build: expected=$expected_generated_config_sha256 actual=$generated_config_sha256" >&2
+    cp "$source_dir/.config" "$evidence_dir/failed-$label.config"
+    return 10
+  fi
 
   if [[ "$single_step" == "1" ]]; then
     if ! grep -q '^CONFIG_ENABLE_INSTR_CNT=y$' "$source_dir/.config"; then
@@ -181,6 +230,7 @@ nm -D "$reference_so" | sort > "$evidence_dir/reference-so.symbols.txt"
 readelf -d -h -S -s "$reference_so" > "$evidence_dir/reference-so.elf.txt"
 ldd "$reference_so" > "$evidence_dir/reference-so.ldd.txt"
 cp "$source_dir/.config" "$evidence_dir/generated.config"
+generated_config_sha256="$(sha256sum "$evidence_dir/generated.config" | awk '{print $1}')"
 
 REFERENCE_SO="$reference_so" EVIDENCE_DIR="$evidence_dir" \
 EXPECTED_REG_BYTES="$expected_reg_bytes" NEMU_REVISION="$revision" python3 - <<'PY'
@@ -253,6 +303,10 @@ regcpy_bytes=$expected_reg_bytes
 reproducible=true
 single_step=$single_step
 perf_opt=$([[ "$single_step" == "1" ]] && echo false || echo true)
+derived_defconfig_sha256=$derived_defconfig_sha256
+generated_config_sha256=$generated_config_sha256
+build_composition_sha256=$build_composition_sha256
 EOF
 cat "$evidence_dir/result.txt"
 cat "$evidence_dir/abi-probe.txt"
+cat "$evidence_dir/host-toolchain.txt"
