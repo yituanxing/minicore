@@ -148,7 +148,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+          bash tools/ci/l32_linux_cache_key.sh check build/l32-linux
           source software/l32/linux-freeze.env
           echo "${L32_LINUX_IMAGE_SHA256}  build/l32-linux/obj/arch/riscv/boot/Image" | sha256sum -c -
           echo "${L32_LINUX_VMLINUX_SHA256}  build/l32-linux/obj/vmlinux" | sha256sum -c -
