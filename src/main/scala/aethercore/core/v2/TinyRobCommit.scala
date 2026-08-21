@@ -63,6 +63,8 @@ class TinyRob(val xlen: Int) extends Module {
     val dispatch = Flipped(Decoupled(new RobDispatch(xlen)))
     val allocated = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits)))
+    val acceptedCompletion = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
+    val headView = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val retire = Decoupled(new RobRetirement(xlen))
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
   })
@@ -91,6 +93,9 @@ class TinyRob(val xlen: Int) extends Module {
   io.allocated.bits.valueRef.generation := slotGenerations(tail)
   io.allocated.bits.producesValue := io.dispatch.bits.producesValue
 
+  io.headView.valid := retireHead.valid
+  io.headView.bits := retireHead.uop
+
   io.retire.valid := retireHead.valid && retireHead.complete
   io.retire.bits := 0.U.asTypeOf(new RobRetirement(xlen))
   io.retire.bits.uop := retireHead.uop
@@ -111,6 +116,9 @@ class TinyRob(val xlen: Int) extends Module {
     completionEntry.uop.producerTag.generation === io.completion.bits.producerTag.generation &&
     completionEntry.uop.valueRef.id === io.completion.bits.valueRef.id &&
     completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation
+
+  io.acceptedCompletion.valid := completionMatches
+  io.acceptedCompletion.bits := io.completion.bits
 
   when(completionMatches) {
     entries(completionIndex).complete := true.B

@@ -23,7 +23,12 @@ private class V2FoundationWidthSmoke(val xlen: Int) extends Module {
   io.memOut := io.memIn
 }
 
-class DatapathWidthSpec extends AnyFlatSpec with Matchers with ChiselSim with V2F1RobCommitChecks {
+class DatapathWidthSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F1RobCommitChecks
+    with V2F2DependencyChecks {
   behavior of "parameterized integer datapath components"
 
   private def pokeF1Dispatch(dut: TinyRobCommitBackend, pc: BigInt, rd: Int): Unit = {
