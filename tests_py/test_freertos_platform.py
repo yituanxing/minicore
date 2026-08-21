@@ -147,8 +147,10 @@ class FreeRtosPlatformTest(unittest.TestCase):
 
     def test_full_gate_is_milestone_only_and_keeps_the_complete_order(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("- .github/full-gate-request", text)
+        self.assertIn("push:\n    branches:\n      - main", text)
         self.assertIn("workflow_dispatch:", text)
+        self.assertNotIn("pull_request:", text)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
         self.assertNotIn("AETHERCORE_VERILATOR_FAST_VERIFY", text)
         newlib = text.index("Provision pinned RISC-V newlib sysroot")
         source_tests = text.index("Fast source and image tests")
