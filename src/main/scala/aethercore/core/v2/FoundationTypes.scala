@@ -113,6 +113,10 @@ class DecodedInstruction(val xlen: Int) extends Bundle {
   val instBytes = UInt(3.W)
 
   val aluOp = AluOp()
+  // RV64 *W integer/M operations reuse AluOp but execute with 32-bit operands
+  // and sign-extend the low 32-bit result. This is architectural decode
+  // semantics, not an execution-port or pipeline control bit.
+  val wordOp = Bool()
 
   val rs1 = UInt(5.W)
   val rs2 = UInt(5.W)
@@ -163,6 +167,7 @@ class ExecutionRequest(
   val valueRef = new ValueRef(identityBits, generationBits)
   val executionClass = ExecutionClass()
   val aluOp = AluOp()
+  val wordOp = Bool()
   val controlFlowKind = ControlFlowKind()
   val branchType = BranchType()
   val lhs = UInt(xlen.W)
