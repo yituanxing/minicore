@@ -30,6 +30,20 @@ class SoftFloatBootstrapTest(unittest.TestCase):
         self.assertIn('softfloat-revision.txt', text)
         self.assertIn('softfloat_revision=$softfloat_revision', text)
 
+    def test_historical_shared_reference_bootstraps_config_in_shared_mode(self) -> None:
+        text = HISTORICAL.read_text(encoding="utf-8")
+        self.assertIn("CONFIG_SHARE=y", text)
+        self.assertIn(
+            'make -C "$source_dir" CONFIG_SHARE=y "$config_name"',
+            text,
+        )
+        self.assertIn(
+            "ERROR: exact RV32 NEMU config generation failed",
+            text,
+        )
+        self.assertIn('cat "$config_log" >&2', text)
+        self.assertNotIn("libsdl2-dev", text)
+
 
 if __name__ == "__main__":
     unittest.main()
