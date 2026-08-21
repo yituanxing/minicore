@@ -11,6 +11,17 @@ object ExecutionClass extends ChiselEnum {
   val None, Integer, Branch, MulDiv, Memory, System = Value
 }
 
+/** Semantic source of an execution operand.
+  *
+  * This describes what the instruction means, not a bypass mux, physical port,
+  * pipeline stage or scheduler choice. The first issue implementation can use
+  * it to materialize concrete lhs/rhs values without re-decoding raw opcode
+  * bits.
+  */
+object OperandSourceKind extends ChiselEnum {
+  val Zero, Rs1, Rs2, Pc, Immediate = Value
+}
+
 object ControlFlowKind extends ChiselEnum {
   val None, Conditional, DirectJump, IndirectJump = Value
 }
@@ -95,6 +106,10 @@ class DecodedSystemOperation extends Bundle {
   val csrOp = CsrOp()
   val csrAddress = UInt(12.W)
   val csrUseImmediate = Bool()
+  // CSR immediate instructions encode a semantic zero-extended five-bit zimm
+  // in the rs1 field. Preserve it explicitly so F5 never has to reinterpret a
+  // logical register field as an immediate operand.
+  val csrImmediate = UInt(5.W)
   val xret = XRetOp()
 }
 
@@ -113,6 +128,12 @@ class DecodedInstruction(val xlen: Int) extends Bundle {
   val instBytes = UInt(3.W)
 
   val aluOp = AluOp()
+  // RV64 *W integer/M operations reuse AluOp but execute with 32-bit operands
+  // and sign-extend the low 32-bit result. This is architectural decode
+  // semantics, not an execution-port or pipeline control bit.
+  val wordOp = Bool()
+  val lhsSource = OperandSourceKind()
+  val rhsSource = OperandSourceKind()
 
   val rs1 = UInt(5.W)
   val rs2 = UInt(5.W)
@@ -163,11 +184,15 @@ class ExecutionRequest(
   val valueRef = new ValueRef(identityBits, generationBits)
   val executionClass = ExecutionClass()
   val aluOp = AluOp()
+  val wordOp = Bool()
   val controlFlowKind = ControlFlowKind()
   val branchType = BranchType()
   val lhs = UInt(xlen.W)
   val rhs = UInt(xlen.W)
   val pc = UInt(xlen.W)
+  // Required for architectural link values: compressed jumps retire a link of
+  // pc+2 while ordinary 32-bit jumps use pc+4.
+  val instBytes = UInt(3.W)
   val immediate = UInt(xlen.W)
 }
 

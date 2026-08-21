@@ -23,7 +23,12 @@ private class V2FoundationWidthSmoke(val xlen: Int) extends Module {
   io.memOut := io.memIn
 }
 
-class DatapathWidthSpec extends AnyFlatSpec with Matchers with ChiselSim with V2F1RobCommitChecks {
+class DatapathWidthSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F1RobCommitChecks
+    with V2F2DependencyChecks {
   behavior of "parameterized integer datapath components"
 
   private def pokeF1Dispatch(dut: TinyRobCommitBackend, pc: BigInt, rd: Int): Unit = {
@@ -35,6 +40,7 @@ class DatapathWidthSpec extends AnyFlatSpec with Matchers with ChiselSim with V2
     dut.io.dispatch.bits.decoded.rawInst.poke("h002081b3".U)
     dut.io.dispatch.bits.decoded.instBytes.poke(4.U)
     dut.io.dispatch.bits.decoded.aluOp.poke(AluOp.Add)
+    dut.io.dispatch.bits.decoded.wordOp.poke(false.B)
     dut.io.dispatch.bits.decoded.rs1.poke(1.U)
     dut.io.dispatch.bits.decoded.rs2.poke(2.U)
     dut.io.dispatch.bits.decoded.rd.poke(rd.U)
@@ -118,15 +124,18 @@ class DatapathWidthSpec extends AnyFlatSpec with Matchers with ChiselSim with V2
   it should "elaborate the v2 semantic, identity and memory contracts at both XLENs" in {
     for (xlen <- Seq(32, 64)) {
       simulate(new V2FoundationWidthSmoke(xlen)) { dut =>
+        val wordOperation = xlen == 64
         dut.io.uopIn.executionClass.poke(ExecutionClass.Integer)
         dut.io.uopIn.robToken.index.poke(6.U)
         dut.io.uopIn.robToken.generation.poke(1.U)
         dut.io.uopIn.decoded.pc.poke("h80000000".U)
+        dut.io.uopIn.decoded.wordOp.poke(wordOperation.B)
 
         dut.io.uopOut.executionClass.expect(ExecutionClass.Integer)
         dut.io.uopOut.robToken.index.expect(6.U)
         dut.io.uopOut.robToken.generation.expect(1.U)
         dut.io.uopOut.decoded.pc.expect("h80000000".U)
+        dut.io.uopOut.decoded.wordOp.expect(wordOperation.B)
 
         dut.io.memIn.txnId.poke(2.U)
         dut.io.memIn.op.poke(AetherMemOp.Read)

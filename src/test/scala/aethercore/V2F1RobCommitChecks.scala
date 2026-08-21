@@ -38,6 +38,7 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     dut.io.dispatch.bits.decoded.rawInst.poke("h002081b3".U)
     dut.io.dispatch.bits.decoded.instBytes.poke(4.U)
     dut.io.dispatch.bits.decoded.aluOp.poke(AluOp.Add)
+    dut.io.dispatch.bits.decoded.wordOp.poke(false.B)
     dut.io.dispatch.bits.decoded.rs1.poke(1.U)
     dut.io.dispatch.bits.decoded.rs2.poke(2.U)
     dut.io.dispatch.bits.decoded.rd.poke(rd.U)
