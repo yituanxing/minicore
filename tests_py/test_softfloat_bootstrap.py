@@ -30,10 +30,14 @@ class SoftFloatBootstrapTest(unittest.TestCase):
         self.assertIn('softfloat-revision.txt', text)
         self.assertIn('softfloat_revision=$softfloat_revision', text)
 
-    def test_historical_shared_reference_bootstraps_config_in_shared_mode(self) -> None:
+    def test_historical_shared_reference_isolates_host_config_linker_flags(self) -> None:
         text = HISTORICAL.read_text(encoding="utf-8")
         self.assertIn("CONFIG_SHARE=y", text)
         self.assertIn(
+            'env -u LDFLAGS make -C "$source_dir" "$config_name"',
+            text,
+        )
+        self.assertNotIn(
             'make -C "$source_dir" CONFIG_SHARE=y "$config_name"',
             text,
         )
