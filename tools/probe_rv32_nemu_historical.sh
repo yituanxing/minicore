@@ -109,12 +109,27 @@ cp "$source_dir/src/cpu/cpu-exec.c" "$evidence_dir/cpu-exec.c"
 build_reference() {
   local label="$1"
   local reference_so
+  local config_log="$evidence_dir/config-$label.log"
 
   rm -f "$source_dir/.config"
   rm -rf "$source_dir/build"
 
-  make -C "$source_dir" "$config_name" \
-    > "$evidence_dir/config-$label.log" 2>&1
+  # The selected defconfig is a shared DiffTest reference. Before .config
+  # exists, this historical top-level Makefile otherwise assumes a standalone
+  # device executable and appends -lSDL2/-lreadline/-ldl/-pie. Those target
+  # runtime flags then leak into the recursively built Kconfig host tool.
+  # Seed only the already-selected CONFIG_SHARE mode for this bootstrap make;
+  # the generated .config remains wholly owned by the pinned defconfig below.
+  if ! make -C "$source_dir" CONFIG_SHARE=y "$config_name" > "$config_log" 2>&1; then
+    echo "ERROR: exact RV32 NEMU config generation failed in $label build" >&2
+    cat "$config_log" >&2
+    return 6
+  fi
+  if [[ ! -f "$source_dir/.config" ]]; then
+    echo "ERROR: exact RV32 NEMU config target succeeded without producing .config in $label build" >&2
+    cat "$config_log" >&2
+    return 7
+  fi
 
   if [[ "$single_step" == "1" ]]; then
     if ! grep -q '^CONFIG_ENABLE_INSTR_CNT=y$' "$source_dir/.config"; then
