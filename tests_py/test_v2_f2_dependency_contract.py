@@ -15,9 +15,25 @@ def test_f2_owns_only_tiny_rat_and_operand_readiness() -> None:
     assert "val value = UInt(xlen.W)" in text
     assert "val producerTag = new ProducerTag" in text
     assert "Seq.fill(32)" in text
-    assert "private val Entries = 4" in text
     assert "class TinyDependencyState" in text
     assert "class TinyDependencyBackend" in text
+
+
+def test_f2_derives_rob_parallel_geometry_from_the_rob_owner() -> None:
+    rob = ROB.read_text(encoding="utf-8")
+    dependency = DEPENDENCY.read_text(encoding="utf-8")
+    assert "private[v2] object TinyRobGeometry" in rob
+    assert "val Entries: Int = 4" in rob
+    assert "val IndexBits: Int = 2" in rob
+    assert "val GenerationBits: Int = 2" in rob
+    assert "private val Entries = TinyRobGeometry.Entries" in dependency
+    assert "private val IdentityBits = TinyRobGeometry.IndexBits" in dependency
+    assert "private val GenerationBits = TinyRobGeometry.GenerationBits" in dependency
+    assert "private val Entries = 4" not in dependency
+    assert "private val IdentityBits = 2" not in dependency
+    assert "private val GenerationBits = 2" not in dependency
+    assert "log2Ceil(TinyRobGeometry.Entries + 1).W" in rob
+    assert "log2Ceil(TinyRobGeometry.Entries + 1).W" in dependency
 
 
 def test_dependency_identity_is_producer_tag_not_order_or_storage_identity() -> None:
