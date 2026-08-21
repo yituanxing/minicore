@@ -7,6 +7,10 @@ FAST_GATE = ROOT / ".github/workflows/fast-gate.yml"
 RV64_PID1 = ROOT / ".github/workflows/rv64-minimal-initramfs-v1.yml"
 L32_LINUX = ROOT / ".github/workflows/l32-linux-build.yml"
 L32_HANDOFF = ROOT / ".github/workflows/l32-linux-handoff.yml"
+LEGACY_L32_EARLY = ROOT / ".github/workflows/l32-linux-boot.yml"
+LEGACY_L32_DEEPER = ROOT / ".github/workflows/l32-linux-deeper-boot.yml"
+LEGACY_L32_BUSYBOX = ROOT / ".github/workflows/l32-busybox-build.yml"
+LEGACY_RV64_EARLY = ROOT / ".github/workflows/rv64-linux-early.yml"
 INITRAMFS_BUILD = ROOT / "tools/ci/rv64_minimal_initramfs_build.sh"
 HOSTED_DOC = ROOT / "docs/CI_HOSTED_RUNNERS.md"
 
@@ -25,18 +29,39 @@ class HostedRunnerCacheContract(unittest.TestCase):
             self.assertNotIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
             self.assertIn("clean: true", text)
 
+    def test_legacy_self_hosted_milestones_never_auto_run_on_public_prs(self):
+        manual_only = [
+            LEGACY_L32_EARLY.read_text(encoding="utf-8"),
+            LEGACY_L32_BUSYBOX.read_text(encoding="utf-8"),
+            LEGACY_RV64_EARLY.read_text(encoding="utf-8"),
+        ]
+        for text in manual_only:
+            self.assertIn("workflow_dispatch:", text)
+            self.assertNotIn("pull_request:", text)
+            self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
+
+        # Deeper boot retains its dedicated hosted exploration-branch push
+        # frontier, while the historical L32 self-hosted lane is manual-only.
+        deeper = LEGACY_L32_DEEPER.read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", deeper)
+        self.assertNotIn("pull_request:", deeper)
+        self.assertIn("push:", deeper)
+        self.assertIn("explore/rv64-linux-deeper-v1", deeper)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", deeper)
+        self.assertIn("runs-on: ubuntu-24.04", deeper)
+
     def test_hosted_gates_persist_only_explicit_cache_roots(self):
         fast = FAST_GATE.read_text(encoding="utf-8")
         pid1 = RV64_PID1.read_text(encoding="utf-8")
         l32 = L32_LINUX.read_text(encoding="utf-8")
         handoff = L32_HANDOFF.read_text(encoding="utf-8")
 
-        # Fast Gate and handoff still use the combined restore/post-save action.
+        # Fast Gate and handoff still use combined restore/post-save actions for
+        # selected short-lived dependency layers; long producers checkpoint
+        # their expensive validated layers explicitly.
         for text in (fast, handoff):
             self.assertIn("uses: actions/cache@v4", text)
 
-        # Long software producers use explicit restore/save checkpoints so a
-        # later runtime failure cannot discard already validated prerequisites.
         for text in (pid1, l32):
             self.assertIn("uses: actions/cache/restore@v4", text)
             self.assertIn("uses: actions/cache/save@v4", text)
