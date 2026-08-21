@@ -1,19 +1,9 @@
 name: L32 Linux Early Boot
 
 on:
-  pull_request:
-    paths:
-      - software/l32/**
-      - tools/ci/l32_linux_build.sh
-      - tools/ci/l32_linux_cache_key.sh
-      - tools/ci/l32_linux_payload_build.sh
-      - tools/ci/l32_software_artifact_cache.sh
-      - tools/ci/make_l32_dtb.py
-      - tools/ensure_l32_riscv32_linux_gcc.sh
-      - tests_py/test_l32_linux_boot_contract.py
-      - sim/opensbi_boot_main.cpp
-      - Makefile.l32-linux-boot
-      - .github/workflows/l32-linux-boot.yml
+  # Legacy self-hosted milestone. Public PR qualification is owned by the
+  # GitHub-hosted Fast/L32/PID1 lanes; this surface remains available for
+  # explicit trusted milestone runs when a self-hosted runner is present.
   workflow_dispatch:
 
 permissions:
