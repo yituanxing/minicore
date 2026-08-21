@@ -112,6 +112,7 @@ class TinyRob(val xlen: Int) extends Module {
     completionIndex === head &&
     io.completion.bits.branchValid &&
     io.completion.bits.branchTaken &&
+    !completionEntry.exception.valid &&
     !io.completion.bits.exception.valid
 
   io.acceptedCompletion.valid := completionMatches
