@@ -240,10 +240,10 @@ class TinyDependencyState(val xlen: Int) extends Module {
     dependencies(slot).rs1 := allocateRs1
     dependencies(slot).rs2 := allocateRs2
 
-    producers(slot).valid := createsProducer
-    producers(slot).producerTag := allocated.producerTag
-    producers(slot).ready := false.B
-    producers(slot).value := 0.U
+    producers(allocated.producerTag.id).valid := createsProducer
+    producers(allocated.producerTag.id).producerTag := allocated.producerTag
+    producers(allocated.producerTag.id).ready := false.B
+    producers(allocated.producerTag.id).value := 0.U
 
     when(createsProducer) {
       rename(allocated.decoded.rd).valid := true.B

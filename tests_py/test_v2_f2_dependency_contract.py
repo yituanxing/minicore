@@ -26,6 +26,9 @@ def test_dependency_identity_is_producer_tag_not_order_or_storage_identity() -> 
     assert "mapping.producerTag" in text
     assert "sameProducer(dependencies(index).rs1.producerTag" in text
     assert "sameProducer(dependencies(index).rs2.producerTag" in text
+    assert "producers(allocated.producerTag.id).valid := createsProducer" in text
+    assert "producers(allocated.producerTag.id).producerTag := allocated.producerTag" in text
+    assert "producers(slot).valid := createsProducer" not in text
     assert "new ValueRef" not in text
     assert ".valueRef" not in text
 
