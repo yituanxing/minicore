@@ -1,30 +1,9 @@
 name: RV64 Linux Early Boot
 
 on:
-  pull_request:
-    paths:
-      - 'software/rv64/linux_early.env'
-      - 'software/rv64/opensbi_first_exec.env'
-      - 'tools/ci/rv64_linux_early_build.sh'
-      - 'tools/ensure_riscv64_linux_gcc_13_3.sh'
-      - 'tools/ci/make_l32_dtb.py'
-      - 'sim/rv64_opensbi_shim/**'
-      - 'sim/opensbi_boot_main.cpp'
-      - 'src/main/scala/aethercore/ElaborateOpenSbiRV64.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala'
-      - 'src/main/scala/aethercore/core/AetherCore.scala'
-      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
-      - 'src/main/scala/aethercore/core/SatpRegister.scala'
-      - 'src/main/scala/aethercore/core/PageTableWalker.scala'
-      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
-      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
-      - 'src/main/scala/aethercore/core/PtwArbiter.scala'
-      - 'src/test/scala/aethercore/RV64SupervisorPlatformMmioSpec.scala'
-      - 'src/test/scala/aethercore/RV64LinuxTrampolineSpec.scala'
-      - 'Makefile.l32-linux-boot'
-      - 'tests_py/test_rv64_linux_early_contract.py'
-      - '.github/workflows/rv64-linux-early.yml'
+  # Legacy self-hosted banner milestone. The deeper GitHub-hosted PID1 lane now
+  # covers ordinary public PR qualification; keep this exact historical probe
+  # available only for explicit trusted runs.
   workflow_dispatch:
 
 permissions:
