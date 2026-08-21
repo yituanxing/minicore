@@ -4,18 +4,6 @@ on:
   push:
     branches:
       - explore/rv64-linux-timer-v1
-  pull_request:
-    paths:
-      - 'Makefile.l32-linux-boot'
-      - 'sim/opensbi_boot_main.cpp'
-      - 'src/main/scala/aethercore/config/CoreConfig.scala'
-      - 'src/main/scala/aethercore/core/AetherCore.scala'
-      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreSimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala'
-      - 'src/test/scala/aethercore/LegacySupervisorTimerSpec.scala'
-      - 'src/test/scala/aethercore/SupervisorTimeCounterSpec.scala'
-      - '.github/workflows/rv64-linux-timer-v1.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,7 +11,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: rv64-linux-timer-v1-${{ github.event.pull_request.number || github.ref }}
+  group: rv64-linux-timer-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,7 +22,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Publish pending qualification status
