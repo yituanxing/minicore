@@ -67,7 +67,7 @@ class TinyRob(val xlen: Int) extends Module {
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
   })
 
-  val entries = RegInit(VecInit(Seq.fill(Entries)(0.U.asTypeOf(new TinyRobEntry(xlen)))))
+  private val entries = RegInit(VecInit(Seq.fill(Entries)(0.U.asTypeOf(new TinyRobEntry(xlen)))))
   val slotGenerations = RegInit(VecInit(Seq.fill(Entries)(0.U(GenerationBits.W))))
   val head = RegInit(0.U(IndexBits.W))
   val tail = RegInit(0.U(IndexBits.W))
@@ -77,7 +77,7 @@ class TinyRob(val xlen: Int) extends Module {
   io.dispatch.ready := count =/= Entries.U
 
   val allocFire = io.dispatch.valid && io.dispatch.ready
-  val retireHead = entries(head)
+  private val retireHead = entries(head)
 
   io.allocated.valid := allocFire
   io.allocated.bits := 0.U.asTypeOf(new BackendUop(xlen, IndexBits, GenerationBits))
@@ -101,7 +101,7 @@ class TinyRob(val xlen: Int) extends Module {
   val retireFire = io.retire.valid && io.retire.ready
 
   val completionIndex = io.completion.bits.robToken.index
-  val completionEntry = entries(completionIndex)
+  private val completionEntry = entries(completionIndex)
   val completionMatches = io.completion.valid &&
     completionEntry.valid &&
     !completionEntry.complete &&
