@@ -17,6 +17,8 @@ def test_recovery_is_derived_only_after_full_rob_completion_identity_validation(
     assert "completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation" in rob
     assert "val recoveryMatches = completionMatches" in rob
     assert "completionIndex === head" in rob
+    assert "completionEntry.uop.executionClass === ExecutionClass.Branch" in rob
+    assert "completionEntry.uop.decoded.controlFlow.kind =/= ControlFlowKind.None" in rob
     assert "!completionEntry.exception.valid" in rob
     assert "!io.completion.bits.exception.valid" in rob
     assert "io.acceptedRecovery.valid := recoveryMatches" in rob
