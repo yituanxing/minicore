@@ -78,6 +78,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
     for (xlen <- Seq(32, 64)) {
       simulate(new V2ExecutionHarness(xlen)) { dut =>
         val wordOperation = xlen == 64
+        val instructionBytes = if (xlen == 32) 2 else 4
 
         dut.io.uopIn.executionClass.poke(ExecutionClass.Integer)
         dut.io.uopIn.robToken.index.poke(3.U)
@@ -91,9 +92,11 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.uopIn.decoded.pc.poke("h80000000".U)
         dut.io.uopIn.decoded.inst.poke("h002081b3".U)
         dut.io.uopIn.decoded.rawInst.poke("h002081b3".U)
-        dut.io.uopIn.decoded.instBytes.poke(4.U)
+        dut.io.uopIn.decoded.instBytes.poke(instructionBytes.U)
         dut.io.uopIn.decoded.aluOp.poke(AluOp.Add)
         dut.io.uopIn.decoded.wordOp.poke(wordOperation.B)
+        dut.io.uopIn.decoded.lhsSource.poke(OperandSourceKind.Rs1)
+        dut.io.uopIn.decoded.rhsSource.poke(OperandSourceKind.Rs2)
         dut.io.uopIn.decoded.rs1.poke(1.U)
         dut.io.uopIn.decoded.rs2.poke(2.U)
         dut.io.uopIn.decoded.rd.poke(3.U)
@@ -113,6 +116,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.uopIn.decoded.system.csrOp.poke(aethercore.common.CsrOp.None)
         dut.io.uopIn.decoded.system.csrAddress.poke(0.U)
         dut.io.uopIn.decoded.system.csrUseImmediate.poke(false.B)
+        dut.io.uopIn.decoded.system.csrImmediate.poke(0.U)
         dut.io.uopIn.decoded.system.xret.poke(aethercore.common.XRetOp.None)
         dut.io.uopIn.decoded.ordering.poke(OrderingClass.Normal)
         dut.io.uopIn.decoded.exception.valid.poke(false.B)
@@ -124,6 +128,9 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.uopOut.valueRef.id.expect(6.U)
         dut.io.uopOut.decoded.aluOp.expect(AluOp.Add)
         dut.io.uopOut.decoded.wordOp.expect(wordOperation.B)
+        dut.io.uopOut.decoded.lhsSource.expect(OperandSourceKind.Rs1)
+        dut.io.uopOut.decoded.rhsSource.expect(OperandSourceKind.Rs2)
+        dut.io.uopOut.decoded.instBytes.expect(instructionBytes.U)
         dut.io.uopOut.decoded.rs1.expect(1.U)
         dut.io.uopOut.decoded.rs2.expect(2.U)
         dut.io.uopOut.decoded.rd.expect(3.U)
@@ -142,6 +149,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.requestIn.lhs.poke(7.U)
         dut.io.requestIn.rhs.poke(9.U)
         dut.io.requestIn.pc.poke("h80000000".U)
+        dut.io.requestIn.instBytes.poke(instructionBytes.U)
         dut.io.requestIn.immediate.poke(0.U)
 
         dut.io.requestOut.robToken.index.expect(3.U)
@@ -153,6 +161,7 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.requestOut.wordOp.expect(wordOperation.B)
         dut.io.requestOut.lhs.expect(7.U)
         dut.io.requestOut.rhs.expect(9.U)
+        dut.io.requestOut.instBytes.expect(instructionBytes.U)
 
         dut.io.responseIn.robToken.index.poke(3.U)
         dut.io.responseIn.robToken.generation.poke(1.U)
@@ -179,9 +188,11 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.decodedIn.pc.poke("h80000000".U)
         dut.io.decodedIn.inst.poke("h002081b3".U)
         dut.io.decodedIn.rawInst.poke("h002081b3".U)
-        dut.io.decodedIn.instBytes.poke(4.U)
+        dut.io.decodedIn.instBytes.poke(instructionBytes.U)
         dut.io.decodedIn.aluOp.poke(AluOp.Add)
         dut.io.decodedIn.wordOp.poke(wordOperation.B)
+        dut.io.decodedIn.lhsSource.poke(OperandSourceKind.Pc)
+        dut.io.decodedIn.rhsSource.poke(OperandSourceKind.Immediate)
         dut.io.decodedIn.rs1.poke(1.U)
         dut.io.decodedIn.rs2.poke(2.U)
         dut.io.decodedIn.rd.poke(3.U)
@@ -200,7 +211,8 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
         dut.io.decodedIn.system.kind.poke(SystemOperationKind.None)
         dut.io.decodedIn.system.csrOp.poke(aethercore.common.CsrOp.None)
         dut.io.decodedIn.system.csrAddress.poke(0.U)
-        dut.io.decodedIn.system.csrUseImmediate.poke(false.B)
+        dut.io.decodedIn.system.csrUseImmediate.poke(true.B)
+        dut.io.decodedIn.system.csrImmediate.poke(31.U)
         dut.io.decodedIn.system.xret.poke(aethercore.common.XRetOp.None)
         dut.io.decodedIn.ordering.poke(OrderingClass.Normal)
         dut.io.decodedIn.exception.valid.poke(false.B)
@@ -209,6 +221,10 @@ class V2FoundationTypesSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
         dut.io.decodedOut.pc.expect("h80000000".U)
         dut.io.decodedOut.wordOp.expect(wordOperation.B)
+        dut.io.decodedOut.lhsSource.expect(OperandSourceKind.Pc)
+        dut.io.decodedOut.rhsSource.expect(OperandSourceKind.Immediate)
+        dut.io.decodedOut.system.csrUseImmediate.expect(true.B)
+        dut.io.decodedOut.system.csrImmediate.expect(31.U)
         dut.io.decodedOut.rs1.expect(1.U)
         dut.io.decodedOut.rs2.expect(2.U)
         dut.io.decodedOut.rd.expect(3.U)
