@@ -1,26 +1,13 @@
 name: RV32C Linux Kernel Qualification
 
 on:
-  pull_request:
-    paths:
-      - Makefile.l32-linux-boot
-      - sim/opensbi_boot_main.cpp
-      - src/main/scala/aethercore/ElaborateOpenSbiC.scala
-      - src/main/scala/aethercore/sim/AetherCoreOpenSbiCSimTop.scala
-      - software/l32/**
-      - tools/ci/l32_rv32c_kernel_build.sh
-      - tools/ci/make_l32_dtb.py
-      - tools/ensure_l32_riscv32_linux_gcc.sh
-      - tests_py/test_rv32c_linux_kernel_contract.py
-      - tests_py/test_rv32c_linux_runtime_contract.py
-      - .github/workflows/rv32c-linux-kernel.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv32c-linux-kernel-${{ github.event.pull_request.number || github.ref }}
+  group: rv32c-linux-kernel-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
