@@ -114,13 +114,14 @@ build_reference() {
   rm -f "$source_dir/.config"
   rm -rf "$source_dir/build"
 
-  # The selected defconfig is a shared DiffTest reference. Before .config
-  # exists, this historical top-level Makefile otherwise assumes a standalone
-  # device executable and appends -lSDL2/-lreadline/-ldl/-pie. Those target
-  # runtime flags then leak into the recursively built Kconfig host tool.
-  # Seed only the already-selected CONFIG_SHARE mode for this bootstrap make;
-  # the generated .config remains wholly owned by the pinned defconfig below.
-  if ! make -C "$source_dir" CONFIG_SHARE=y "$config_name" > "$config_log" 2>&1; then
+  # LDFLAGS is intentionally exported for the final deterministic NEMU shared
+  # object. It must not reach the recursively built Kconfig host utility: this
+  # historical top-level Makefile appends target-only SDL/PIE flags before a
+  # .config exists (or shared-object flags when CONFIG_SHARE is injected), and
+  # environment-origin make variables remain exported to recursive make. Strip
+  # only LDFLAGS for config bootstrap; CONFIG_SHARE remains owned exclusively by
+  # the pinned defconfig and the final reference build sees the normal LDFLAGS.
+  if ! env -u LDFLAGS make -C "$source_dir" "$config_name" > "$config_log" 2>&1; then
     echo "ERROR: exact RV32 NEMU config generation failed in $label build" >&2
     cat "$config_log" >&2
     return 6
