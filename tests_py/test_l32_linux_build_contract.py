@@ -64,7 +64,7 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn('PAHOLE="${PAHOLE_BIN}"', text)
         self.assertIn("CONFIG_PAHOLE_VERSION=0", text)
         self.assertIn("pahole_version=0", text)
-        self.assertNotIn("/bin/false", text)
+        self.assertNotIn('PAHOLE_BIN="${L32_LINUX_PAHOLE:-/bin/false}"', text)
         self.assertIn("recipe_version=${L32_LINUX_RECIPE_VERSION}", text)
         self.assertIn("kbuild_user=${KBUILD_BUILD_USER}", text)
         self.assertIn("kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}", text)
