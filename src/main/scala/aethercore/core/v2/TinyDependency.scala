@@ -52,7 +52,7 @@ private class TinyDependencyEntry(
   *
   * This is deliberately not an issue queue or physical-register file. The
   * 32-entry RAT names the newest live producer of each architectural register;
-  * four ROB-parallel dependency records remember Ready(value) or
+  * ROB-parallel dependency records remember Ready(value) or
   * Pending(ProducerTag). A tiny producer scoreboard retains completed values
   * until retirement so a consumer dispatched after the completion pulse still
   * resolves correctly.
@@ -60,9 +60,9 @@ private class TinyDependencyEntry(
 class TinyDependencyState(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-dependency XLEN must be 32 or 64, got $xlen")
 
-  private val Entries = 4
-  private val IdentityBits = 2
-  private val GenerationBits = 2
+  private val Entries = TinyRobGeometry.Entries
+  private val IdentityBits = TinyRobGeometry.IndexBits
+  private val GenerationBits = TinyRobGeometry.GenerationBits
 
   val io = IO(new Bundle {
     val allocate = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
@@ -262,8 +262,8 @@ class TinyDependencyState(val xlen: Int) extends Module {
 class TinyDependencyBackend(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"v2 F2 backend XLEN must be 32 or 64, got $xlen")
 
-  private val IdentityBits = 2
-  private val GenerationBits = 2
+  private val IdentityBits = TinyRobGeometry.IndexBits
+  private val GenerationBits = TinyRobGeometry.GenerationBits
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new RobDispatch(xlen)))
@@ -275,7 +275,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     val headRs1 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headRs2 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headOperandsReady = Output(Bool())
-    val occupancy = Output(UInt(3.W))
+    val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
   })
 
   val rob = Module(new TinyRob(xlen))
