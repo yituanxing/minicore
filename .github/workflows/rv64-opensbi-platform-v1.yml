@@ -1,24 +1,13 @@
 name: RV64 OpenSBI Platform V1
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/sim/AetherCoreSimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreOpenSbiSimTop.scala'
-      - 'src/main/scala/aethercore/ElaborateOpenSbiRV64.scala'
-      - 'src/test/scala/aethercore/RV64SupervisorPlatformMmioSpec.scala'
-      - 'sim/l32_opensbi_runtime.h'
-      - 'sim/opensbi_runtime_compile_probe.cpp'
-      - 'tools/ci/make_l32_dtb.py'
-      - 'tests_py/test_opensbi_dtb_profiles.py'
-      - '.github/workflows/rv64-opensbi-platform-v1.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64-opensbi-platform-v1-${{ github.event.pull_request.number || github.ref }}
+  group: rv64-opensbi-platform-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +18,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without external actions
