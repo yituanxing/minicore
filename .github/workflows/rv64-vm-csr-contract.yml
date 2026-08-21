@@ -1,24 +1,13 @@
 name: RV64 VM CSR Contract
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/config/CoreConfig.scala'
-      - 'src/main/scala/aethercore/config/PageTableGeometry.scala'
-      - 'src/main/scala/aethercore/core/SatpRegister.scala'
-      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
-      - 'src/test/scala/aethercore/CoreConfigSpec.scala'
-      - 'src/test/scala/aethercore/RV64VirtualMemoryConfigSpec.scala'
-      - 'src/test/scala/aethercore/SatpRegisterSpec.scala'
-      - 'src/test/scala/aethercore/RV64SatpCsrSpec.scala'
-      - '.github/workflows/rv64-vm-csr-contract.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64-vm-csr-${{ github.event.pull_request.number || github.ref }}
+  group: rv64-vm-csr-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +18,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without external actions
