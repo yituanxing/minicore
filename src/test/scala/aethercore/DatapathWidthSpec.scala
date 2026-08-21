@@ -28,7 +28,9 @@ class DatapathWidthSpec
     with Matchers
     with ChiselSim
     with V2F1RobCommitChecks
-    with V2F2DependencyChecks {
+    with V2F2DependencyChecks
+    with V2F3ExecutionChecks
+    with V2F3ExecutionSemanticChecks {
   behavior of "parameterized integer datapath components"
 
   private def pokeF1Dispatch(dut: TinyRobCommitBackend, pc: BigInt, rd: Int): Unit = {
