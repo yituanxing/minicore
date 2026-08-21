@@ -1,31 +1,13 @@
 name: RV32C NuttX Sv32 Qualification
 
 on:
-  pull_request:
-    paths:
-      - software/nuttx/**
-      - src/main/scala/aethercore/**
-      - sim/nuttx_paging_boot_main.cpp
-      - Makefile.nuttx-sv32-probe
-      - Makefile.nuttx-sv32c-probe
-      - tools/ci/nuttx_sv32_paging_build_audit.sh
-      - tools/ci/nuttx_sv32_paging_aether_profile_build.sh
-      - tools/ci/nuttx_sv32_paging_cache_key.sh
-      - tools/ci/audit_riscv_elf_profile.py
-      - tools/ci/nuttx_prepare_host_tools.sh
-      - tools/ci/ensure_genromfs.sh
-      - tools/ci/kconfig-tweak
-      - tools/fetch_range_archive.py
-      - tests_py/test_nuttx_sv32_paging_contract.py
-      - tests_py/test_rv32c_nuttx_sv32_contract.py
-      - .github/workflows/rv32c-nuttx-sv32.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv32c-nuttx-sv32-${{ github.event.pull_request.number || github.ref }}
+  group: rv32c-nuttx-sv32-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

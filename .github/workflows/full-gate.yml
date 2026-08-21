@@ -4,16 +4,13 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    paths:
-      - .github/full-gate-request
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethercore-full-${{ github.event.pull_request.number || github.ref }}
+  group: aethercore-full-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

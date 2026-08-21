@@ -1,55 +1,13 @@
 name: RV64 VM Shared Contract
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/common/Interfaces.scala'
-      - 'src/main/scala/aethercore/config/CoreConfig.scala'
-      - 'src/main/scala/aethercore/config/PageTableGeometry.scala'
-      - 'src/main/scala/aethercore/core/AetherCore.scala'
-      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
-      - 'src/main/scala/aethercore/core/SystemInstruction.scala'
-      - 'src/main/scala/aethercore/core/PageTableWalker.scala'
-      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
-      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
-      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
-      - 'src/main/scala/aethercore/core/PtwArbiter.scala'
-      - 'src/main/scala/aethercore/core/Sv32PageTableWalker.scala'
-      - 'src/main/scala/aethercore/core/Sv32Tlb.scala'
-      - 'src/main/scala/aethercore/core/Sv32TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/Sv32InstructionFetchAdapter.scala'
-      - 'src/main/scala/aethercore/core/Sv32DataPathAdapter.scala'
-      - 'src/main/scala/aethercore/core/Sv32PtwArbiter.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreSimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreRV64IMSv39PmpSimTop.scala'
-      - 'src/main/scala/aethercore/ElaborateRV64IMSv39Pmp.scala'
-      - 'src/test/scala/aethercore/RV64SharedVirtualMemorySpec.scala'
-      - 'src/test/scala/aethercore/RV64Sv39CoreSpec.scala'
-      - 'src/test/scala/aethercore/RV64Sv39ProtectionSpec.scala'
-      - 'src/test/scala/aethercore/TranslationUnitSpec.scala'
-      - 'src/test/scala/aethercore/RV64VirtualMemoryAdapterSpec.scala'
-      - 'src/test/scala/aethercore/Sv32PageTableWalkerSpec.scala'
-      - 'src/test/scala/aethercore/Sv32TlbSpec.scala'
-      - 'src/test/scala/aethercore/Sv32TranslationUnitTlbSpec.scala'
-      - 'src/test/scala/aethercore/Sv32InstructionTranslationSpec.scala'
-      - 'src/test/scala/aethercore/Sv32InstructionFetchCoreSpec.scala'
-      - 'src/test/scala/aethercore/Sv32DataPathCoreSpec.scala'
-      - 'src/test/scala/aethercore/Sv32PmpCompositionSpec.scala'
-      - 'src/test/scala/aethercore/Sv32SfenceCoreSpec.scala'
-      - 'sim/sim_main.cpp'
-      - 'software/rv64/sv39_pmp_v1_linker.ld'
-      - 'software/rv64/sv39_pmp_v1_workload.S'
-      - 'tools/build_rv64im_sv39_pmp_v1.sh'
-      - 'Makefile.rv64im-sv39-pmp-v1'
-      - '.github/workflows/rv64-vm-shared-contract.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64-vm-shared-${{ github.event.pull_request.number || github.ref }}
+  group: rv64-vm-shared-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -60,7 +18,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without external actions

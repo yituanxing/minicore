@@ -1,35 +1,13 @@
 name: RV64A V1 Qualification
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/config/CoreConfig.scala'
-      - 'src/main/scala/aethercore/core/AetherCore.scala'
-      - 'src/main/scala/aethercore/core/Decoder.scala'
-      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreRV64IMASv39PmpSimTop.scala'
-      - 'src/main/scala/aethercore/ElaborateRV64IMASv39Pmp.scala'
-      - 'src/test/scala/aethercore/CoreConfigSpec.scala'
-      - 'src/test/scala/aethercore/DecoderSpec.scala'
-      - 'src/test/scala/aethercore/RV32AtomicCoreSpec.scala'
-      - 'src/test/scala/aethercore/Sv32AtomicScSpec.scala'
-      - 'src/test/scala/aethercore/RV64AtomicCoreSpec.scala'
-      - 'src/test/scala/aethercore/RV64AtomicWordLrScSpec.scala'
-      - 'src/test/scala/aethercore/RV64AtomicDwordOpsSpec.scala'
-      - 'src/test/scala/aethercore/RV64AtomicMisaSpec.scala'
-      - 'software/rv64/rv64a_sv39_pmp_v1_workload.S'
-      - 'software/rv64/sv39_pmp_v1_linker.ld'
-      - 'tools/build_rv64a_sv39_pmp_v1.sh'
-      - 'Makefile.rv64a-sv39-pmp-v1'
-      - 'sim/sim_main.cpp'
-      - '.github/workflows/rv64a-v1.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64a-v1-${{ github.event.pull_request.number || github.ref }}
+  group: rv64a-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -40,7 +18,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without external actions

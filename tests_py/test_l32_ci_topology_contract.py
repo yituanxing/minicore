@@ -10,69 +10,90 @@ def pull_request_paths(path: Path) -> list[str]:
     marker = "  pull_request:\n    paths:\n"
     if marker not in text:
         return []
-    block = text.split(marker, 1)[1].split("  workflow_dispatch:", 1)[0]
+    # Stop at the next top-level trigger/key rather than assuming a specific
+    # trigger ordering.
+    block = text.split(marker, 1)[1]
+    for next_key in ("  push:\n", "  workflow_dispatch:\n", "  workflow_call:\n"):
+        if next_key in block:
+            block = block.split(next_key, 1)[0]
     paths = []
     for line in block.splitlines():
         if line.startswith("      - "):
-            paths.append(line[len("      - ") :].strip())
+            paths.append(line[len("      - ") :].strip().strip("'\""))
     return paths
 
 
 class L32CiTopologyContractTest(unittest.TestCase):
-    def test_deep_linux_runtime_is_the_canonical_pr_hardware_signoff(self):
-        path = WORKFLOWS / "l32-busybox-build.yml"
-        text = path.read_text()
-        paths = pull_request_paths(path)
-
-        for required in (
-            "src/main/scala/aethercore/**",
-            "build.mill",
-            "mill",
-            "tools/ensure_verilator_5_024.sh",
-            "Makefile.l32-linux-boot",
-            "sim/l32_opensbi_runtime.h",
-            "sim/opensbi_boot_main.cpp",
-            "sim/opensbi_forkserver_main.cpp",
-            "tests_py/test_l32_sim_runtime_contract.py",
-            ".github/workflows/l32-busybox-build.yml",
-        ):
-            self.assertIn(required, paths)
-
-        self.assertIn("if: ${{ github.event_name == 'pull_request' }}", text)
-        self.assertIn("if: ${{ github.event_name == 'workflow_dispatch' }}", text)
-        self.assertNotIn("github.event.pull_request.draft", text)
-        self.assertIn("Run cumulative Linux functional matrix from warm shell", text)
-        self.assertIn("python3 tools/ci/l32_linux_runtime_suite.py verify-log", text)
-
-    def test_prefix_milestones_do_not_shadow_shared_hardware_changes(self):
-        prefix_workflows = (
-            "l32-opensbi.yml",
+    def test_current_public_pr_signoff_lanes_are_hosted(self):
+        # The public repository no longer treats the historical deep L32
+        # self-hosted BusyBox lane as the canonical PR hardware owner. Fast
+        # Gate plus the currently targeted hosted real-system lanes own normal
+        # PR qualification.
+        for filename in (
+            "fast-gate.yml",
+            "l32-linux-build.yml",
             "l32-linux-handoff.yml",
-            "l32-linux-boot.yml",
-            "l32-linux-deeper-boot.yml",
-            "l32-minimal-initramfs.yml",
-        )
-
-        for filename in prefix_workflows:
+            "rv64-minimal-initramfs-v1.yml",
+        ):
             with self.subTest(workflow=filename):
-                path = WORKFLOWS / filename
-                text = path.read_text()
-                paths = pull_request_paths(path)
-                self.assertIn("  workflow_dispatch:", text)
-                self.assertIn(f".github/workflows/{filename}", paths)
-                self.assertFalse(
-                    any(item.startswith("src/main/scala/aethercore/") for item in paths),
-                    msg=f"{filename} must leave shared AetherCore hardware PR signoff to l32-busybox-build.yml",
-                )
+                text = (WORKFLOWS / filename).read_text()
+                self.assertIn("pull_request:", text)
+                self.assertIn("runs-on: ubuntu-24.04", text)
+                self.assertNotIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
+
+        # Fast Gate deliberately runs on every PR and classifies changed paths
+        # inside a small hosted job instead of duplicating a large paths list in
+        # the event trigger. Shared RTL/test changes must select the Chisel,
+        # Supervisor and FreeRTOS hardware lanes.
+        fast = (WORKFLOWS / "fast-gate.yml").read_text()
+        self.assertIn("Classify fast-gate paths", fast)
+        self.assertIn("^(src/main/scala/|src/test/scala/|build\\.mill$|mill$)", fast)
+        self.assertIn("run_chisel=true", fast)
+        self.assertIn("run_hardware=true", fast)
+
+        pid1 = (WORKFLOWS / "rv64-minimal-initramfs-v1.yml").read_text()
+        self.assertIn("Run real RV64 PID 1 UART interrupt proof", pid1)
+        self.assertIn('MILESTONE="RV64 USER UART IRQ OK"', pid1)
+        self.assertIn("MIN_STIP=1", pid1)
+        self.assertIn("MIN_SEIP=1", pid1)
+
+    def test_legacy_l32_prefix_milestones_are_manual_or_dedicated_branch_only(self):
+        for filename in (
+            "l32-linux-boot.yml",
+            "l32-busybox-build.yml",
+        ):
+            with self.subTest(workflow=filename):
+                text = (WORKFLOWS / filename).read_text()
+                self.assertIn("workflow_dispatch:", text)
+                self.assertNotIn("pull_request:", text)
+                self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
+
+        deeper = (WORKFLOWS / "l32-linux-deeper-boot.yml").read_text()
+        self.assertIn("workflow_dispatch:", deeper)
+        self.assertNotIn("pull_request:", deeper)
+        self.assertIn("push:", deeper)
+        self.assertIn("explore/rv64-linux-deeper-v1", deeper)
+        self.assertIn("runs-on: ubuntu-24.04", deeper)
+
+    def test_public_pull_requests_can_never_target_a_self_hosted_runner(self):
+        offenders = []
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text()
+            if "pull_request:" in text and "self-hosted" in text:
+                offenders.append(path.name)
+        self.assertEqual(
+            offenders,
+            [],
+            "public pull_request workflows must never execute on self-hosted runners; "
+            f"manualize or migrate: {offenders}",
+        )
 
     def test_kernel_init_remains_historical_manual_self_validation(self):
         path = WORKFLOWS / "l32-linux-kernel-init.yml"
         text = path.read_text()
-        self.assertEqual(
-            pull_request_paths(path),
-            [".github/workflows/l32-linux-kernel-init.yml"],
-        )
-        self.assertIn("  workflow_dispatch:", text)
+        self.assertIn("workflow_dispatch:", text)
+        self.assertNotIn("pull_request:", text)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
 
 
 if __name__ == "__main__":

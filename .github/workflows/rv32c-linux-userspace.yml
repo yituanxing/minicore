@@ -1,53 +1,13 @@
 name: RV32C Linux Userspace Qualification
 
 on:
-  pull_request:
-    paths:
-      - software/l32/**
-      - software/l32_busybox/**
-      - software/l32_real/**
-      - tools/ci/l32_userspace_profile.sh
-      - tools/ci/riscv_elf_profile.py
-      - tools/ci/l32_musl_link_wrapper.sh
-      - tools/ci/l32_busybox_build.sh
-      - tools/ci/l32_runtime_probe_build.sh
-      - tools/ci/l32_real_programs_build.sh
-      - tools/ci/l32_real_programs_cache.sh
-      - tools/ci/l32_software_artifact_cache.sh
-      - tools/ci/l32_runtime_image_cache.sh
-      - tools/ci/l32_busybox_initramfs_build.sh
-      - tools/ci/l32_busybox_payload_build.sh
-      - tools/ci/l32_busybox_runtime_freeze.sh
-      - tools/ci/l32_rv32c_kernel_build.sh
-      - tools/ci/l32_linux_runtime_suite.py
-      - tools/ci/make_l32_dtb.py
-      - tools/ensure_l32_riscv32_linux_gcc.sh
-      - tools/ensure_verilator_5_024.sh
-      - tests_py/test_l32_userspace_profile_contract.py
-      - tests_py/test_riscv_elf_profile.py
-      - tests_py/test_l32_musl_link_wrapper_contract.py
-      - tests_py/test_l32_busybox_contract.py
-      - tests_py/test_l32_real_program_profile_contract.py
-      - tests_py/test_l32_real_program_component_cache_contract.py
-      - tests_py/test_l32_software_artifact_cache_contract.py
-      - tests_py/test_l32_busybox_runtime_freeze_contract.py
-      - tests_py/test_l32_forkserver_contract.py
-      - tests_py/test_l32_linux_runtime_suite_contract.py
-      - tests_py/test_rv32c_linux_userspace_contract.py
-      - Makefile.l32-linux-boot
-      - sim/l32_opensbi_runtime.h
-      - sim/opensbi_forkserver_main.cpp
-      - src/main/scala/aethercore/ElaborateOpenSbiC.scala
-      - src/main/scala/aethercore/sim/AetherCoreOpenSbiCSimTop.scala
-      - src/main/scala/aethercore/config/CoreConfig.scala
-      - .github/workflows/rv32c-linux-userspace.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv32c-linux-userspace-${{ github.event.pull_request.number || github.ref }}
+  group: rv32c-linux-userspace-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

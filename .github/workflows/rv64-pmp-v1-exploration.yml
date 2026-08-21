@@ -1,25 +1,13 @@
 name: RV64 PMP V1 Qualification
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/**'
-      - 'src/test/scala/aethercore/RV64PmpCsrSpec.scala'
-      - 'src/test/scala/aethercore/PhysicalAddressNarrowingSpec.scala'
-      - 'src/test/scala/aethercore/PmpCsrFileSpec.scala'
-      - 'src/test/scala/aethercore/PmpCheckerSpec.scala'
-      - 'software/rv32/pmp_v1_workload.S'
-      - 'software/rv32/pmp_v1_linker.ld'
-      - 'tools/build_pmp_v1.sh'
-      - 'Makefile.rv64im-pmp-v1'
-      - '.github/workflows/rv64-pmp-v1-exploration.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64-pmp-v1-${{ github.event.pull_request.number || github.ref }}
+  group: rv64-pmp-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,7 +18,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without external actions

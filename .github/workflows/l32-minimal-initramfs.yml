@@ -1,24 +1,13 @@
 name: L32 Minimal Initramfs Userspace
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/l32-minimal-initramfs.yml
-      - Makefile.l32-linux-boot
-      - sim/opensbi_boot_main.cpp
-      - software/l32_userspace/**
-      - tools/ci/make_l32_dtb.py
-      - tools/ci/l32_minimal_initramfs_build.sh
-      - tools/ci/l32_minimal_init_payload_build.sh
-      - tools/ci/l32_software_artifact_cache.sh
-      - tests_py/test_l32_minimal_initramfs_contract.py
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: l32-minimal-initramfs-${{ github.event.pull_request.number || github.ref }}
+  group: l32-minimal-initramfs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

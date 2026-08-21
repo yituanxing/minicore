@@ -1,37 +1,13 @@
 name: RV32C FreeRTOS Qualification
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/rv32c-freertos.yml
-      - Makefile.freertos
-      - Makefile.freertos-difftest
-      - Makefile.freertos-rv32imc
-      - software/freertos/**
-      - src/main/scala/aethercore/ElaborateRV32IMCTrap.scala
-      - src/main/scala/aethercore/config/CoreConfig.scala
-      - src/main/scala/aethercore/core/**
-      - src/main/scala/aethercore/sim/AetherCoreSimTop.scala
-      - src/main/scala/aethercore/sim/AetherCoreRV32IMCTrapSimTop.scala
-      - sim/nemu_difftest.h
-      - sim/nemu_difftest_rv32_timer.cpp
-      - tools/apply_rv32_difftest_isa_profile.py
-      - tools/make_freertos_runner.py
-      - tools/make_freertos_difftest_runner.py
-      - tools/make_freertos_difftest_adapter.py
-      - tools/make_freertos_wfi_difftest_adapter.py
-      - tools/make_freertos_rv32imc_runner.py
-      - tools/make_freertos_rv32imc_difftest_runner.py
-      - tools/resolve_rv32c_spike_reference.sh
-      - tools/ensure_riscv_none_elf_gcc_15_2.sh
-      - tests_py/test_rv32c_freertos_contract.py
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv32c-freertos-${{ github.event.pull_request.number || github.ref }}
+  group: rv32c-freertos-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

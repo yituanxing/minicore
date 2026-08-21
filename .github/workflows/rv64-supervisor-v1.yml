@@ -1,25 +1,13 @@
 name: RV64 Supervisor V1 Qualification
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/**'
-      - 'src/test/scala/aethercore/RV64SupervisorModeSpec.scala'
-      - 'software/rv32/supervisor_v1_workload.S'
-      - 'software/rv32/crt0.S'
-      - 'software/rv32/linker.ld'
-      - 'tools/build_rv32im_supervisor_v1.sh'
-      - 'tools/build_rv64im_supervisor_v1.sh'
-      - 'Makefile.rv32im-supervisor-v1'
-      - 'Makefile.rv64im-supervisor-v1'
-      - '.github/workflows/rv64-supervisor-v1.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv64-supervisor-v1-${{ github.event.pull_request.number || github.ref }}
+  group: rv64-supervisor-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,7 +18,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without external actions

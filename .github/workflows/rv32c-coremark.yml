@@ -1,26 +1,13 @@
 name: RV32C CoreMark Qualification
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/rv32c-coremark.yml
-      - Makefile.rv32imc-coremark
-      - software/rv32/**
-      - software/upstream/coremark/**
-      - src/main/scala/aethercore/**
-      - tools/build_rv32im_coremark.sh
-      - tools/ensure_riscv_none_elf_gcc_15_2.sh
-      - tools/ensure_rv32c_spike_reference.sh
-      - tools/resolve_rv32c_spike_reference.sh
-      - tools/probe_rv32_reference_abi.py
-      - tools/spike_rv32_reference_shim.cpp
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv32c-coremark-${{ github.event.pull_request.number || github.ref }}
+  group: rv32c-coremark-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

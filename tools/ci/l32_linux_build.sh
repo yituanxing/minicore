@@ -16,6 +16,13 @@ OBJ_DIR="${BUILD_DIR}/obj"
 STAGING_KEY_FILE="${BUILD_DIR}/.aethercore-staging-input-key"
 CACHE_KEY_SCRIPT="${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
+# CONFIG_PAHOLE_VERSION is serialized into .config. The original #78 canonical
+# build had no usable pahole and therefore froze CONFIG_PAHOLE_VERSION=0.
+# Linux 6.6 scripts/pahole-version.sh emits exactly 0 when the PAHOLE command
+# cannot be resolved. Point PAHOLE at an intentionally absent sentinel rather
+# than /bin/false: coreutils false --version prints text, which is not a valid
+# Kconfig number and therefore does not model an absent pahole at all.
+PAHOLE_BIN="${L32_LINUX_PAHOLE:-/__aethercore_no_pahole__}"
 
 # The canonical base is a recipe-derived artifact, not an incremental Kbuild
 # checkpoint. Fixed neutral metadata keeps rebuilds deterministic. Rebuild in a
@@ -29,6 +36,10 @@ export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
 export TZ="${L32_LINUX_BUILD_TZ}"
 
 mkdir -p "${CACHE_ROOT}" "${ROOT_DIR}/build"
+if command -v "${PAHOLE_BIN}" >/dev/null 2>&1; then
+  echo "ERROR: canonical L32 recipe requires an unavailable pahole sentinel, but it resolved: ${PAHOLE_BIN}" >&2
+  exit 19
+fi
 
 publish_staging() {
   # Staging has already passed the exact frozen-output checks. Removing the old
@@ -67,11 +78,37 @@ fi
 if [[ ! -f "${ARCHIVE}" ]]; then
   tmp="${ARCHIVE}.part.$$"
   rm -f "${tmp}"
-  curl --http1.1 -fL --retry 8 --retry-delay 2 --retry-all-errors \
-    --connect-timeout 30 --max-time 3600 \
-    "${LINUX_ARCHIVE}" -o "${tmp}"
-  printf '%s  %s\n' "${LINUX_SHA256}" "${tmp}" | sha256sum -c -
-  mv "${tmp}" "${ARCHIVE}"
+  archive_urls=("${LINUX_ARCHIVE}")
+  if [[ "${LINUX_ARCHIVE}" == https://cdn.kernel.org/* ]]; then
+    kernel_path="${LINUX_ARCHIVE#https://cdn.kernel.org}"
+    archive_urls+=(
+      "https://mirrors.edge.kernel.org${kernel_path}"
+      "https://www.kernel.org${kernel_path}"
+    )
+  fi
+
+  downloaded=0
+  for archive_url in "${archive_urls[@]}"; do
+    rm -f "${tmp}"
+    echo "L32 Linux source fetch: ${archive_url}"
+    if curl --http1.1 -fL --retry 4 --retry-delay 2 --retry-all-errors \
+        --connect-timeout 30 --max-time 1200 \
+        "${archive_url}" -o "${tmp}"; then
+      if printf '%s  %s\n' "${LINUX_SHA256}" "${tmp}" | sha256sum -c -; then
+        mv "${tmp}" "${ARCHIVE}"
+        downloaded=1
+        break
+      fi
+      echo "L32 Linux source checksum mismatch from ${archive_url}; trying next mirror." >&2
+    else
+      echo "L32 Linux source fetch failed from ${archive_url}; trying next mirror." >&2
+    fi
+  done
+  rm -f "${tmp}"
+  [[ "${downloaded}" == "1" ]] || {
+    echo "ERROR: unable to fetch the exact Linux ${LINUX_VERSION} archive from all pinned mirrors" >&2
+    exit 21
+  }
 fi
 printf '%s  %s\n' "${LINUX_SHA256}" "${ARCHIVE}" | sha256sum -c -
 
@@ -116,12 +153,15 @@ rm -f "${BUILD_DIR}/result.txt" "${BUILD_DIR}/config.log" "${BUILD_DIR}/linux-bu
   echo "kbuild_version=${KBUILD_BUILD_VERSION}"
   echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
   echo "kbuild_tz=${TZ}"
+  echo "pahole=${PAHOLE_BIN}"
+  echo "pahole_version=0"
   echo "staging_input_key=${input_key}"
   echo "resumed_staging=${resume_staging}"
 } > "${EVIDENCE_DIR}/build-inputs.txt"
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
+  PAHOLE="${PAHOLE_BIN}" \
   "${LINUX_RV32_DEFCONFIG}" \
   2>&1 | tee "${BUILD_DIR}/config.log"
 
@@ -136,13 +176,15 @@ make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   -d VGA_CONSOLE
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
-  ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" olddefconfig \
+  ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
+  PAHOLE="${PAHOLE_BIN}" olddefconfig \
   2>&1 | tee -a "${BUILD_DIR}/config.log"
 
 for required in \
   'CONFIG_32BIT=y' \
   'CONFIG_MMU=y' \
-  'CONFIG_RISCV=y'; do
+  'CONFIG_RISCV=y' \
+  'CONFIG_PAHOLE_VERSION=0'; do
   grep -qx "${required}" "${OBJ_DIR}/.config" || {
     echo "ERROR: resolved Linux config missing ${required}" >&2
     exit 22
@@ -163,6 +205,7 @@ grep -qx '# CONFIG_VGA_CONSOLE is not set' "${OBJ_DIR}/.config" || {
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${L32_CROSS_COMPILE_PREFIX}" \
+  PAHOLE="${PAHOLE_BIN}" \
   -j"${JOBS}" Image \
   2>&1 | tee "${BUILD_DIR}/linux-build.log"
 
@@ -203,6 +246,7 @@ fi
   echo "kbuild_version=${KBUILD_BUILD_VERSION}"
   echo "kbuild_timestamp=${KBUILD_BUILD_TIMESTAMP}"
   echo "kbuild_tz=${TZ}"
+  echo "pahole_version=0"
 } | tee "${BUILD_DIR}/result.txt"
 
 # Qualify the complete staging tree before publishing it. Until these exact
