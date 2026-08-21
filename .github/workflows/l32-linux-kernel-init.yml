@@ -1,16 +1,13 @@
 name: L32 Linux Kernel Init
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/l32-linux-kernel-init.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: l32-linux-kernel-init-${{ github.event.pull_request.number || github.ref }}
+  group: l32-linux-kernel-init-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
