@@ -110,6 +110,8 @@ class TinyRob(val xlen: Int) extends Module {
 
   val recoveryMatches = completionMatches &&
     completionIndex === head &&
+    completionEntry.uop.executionClass === ExecutionClass.Branch &&
+    completionEntry.uop.decoded.controlFlow.kind =/= ControlFlowKind.None &&
     io.completion.bits.branchValid &&
     io.completion.bits.branchTaken &&
     !completionEntry.exception.valid &&
