@@ -46,11 +46,16 @@ private class TinyRobEntry(val xlen: Int) extends Bundle {
 }
 
 /**
-  * F1 fixed four-entry ROB.
+  * F1 fixed four-entry ROB, extended by F4 with one deliberately narrow
+  * head-recovery operation.
   *
-  * The ROB is intentionally one-wide and policy-poor. Allocation is the single
-  * owner of the first implementation's RobToken / ProducerTag / ValueRef.
+  * Allocation remains the single owner of RobToken / ProducerTag / ValueRef.
   * Completion may arrive for any live slot, but only a completed head retires.
+  * A normal taken-branch recovery is accepted only from a completion that has
+  * already passed the complete lifetime/storage identity match and names the
+  * current head. The current F3 issue policy is strict oldest-only, so every
+  * other live entry is necessarily younger and may be squashed without a
+  * general age comparator or branch mask.
   */
 class TinyRob(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-ROB XLEN must be 32 or 64, got $xlen")
@@ -64,6 +69,7 @@ class TinyRob(val xlen: Int) extends Module {
     val allocated = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits)))
     val acceptedCompletion = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
+    val acceptedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val headView = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val retire = Decoupled(new RobRetirement(xlen))
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
@@ -76,23 +82,8 @@ class TinyRob(val xlen: Int) extends Module {
   val count = RegInit(0.U(log2Ceil(Entries + 1).W))
 
   io.occupancy := count
-  io.dispatch.ready := count =/= Entries.U
 
-  val allocFire = io.dispatch.valid && io.dispatch.ready
   private val retireHead = entries(head)
-
-  io.allocated.valid := allocFire
-  io.allocated.bits := 0.U.asTypeOf(new BackendUop(xlen, IndexBits, GenerationBits))
-  io.allocated.bits.decoded := io.dispatch.bits.decoded
-  io.allocated.bits.executionClass := io.dispatch.bits.executionClass
-  io.allocated.bits.robToken.index := tail
-  io.allocated.bits.robToken.generation := slotGenerations(tail)
-  io.allocated.bits.producerTag.id := tail
-  io.allocated.bits.producerTag.generation := slotGenerations(tail)
-  io.allocated.bits.valueRef.id := tail
-  io.allocated.bits.valueRef.generation := slotGenerations(tail)
-  io.allocated.bits.producesValue := io.dispatch.bits.producesValue
-
   io.headView.valid := retireHead.valid
   io.headView.bits := retireHead.uop
 
@@ -117,8 +108,33 @@ class TinyRob(val xlen: Int) extends Module {
     completionEntry.uop.valueRef.id === io.completion.bits.valueRef.id &&
     completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation
 
+  val recoveryMatches = completionMatches &&
+    completionIndex === head &&
+    io.completion.bits.branchValid &&
+    io.completion.bits.branchTaken &&
+    !io.completion.bits.exception.valid
+
   io.acceptedCompletion.valid := completionMatches
   io.acceptedCompletion.bits := io.completion.bits
+  io.acceptedRecovery.valid := recoveryMatches
+  io.acceptedRecovery.bits := io.completion.bits
+
+  // Recovery wins over same-cycle speculative dispatch. The surviving branch
+  // is not complete at the start of this cycle, so it cannot also retire.
+  io.dispatch.ready := count =/= Entries.U && !recoveryMatches
+  val allocFire = io.dispatch.valid && io.dispatch.ready
+
+  io.allocated.valid := allocFire
+  io.allocated.bits := 0.U.asTypeOf(new BackendUop(xlen, IndexBits, GenerationBits))
+  io.allocated.bits.decoded := io.dispatch.bits.decoded
+  io.allocated.bits.executionClass := io.dispatch.bits.executionClass
+  io.allocated.bits.robToken.index := tail
+  io.allocated.bits.robToken.generation := slotGenerations(tail)
+  io.allocated.bits.producerTag.id := tail
+  io.allocated.bits.producerTag.generation := slotGenerations(tail)
+  io.allocated.bits.valueRef.id := tail
+  io.allocated.bits.valueRef.generation := slotGenerations(tail)
+  io.allocated.bits.producesValue := io.dispatch.bits.producesValue
 
   when(completionMatches) {
     entries(completionIndex).complete := true.B
@@ -149,6 +165,20 @@ class TinyRob(val xlen: Int) extends Module {
   switch(Cat(allocFire, retireFire)) {
     is("b10".U) { count := count + 1.U }
     is("b01".U) { count := count - 1.U }
+  }
+
+  when(recoveryMatches) {
+    for (index <- 0 until Entries) {
+      when(index.U =/= head && entries(index).valid) {
+        entries(index).valid := false.B
+        entries(index).complete := false.B
+        // A killed slot gets a new lifetime immediately. Any future late
+        // response carrying the old generation will fail completionMatches.
+        slotGenerations(index) := slotGenerations(index) + 1.U
+      }
+    }
+    tail := head + 1.U
+    count := 1.U
   }
 }
 
