@@ -63,6 +63,15 @@ class V2FoundationContractTest(unittest.TestCase):
         self.assertIn("ordering", decoded_body)
         self.assertIn("exception", decoded_body)
 
+    def test_rv64_word_operation_semantics_survive_decode_and_execute_seams(self) -> None:
+        text = FOUNDATION.read_text(encoding="utf-8")
+        decoded_body = text.split("class DecodedInstruction", 1)[1].split("/** First backend-owned representation", 1)[0]
+        request_body = text.split("class ExecutionRequest", 1)[1].split("/** Tagged completion", 1)[0]
+
+        self.assertIn("val wordOp = Bool()", decoded_body)
+        self.assertIn("val wordOp = Bool()", request_body)
+        self.assertIn("RV64 *W", decoded_body)
+
     def test_existing_isa_semantic_enums_are_reused_instead_of_forked(self) -> None:
         text = FOUNDATION.read_text(encoding="utf-8")
 
