@@ -18,10 +18,11 @@ CACHE_KEY_SCRIPT="${ROOT_DIR}/tools/ci/l32_linux_cache_key.sh"
 JOBS="${L32_LINUX_JOBS:-$(nproc)}"
 # CONFIG_PAHOLE_VERSION is serialized into .config. The original #78 canonical
 # build had no usable pahole and therefore froze CONFIG_PAHOLE_VERSION=0.
-# Do not let the hosted runner image (or an apt package update) silently become
-# part of the kernel recipe. Pass this as a Kbuild command-line variable on
-# every make invocation so Makefile defaults cannot override the environment.
-PAHOLE_BIN="${L32_LINUX_PAHOLE:-/bin/false}"
+# Linux 6.6 scripts/pahole-version.sh emits exactly 0 when the PAHOLE command
+# cannot be resolved. Point PAHOLE at an intentionally absent sentinel rather
+# than /bin/false: coreutils false --version prints text, which is not a valid
+# Kconfig number and therefore does not model an absent pahole at all.
+PAHOLE_BIN="${L32_LINUX_PAHOLE:-/__aethercore_no_pahole__}"
 
 # The canonical base is a recipe-derived artifact, not an incremental Kbuild
 # checkpoint. Fixed neutral metadata keeps rebuilds deterministic. Rebuild in a
@@ -35,10 +36,10 @@ export KBUILD_BUILD_TIMESTAMP="${L32_LINUX_BUILD_TIMESTAMP}"
 export TZ="${L32_LINUX_BUILD_TZ}"
 
 mkdir -p "${CACHE_ROOT}" "${ROOT_DIR}/build"
-[[ -x "${PAHOLE_BIN}" ]] || {
-  echo "ERROR: deterministic PAHOLE command is not executable: ${PAHOLE_BIN}" >&2
+if command -v "${PAHOLE_BIN}" >/dev/null 2>&1; then
+  echo "ERROR: canonical L32 recipe requires an unavailable pahole sentinel, but it resolved: ${PAHOLE_BIN}" >&2
   exit 19
-}
+fi
 
 publish_staging() {
   # Staging has already passed the exact frozen-output checks. Removing the old
