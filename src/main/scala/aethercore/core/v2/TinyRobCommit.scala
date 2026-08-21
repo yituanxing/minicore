@@ -5,7 +5,7 @@ import chisel3.util._
 import aethercore.common.CommitTrace
 import aethercore.core.RegisterFile
 
-private object TinyRobGeometry {
+private[v2] object TinyRobGeometry {
   val Entries: Int = 4
   val IndexBits: Int = 2
   val GenerationBits: Int = 2
@@ -222,7 +222,7 @@ class TinyRobCommitBackend(val xlen: Int) extends Module {
     val rs2Addr = Input(UInt(5.W))
     val rs1Data = Output(UInt(xlen.W))
     val rs2Data = Output(UInt(xlen.W))
-    val occupancy = Output(UInt(3.W))
+    val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
   })
 
   val rob = Module(new TinyRob(xlen))
