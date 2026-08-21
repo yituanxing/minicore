@@ -1,21 +1,13 @@
 name: RV32C Spike Reference
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/rv32c-spike-reference.yml
-      - tools/ensure_rv32c_spike_reference.sh
-      - tools/resolve_rv32c_spike_reference.sh
-      - tools/probe_rv32_reference_abi.py
-      - tools/spike_rv32_reference_shim.cpp
-      - tests_py/test_rv32c_spike_reference_contract.py
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: rv32c-spike-reference-${{ github.event.pull_request.number || github.ref }}
+  group: rv32c-spike-reference-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
