@@ -48,12 +48,12 @@ private class TinyDependencyEntry(
 }
 
 /**
-  * F2 fixed dependency tracker, extended by F4 with head-only recovery repair.
+  * Fixed dependency tracker.
   *
-  * Normal completion and recovery are separate validated inputs. In production
-  * composition they are driven only by TinyRob.acceptedCompletion and
-  * TinyRob.acceptedRecovery respectively, so this module never recreates ROB
-  * lifetime validation or branch-recovery policy.
+  * F4 normal recovery keeps the surviving head producer because JAL/JALR may
+  * still publish a link value. F5 privileged recovery is different: the head
+  * is already complete and will trap/return at the next retirement boundary,
+  * so all speculative RAT, producer and dependency state can be discarded.
   */
 class TinyDependencyState(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-dependency XLEN must be 32 or 64, got $xlen")
@@ -68,6 +68,7 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val committedRs2 = Input(UInt(xlen.W))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val recovery = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
+    val privilegedRecovery = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val retire = Flipped(Valid(new RobRetirement(xlen)))
     val head = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
 
@@ -250,9 +251,7 @@ class TinyDependencyState(val xlen: Int) extends Module {
     }
   }
 
-  // Recovery is a validated command from the ROB, not a locally reconstructed
-  // interpretation of a branch response. Under strict-oldest issue every other
-  // live dependency/producer is younger than the surviving head.
+  // Normal branch recovery keeps the surviving head producer/link value.
   when(io.recovery.valid) {
     assert(io.head.valid, "accepted recovery must retain a live ROB head")
     assert(sameRobToken(io.head.bits.robToken, io.recovery.bits.robToken),
@@ -285,14 +284,30 @@ class TinyDependencyState(val xlen: Int) extends Module {
       rename(survivor.decoded.rd).producerTag := survivor.producerTag
     }
   }
+
+  // Trap/xRET recovery has no speculative survivor dependency: the head is
+  // already complete and will retire on the next boundary. Clear everything so
+  // the redirect target starts from committed architectural state only.
+  when(io.privilegedRecovery.valid) {
+    assert(io.head.valid, "privileged recovery must retain a live ROB head until retirement")
+    assert(sameRobToken(io.head.bits.robToken, io.privilegedRecovery.bits.robToken),
+      "privileged recovery must name the surviving ROB head")
+
+    for (register <- 0 until 32) {
+      rename(register).valid := false.B
+    }
+    for (index <- 0 until Entries) {
+      dependencies(index).valid := false.B
+      producers(index).valid := false.B
+      producers(index).ready := false.B
+    }
+  }
 }
 
 /**
-  * F2 integration harness.
-  *
-  * Ordering/lifetime still belongs to TinyRob and architectural state still
-  * changes only through V2Commit. This layer owns RAT/readiness and forwards
-  * the ROB-validated normal branch-recovery pulse for F4.
+  * F2 integration substrate, extended with read-only F5 retirement/recovery
+  * observability. Ordering/lifetime remains owned by TinyRob and architectural
+  * integer state remains owned by V2Commit.
   */
 class TinyDependencyBackend(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"v2 F2 backend XLEN must be 32 or 64, got $xlen")
@@ -305,6 +320,8 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     val allocated = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val acceptedRecovery = Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+    val acceptedPrivilegedRecovery = Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+    val retiring = Valid(new RobRetirement(xlen))
     val commit = Output(new CommitTrace(xlen = xlen))
     val head = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
     val headDependenciesValid = Output(Bool())
@@ -327,8 +344,11 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   rob.io.completion.valid := io.completion.valid
   rob.io.completion.bits := io.completion.bits
   io.acceptedRecovery := rob.io.acceptedRecovery
+  io.acceptedPrivilegedRecovery := rob.io.acceptedPrivilegedRecovery
 
   commitStage.io.retire <> rob.io.retire
+  io.retiring.valid := rob.io.retire.valid && rob.io.retire.ready
+  io.retiring.bits := rob.io.retire.bits
   io.commit := commitStage.io.commit
   io.occupancy := rob.io.occupancy
   io.head := rob.io.headView
@@ -344,6 +364,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   dependencyState.io.committedRs2 := registerFile.io.rs2Data
   dependencyState.io.completion := rob.io.acceptedCompletion
   dependencyState.io.recovery := rob.io.acceptedRecovery
+  dependencyState.io.privilegedRecovery := rob.io.acceptedPrivilegedRecovery
   dependencyState.io.retire.valid := rob.io.retire.valid && rob.io.retire.ready
   dependencyState.io.retire.bits := rob.io.retire.bits
   dependencyState.io.head := rob.io.headView
