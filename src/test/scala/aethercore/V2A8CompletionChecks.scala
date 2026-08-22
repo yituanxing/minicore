@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.common.{AtomicOp, CsrOp, MemSize, PrivilegeMode}
+import aethercore.common.{AluOp, AtomicOp, BranchType, CsrOp, MemSize, PrivilegeMode}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.PmpConstants
 import aethercore.core.v2._
@@ -261,6 +261,82 @@ trait V2A8CompletionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.clock.step()
       dut.io.busy.expect(false.B)
       dut.io.request.ready.expect(true.B)
+    }
+  }
+
+  it should "serve a pending divide despite a continuously refillable integer completion" in {
+    simulate(new TinyExecutionCluster(32, hasCompressed = false)) { dut =>
+      dut.io.request.valid.poke(false.B)
+      dut.io.response.ready.poke(false.B)
+
+      def pokeRequest(
+          executionClass: ExecutionClass.Type,
+          op: AluOp.Type,
+          index: Int,
+          generation: Int,
+          lhs: BigInt,
+          rhs: BigInt
+      ): Unit = {
+        dut.io.request.bits.robToken.index.poke(index.U)
+        dut.io.request.bits.robToken.generation.poke(generation.U)
+        dut.io.request.bits.producerTag.id.poke(index.U)
+        dut.io.request.bits.producerTag.generation.poke(generation.U)
+        dut.io.request.bits.valueRef.id.poke(index.U)
+        dut.io.request.bits.valueRef.generation.poke(generation.U)
+        dut.io.request.bits.executionClass.poke(executionClass)
+        dut.io.request.bits.aluOp.poke(op)
+        dut.io.request.bits.wordOp.poke(false.B)
+        dut.io.request.bits.controlFlowKind.poke(ControlFlowKind.None)
+        dut.io.request.bits.branchType.poke(BranchType.None)
+        dut.io.request.bits.lhs.poke(lhs.U)
+        dut.io.request.bits.rhs.poke(rhs.U)
+        dut.io.request.bits.pc.poke(0.U)
+        dut.io.request.bits.instBytes.poke(4.U)
+        dut.io.request.bits.immediate.poke(0.U)
+      }
+
+      // Start a long-latency divide first.
+      pokeRequest(ExecutionClass.MulDiv, AluOp.Divu, index = 3, generation = 1, lhs = 100, rhs = 7)
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.ready.expect(true.B)
+      dut.clock.step()
+
+      // Then create a one-cycle integer response and hold the shared response
+      // port closed while the divider finishes in the background.
+      pokeRequest(ExecutionClass.Integer, AluOp.Add, index = 0, generation = 1, lhs = 10, rhs = 1)
+      dut.io.request.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+      for (_ <- 0 until 40) dut.clock.step()
+
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.robToken.index.expect(0.U)
+      dut.io.response.bits.value.expect(11.U)
+
+      // Hold a replacement integer request valid. When the first integer
+      // response fires it can refill the integer unit in the same cycle. A
+      // fixed-priority merge would then select integer again forever under a
+      // sustained stream; round-robin must rotate to the already-pending DIV.
+      pokeRequest(ExecutionClass.Integer, AluOp.Add, index = 1, generation = 2, lhs = 20, rhs = 2)
+      dut.io.request.valid.poke(true.B)
+      dut.io.response.ready.poke(true.B)
+      dut.io.request.ready.expect(true.B)
+      dut.io.response.bits.robToken.index.expect(0.U)
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.robToken.index.expect(3.U)
+      dut.io.response.bits.robToken.generation.expect(1.U)
+      dut.io.response.bits.value.expect(14.U)
+      dut.clock.step()
+
+      // The replacement integer response remains available after the divider
+      // has received bounded service.
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.robToken.index.expect(1.U)
+      dut.io.response.bits.robToken.generation.expect(2.U)
+      dut.io.response.bits.value.expect(22.U)
     }
   }
 }
