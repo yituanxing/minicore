@@ -288,7 +288,7 @@ trait V2F4RecoveryChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
 
       dut.io.redirect.valid.expect(false.B)
       dut.clock.step()
-      dut.io.occupancy.expect(1.U)
+      dut.io.occupancy.expect(2.U)
 
       var sawYounger = false
       var cycles = 0
