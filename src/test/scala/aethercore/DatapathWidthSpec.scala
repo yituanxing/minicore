@@ -31,7 +31,8 @@ class DatapathWidthSpec
     with V2F2DependencyChecks
     with V2F3ExecutionChecks
     with V2F3ExecutionSemanticChecks
-    with V2F4RecoveryChecks {
+    with V2F4RecoveryChecks
+    with V2F5PrivilegedChecks {
   behavior of "parameterized integer datapath components"
 
   private def pokeF1Dispatch(dut: TinyRobCommitBackend, pc: BigInt, rd: Int): Unit = {
