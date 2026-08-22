@@ -178,6 +178,34 @@ jobs:
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             run-local
 
+      - name: Preserve PID1 runtime evidence
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          src="$HOME/.cache/aethercore/v2-rv64-linux-minimal-initramfs/$TARGET_SHA"
+          dst="build/v2-f7-linux-pid1-runtime"
+          mkdir -p "$dst"
+          if [[ -f "$src/firmware.sha256" ]]; then
+            cp "$src/firmware.sha256" "$dst/"
+          fi
+          if [[ -d "$src/logs" ]]; then
+            cp -a "$src/logs/." "$dst/"
+          fi
+          {
+            echo "target_sha=$TARGET_SHA"
+            echo "source=$src"
+            echo 'files:'
+            find "$dst" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          } > "$dst/manifest.txt"
+          if [[ -s "$dst/boot-probe.log" ]]; then
+            echo '::group::v2 PID1 boot-probe tail'
+            tail -n 400 "$dst/boot-probe.log"
+            echo '::endgroup::'
+          else
+            echo '::warning::PID1 boot-probe.log was not found in the exact-head simulation cache'
+          fi
+
       - name: Save exact-head v2 simulation accelerator
         if: always()
         continue-on-error: true
@@ -228,5 +256,4 @@ jobs:
             build/rv64-minimal-init-boot/result.txt
             build/rv64-minimal-init-boot/evidence/
             build/rv64-minimal-init-boot/opensbi-initramfs-build.log
-            ~/.cache/aethercore/v2-rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/firmware.sha256
-            ~/.cache/aethercore/v2-rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}/logs/*.log
+            build/v2-f7-linux-pid1-runtime/
