@@ -87,3 +87,4 @@ class V2F7AtomicCoreSpec
     with Matchers
     with ChiselSim
     with V2F7AtomicCoreChecks
+    with V2F7OpenSbiAtomicChecks
