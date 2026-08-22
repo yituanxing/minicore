@@ -4,8 +4,9 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.common.{CsrOp, PrivilegeMode}
-import aethercore.config.CoreProfiles
+import aethercore.common.{AtomicOp, CsrOp, MemSize, PrivilegeMode}
+import aethercore.config.{CoreProfiles, PageTableGeometry}
+import aethercore.core.PmpConstants
 import aethercore.core.v2._
 
 /** Small harness that exposes only the A8 system-completion transport facts. */
@@ -162,6 +163,104 @@ trait V2A8CompletionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
 
       pending shouldBe empty
       cycles should be <= 3
+    }
+  }
+
+  it should "retain an LSU terminal response and its busy lifetime until completion fire" in {
+    simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
+      dut.io.request.valid.poke(false.B)
+      dut.io.completion.ready.poke(false.B)
+      dut.io.storePermit.valid.poke(false.B)
+      dut.io.storePermit.bits.index.poke(0.U)
+      dut.io.storePermit.bits.generation.poke(0.U)
+
+      dut.io.effectivePrivilege.poke(PrivilegeMode.Machine.U)
+      dut.io.satpTranslationEnabled.poke(false.B)
+      dut.io.satpRootPpn.poke(0.U)
+      dut.io.supervisorSum.poke(false.B)
+      dut.io.supervisorMxr.poke(false.B)
+      dut.io.translationFlush.poke(false.B)
+      dut.io.pmpEnabled.poke(false.B)
+      for (index <- 0 until PmpConstants.MaxEntries) {
+        dut.io.pmpConfig(index).poke(0.U)
+        dut.io.pmpAddress(index).poke(0.U)
+      }
+      dut.io.pteReady.poke(false.B)
+      dut.io.pteData.poke(0.U)
+      dut.io.pteFault.poke(false.B)
+      dut.io.resolvedAttributes.cacheable.poke(true.B)
+      dut.io.resolvedAttributes.idempotent.poke(true.B)
+      dut.io.resolvedAttributes.sideEffecting.poke(false.B)
+      dut.io.resolvedAttributes.ordered.poke(false.B)
+      dut.io.resolvedAttributes.executable.poke(false.B)
+      dut.io.resolvedAttributes.supportsAtomic.poke(false.B)
+      dut.io.resolvedAttributes.supportsPartial.poke(true.B)
+      dut.io.memoryRequest.ready.poke(false.B)
+      dut.io.memoryResponse.valid.poke(false.B)
+      dut.io.memoryResponse.bits.txnId.poke(0.U)
+      dut.io.memoryResponse.bits.rdata.poke(0.U)
+      dut.io.memoryResponse.bits.fault.poke(false.B)
+      dut.io.memoryResponse.bits.last.poke(true.B)
+
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.bits.robToken.index.poke(2.U)
+      dut.io.request.bits.robToken.generation.poke(9.U)
+      dut.io.request.bits.producerTag.id.poke(2.U)
+      dut.io.request.bits.producerTag.generation.poke(9.U)
+      dut.io.request.bits.valueRef.id.poke(2.U)
+      dut.io.request.bits.valueRef.generation.poke(9.U)
+      dut.io.request.bits.kind.poke(MemoryOperationKind.Load)
+      dut.io.request.bits.size.poke(MemSize.DWord)
+      dut.io.request.bits.unsigned.poke(false.B)
+      dut.io.request.bits.atomicOp.poke(AtomicOp.None)
+      dut.io.request.bits.base.poke(0x1000.U)
+      dut.io.request.bits.offset.poke(0.U)
+      dut.io.request.bits.storeData.poke(0.U)
+      dut.io.request.bits.rawInst.poke(0x00003003.U)
+      dut.io.request.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+
+      var requestCycles = 0
+      while (!dut.io.memoryRequest.valid.peek().litToBoolean && requestCycles < 16) {
+        dut.clock.step()
+        requestCycles += 1
+      }
+      dut.io.memoryRequest.valid.expect(true.B)
+      val txn = dut.io.memoryRequest.bits.txnId.peek().litValue
+      dut.io.memoryRequest.ready.poke(true.B)
+      dut.clock.step()
+      dut.io.memoryRequest.ready.poke(false.B)
+
+      dut.io.memoryResponse.valid.poke(true.B)
+      dut.io.memoryResponse.bits.txnId.poke(txn.U)
+      dut.io.memoryResponse.bits.rdata.poke(0x1234.U)
+      dut.io.completion.valid.expect(true.B)
+      dut.io.completion.bits.robToken.index.expect(2.U)
+      dut.io.completion.bits.robToken.generation.expect(9.U)
+      dut.io.completion.bits.value.expect(0x1234.U)
+      dut.clock.step()
+
+      // The physical response is gone and its source data changes, but the
+      // held architectural completion must remain exactly the same.
+      dut.io.memoryResponse.valid.poke(false.B)
+      dut.io.memoryResponse.bits.rdata.poke(0xdead.U)
+      for (_ <- 0 until 3) {
+        dut.io.completion.valid.expect(true.B)
+        dut.io.completion.bits.robToken.index.expect(2.U)
+        dut.io.completion.bits.robToken.generation.expect(9.U)
+        dut.io.completion.bits.value.expect(0x1234.U)
+        dut.io.busy.expect(true.B)
+        dut.io.request.ready.expect(false.B)
+        dut.io.memoryResponse.ready.expect(false.B)
+        dut.clock.step()
+      }
+
+      dut.io.completion.ready.poke(true.B)
+      dut.io.completion.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.busy.expect(false.B)
+      dut.io.request.ready.expect(true.B)
     }
   }
 }
