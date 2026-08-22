@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{MachineCsrFile, PmpChecker, PmpConstants}
+import aethercore.core.{MachineCsrFile, PmpChecker, PmpConstants, PmpGeometry}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -31,6 +31,7 @@ class TinyMemoryBackend(
   private val Entries = TinyRobGeometry.Entries
   private val PhysicalBits = config.platform.paddrBits
   private val BusBits = config.platform.busDataBits
+  private val PmpAddressBits = PmpGeometry(xlen, PhysicalBits).encodedAddressBits
 
   require(geometry.xlen == xlen, s"F6 geometry XLEN=${geometry.xlen} does not match core XLEN=$xlen")
   require(
@@ -49,6 +50,13 @@ class TinyMemoryBackend(
     val branchRedirect = Valid(new RecoveryRedirect(xlen))
     val privilegedRedirect = Valid(new PrivilegedRedirect(xlen))
     val currentPrivilege = Output(UInt(2.W))
+    // Read-only architectural context exported for the F7 instruction-side
+    // translation/PMP owner. MachineCsrFile remains the single mutable owner.
+    val frontendSatpTranslationEnabled = Output(Bool())
+    val frontendSatpRootPpn = Output(UInt(geometry.ppnBits.W))
+    val frontendSupervisorMxr = Output(Bool())
+    val frontendPmpConfig = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
+    val frontendPmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt(PmpAddressBits.W)))
     val time = if (isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
 
@@ -135,6 +143,11 @@ class TinyMemoryBackend(
   system.io.csrReadWritable := csrFile.io.readWritable
   system.io.currentPrivilege := csrFile.io.currentPrivilege
   io.currentPrivilege := csrFile.io.currentPrivilege
+  io.frontendSatpTranslationEnabled := csrFile.io.satpTranslationEnabled
+  io.frontendSatpRootPpn := csrFile.io.satpRootPpn
+  io.frontendSupervisorMxr := csrFile.io.supervisorMxr
+  io.frontendPmpConfig := csrFile.io.pmpConfig
+  io.frontendPmpAddress := csrFile.io.pmpAddress
 
   // One-shot oldest-only memory issue. The architectural rs1/rs2 dependency
   // values are materialized only after F2 says the current ROB head is ready.
