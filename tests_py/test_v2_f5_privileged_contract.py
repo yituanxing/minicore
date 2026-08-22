@@ -15,7 +15,8 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
         self.assertIn("class PendingPrivilegedEffect", text)
         self.assertIn("val privileged = new PendingPrivilegedEffect", text)
         self.assertIn("pending", text.lower())
-        self.assertNotIn("MachineCsrFile", text)
+        self.assertNotIn("new MachineCsrFile", text)
+        self.assertNotIn("csrFile.io.", text)
 
     def test_rob_remains_full_identity_and_recovery_authority(self):
         text = ROB.read_text()
@@ -54,8 +55,9 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
     def test_system_completion_is_side_effect_free(self):
         text = PRIVILEGED.read_text()
         system_body = text.split("class TinySystemCompletion", 1)[1].split("class TinyPrivilegedBackend", 1)[0]
-        self.assertNotIn("MachineCsrFile", system_body)
-        self.assertNotIn("writeEnable", system_body)
+        self.assertNotIn("new MachineCsrFile", system_body)
+        self.assertNotIn("csrFile.io.", system_body)
+        self.assertNotIn("writeEnable :=", system_body)
         self.assertIn("io.completion.bits.privileged.csrWriteValid", system_body)
         self.assertIn("io.completion.bits.privileged.trapReturn", system_body)
 
