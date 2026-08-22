@@ -18,6 +18,13 @@ trait V2F7AtomicCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private val DataAddress = BigInt("00000100", 16)
   private val Nop = BigInt("00000013", 16)
 
+  private val AtomicMemCode = AetherMemOp.Atomic.litValue
+  private val ReadMemCode = AetherMemOp.Read.litValue
+  private val LrCode = AtomicOp.Lr.litValue
+  private val ScCode = AtomicOp.Sc.litValue
+  private val AddCode = AtomicOp.Add.litValue
+  private val NoneAtomicCode = AtomicOp.None.litValue
+
   private case class PendingResponse(txnId: BigInt, rdata: BigInt)
 
   private def initialize(dut: TinyPagedCore): Unit = {
@@ -66,7 +73,7 @@ trait V2F7AtomicCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       var externalReservation = false
       var scAttempts = 0
       var pending: Option[PendingResponse] = None
-      val requests = mutable.ArrayBuffer.empty[(AetherMemOp.Type, AtomicOp.Type)]
+      val requests = mutable.ArrayBuffer.empty[(BigInt, BigInt)]
       val commits = mutable.Set.empty[BigInt]
 
       def driveInstruction(): Unit = {
@@ -164,43 +171,41 @@ trait V2F7AtomicCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
         if (requestFire) {
           dut.io.memoryRequest.bits.paddr.expect(DataAddress.U)
           val txn = dut.io.memoryRequest.bits.txnId.peek().litValue
-          val op = dut.io.memoryRequest.bits.op.peekValue()
-          val atomic = dut.io.memoryRequest.bits.atomicOp.peekValue()
-          requests += ((op, atomic))
+          val opCode = dut.io.memoryRequest.bits.op.peek().litValue
+          val atomicCode = dut.io.memoryRequest.bits.atomicOp.peek().litValue
+          requests += ((opCode, atomicCode))
 
-          op match {
-            case AetherMemOp.Atomic =>
-              atomic match {
-                case AtomicOp.Lr =>
-                  dut.io.memoryRequest.bits.wmask.expect(0.U)
-                  externalReservation = true
-                  newResponse = Some(PendingResponse(txn, memoryValue))
-                case AtomicOp.Sc =>
-                  dut.io.memoryRequest.bits.wmask.expect("hf".U)
-                  val succeed = externalReservation && scAttempts == 0
-                  if (succeed) {
-                    memoryValue = dut.io.memoryRequest.bits.wdata.peek().litValue & BigInt("ffffffff", 16)
-                    newResponse = Some(PendingResponse(txn, 0))
-                  } else {
-                    newResponse = Some(PendingResponse(txn, 1))
-                  }
-                  scAttempts += 1
-                  externalReservation = false
-                case AtomicOp.Add =>
-                  dut.io.memoryRequest.bits.wmask.expect("hf".U)
-                  val old = memoryValue
-                  val operand = dut.io.memoryRequest.bits.wdata.peek().litValue & BigInt("ffffffff", 16)
-                  memoryValue = (old + operand) & BigInt("ffffffff", 16)
-                  externalReservation = false
-                  newResponse = Some(PendingResponse(txn, old))
-                case other =>
-                  fail(s"unexpected atomic operation in real stream: $other")
-              }
-            case AetherMemOp.Read =>
-              dut.io.memoryRequest.bits.atomicOp.expect(AtomicOp.None)
+          if (opCode == AtomicMemCode) {
+            if (atomicCode == LrCode) {
+              dut.io.memoryRequest.bits.wmask.expect(0.U)
+              externalReservation = true
               newResponse = Some(PendingResponse(txn, memoryValue))
-            case other =>
-              fail(s"unexpected physical memory operation in real stream: $other")
+            } else if (atomicCode == ScCode) {
+              dut.io.memoryRequest.bits.wmask.expect("hf".U)
+              val succeed = externalReservation && scAttempts == 0
+              if (succeed) {
+                memoryValue = dut.io.memoryRequest.bits.wdata.peek().litValue & BigInt("ffffffff", 16)
+                newResponse = Some(PendingResponse(txn, 0))
+              } else {
+                newResponse = Some(PendingResponse(txn, 1))
+              }
+              scAttempts += 1
+              externalReservation = false
+            } else if (atomicCode == AddCode) {
+              dut.io.memoryRequest.bits.wmask.expect("hf".U)
+              val old = memoryValue
+              val operand = dut.io.memoryRequest.bits.wdata.peek().litValue & BigInt("ffffffff", 16)
+              memoryValue = (old + operand) & BigInt("ffffffff", 16)
+              externalReservation = false
+              newResponse = Some(PendingResponse(txn, old))
+            } else {
+              fail(s"unexpected atomic operation code in real stream: $atomicCode")
+            }
+          } else if (opCode == ReadMemCode) {
+            atomicCode shouldBe NoneAtomicCode
+            newResponse = Some(PendingResponse(txn, memoryValue))
+          } else {
+            fail(s"unexpected physical memory operation code in real stream: $opCode")
           }
         }
 
@@ -231,12 +236,12 @@ trait V2F7AtomicCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       scAttempts shouldBe 2
 
       val expectedRequests = Seq(
-        (AetherMemOp.Atomic, AtomicOp.Lr),
-        (AetherMemOp.Atomic, AtomicOp.Sc),
-        (AetherMemOp.Atomic, AtomicOp.Add),
-        (AetherMemOp.Atomic, AtomicOp.Lr),
-        (AetherMemOp.Atomic, AtomicOp.Sc),
-        (AetherMemOp.Read, AtomicOp.None)
+        (AtomicMemCode, LrCode),
+        (AtomicMemCode, ScCode),
+        (AtomicMemCode, AddCode),
+        (AtomicMemCode, LrCode),
+        (AtomicMemCode, ScCode),
+        (ReadMemCode, NoneAtomicCode)
       )
       requests.toSeq shouldBe expectedRequests
     }
