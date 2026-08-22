@@ -1,2 +1,2 @@
-run=2
-reason=Final F7 software-parity candidate; run real PID1 UART/STIP/SEIP proof on the same exact head as the formal Linux clocksource/STIP gate
+run=3
+reason=Rerun unchanged Linux PID1 UART/STIP/SEIP proof with the measured oldest-only F7 cycle budget; correctness gates remain unchanged
