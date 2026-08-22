@@ -50,3 +50,4 @@ class V2F6BlockingLsuSpec
     with V2F6VirtualMemoryChecks
     with V2F6Sv32MemoryChecks
     with V2F6SfenceChecks
+    with V2F6MemoryClosureChecks
