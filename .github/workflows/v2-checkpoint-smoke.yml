@@ -1,0 +1,92 @@
+name: V2 Checkpoint Forkserver Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - diag/v2-f7-pid1-checkpoint
+    paths:
+      - 'sim/v2_checkpoint_forkserver_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'Makefile.v2-checkpoint'
+      - '.github/workflows/v2-checkpoint-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-checkpoint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile v2 checkpoint forkserver
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Validate fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Compile checkpoint model and host harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.v2-checkpoint \
+            BUILD_DIR="$RUNNER_TEMP/v2-checkpoint" \
+            JOBS="$(nproc)" \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            sim
+          test -x "$RUNNER_TEMP/v2-checkpoint/obj/VAetherCoreV2OpenSbiRV64SimTop"
+
+      - name: Upload compile evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-checkpoint-smoke-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/v2-checkpoint/logs/rtl-build.log
+            ${{ runner.temp }}/v2-checkpoint/logs/verilator-build.log
