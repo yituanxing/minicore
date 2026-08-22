@@ -101,7 +101,8 @@ jobs:
           ./mill aethercore.test.testOnly \
             aethercore.V2F7SemanticDecodeSpec \
             aethercore.V2F7BareCoreSpec \
-            aethercore.V2F7PagedCoreSpec
+            aethercore.V2F7PagedCoreSpec \
+            aethercore.V2F7AsyncInterruptSpec
 
       - name: Save validated F7 Mill output accelerator
         if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'
