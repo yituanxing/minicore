@@ -71,6 +71,12 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
     Cat(0.U((xlen - 32).W), decoded.rawInst)
   }
 
+  private def markIllegalInstruction(): Unit = {
+    io.completion.bits.exception.valid := true.B
+    io.completion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
+    io.completion.bits.exception.value := instructionTrapValue
+  }
+
   private val csrImmediate = decoded.system.csrImmediate.pad(xlen)
   private val csrOperand = Mux(decoded.system.csrUseImmediate, csrImmediate, io.headRs1.value)
   private val csrSourceFieldNonZero = Mux(
@@ -110,62 +116,64 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
       io.currentPrivilege >= PrivilegeMode.Supervisor.U
   private val xretLegal = machineReturnLegal || supervisorReturnLegal
 
-  private val supportedSystem =
+  private val implementedSystem =
     systemKind === SystemOperationKind.Csr ||
       systemKind === SystemOperationKind.Ecall ||
       systemKind === SystemOperationKind.Ebreak ||
       systemKind === SystemOperationKind.Xret ||
       systemKind === SystemOperationKind.Fence ||
-      systemKind === SystemOperationKind.FenceI
+      (systemKind === SystemOperationKind.FenceI && isa.hasZifencei.B)
 
   // A predecoded exception is already an architectural semantic fact and must
   // not wait for a source value that the faulting instruction will never use.
   when(headRecordReady && hasPredecodedException) {
     io.completion.valid := true.B
     io.completion.bits.exception := decoded.exception
-  }.elsewhen(operandsReady && isSystemHead && supportedSystem) {
+  }.elsewhen(operandsReady && isSystemHead) {
+    // A deferred or unavailable system operation must fail closed instead of
+    // leaving the oldest ROB entry permanently incomplete.
     io.completion.valid := true.B
-
-    switch(systemKind) {
-      is(SystemOperationKind.Csr) {
-        when(csrLegal && decoded.system.csrOp =/= CsrOp.None) {
-          io.completion.bits.hasValue := io.head.bits.producesValue
-          io.completion.bits.value := io.csrReadData
-          io.completion.bits.privileged.csrWriteValid := csrWriteIntent
-          io.completion.bits.privileged.csrAddress := decoded.system.csrAddress
-          io.completion.bits.privileged.csrWriteData := csrWriteData
-        }.otherwise {
-          io.completion.bits.exception.valid := true.B
-          io.completion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
-          io.completion.bits.exception.value := instructionTrapValue
+    when(!implementedSystem) {
+      markIllegalInstruction()
+    }.otherwise {
+      switch(systemKind) {
+        is(SystemOperationKind.Csr) {
+          when(csrLegal && decoded.system.csrOp =/= CsrOp.None) {
+            io.completion.bits.hasValue := io.head.bits.producesValue
+            io.completion.bits.value := io.csrReadData
+            io.completion.bits.privileged.csrWriteValid := csrWriteIntent
+            io.completion.bits.privileged.csrAddress := decoded.system.csrAddress
+            io.completion.bits.privileged.csrWriteData := csrWriteData
+          }.otherwise {
+            markIllegalInstruction()
+          }
         }
-      }
-      is(SystemOperationKind.Ecall) {
-        io.completion.bits.exception.valid := true.B
-        io.completion.bits.exception.cause := environmentCallCause
-        io.completion.bits.exception.value := 0.U
-      }
-      is(SystemOperationKind.Ebreak) {
-        io.completion.bits.exception.valid := true.B
-        io.completion.bits.exception.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
-        io.completion.bits.exception.value := decoded.pc
-      }
-      is(SystemOperationKind.Xret) {
-        when(xretLegal) {
-          io.completion.bits.privileged.trapReturn := true.B
-          io.completion.bits.privileged.trapReturnSupervisor :=
-            decoded.system.xret === XRetOp.Supervisor
-        }.otherwise {
+        is(SystemOperationKind.Ecall) {
           io.completion.bits.exception.valid := true.B
-          io.completion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
-          io.completion.bits.exception.value := instructionTrapValue
+          io.completion.bits.exception.cause := environmentCallCause
+          io.completion.bits.exception.value := 0.U
         }
+        is(SystemOperationKind.Ebreak) {
+          io.completion.bits.exception.valid := true.B
+          io.completion.bits.exception.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
+          io.completion.bits.exception.value := decoded.pc
+        }
+        is(SystemOperationKind.Xret) {
+          when(xretLegal) {
+            io.completion.bits.privileged.trapReturn := true.B
+            io.completion.bits.privileged.trapReturnSupervisor :=
+              decoded.system.xret === XRetOp.Supervisor
+          }.otherwise {
+            markIllegalInstruction()
+          }
+        }
+        // With strict-oldest issue and no caches in the v2 bring-up backend,
+        // FENCE/FENCE.I are conservative serialized no-ops. FENCE.I reaches
+        // this case only when Zifencei is present. SFENCE.VMA and WFI fail
+        // closed above until their owning phases arrive.
+        is(SystemOperationKind.Fence)  { }
+        is(SystemOperationKind.FenceI) { }
       }
-      // With strict-oldest issue and no caches in the v2 bring-up backend,
-      // FENCE/FENCE.I are conservative serialized no-ops. SFENCE.VMA and WFI
-      // remain deliberately unsupported until their owning phases arrive.
-      is(SystemOperationKind.Fence)  { }
-      is(SystemOperationKind.FenceI) { }
     }
   }
 }
