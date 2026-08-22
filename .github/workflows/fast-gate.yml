@@ -18,6 +18,8 @@ jobs:
     outputs:
       run_v2: ${{ steps.changes.outputs.run_v2 }}
       run_v2_history: ${{ steps.changes.outputs.run_v2_history }}
+      run_v2_f5: ${{ steps.changes.outputs.run_v2_f5 }}
+      run_v2_f6: ${{ steps.changes.outputs.run_v2_f6 }}
       run_legacy_chisel: ${{ steps.changes.outputs.run_legacy_chisel }}
       run_smode_v1: ${{ steps.changes.outputs.run_smode_v1 }}
       run_freertos: ${{ steps.changes.outputs.run_freertos }}
@@ -49,6 +51,8 @@ jobs:
 
           run_v2=false
           run_v2_history=false
+          run_v2_f5=false
+          run_v2_f6=false
           run_legacy_chisel=false
           run_smode_v1=false
           run_freertos=false
@@ -58,11 +62,24 @@ jobs:
             run_v2=true
           fi
 
+          # Current stage ownership is explicit so F6 edits do not replay the
+          # already-frozen privileged suite, and vice versa.
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/TinyPrivileged\.scala$|src/test/scala/aethercore/V2F5[^/]*\.scala$)' <<<"$changed"; then
+            run_v2=true
+            run_v2_f5=true
+          fi
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/TinyBlockingLsu\.scala$|src/test/scala/aethercore/V2F6[^/]*\.scala$)' <<<"$changed"; then
+            run_v2=true
+            run_v2_f6=true
+          fi
+
           # Re-run inherited F1-F4 only when their actual ownership surfaces or
-          # direct stage tests move. Frontier F5/F6 work should not pay this tax.
+          # direct stage tests move. Changes there can feed both current stages.
           if grep -Eq '^(src/main/scala/aethercore/core/v2/(FoundationTypes|TinyRobCommit|TinyDependency|TinyExecution|TinyRecovery)\.scala$|src/test/scala/aethercore/V2F[1-4][^/]*\.scala$|src/test/scala/aethercore/V2FoundationTypesSpec\.scala$)' <<<"$changed"; then
             run_v2=true
             run_v2_history=true
+            run_v2_f5=true
+            run_v2_f6=true
           fi
 
           # Build/test infrastructure and the shared width smoke exercise both
@@ -81,6 +98,9 @@ jobs:
           )"
           if [[ -n "$shared_scala" ]]; then
             run_v2=true
+            run_v2_history=true
+            run_v2_f5=true
+            run_v2_f6=true
             run_legacy_chisel=true
             run_smode_v1=true
             run_freertos=true
@@ -102,6 +122,8 @@ jobs:
           echo "classified_base=${classified_base}" >> "$GITHUB_OUTPUT"
           echo "run_v2=$run_v2" >> "$GITHUB_OUTPUT"
           echo "run_v2_history=$run_v2_history" >> "$GITHUB_OUTPUT"
+          echo "run_v2_f5=$run_v2_f5" >> "$GITHUB_OUTPUT"
+          echo "run_v2_f6=$run_v2_f6" >> "$GITHUB_OUTPUT"
           echo "run_legacy_chisel=$run_legacy_chisel" >> "$GITHUB_OUTPUT"
           echo "run_smode_v1=$run_smode_v1" >> "$GITHUB_OUTPUT"
           echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
@@ -192,21 +214,33 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run v2 frontier Chisel checks
+      - name: Run v2 stage-local Chisel checks
         shell: bash
         run: |
           set -euo pipefail
-          tests=(
-            aethercore.V2FoundationTypesSpec
-            aethercore.V2F5PrivilegedSpec
-            aethercore.V2F6BlockingLsuSpec
-          )
+          tests=()
           if [[ "${{ needs.classify.outputs.run_v2_history }}" == "true" ]]; then
             tests+=(
+              aethercore.V2FoundationTypesSpec
               aethercore.V2F1RobCommitSpec
               aethercore.V2F2DependencySpec
               aethercore.V2F3ExecutionSpec
               aethercore.V2F4RecoverySpec
+            )
+          fi
+          if [[ "${{ needs.classify.outputs.run_v2_f5 }}" == "true" ]]; then
+            tests+=(aethercore.V2F5PrivilegedSpec)
+          fi
+          if [[ "${{ needs.classify.outputs.run_v2_f6 }}" == "true" ]]; then
+            tests+=(aethercore.V2F6BlockingLsuSpec)
+          fi
+          if [[ "${#tests[@]}" -eq 0 ]]; then
+            # Unknown/new v2 or CI-infrastructure edits get a conservative
+            # frontier fallback rather than silently compiling without tests.
+            tests=(
+              aethercore.V2FoundationTypesSpec
+              aethercore.V2F5PrivilegedSpec
+              aethercore.V2F6BlockingLsuSpec
             )
           fi
           printf 'v2_test=%s\n' "${tests[@]}"
@@ -220,8 +254,9 @@ jobs:
             echo '## AetherCore v2 development gate'
             echo
             echo "- head: \`${{ github.event.pull_request.head.sha || github.sha }}\`"
-            echo '- default scope: v2 foundation plus current F5/F6 frontier checks'
-            echo "- inherited F1-F4 checks selected: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo "- inherited F1-F4 selected: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo "- F5 privileged selected: \`${{ needs.classify.outputs.run_v2_f5 }}\`"
+            echo "- F6 memory selected: \`${{ needs.classify.outputs.run_v2_f6 }}\`"
             echo '- pure-v2 lane uses the stock hosted image and does not apt-provision on every commit'
             echo '- hosted Mill daemon remains enabled; WSL-only no-daemon workaround is not applied'
             echo '- Supervisor, FreeRTOS and exact DiffTest are intentionally outside the pure-v2 edit loop'
@@ -502,12 +537,14 @@ jobs:
             echo "- head: \`${{ github.event.pull_request.head.sha || github.sha }}\`"
             echo "- classified base: \`${{ needs.classify.outputs.classified_base }}\`"
             echo "- v2 development lane: \`${{ needs.classify.outputs.run_v2 }}\`"
-            echo "- inherited v2 F1-F4 lane: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo "- inherited v2 F1-F4: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo "- v2 F5 privileged: \`${{ needs.classify.outputs.run_v2_f5 }}\`"
+            echo "- v2 F6 memory: \`${{ needs.classify.outputs.run_v2_f6 }}\`"
             echo "- legacy/shared Chisel lane: \`${{ needs.classify.outputs.run_legacy_chisel }}\`"
             echo "- Supervisor V1 lane: \`${{ needs.classify.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS lane: \`${{ needs.classify.outputs.run_freertos }}\`"
             echo '- pure v2 edits no longer pay Supervisor/FreeRTOS/DiffTest latency'
-            echo '- frontier F5/F6 edits no longer replay frozen F1-F4 unless their ownership surfaces move'
+            echo '- stage-local v2 edits run only their owning stage unless shared ownership moves'
             echo '- source contracts and the shared Verilator producer start in parallel after classification'
             echo '- Full Gate remains the complete freeze/milestone qualification surface'
           } >> "$GITHUB_STEP_SUMMARY"
