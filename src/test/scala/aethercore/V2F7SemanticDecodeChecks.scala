@@ -153,11 +153,17 @@ trait V2F7SemanticDecodeChecks { this: AnyFlatSpec with Matchers with ChiselSim 
       dut.io.dispatch.decoded.system.xret.expect(XRetOp.Supervisor)
 
       // SFENCE.VMA x1,x2 is recognized as a translation fence even though the
-      // legacy Decoder intentionally leaves it to the VM/privileged layer.
+      // legacy Decoder intentionally leaves it to the VM/privileged layer. Its
+      // rs1/rs2 operand dependencies remain explicit even while F6 currently
+      // implements the conservative whole-TLB flush form.
       drive(dut, pc + 24, BigInt("12208073", 16))
       dut.io.dispatch.executionClass.expect(ExecutionClass.System)
       dut.io.dispatch.decoded.system.kind.expect(SystemOperationKind.SfenceVma)
       dut.io.dispatch.decoded.ordering.expect(OrderingClass.TranslationFence)
+      dut.io.dispatch.decoded.rs1.expect(1.U)
+      dut.io.dispatch.decoded.rs2.expect(2.U)
+      dut.io.dispatch.decoded.usesRs1.expect(true.B)
+      dut.io.dispatch.decoded.usesRs2.expect(true.B)
       dut.io.dispatch.decoded.exception.valid.expect(false.B)
 
       drive(dut, pc + 28, BigInt("0000000f", 16))
