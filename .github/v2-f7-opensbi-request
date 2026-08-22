@@ -1,4 +1,4 @@
 AetherCore v2 F7 OpenSBI exact-head milestone request.
 
-request_revision=5
-reason=explicit OpenSBI first-exec migrated to GitHub-hosted with pinned caches
+request_revision=6
+reason=rerun unchanged OpenSBI after current-head scoped issue-latch fix and exact 16-instruction token-wrap regression
