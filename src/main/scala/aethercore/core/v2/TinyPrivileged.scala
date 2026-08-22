@@ -191,6 +191,7 @@ class TinyPrivilegedBackend(val config: CoreConfig) extends Module {
     val branchRedirect = Valid(new RecoveryRedirect(xlen))
     val privilegedRedirect = Valid(new PrivilegedRedirect(xlen))
     val currentPrivilege = Output(UInt(2.W))
+    val time = if (isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
     val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
   })
 
@@ -267,7 +268,9 @@ class TinyPrivilegedBackend(val config: CoreConfig) extends Module {
   csrFile.io.writeData := retiring.bits.privileged.csrWriteData
   csrFile.io.timerInterrupt := false.B
   if (isa.hasTimeCounter) {
-    csrFile.io.time.get := 0.U
+    // F5 exposes the architectural counter source only. Interrupt take remains
+    // deliberately deferred and timerInterrupt stays tied off above.
+    csrFile.io.time.get := io.time.get
   }
   csrFile.io.trapEnter := trapAtRetire
   csrFile.io.trapPc := retiring.bits.uop.decoded.pc
