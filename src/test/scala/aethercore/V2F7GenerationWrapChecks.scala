@@ -4,16 +4,19 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import aethercore.common.{AluOp, BranchType}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
-import aethercore.core.v2.TinyBareCore
+import aethercore.core.v2._
 import aethercore.memory.AetherMemOp
 
-/** Regression for the real OpenSBI fdt_size_cells() frontier.
+/** Regressions derived from the real OpenSBI fdt_size_cells() frontier.
   *
-  * A four-entry ROB with a two-bit generation repeats the same RobToken after
-  * sixteen retired instructions. The once-only memory issue latch must be
-  * scoped to the observed head lifetime, not to an indefinitely remembered
-  * numeric token.
+  * F7 exposed an important lifetime rule: RobToken is a bounded discriminator,
+  * not a globally unique instruction number. Once-only issue state must be
+  * scoped to the currently observed head lifetime. A8 widens generation so the
+  * old 16-instruction numeric alias is no longer the implementation boundary;
+  * the direct issue test below therefore protects the semantic rule without
+  * depending on a particular generation width.
   */
 trait V2F7GenerationWrapChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private val Config = CoreProfiles.rv64imsuSv39PmpSoftware
@@ -23,7 +26,7 @@ trait V2F7GenerationWrapChecks { this: AnyFlatSpec with Matchers with ChiselSim 
 
   behavior of "AetherCore v2 bounded-generation issue ownership"
 
-  it should "reissue a new load whose RobToken numerically repeats sixteen instructions later" in {
+  it should "reissue a later load while the ROB head stays continuously occupied" in {
     simulate(new TinyBareCore(Config, PageTableGeometry.Sv39)) { dut =>
       dut.io.imem.inst.poke(Nop.U)
       dut.io.imem.fault.poke(false.B)
@@ -47,8 +50,10 @@ trait V2F7GenerationWrapChecks { this: AnyFlatSpec with Matchers with ChiselSim 
       dut.io.memoryResponse.bits.fault.poke(false.B)
       dut.io.memoryResponse.bits.last.poke(true.B)
 
-      // First load at instruction index 1. The second load is exactly sixteen
-      // instructions later, so its 4-entry/2-bit-generation RobToken repeats.
+      // Keep the original software-shaped frontier: two loads separated by
+      // sixteen instructions while the tiny ROB never naturally becomes empty.
+      // The direct issue regression below, rather than this program distance,
+      // now protects numeric-token reuse independently of GenerationBits.
       val program = (0 until 18).map { index =>
         val inst = index match {
           case 0  => BigInt("10000093", 16) // addi x1,x0,0x100
@@ -70,9 +75,6 @@ trait V2F7GenerationWrapChecks { this: AnyFlatSpec with Matchers with ChiselSim 
         val fetchAddress = dut.io.imem.addr.peek().litValue
         dut.io.imem.inst.poke(program.getOrElse(fetchAddress, Nop).U)
 
-        // Delay the first response long enough to fill the tiny ROB. This keeps
-        // head.valid continuously asserted across the 16-instruction interval,
-        // reproducing the software condition that exposed the stale latch.
         val mayRespond = pendingTxn.nonEmpty &&
           (reads > 1 || cycles - firstRequestCycle >= 5)
         if (mayRespond) {
@@ -123,13 +125,73 @@ trait V2F7GenerationWrapChecks { this: AnyFlatSpec with Matchers with ChiselSim 
         }
       }
 
-      withClue("the test accidentally allowed head.valid to become empty, masking the original bug: ") {
+      withClue("the test accidentally allowed head.valid to become empty, masking the software-shaped frontier: ") {
         sawEmptyAfterFirstRequest shouldBe false
       }
-      withClue("the numerically repeated RobToken was incorrectly suppressed as already-issued: ") {
+      withClue("the later load was incorrectly suppressed by stale once-only issue state: ") {
         secondLoadCommitted shouldBe true
       }
       reads shouldBe 2
+    }
+  }
+
+  it should "scope once-only issue state to an observed head lifetime rather than numeric token history" in {
+    simulate(new TinyOldestIssue(64)) { dut =>
+      def pokeHead(index: Int, generation: Int, pc: BigInt): Unit = {
+        dut.io.head.valid.poke(true.B)
+        dut.io.head.bits.executionClass.poke(ExecutionClass.Integer)
+        dut.io.head.bits.robToken.index.poke(index.U)
+        dut.io.head.bits.robToken.generation.poke(generation.U)
+        dut.io.head.bits.producerTag.id.poke(index.U)
+        dut.io.head.bits.producerTag.generation.poke(generation.U)
+        dut.io.head.bits.valueRef.id.poke(index.U)
+        dut.io.head.bits.valueRef.generation.poke(generation.U)
+        dut.io.head.bits.decoded.aluOp.poke(AluOp.Add)
+        dut.io.head.bits.decoded.wordOp.poke(false.B)
+        dut.io.head.bits.decoded.lhsSource.poke(OperandSourceKind.Zero)
+        dut.io.head.bits.decoded.rhsSource.poke(OperandSourceKind.Immediate)
+        dut.io.head.bits.decoded.pc.poke(pc.U)
+        dut.io.head.bits.decoded.instBytes.poke(4.U)
+        dut.io.head.bits.decoded.immediate.poke(1.U)
+        dut.io.head.bits.decoded.controlFlow.kind.poke(ControlFlowKind.None)
+        dut.io.head.bits.decoded.controlFlow.branchType.poke(BranchType.None)
+      }
+
+      dut.io.headDependenciesValid.poke(true.B)
+      dut.io.headOperandsReady.poke(true.B)
+      dut.io.headRs1.ready.poke(true.B)
+      dut.io.headRs1.value.poke(0.U)
+      dut.io.headRs1.producerTag.id.poke(0.U)
+      dut.io.headRs1.producerTag.generation.poke(0.U)
+      dut.io.headRs2.ready.poke(true.B)
+      dut.io.headRs2.value.poke(0.U)
+      dut.io.headRs2.producerTag.id.poke(0.U)
+      dut.io.headRs2.producerTag.generation.poke(0.U)
+
+      // Lifetime A fires once and becomes the remembered issued token.
+      pokeHead(index = 0, generation = 7, pc = BigInt("92000000", 16))
+      dut.io.request.ready.poke(true.B)
+      dut.io.request.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.request.valid.expect(false.B)
+
+      // Observe a different head lifetime B but backpressure its request. The
+      // old A latch must clear solely because the observed lifetime changed.
+      pokeHead(index = 1, generation = 9, pc = BigInt("92000004", 16))
+      dut.io.request.ready.poke(false.B)
+      dut.io.request.valid.expect(true.B)
+      dut.clock.step()
+
+      // Reuse the exact same *numeric* identity as A. This models a later wrap
+      // without requiring 256 per-slot reuses in a unit test. It must be
+      // eligible because B proved that A's observed lifetime had ended.
+      pokeHead(index = 0, generation = 7, pc = BigInt("92000400", 16))
+      dut.io.request.ready.poke(true.B)
+      dut.io.request.valid.expect(true.B)
+      dut.io.request.bits.robToken.index.expect(0.U)
+      dut.io.request.bits.robToken.generation.expect(7.U)
+      dut.clock.step()
+      dut.io.request.valid.expect(false.B)
     }
   }
 }
