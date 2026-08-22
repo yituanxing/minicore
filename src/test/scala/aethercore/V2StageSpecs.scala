@@ -81,3 +81,9 @@ class V2F7AtomicLsuSpec
     with Matchers
     with ChiselSim
     with V2F7AtomicLsuChecks
+
+class V2F7AtomicCoreSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7AtomicCoreChecks
