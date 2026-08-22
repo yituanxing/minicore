@@ -132,7 +132,7 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
   // One-entry transport register. The LSU allocates transaction identity; this
   // shell merely retains it until RAM/MMIO returns exactly one final response.
   val pendingValid = RegInit(false.B)
-  val pending = Reg(new AetherMemRequest(paddrBits, busDataBits, txnIdBits))
+  val pending = RegInit(0.U.asTypeOf(new AetherMemRequest(paddrBits, busDataBits, txnIdBits)))
   core.io.memoryRequest.ready := !pendingValid
   when(core.io.memoryRequest.fire) {
     pending := core.io.memoryRequest.bits
@@ -241,10 +241,15 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
 
   when(responseFire && pendingUart && pendingWrite) {
     switch(uartOffset(2, 0)) {
-      is(0.U) { when(uartDlab) { uartDll := pending.wdata(7, 0) } }
+      is(0.U) {
+        when(uartDlab) { uartDll := pending.wdata(7, 0) }
+      }
       is(1.U) {
-        when(uartDlab) { uartDlm := pending.wdata(7, 0) }
-          .otherwise { uartIer := pending.wdata(7, 0) }
+        when(uartDlab) {
+          uartDlm := pending.wdata(7, 0)
+        }.otherwise {
+          uartIer := pending.wdata(7, 0)
+        }
       }
       is(3.U) { uartLcr := pending.wdata(7, 0) }
       is(4.U) { uartMcr := pending.wdata(7, 0) }
