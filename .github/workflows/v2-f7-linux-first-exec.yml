@@ -1,0 +1,220 @@
+name: AetherCore V2 F7 Linux First Execution
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/aethercore-v2-f7-software-parity
+    paths:
+      - '.github/v2-f7-linux-request'
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: aethercore-v2-f7-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  announce:
+    name: Publish exact-head Linux status
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      STATUS_CONTEXT: AetherCore V2 F7 Linux First Execution
+    steps:
+      - name: Publish pending exact-head status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Pinned Linux 6.6.143 early boot queued/running on F7 v2\",\"target_url\":\"$target_url\"}"
+
+  first-exec:
+    name: Unchanged Linux 6.6.143 early boot on F7 v2 RV64
+    needs: announce
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      STATUS_CONTEXT: AetherCore V2 F7 Linux First Execution
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact head and install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]]
+          chmod +x ./mill tools/ensure_verilator_5_024.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh tools/ci/rv64_linux_early_build.sh
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential pkg-config curl xz-utils git \
+            python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+          root="$RUNNER_TEMP/aethercore-v2-f7-linux"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+          echo "exact_head=$actual"
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore previous v2 Mill output accelerator
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-f7-linux/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-linux-millout-v1-${{ github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-opensbi-millout-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore pinned RV64 Linux GCC cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore qualified RV64 Linux/OpenSBI cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Validate fixed tools and Linux build contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash -n tools/ci/rv64_linux_early_build.sh
+          python3 -m py_compile tools/ci/make_l32_dtb.py
+
+      - name: Build or reuse unchanged Linux 6.6.143 plus OpenSBI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+
+      - name: Execute Linux early boot through F7 v2 core
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$RUNNER_TEMP/aethercore-v2-f7-linux/sim" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=120000000 \
+            MILESTONE='Linux version 6.6.143' \
+            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            PROGRESS_INTERVAL_CYCLES=5000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+
+      - name: Publish successful exact-head status
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Linux 6.6.143 early banner reached on F7 v2\",\"target_url\":\"$target_url\"}"
+
+      - name: Publish failed exact-head status
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"F7 v2 Linux first-exec failed; inspect exact frontier\",\"target_url\":\"$target_url\"}"
+
+      - name: Upload Linux first-exec evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-f7-linux-first-exec-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            build/rv64-linux-early/opensbi-linux-build.log
+            ${{ runner.temp }}/aethercore-v2-f7-linux/sim/logs/boot-probe.log
+            ${{ runner.temp }}/aethercore-v2-f7-linux/sim/firmware.sha256
+
+      - name: Write Linux frontier summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore v2 F7 Linux first execution'
+            echo
+            echo "- exact head: \`$TARGET_SHA\`"
+            echo '- unchanged software: Linux 6.6.143 + pinned OpenSBI 1.6'
+            echo '- first milestone: `Linux version 6.6.143` only; no PID1/interrupt qualification yet'
+            echo '- top: `AetherCoreV2OpenSbiRV64SimTop`'
+            echo '- runtime budget: 120,000,000 cycles'
+          } >> "$GITHUB_STEP_SUMMARY"
