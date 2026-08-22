@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       run_v2: ${{ steps.changes.outputs.run_v2 }}
+      run_v2_history: ${{ steps.changes.outputs.run_v2_history }}
       run_legacy_chisel: ${{ steps.changes.outputs.run_legacy_chisel }}
       run_smode_v1: ${{ steps.changes.outputs.run_smode_v1 }}
       run_freertos: ${{ steps.changes.outputs.run_freertos }}
@@ -47,6 +48,7 @@ jobs:
           printf '%s\n' "$changed"
 
           run_v2=false
+          run_v2_history=false
           run_legacy_chisel=false
           run_smode_v1=false
           run_freertos=false
@@ -54,6 +56,13 @@ jobs:
           # Pure v2 implementation/tests get the short development lane only.
           if grep -Eq '^(src/main/scala/aethercore/core/v2/|src/test/scala/aethercore/V2[^/]*\.scala$)' <<<"$changed"; then
             run_v2=true
+          fi
+
+          # Re-run inherited F1-F4 only when their actual ownership surfaces or
+          # direct stage tests move. Frontier F5/F6 work should not pay this tax.
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/(FoundationTypes|TinyRobCommit|TinyDependency|TinyExecution|TinyRecovery)\.scala$|src/test/scala/aethercore/V2F[1-4][^/]*\.scala$|src/test/scala/aethercore/V2FoundationTypesSpec\.scala$)' <<<"$changed"; then
+            run_v2=true
+            run_v2_history=true
           fi
 
           # Build/test infrastructure and the shared width smoke exercise both
@@ -92,6 +101,7 @@ jobs:
 
           echo "classified_base=${classified_base}" >> "$GITHUB_OUTPUT"
           echo "run_v2=$run_v2" >> "$GITHUB_OUTPUT"
+          echo "run_v2_history=$run_v2_history" >> "$GITHUB_OUTPUT"
           echo "run_legacy_chisel=$run_legacy_chisel" >> "$GITHUB_OUTPUT"
           echo "run_smode_v1=$run_smode_v1" >> "$GITHUB_OUTPUT"
           echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
@@ -137,7 +147,7 @@ jobs:
     needs: [classify, verilator-tool]
     if: needs.classify.outputs.run_v2 == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 12
     env:
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
       AETHERCORE_TOOLCHAIN_JOBS: "4"
@@ -147,15 +157,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
-
-      - name: Install v2 hosted prerequisites
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            autoconf cmake ninja-build libfl-dev zlib1g-dev \
-            build-essential git curl openjdk-17-jdk-headless
 
       - name: Restore Scala dependency cache
         id: scala-cache
@@ -191,17 +192,25 @@ jobs:
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
 
-      - name: Run v2 stage-local Chisel checks
+      - name: Run v2 frontier Chisel checks
         shell: bash
         run: |
-          ./mill aethercore.test.testOnly \
-            aethercore.V2FoundationTypesSpec \
-            aethercore.V2F1RobCommitSpec \
-            aethercore.V2F2DependencySpec \
-            aethercore.V2F3ExecutionSpec \
-            aethercore.V2F4RecoverySpec \
-            aethercore.V2F5PrivilegedSpec \
+          set -euo pipefail
+          tests=(
+            aethercore.V2FoundationTypesSpec
+            aethercore.V2F5PrivilegedSpec
             aethercore.V2F6BlockingLsuSpec
+          )
+          if [[ "${{ needs.classify.outputs.run_v2_history }}" == "true" ]]; then
+            tests+=(
+              aethercore.V2F1RobCommitSpec
+              aethercore.V2F2DependencySpec
+              aethercore.V2F3ExecutionSpec
+              aethercore.V2F4RecoverySpec
+            )
+          fi
+          printf 'v2_test=%s\n' "${tests[@]}"
+          ./mill aethercore.test.testOnly "${tests[@]}"
 
       - name: Write v2 development summary
         if: always()
@@ -211,7 +220,9 @@ jobs:
             echo '## AetherCore v2 development gate'
             echo
             echo "- head: \`${{ github.event.pull_request.head.sha || github.sha }}\`"
-            echo '- scope: v2 foundation plus F1-F6 stage-local checks only'
+            echo '- default scope: v2 foundation plus current F5/F6 frontier checks'
+            echo "- inherited F1-F4 checks selected: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo '- pure-v2 lane uses the stock hosted image and does not apt-provision on every commit'
             echo '- hosted Mill daemon remains enabled; WSL-only no-daemon workaround is not applied'
             echo '- Supervisor, FreeRTOS and exact DiffTest are intentionally outside the pure-v2 edit loop'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -491,10 +502,12 @@ jobs:
             echo "- head: \`${{ github.event.pull_request.head.sha || github.sha }}\`"
             echo "- classified base: \`${{ needs.classify.outputs.classified_base }}\`"
             echo "- v2 development lane: \`${{ needs.classify.outputs.run_v2 }}\`"
+            echo "- inherited v2 F1-F4 lane: \`${{ needs.classify.outputs.run_v2_history }}\`"
             echo "- legacy/shared Chisel lane: \`${{ needs.classify.outputs.run_legacy_chisel }}\`"
             echo "- Supervisor V1 lane: \`${{ needs.classify.outputs.run_smode_v1 }}\`"
             echo "- FreeRTOS lane: \`${{ needs.classify.outputs.run_freertos }}\`"
             echo '- pure v2 edits no longer pay Supervisor/FreeRTOS/DiffTest latency'
+            echo '- frontier F5/F6 edits no longer replay frozen F1-F4 unless their ownership surfaces move'
             echo '- source contracts and the shared Verilator producer start in parallel after classification'
             echo '- Full Gate remains the complete freeze/milestone qualification surface'
           } >> "$GITHUB_STEP_SUMMARY"
