@@ -117,11 +117,13 @@ class TinyRob(val xlen: Int) extends Module {
     !completionEntry.exception.valid &&
     !io.completion.bits.exception.valid
 
+  val systemTrapReturn = completionEntry.uop.executionClass === ExecutionClass.System &&
+    io.completion.bits.privileged.trapReturn
   val privilegedRecoveryMatches = completionMatches &&
     completionIndex === head &&
     (completionEntry.exception.valid ||
       io.completion.bits.exception.valid ||
-      io.completion.bits.privileged.trapReturn)
+      systemTrapReturn)
 
   val squashYounger = recoveryMatches || privilegedRecoveryMatches
 
@@ -154,7 +156,11 @@ class TinyRob(val xlen: Int) extends Module {
     entries(completionIndex).complete := true.B
     entries(completionIndex).resultValid := io.completion.bits.hasValue
     entries(completionIndex).result := io.completion.bits.value
-    entries(completionIndex).privileged := io.completion.bits.privileged
+    entries(completionIndex).privileged := Mux(
+      completionEntry.uop.executionClass === ExecutionClass.System,
+      io.completion.bits.privileged,
+      0.U.asTypeOf(new PendingPrivilegedEffect(xlen))
+    )
     when(!entries(completionIndex).exception.valid && io.completion.bits.exception.valid) {
       entries(completionIndex).exception := io.completion.bits.exception
     }
