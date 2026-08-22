@@ -17,8 +17,8 @@ private[v2] object TinyRobGeometry {
   //
   // Producers that can retain a RobToken after squash must still have a bounded
   // terminal-response lifetime shorter than this reuse budget. Potentially
-  // unbounded external memory transactions use AetherMem txnId/MSHR lifetime
-  // ownership instead of relying on RobToken generation alone.
+  // unbounded external memory transactions use an independent AetherMem
+  // transaction lifetime instead of relying on RobToken generation alone.
   val GenerationBits: Int = 8
   val GenerationReuseBudget: Int = 1 << GenerationBits
 }
