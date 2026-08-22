@@ -30,6 +30,7 @@ class RobRetirement(val xlen: Int) extends Bundle {
   val resultValid = Bool()
   val result = UInt(xlen.W)
   val exception = new aethercore.common.TrapInfo(xlen)
+  val privileged = new PendingPrivilegedEffect(xlen)
 }
 
 private class TinyRobEntry(val xlen: Int) extends Bundle {
@@ -43,19 +44,16 @@ private class TinyRobEntry(val xlen: Int) extends Bundle {
   val resultValid = Bool()
   val result = UInt(xlen.W)
   val exception = new aethercore.common.TrapInfo(xlen)
+  val privileged = new PendingPrivilegedEffect(xlen)
 }
 
 /**
-  * F1 fixed four-entry ROB, extended by F4 with one deliberately narrow
-  * head-recovery operation.
+  * Fixed four-entry ROB.
   *
-  * Allocation remains the single owner of RobToken / ProducerTag / ValueRef.
-  * Completion may arrive for any live slot, but only a completed head retires.
-  * A normal taken-branch recovery is accepted only from a completion that has
-  * already passed the complete lifetime/storage identity match and names the
-  * current head. The current F3 issue policy is strict oldest-only, so every
-  * other live entry is necessarily younger and may be squashed without a
-  * general age comparator or branch mask.
+  * F4 added validated head-only normal branch recovery. F5 extends the same
+  * lifetime authority to synchronous traps and xRET: a matching head
+  * completion carrying an exception or validated trap-return effect may squash
+  * every younger entry, but the head itself survives until precise retirement.
   */
 class TinyRob(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-ROB XLEN must be 32 or 64, got $xlen")
@@ -70,6 +68,7 @@ class TinyRob(val xlen: Int) extends Module {
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits)))
     val acceptedCompletion = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val acceptedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
+    val acceptedPrivilegedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val headView = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val retire = Decoupled(new RobRetirement(xlen))
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
@@ -93,6 +92,7 @@ class TinyRob(val xlen: Int) extends Module {
   io.retire.bits.resultValid := retireHead.resultValid
   io.retire.bits.result := retireHead.result
   io.retire.bits.exception := retireHead.exception
+  io.retire.bits.privileged := retireHead.privileged
 
   val retireFire = io.retire.valid && io.retire.ready
 
@@ -117,14 +117,25 @@ class TinyRob(val xlen: Int) extends Module {
     !completionEntry.exception.valid &&
     !io.completion.bits.exception.valid
 
+  val privilegedRecoveryMatches = completionMatches &&
+    completionIndex === head &&
+    (completionEntry.exception.valid ||
+      io.completion.bits.exception.valid ||
+      io.completion.bits.privileged.trapReturn)
+
+  val squashYounger = recoveryMatches || privilegedRecoveryMatches
+
   io.acceptedCompletion.valid := completionMatches
   io.acceptedCompletion.bits := io.completion.bits
   io.acceptedRecovery.valid := recoveryMatches
   io.acceptedRecovery.bits := io.completion.bits
+  io.acceptedPrivilegedRecovery.valid := privilegedRecoveryMatches
+  io.acceptedPrivilegedRecovery.bits := io.completion.bits
 
-  // Recovery wins over same-cycle speculative dispatch. The surviving branch
-  // is not complete at the start of this cycle, so it cannot also retire.
-  io.dispatch.ready := count =/= Entries.U && !recoveryMatches
+  // Any validated head recovery wins over same-cycle speculative dispatch. The
+  // surviving head is incomplete at the start of the cycle, so it cannot also
+  // retire on this cycle.
+  io.dispatch.ready := count =/= Entries.U && !squashYounger
   val allocFire = io.dispatch.valid && io.dispatch.ready
 
   io.allocated.valid := allocFire
@@ -143,6 +154,7 @@ class TinyRob(val xlen: Int) extends Module {
     entries(completionIndex).complete := true.B
     entries(completionIndex).resultValid := io.completion.bits.hasValue
     entries(completionIndex).result := io.completion.bits.value
+    entries(completionIndex).privileged := io.completion.bits.privileged
     when(!entries(completionIndex).exception.valid && io.completion.bits.exception.valid) {
       entries(completionIndex).exception := io.completion.bits.exception
     }
@@ -162,6 +174,7 @@ class TinyRob(val xlen: Int) extends Module {
     entries(tail).resultValid := false.B
     entries(tail).result := 0.U
     entries(tail).exception := io.dispatch.bits.decoded.exception
+    entries(tail).privileged := 0.U.asTypeOf(new PendingPrivilegedEffect(xlen))
     tail := tail + 1.U
   }
 
@@ -170,7 +183,7 @@ class TinyRob(val xlen: Int) extends Module {
     is("b01".U) { count := count - 1.U }
   }
 
-  when(recoveryMatches) {
+  when(squashYounger) {
     for (index <- 0 until Entries) {
       when(index.U =/= head && entries(index).valid) {
         entries(index).valid := false.B
@@ -186,10 +199,11 @@ class TinyRob(val xlen: Int) extends Module {
 }
 
 /**
-  * F1 architectural retirement owner.
+  * Architectural integer-register retirement owner.
   *
-  * It consumes only ROB-head retirement and produces the already-qualified
-  * CommitTrace plus the one committed architectural integer-register write.
+  * F5 privileged effects are carried alongside this record but are consumed by
+  * a separate commit-time privileged adapter. Register writes remain governed
+  * by the same precise exception rule used since F1.
   */
 class V2Commit(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"v2-commit XLEN must be 32 or 64, got $xlen")
