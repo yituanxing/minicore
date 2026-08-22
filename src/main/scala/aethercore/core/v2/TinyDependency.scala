@@ -48,14 +48,12 @@ private class TinyDependencyEntry(
 }
 
 /**
-  * F2 fixed dependency tracker.
+  * F2 fixed dependency tracker, extended by F4 with head-only recovery repair.
   *
-  * This is deliberately not an issue queue or physical-register file. The
-  * 32-entry RAT names the newest live producer of each architectural register;
-  * ROB-parallel dependency records remember Ready(value) or
-  * Pending(ProducerTag). A tiny producer scoreboard retains completed values
-  * until retirement so a consumer dispatched after the completion pulse still
-  * resolves correctly.
+  * Normal completion and recovery are separate validated inputs. In production
+  * composition they are driven only by TinyRob.acceptedCompletion and
+  * TinyRob.acceptedRecovery respectively, so this module never recreates ROB
+  * lifetime validation or branch-recovery policy.
   */
 class TinyDependencyState(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-dependency XLEN must be 32 or 64, got $xlen")
@@ -69,6 +67,7 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val committedRs1 = Input(UInt(xlen.W))
     val committedRs2 = Input(UInt(xlen.W))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
+    val recovery = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val retire = Flipped(Valid(new RobRetirement(xlen)))
     val head = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
 
@@ -250,14 +249,50 @@ class TinyDependencyState(val xlen: Int) extends Module {
       rename(allocated.decoded.rd).producerTag := allocated.producerTag
     }
   }
+
+  // Recovery is a validated command from the ROB, not a locally reconstructed
+  // interpretation of a branch response. Under strict-oldest issue every other
+  // live dependency/producer is younger than the surviving head.
+  when(io.recovery.valid) {
+    assert(io.head.valid, "accepted recovery must retain a live ROB head")
+    assert(sameRobToken(io.head.bits.robToken, io.recovery.bits.robToken),
+      "accepted recovery must name the surviving ROB head")
+
+    val survivor = io.head.bits
+    val survivorCreatesProducer = survivor.decoded.writesRd &&
+      survivor.decoded.rd =/= 0.U &&
+      survivor.producesValue
+
+    for (register <- 0 until 32) {
+      rename(register).valid := false.B
+    }
+    for (index <- 0 until Entries) {
+      when(index.U =/= survivor.robToken.index) {
+        dependencies(index).valid := false.B
+      }
+      when(index.U =/= survivor.producerTag.id) {
+        producers(index).valid := false.B
+        producers(index).ready := false.B
+      }
+    }
+
+    producers(survivor.producerTag.id).valid := survivorCreatesProducer
+    producers(survivor.producerTag.id).producerTag := survivor.producerTag
+    producers(survivor.producerTag.id).ready := survivorCreatesProducer && io.recovery.bits.hasValue
+    producers(survivor.producerTag.id).value := io.recovery.bits.value
+    when(survivorCreatesProducer) {
+      rename(survivor.decoded.rd).valid := true.B
+      rename(survivor.decoded.rd).producerTag := survivor.producerTag
+    }
+  }
 }
 
 /**
   * F2 integration harness.
   *
   * Ordering/lifetime still belongs to TinyRob and architectural state still
-  * changes only through V2Commit. This layer adds only RAT/readiness ownership;
-  * there is no execution scheduler yet.
+  * changes only through V2Commit. This layer owns RAT/readiness and forwards
+  * the ROB-validated normal branch-recovery pulse for F4.
   */
 class TinyDependencyBackend(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"v2 F2 backend XLEN must be 32 or 64, got $xlen")
@@ -269,6 +304,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     val dispatch = Flipped(Decoupled(new RobDispatch(xlen)))
     val allocated = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
+    val acceptedRecovery = Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
     val commit = Output(new CommitTrace(xlen = xlen))
     val head = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
     val headDependenciesValid = Output(Bool())
@@ -290,6 +326,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
 
   rob.io.completion.valid := io.completion.valid
   rob.io.completion.bits := io.completion.bits
+  io.acceptedRecovery := rob.io.acceptedRecovery
 
   commitStage.io.retire <> rob.io.retire
   io.commit := commitStage.io.commit
@@ -306,6 +343,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   dependencyState.io.committedRs1 := registerFile.io.rs1Data
   dependencyState.io.committedRs2 := registerFile.io.rs2Data
   dependencyState.io.completion := rob.io.acceptedCompletion
+  dependencyState.io.recovery := rob.io.acceptedRecovery
   dependencyState.io.retire.valid := rob.io.retire.valid && rob.io.retire.ready
   dependencyState.io.retire.bits := rob.io.retire.bits
   dependencyState.io.head := rob.io.headView
