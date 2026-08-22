@@ -196,6 +196,24 @@ class ExecutionRequest(
   val immediate = UInt(xlen.W)
 }
 
+/**
+  * Completion-time description of a privileged architectural effect.
+  *
+  * This record is deliberately *pending*: execution may calculate a CSR write
+  * or validate xRET, but MachineCsrFile is not mutated until the matching ROB
+  * head retires. Trap entry itself is represented by ExecutionResponse.exception
+  * and is likewise applied only at retirement.
+  */
+class PendingPrivilegedEffect(val xlen: Int) extends Bundle {
+  require(xlen == 32 || xlen == 64, s"privileged-effect XLEN must be 32 or 64, got $xlen")
+
+  val csrWriteValid = Bool()
+  val csrAddress = UInt(12.W)
+  val csrWriteData = UInt(xlen.W)
+  val trapReturn = Bool()
+  val trapReturnSupervisor = Bool()
+}
+
 /** Tagged completion. Execution latency is deliberately absent from the type. */
 class ExecutionResponse(
     val xlen: Int,
@@ -215,4 +233,5 @@ class ExecutionResponse(
   val branchTarget = UInt(xlen.W)
 
   val exception = new TrapInfo(xlen)
+  val privileged = new PendingPrivilegedEffect(xlen)
 }
