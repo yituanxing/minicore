@@ -1,4 +1,4 @@
 AetherCore v2 F7 Linux exact-head milestone request.
 
-request_revision=1
-reason=OpenSBI 1.6 software-parity slice passed; enter unchanged Linux 6.6.143 early boot
+request_revision=2
+reason=Linux 6.6.143 version banner passed; advance unchanged early boot to Memory milestone
