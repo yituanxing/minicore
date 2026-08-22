@@ -15,15 +15,20 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
   * shares the existing geometry-driven PTW arbiter, and converts fetch faults
   * into predecoded architectural exceptions before ROB allocation.
   *
-  * The current slice intentionally excludes compressed parcel assembly and
-  * asynchronous interrupts/WFI. It remains a one-instruction-wide correctness
-  * frontend, not a predictor or fetch queue.
+  * F7 may additionally opt into clean-boundary asynchronous interrupts/WFI.
+  * Interrupt qualification immediately closes dispatch; architectural trap
+  * entry happens only after the ROB drains, using this frontend's next PC as
+  * mepc/sepc. The default remains disabled so the already-qualified paged slice
+  * and frozen F6 behavior are unchanged.
   */
 class TinyPagedCore(
     val config: CoreConfig,
     val geometry: PageTableGeometry,
     val tlbEntries: Int = 8,
-    val txnIdBits: Int = 2
+    val txnIdBits: Int = 2,
+    val enableAsyncInterrupts: Boolean = false,
+    val withMachineExternalInterrupt: Boolean = false,
+    val withSupervisorExternalInterrupt: Boolean = false
 ) extends Module {
   private val isa = config.isa
   private val Xlen = isa.xlen
@@ -35,6 +40,8 @@ class TinyPagedCore(
   require(isa.hasPagedVirtualMemory, "TinyPagedCore requires a paged-VM profile")
   require(!isa.hasC, "TinyPagedCore current F7 slice accepts only canonical 32-bit instructions")
   require(BusBits == Xlen, "TinyPagedCore current slice retains the F6 busDataBits == XLEN contract")
+  require(!withMachineExternalInterrupt || enableAsyncInterrupts)
+  require(!withSupervisorExternalInterrupt || enableAsyncInterrupts)
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(PhysicalBits)
@@ -45,7 +52,14 @@ class TinyPagedCore(
     val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
     val frontendPc = Output(UInt(Xlen.W))
     val frontendPhysicalAddress = Output(UInt(PhysicalBits.W))
+    val halted = Output(Bool())
+    val interruptHold = Output(Bool())
     val time = if (isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
+    val timerInterrupt = if (enableAsyncInterrupts) Some(Input(Bool())) else None
+    val machineExternalInterrupt =
+      if (enableAsyncInterrupts && withMachineExternalInterrupt) Some(Input(Bool())) else None
+    val supervisorExternalInterrupt =
+      if (enableAsyncInterrupts && withSupervisorExternalInterrupt) Some(Input(Bool())) else None
 
     val resolvedPhysicalValid = Output(Bool())
     val resolvedPhysicalAddress = Output(UInt(PhysicalBits.W))
@@ -60,7 +74,10 @@ class TinyPagedCore(
     config,
     geometry,
     tlbEntries = tlbEntries,
-    txnIdBits = txnIdBits
+    txnIdBits = txnIdBits,
+    enableAsyncInterrupts = enableAsyncInterrupts,
+    withMachineExternalInterrupt = withMachineExternalInterrupt,
+    withSupervisorExternalInterrupt = withSupervisorExternalInterrupt
   ))
   val decode = Module(new TinySemanticDecode(isa))
   val fetch = Module(new InstructionFetchAdapter(geometry, PhysicalBits, tlbEntries))
@@ -73,24 +90,41 @@ class TinyPagedCore(
   private val serializedPc = Reg(UInt(Xlen.W))
   io.frontendPc := pc
 
+  private val asyncInterruptRedirect =
+    if (enableAsyncInterrupts) backend.io.async.get.interruptRedirect.valid else false.B
+  private val interruptHold =
+    if (enableAsyncInterrupts) backend.io.async.get.interruptHold else false.B
+  private val wfiWaiting =
+    if (enableAsyncInterrupts) backend.io.async.get.wfiWaiting else false.B
   private val branchRedirect = backend.io.branchRedirect.valid
   private val privilegedRedirect = backend.io.privilegedRedirect.valid
-  private val redirect = privilegedRedirect || branchRedirect
+  private val redirect = asyncInterruptRedirect || privilegedRedirect || branchRedirect
   private val redirectTarget = Mux(
-    privilegedRedirect,
-    backend.io.privilegedRedirect.bits.target,
-    backend.io.branchRedirect.bits.target
+    asyncInterruptRedirect,
+    if (enableAsyncInterrupts) backend.io.async.get.interruptRedirect.bits else 0.U,
+    Mux(
+      privilegedRedirect,
+      backend.io.privilegedRedirect.bits.target,
+      backend.io.branchRedirect.bits.target
+    )
   )
+  private val frontendBlocked = serialized || interruptHold || wfiWaiting
+  io.halted := wfiWaiting
+  io.interruptHold := interruptHold
 
-  // A serializing architectural operation (CSR/SFENCE/xRET/fence today, and
+  // A serializing architectural operation (CSR/SFENCE/xRET/fence/WFI today, and
   // aq/rl atomics once F7 implements A) closes the speculative fetch window.
   // This avoids carrying stale translated instruction bits across a retirement
   // that changes SATP/PMP/privilege state, without adding a replay mechanism.
   private val serializedRetires = serialized && backend.io.commit.valid &&
     backend.io.commit.pc === serializedPc
 
-  fetch.io.requestValid := !redirect && !serialized
-  fetch.io.kill := redirect
+  fetch.io.requestValid := !redirect && !frontendBlocked
+  // A newly qualified interrupt can arrive while an instruction translation is
+  // in flight. Cancel that speculative fetch and restart from the same PC after
+  // trap entry/return rather than carrying old-context instruction bits across
+  // the architectural boundary.
+  fetch.io.kill := redirect || interruptHold || wfiWaiting
   fetch.io.flush := backend.io.translationFence
   fetch.io.virtualAddress := pc
   fetch.io.privilege := backend.io.currentPrivilege
@@ -112,7 +146,7 @@ class TinyPagedCore(
   io.frontendPhysicalAddress := fetch.io.physicalAddress
   io.imem.valid := fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && !instructionPmpFault &&
-    !redirect && !serialized
+    !redirect && !frontendBlocked
   io.imem.addr := fetch.io.physicalAddress
   io.imem.bytes := 4.U
 
@@ -133,9 +167,20 @@ class TinyPagedCore(
   decode.io.instBytes := 4.U
   decode.io.fetchException := fetchException
 
-  backend.io.dispatch.valid := fetch.io.responseValid && !redirect && !serialized
+  backend.io.dispatch.valid := fetch.io.responseValid && !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
   fetch.io.responseReady := backend.io.dispatch.fire
+
+  if (enableAsyncInterrupts) {
+    backend.io.async.get.boundaryPc := pc
+    backend.io.async.get.timerPending := io.timerInterrupt.get
+    if (withMachineExternalInterrupt) {
+      backend.io.async.get.machineExternalPending.get := io.machineExternalInterrupt.get
+    }
+    if (withSupervisorExternalInterrupt) {
+      backend.io.async.get.supervisorExternalPending.get := io.supervisorExternalInterrupt.get
+    }
+  }
 
   when(redirect) {
     pc := redirectTarget
@@ -204,6 +249,6 @@ class TinyPagedCore(
   io.lsuBusy := backend.io.lsuBusy
   io.translationFence := backend.io.translationFence
 
-  assert(!(branchRedirect && privilegedRedirect),
-    "oldest-only F7 paged frontend cannot accept branch and privileged redirects simultaneously")
+  assert(PopCount(Cat(asyncInterruptRedirect, privilegedRedirect, branchRedirect)) <= 1.U,
+    "oldest-only F7 frontend received more than one architectural redirect in one cycle")
 }
