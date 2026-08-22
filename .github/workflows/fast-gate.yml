@@ -210,6 +210,15 @@ jobs:
           mkdir -p "$root/mill-out"
           echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
 
+      - name: Restore previous v2 Mill output accelerator
+        id: v2-mill-output-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-dev/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-
+
       - name: Revalidate fixed Verilator from producer cache
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
@@ -235,8 +244,6 @@ jobs:
             tests+=(aethercore.V2F6BlockingLsuSpec)
           fi
           if [[ "${#tests[@]}" -eq 0 ]]; then
-            # Unknown/new v2 or CI-infrastructure edits get a conservative
-            # frontier fallback rather than silently compiling without tests.
             tests=(
               aethercore.V2FoundationTypesSpec
               aethercore.V2F5PrivilegedSpec
@@ -245,6 +252,14 @@ jobs:
           fi
           printf 'v2_test=%s\n' "${tests[@]}"
           ./mill aethercore.test.testOnly "${tests[@]}"
+
+      - name: Save validated v2 Mill output accelerator
+        if: success() && steps.v2-mill-output-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-dev/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Write v2 development summary
         if: always()
@@ -257,6 +272,8 @@ jobs:
             echo "- inherited F1-F4 selected: \`${{ needs.classify.outputs.run_v2_history }}\`"
             echo "- F5 privileged selected: \`${{ needs.classify.outputs.run_v2_f5 }}\`"
             echo "- F6 memory selected: \`${{ needs.classify.outputs.run_v2_f6 }}\`"
+            echo "- exact-head Mill output cache hit: \`${{ steps.v2-mill-output-cache.outputs.cache-hit }}\`"
+            echo '- a prior successful head may seed compile outputs; Mill still validates inputs and testOnly executes the selected tests'
             echo '- pure-v2 lane uses the stock hosted image and does not apt-provision on every commit'
             echo '- hosted Mill daemon remains enabled; WSL-only no-daemon workaround is not applied'
             echo '- Supervisor, FreeRTOS and exact DiffTest are intentionally outside the pure-v2 edit loop'
