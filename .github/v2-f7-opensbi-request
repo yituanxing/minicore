@@ -1,4 +1,4 @@
 AetherCore v2 F7 OpenSBI exact-head milestone request.
 
-request_revision=2
-reason=hosted platform elaboration smoke added before trusted firmware execution
+request_revision=3
+reason=publish exact-head pending/success/failure commit status for trusted first-exec
