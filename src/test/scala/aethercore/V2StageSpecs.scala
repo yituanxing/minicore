@@ -51,6 +51,13 @@ class V2F6BlockingLsuSpec
     with V2F6Sv32MemoryChecks
     with V2F6SfenceChecks
     with V2F6MemoryClosureChecks
+    with V2A8CompletionChecks
+
+class V2A8CompletionSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2A8CompletionChecks
 
 class V2F7SemanticDecodeSpec
     extends AnyFlatSpec

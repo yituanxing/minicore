@@ -14,6 +14,7 @@ import aethercore.memory.AetherMemOp
 trait V2F6BlockingLsuChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private def pokeEnvironment(dut: TinyBlockingLsu, privilege: Int = PrivilegeMode.Machine): Unit = {
     dut.io.request.valid.poke(false.B)
+    dut.io.completion.ready.poke(true.B)
     dut.io.storePermit.valid.poke(false.B)
     dut.io.storePermit.bits.index.poke(0.U)
     dut.io.storePermit.bits.generation.poke(0.U)

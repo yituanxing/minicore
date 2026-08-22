@@ -423,6 +423,8 @@ class V2BranchUnit(val xlen: Int, val hasCompressed: Boolean) extends Module {
   * F3 execution cluster. The first issue policy permits only one live issued
   * head, but each unit already uses Decoupled request/response contracts so a
   * later ready-select policy does not require an execution-interface rewrite.
+  * A8 uses round-robin response arbitration so the future selective-issue path
+  * cannot starve a held long-latency result behind short-latency completions.
   */
 class TinyExecutionCluster(val xlen: Int, val hasCompressed: Boolean) extends Module {
   require(xlen == 32 || xlen == 64, s"execution cluster XLEN must be 32 or 64, got $xlen")
@@ -472,7 +474,7 @@ class TinyExecutionCluster(val xlen: Int, val hasCompressed: Boolean) extends Mo
     routeDivide -> divide.io.request.ready
   ))
 
-  val responses = Module(new Arbiter(new ExecutionResponse(xlen, IdentityBits, GenerationBits), 4))
+  val responses = Module(new RRArbiter(new ExecutionResponse(xlen, IdentityBits, GenerationBits), 4))
   responses.io.in(0) <> integer.io.response
   responses.io.in(1) <> branch.io.response
   responses.io.in(2) <> multiply.io.response
