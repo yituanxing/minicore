@@ -42,59 +42,132 @@ jobs:
   first-exec:
     name: Unchanged OpenSBI 1.6 on F7 v2 RV64
     needs: announce
-    runs-on: [self-hosted, Linux, X64, minicore]
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
       TARGET_SHA: ${{ github.sha }}
       OPENSBI_STATUS_CONTEXT: AetherCore V2 F7 OpenSBI First Execution
 
     steps:
-      - name: Checkout exact head without deleting persistent caches
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact head and configure build directory
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-
-          if [[ -d .git ]]; then
-            git clean -fd -- src/main/scala src/test/scala software/rv64 sim tools/ci tests_py .github/workflows || true
-          else
-            git init .
-          fi
-
-          if git remote get-url origin >/dev/null 2>&1; then
-            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          else
-            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          fi
-
-          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
-            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
-          git checkout --detach --force FETCH_HEAD
           actual="$(git rev-parse HEAD)"
           [[ "$actual" == "$TARGET_SHA" ]] || {
             echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
             exit 1
           }
-          chmod +x ./mill tools/ci/rv64_opensbi_first_exec.sh tools/ensure_riscv64_linux_gcc_13_3.sh
+          chmod +x ./mill tools/ci/rv64_opensbi_first_exec.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh tools/ensure_verilator_5_024.sh
+          root="$RUNNER_TEMP/aethercore-v2-f7-opensbi"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
           echo "exact_head=$actual"
 
-      - name: Provision fixed Verilator
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore previous v2 Mill output accelerator
+        id: mill-output-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-f7-opensbi/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-opensbi-millout-v1-${{ github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-opensbi-millout-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-
+
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git xz-utils
+
+      - name: Validate or build exact Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Save exact validated Verilator on cache miss
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Restore pinned RV64 Linux-target GCC cache
+        id: rv64-toolchain-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
 
       - name: Provision pinned RV64 Linux-target GCC
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
+      - name: Save validated RV64 Linux-target GCC on cache miss
+        if: success() && steps.rv64-toolchain-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore pinned OpenSBI source cache
+        id: opensbi-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
+
       - name: Validate unchanged OpenSBI build contracts
         shell: bash
         run: |
           set -euo pipefail
+          bash -n tools/ensure_riscv64_linux_gcc_13_3.sh
           bash -n tools/ci/rv64_opensbi_first_exec.sh
           python3 -m py_compile tools/ci/make_l32_dtb.py
           python3 -m unittest \
@@ -105,32 +178,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/v2-f7-opensbi/$TARGET_SHA"
-          rm -rf "$build/software"
-          mkdir -p "$build/software"
-          bash tools/ci/rv64_opensbi_first_exec.sh "$build/software"
-          grep -q '^RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS$' "$build/software/result.txt"
+          build="$RUNNER_TEMP/aethercore-v2-f7-opensbi/software"
+          rm -rf "$build"
+          mkdir -p "$build"
+          bash tools/ci/rv64_opensbi_first_exec.sh "$build"
+          grep -q '^RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS$' "$build/result.txt"
+          echo "OPENSBI_BUILD=$build" >> "$GITHUB_ENV"
+
+      - name: Save pinned OpenSBI source on cache miss
+        if: success() && steps.opensbi-source-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
 
       - name: Elaborate F7 v2 RV64 OpenSBI top
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/v2-f7-opensbi/$TARGET_SHA"
-          rm -rf "$build/rtl" "$build/obj"
-          mkdir -p "$build/rtl" "$build/obj"
-          ./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64 --target-dir "$build/rtl"
-          find "$build/rtl" -maxdepth 1 -name '*.sv' -print | sort > "$build/rtl-sources.txt"
-          test -s "$build/rtl-sources.txt"
+          rtl="$RUNNER_TEMP/aethercore-v2-f7-opensbi/rtl"
+          obj="$RUNNER_TEMP/aethercore-v2-f7-opensbi/obj"
+          rm -rf "$rtl" "$obj"
+          mkdir -p "$rtl" "$obj"
+          ./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64 --target-dir "$rtl"
+          find "$rtl" -maxdepth 1 -name '*.sv' -print | sort > "$RUNNER_TEMP/aethercore-v2-f7-opensbi/rtl-sources.txt"
+          test -s "$RUNNER_TEMP/aethercore-v2-f7-opensbi/rtl-sources.txt"
+          echo "V2_OPENSBI_RTL=$rtl" >> "$GITHUB_ENV"
+          echo "V2_OPENSBI_OBJ=$obj" >> "$GITHUB_ENV"
+
+      - name: Save validated v2 Mill output accelerator
+        if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-f7-opensbi/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-opensbi-millout-v1-${{ github.sha }}
 
       - name: Compile shared host runtime against v2 top
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/v2-f7-opensbi/$TARGET_SHA"
-          mapfile -t rtl_sources < "$build/rtl-sources.txt"
+          mapfile -t rtl_sources < "$RUNNER_TEMP/aethercore-v2-f7-opensbi/rtl-sources.txt"
           verilator --cc --exe --build -Wall -Wno-fatal \
             --top-module AetherCoreV2OpenSbiRV64SimTop \
-            -Mdir "$build/obj" -j "$(nproc)" \
+            -Mdir "$V2_OPENSBI_OBJ" -j "$(nproc)" \
             -CFLAGS "-std=c++20 -O2 -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             -LDFLAGS "-ldl" \
             "${rtl_sources[@]}" \
@@ -140,10 +232,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          build="$HOME/.cache/aethercore/v2-f7-opensbi/$TARGET_SHA"
-          firmware="$build/software/opensbi/platform/generic/firmware/fw_payload.bin"
-          simulator="$build/obj/VAetherCoreV2OpenSbiRV64SimTop"
-          log="$build/runtime.log"
+          firmware="$OPENSBI_BUILD/opensbi/platform/generic/firmware/fw_payload.bin"
+          simulator="$V2_OPENSBI_OBJ/VAetherCoreV2OpenSbiRV64SimTop"
+          log="$RUNNER_TEMP/aethercore-v2-f7-opensbi/runtime.log"
           test -s "$firmware"
           test -x "$simulator"
 
@@ -198,8 +289,9 @@ jobs:
             echo '## AetherCore v2 F7 OpenSBI first execution'
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
-            echo '- trigger: trusted push request marker or explicit workflow dispatch; never public pull_request -> self-hosted'
-            echo '- status: hosted announce job publishes pending before the self-hosted milestone is allocated'
+            echo '- trigger: explicit request marker or workflow dispatch; never automatic per-PR firmware execution'
+            echo '- runner: GitHub-hosted ubuntu-24.04; no personal-runner dependency'
+            echo '- caches: fixed Verilator, pinned Bootlin RV64 GCC, pinned OpenSBI source, Scala/Mill accelerators'
             echo '- firmware: pinned unchanged OpenSBI 1.6 at bd613dd92113f683052acfb23d9dc8ba60029e0a'
             echo '- toolchain: pinned Bootlin RV64 Linux-target GCC 13.3.0 / binutils 2.41'
             echo '- core: F7 TinyPagedCore, RV64IMA + Zicsr + Zifencei, M/S/U, Sv39, PMP16/PA56'
