@@ -17,16 +17,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  first-exec:
-    name: Unchanged OpenSBI 1.6 on F7 v2 RV64
-    runs-on: [self-hosted, Linux, X64, minicore]
-    timeout-minutes: 45
+  announce:
+    name: Publish exact-head OpenSBI status
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
     env:
-      AETHERCORE_MILL_NO_DAEMON: '1'
-      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       TARGET_SHA: ${{ github.sha }}
       OPENSBI_STATUS_CONTEXT: AetherCore V2 F7 OpenSBI First Execution
-
     steps:
       - name: Publish pending exact-head status
         shell: bash
@@ -40,8 +37,20 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"pending\",\"context\":\"$OPENSBI_STATUS_CONTEXT\",\"description\":\"Pinned unchanged OpenSBI 1.6 executing on F7 v2\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"pending\",\"context\":\"$OPENSBI_STATUS_CONTEXT\",\"description\":\"Pinned unchanged OpenSBI 1.6 queued/running on F7 v2\",\"target_url\":\"$target_url\"}"
 
+  first-exec:
+    name: Unchanged OpenSBI 1.6 on F7 v2 RV64
+    needs: announce
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.sha }}
+      OPENSBI_STATUS_CONTEXT: AetherCore V2 F7 OpenSBI First Execution
+
+    steps:
       - name: Checkout exact head without deleting persistent caches
         shell: bash
         env:
@@ -190,7 +199,7 @@ jobs:
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
             echo '- trigger: trusted push request marker or explicit workflow dispatch; never public pull_request -> self-hosted'
-            echo '- status: classic commit status is published for exact-head observability without PR comments'
+            echo '- status: hosted announce job publishes pending before the self-hosted milestone is allocated'
             echo '- firmware: pinned unchanged OpenSBI 1.6 at bd613dd92113f683052acfb23d9dc8ba60029e0a'
             echo '- toolchain: pinned Bootlin RV64 Linux-target GCC 13.3.0 / binutils 2.41'
             echo '- core: F7 TinyPagedCore, RV64IMA + Zicsr + Zifencei, M/S/U, Sv39, PMP16/PA56'
