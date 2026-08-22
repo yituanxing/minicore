@@ -75,3 +75,9 @@ class V2F7AsyncInterruptSpec
     with Matchers
     with ChiselSim
     with V2F7AsyncInterruptChecks
+
+class V2F7AtomicLsuSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7AtomicLsuChecks
