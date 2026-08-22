@@ -148,6 +148,14 @@ class TinySemanticDecode(val isa: IsaConfig) extends Module {
   private val rhsSource =
     Mux(ctrl.opBSel === OpBSel.Imm, OperandSourceKind.Immediate, OperandSourceKind.Rs2)
 
+  // SFENCE.VMA is deliberately recognized above the legacy Decoder, so its
+  // architectural rs1/rs2 operands must also be restored here. The current F6
+  // implementation conservatively flushes all translations, but preserving
+  // these dependency facts keeps later address/ASID-selective invalidation from
+  // having to re-decode the raw opcode inside the backend.
+  private val semanticUsesRs1 = ctrl.usesRs1 || sfenceVma
+  private val semanticUsesRs2 = ctrl.usesRs2 || sfenceVma
+
   private val hasDecodeException = decodedException.valid
   io.dispatch := 0.U.asTypeOf(new RobDispatch(xlen))
   io.dispatch.decoded.pc := io.pc
@@ -161,8 +169,8 @@ class TinySemanticDecode(val isa: IsaConfig) extends Module {
   io.dispatch.decoded.rs1 := decoder.io.rs1
   io.dispatch.decoded.rs2 := decoder.io.rs2
   io.dispatch.decoded.rd := decoder.io.rd
-  io.dispatch.decoded.usesRs1 := ctrl.usesRs1 && !hasDecodeException
-  io.dispatch.decoded.usesRs2 := ctrl.usesRs2 && !hasDecodeException
+  io.dispatch.decoded.usesRs1 := semanticUsesRs1 && !hasDecodeException
+  io.dispatch.decoded.usesRs2 := semanticUsesRs2 && !hasDecodeException
   io.dispatch.decoded.writesRd := ctrl.regWrite && !hasDecodeException
   io.dispatch.decoded.immediate := decodedImm
   io.dispatch.decoded.controlFlow.kind := controlFlowKind
