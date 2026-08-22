@@ -1,4 +1,4 @@
-name: AetherCore V2 F7 Linux Interrupt Observer Probe
+name: AetherCore V2 F7 Linux Clocksource STIP Qualification
 
 on:
   workflow_dispatch:
@@ -8,23 +8,24 @@ on:
     paths:
       - '.github/workflows/v2-f7-linux-observer-probe.yml'
       - '.github/v2-f7-linux-observer-request'
+      - 'sim/opensbi_boot_main.cpp'
 
 permissions:
   contents: read
   statuses: write
 
 concurrency:
-  group: aethercore-v2-f7-linux-observer-${{ github.ref }}
+  group: aethercore-v2-f7-linux-stip-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  probe:
-    name: Unchanged Linux clocksource/STIP with boundary-event observer
+  qualify:
+    name: Unchanged Linux clocksource/STIP exact-head qualification
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       TARGET_SHA: ${{ github.sha }}
-      STATUS_CONTEXT: AetherCore V2 F7 Interrupt Observer Probe
+      STATUS_CONTEXT: AetherCore V2 F7 Linux Clocksource STIP
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
       RV64_LINUX_JOBS: '4'
@@ -48,7 +49,7 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Linux clocksource/STIP observer contract probe running\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Unchanged Linux clocksource/STIP qualification running\",\"target_url\":\"$target_url\"}"
 
       - name: Verify exact head and install prerequisites
         shell: bash
@@ -62,9 +63,28 @@ jobs:
             autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
             libssl-dev libelf-dev build-essential pkg-config curl xz-utils git \
             python3 openjdk-17-jdk-headless device-tree-compiler dwarves
-          root="$RUNNER_TEMP/aethercore-v2-f7-linux-observer"
+          root="$RUNNER_TEMP/aethercore-v2-f7-linux-stip"
           mkdir -p "$root/mill-out"
           echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Verify source-owned boundary-event observer contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          s = Path('sim/opensbi_boot_main.cpp').read_text()
+          retirement = '      if (top.io_commit_valid) {\n'
+          interrupt = '      if (top.io_commit_interrupt) {\n'
+          nested_interrupt = '        if (top.io_commit_interrupt) {\n'
+
+          assert s.count(retirement) == 1, s.count(retirement)
+          assert s.count(interrupt) == 1, s.count(interrupt)
+          assert nested_interrupt not in s
+          assert s.index(retirement) < s.index(interrupt)
+          print('PASS: retirement and asynchronous interrupt observation are independent')
+          PY
 
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
@@ -79,8 +99,8 @@ jobs:
       - name: Restore v2 Mill output accelerator
         uses: actions/cache/restore@v4
         with:
-          path: ${{ runner.temp }}/aethercore-v2-f7-linux-observer/mill-out
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-linux-observer-millout-v1-${{ github.sha }}
+          path: ${{ runner.temp }}/aethercore-v2-f7-linux-stip/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-linux-stip-millout-v1-${{ github.sha }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-v2-opensbi-millout-v1-
             aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-
@@ -133,31 +153,13 @@ jobs:
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
           grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
 
-      - name: Patch only the host observer contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('sim/opensbi_boot_main.cpp')
-          s = p.read_text()
-          head = '        if (top.io_commit_interrupt) {\n'
-          tail = '        }\n      }\n\n      const bool inputSatisfied = uartInput.empty() ||'
-          assert s.count(head) == 1, s.count(head)
-          assert s.count(tail) == 1, s.count(tail)
-          s = s.replace(head, '      }\n\n      if (top.io_commit_interrupt) {\n', 1)
-          s = s.replace(tail, '        }\n\n      const bool inputSatisfied = uartInput.empty() ||', 1)
-          p.write_text(s)
-          PY
-          git diff --check
-          git diff -- sim/opensbi_boot_main.cpp
-
       - name: Execute unchanged Linux clocksource and STIP through F7 v2
         shell: bash
         run: |
           set -euo pipefail
+          git diff --exit-code
           make -f Makefile.l32-linux-boot \
-            BUILD_DIR="$RUNNER_TEMP/aethercore-v2-f7-linux-observer/sim" \
+            BUILD_DIR="$RUNNER_TEMP/aethercore-v2-f7-linux-stip/sim" \
             TOP=AetherCoreV2OpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
             FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
@@ -181,7 +183,7 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Boundary observer sees unchanged Linux clocksource/STIP\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Source-owned observer qualifies unchanged Linux clocksource/STIP\",\"target_url\":\"$target_url\"}"
 
       - name: Publish failed exact-head status
         if: failure()
@@ -194,17 +196,17 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Boundary observer probe failed; inspect exact frontier\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Linux clocksource/STIP qualification failed; inspect exact head\",\"target_url\":\"$target_url\"}"
 
-      - name: Upload exact probe evidence
+      - name: Upload exact qualification evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: aethercore-v2-f7-linux-observer-${{ github.run_id }}
+          name: aethercore-v2-f7-linux-stip-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
           path: |
             build/rv64-linux-early/result.txt
-            ${{ runner.temp }}/aethercore-v2-f7-linux-observer/sim/logs/boot-probe.log
-            ${{ runner.temp }}/aethercore-v2-f7-linux-observer/sim/logs/verilator-build.log
+            ${{ runner.temp }}/aethercore-v2-f7-linux-stip/sim/logs/boot-probe.log
+            ${{ runner.temp }}/aethercore-v2-f7-linux-stip/sim/logs/verilator-build.log
