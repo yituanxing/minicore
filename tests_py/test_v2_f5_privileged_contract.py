@@ -43,11 +43,12 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
         self.assertIn("producers(index).valid := false.B", text)
         self.assertIn("val retiring = Valid(new RobRetirement(xlen))", text)
 
-    def test_machine_csr_file_is_reused_only_at_retirement(self):
+    def test_machine_csr_file_is_reused_only_at_system_retirement(self):
         text = PRIVILEGED.read_text()
         self.assertIn("new MachineCsrFile", text)
         self.assertIn("private val retiring = dependencyBackend.io.retiring", text)
-        self.assertIn("csrFile.io.writeEnable := retiring.valid", text)
+        self.assertIn("private val retiringSystem = retiring.valid", text)
+        self.assertIn("csrFile.io.writeEnable := retiringSystem", text)
         self.assertIn("csrFile.io.trapEnter := trapAtRetire", text)
         self.assertIn("csrFile.io.trapReturn := returnAtRetire", text)
         self.assertNotIn("class V2CsrFile", text)
