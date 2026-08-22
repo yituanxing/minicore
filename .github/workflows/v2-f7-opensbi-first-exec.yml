@@ -1,24 +1,18 @@
 name: AetherCore V2 F7 OpenSBI First Execution
 
 on:
-  pull_request:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/aethercore-v2-f7-software-parity
     paths:
-      - 'src/main/scala/aethercore/core/v2/**'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
-      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
-      - 'sim/l32_opensbi_runtime.h'
-      - 'sim/opensbi_boot_main.cpp'
-      - 'sim/v2_rv64_opensbi_shim/**'
-      - 'software/rv64/opensbi_*'
-      - 'tools/ci/rv64_opensbi_first_exec.sh'
-      - 'tools/ci/make_l32_dtb.py'
-      - '.github/workflows/v2-f7-opensbi-first-exec.yml'
+      - '.github/v2-f7-opensbi-request'
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethercore-v2-f7-opensbi-${{ github.event.pull_request.number || github.ref }}
+  group: aethercore-v2-f7-opensbi-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +23,7 @@ jobs:
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout exact head without deleting persistent caches
@@ -149,6 +143,7 @@ jobs:
             echo '## AetherCore v2 F7 OpenSBI first execution'
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- trigger: trusted push request marker or explicit workflow dispatch; never public pull_request -> self-hosted'
             echo '- firmware: pinned unchanged OpenSBI 1.6 at bd613dd92113f683052acfb23d9dc8ba60029e0a'
             echo '- toolchain: pinned Bootlin RV64 Linux-target GCC 13.3.0 / binutils 2.41'
             echo '- core: F7 TinyPagedCore, RV64IMA + Zicsr + Zifencei, M/S/U, Sv39, PMP16/PA56'
