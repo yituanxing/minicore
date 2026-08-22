@@ -31,6 +31,12 @@ class PrivilegedRedirect(val xlen: Int) extends Bundle {
   * a pending return effect. All architectural state changes happen later when
   * the matching ROB head retires.
   *
+  * A8 strengthens the transport contract without moving architectural
+  * ownership: a generated system completion is Decoupled, stays bit-stable
+  * under backpressure, and is emitted at most once for one observed head
+  * lifetime. This matters for changing values such as the time CSR and for a
+  * future completion arbiter that may temporarily select another producer.
+  *
   * Later phases may opt into a semantic operation whose architectural effect is
   * still owned at retirement. F6 uses this narrow seam for SFENCE.VMA. F7 may
   * opt into WFI once an explicit asynchronous wake/interrupt owner is present.
@@ -58,8 +64,11 @@ class TinySystemCompletion(
     val csrReadWritable = Input(Bool())
     val currentPrivilege = Input(UInt(2.W))
 
-    val completion = Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+    val completion = Decoupled(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
   })
+
+  private def sameRobToken(lhs: RobToken, rhs: RobToken): Bool =
+    lhs.index === rhs.index && lhs.generation === rhs.generation
 
   private val decoded = io.head.bits.decoded
   private val systemKind = decoded.system.kind
@@ -69,11 +78,26 @@ class TinySystemCompletion(
   private val operandsReady = io.headDependenciesValid && io.headOperandsReady
 
   io.csrReadAddr := decoded.system.csrAddress
-  io.completion.valid := false.B
-  io.completion.bits := 0.U.asTypeOf(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
-  io.completion.bits.robToken := io.head.bits.robToken
-  io.completion.bits.producerTag := io.head.bits.producerTag
-  io.completion.bits.valueRef := io.head.bits.valueRef
+
+  // Fresh semantics are still combinational when the consumer is ready, so A8
+  // does not add latency to the ordered F5/F6 path. If the completion cannot
+  // fire, the complete response is captured below and becomes independent of
+  // changing CSR/time inputs until it is accepted.
+  private val freshCompletion = Wire(Valid(
+    new ExecutionResponse(xlen, IdentityBits, GenerationBits)
+  ))
+  freshCompletion.valid := false.B
+  freshCompletion.bits := 0.U.asTypeOf(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+  freshCompletion.bits.robToken := io.head.bits.robToken
+  freshCompletion.bits.producerTag := io.head.bits.producerTag
+  freshCompletion.bits.valueRef := io.head.bits.valueRef
+
+  private val heldValid = RegInit(false.B)
+  private val heldBits = Reg(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+  private val deliveredValid = RegInit(false.B)
+  private val deliveredToken = Reg(new RobToken(IdentityBits, GenerationBits))
+  private val alreadyDelivered = deliveredValid && io.head.valid &&
+    sameRobToken(deliveredToken, io.head.bits.robToken)
 
   private val instructionTrapValue = if (xlen == 32) {
     decoded.rawInst
@@ -82,9 +106,9 @@ class TinySystemCompletion(
   }
 
   private def markIllegalInstruction(): Unit = {
-    io.completion.bits.exception.valid := true.B
-    io.completion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
-    io.completion.bits.exception.value := instructionTrapValue
+    freshCompletion.bits.exception.valid := true.B
+    freshCompletion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
+    freshCompletion.bits.exception.value := instructionTrapValue
   }
 
   private val csrImmediate = decoded.system.csrImmediate.pad(xlen)
@@ -141,41 +165,41 @@ class TinySystemCompletion(
   // A predecoded exception is already an architectural semantic fact and must
   // not wait for a source value that the faulting instruction will never use.
   when(headRecordReady && hasPredecodedException) {
-    io.completion.valid := true.B
-    io.completion.bits.exception := decoded.exception
+    freshCompletion.valid := true.B
+    freshCompletion.bits.exception := decoded.exception
   }.elsewhen(operandsReady && isSystemHead) {
     // A deferred or unavailable system operation must fail closed instead of
     // leaving the oldest ROB entry permanently incomplete.
-    io.completion.valid := true.B
+    freshCompletion.valid := true.B
     when(!implementedSystem) {
       markIllegalInstruction()
     }.otherwise {
       switch(systemKind) {
         is(SystemOperationKind.Csr) {
           when(csrLegal && decoded.system.csrOp =/= CsrOp.None) {
-            io.completion.bits.hasValue := io.head.bits.producesValue
-            io.completion.bits.value := io.csrReadData
-            io.completion.bits.privileged.csrWriteValid := csrWriteIntent
-            io.completion.bits.privileged.csrAddress := decoded.system.csrAddress
-            io.completion.bits.privileged.csrWriteData := csrWriteData
+            freshCompletion.bits.hasValue := io.head.bits.producesValue
+            freshCompletion.bits.value := io.csrReadData
+            freshCompletion.bits.privileged.csrWriteValid := csrWriteIntent
+            freshCompletion.bits.privileged.csrAddress := decoded.system.csrAddress
+            freshCompletion.bits.privileged.csrWriteData := csrWriteData
           }.otherwise {
             markIllegalInstruction()
           }
         }
         is(SystemOperationKind.Ecall) {
-          io.completion.bits.exception.valid := true.B
-          io.completion.bits.exception.cause := environmentCallCause
-          io.completion.bits.exception.value := 0.U
+          freshCompletion.bits.exception.valid := true.B
+          freshCompletion.bits.exception.cause := environmentCallCause
+          freshCompletion.bits.exception.value := 0.U
         }
         is(SystemOperationKind.Ebreak) {
-          io.completion.bits.exception.valid := true.B
-          io.completion.bits.exception.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
-          io.completion.bits.exception.value := decoded.pc
+          freshCompletion.bits.exception.valid := true.B
+          freshCompletion.bits.exception.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
+          freshCompletion.bits.exception.value := decoded.pc
         }
         is(SystemOperationKind.Xret) {
           when(xretLegal) {
-            io.completion.bits.privileged.trapReturn := true.B
-            io.completion.bits.privileged.trapReturnSupervisor :=
+            freshCompletion.bits.privileged.trapReturn := true.B
+            freshCompletion.bits.privileged.trapReturnSupervisor :=
               decoded.system.xret === XRetOp.Supervisor
           }.otherwise {
             markIllegalInstruction()
@@ -203,6 +227,33 @@ class TinySystemCompletion(
           }
         }
       }
+    }
+  }
+
+  private val freshEligible = freshCompletion.valid && !alreadyDelivered && !heldValid
+  io.completion.valid := heldValid || freshEligible
+  io.completion.bits := Mux(heldValid, heldBits, freshCompletion.bits)
+
+  // Once the observed head moves, an old numeric token is no longer remembered
+  // as delivered forever. This mirrors the A8 once-only lifetime rule used by
+  // issue ownership rather than treating a bounded token as globally unique.
+  when(deliveredValid &&
+       (!io.head.valid || !sameRobToken(deliveredToken, io.head.bits.robToken))) {
+    deliveredValid := false.B
+  }
+
+  // Capture exactly the response that first encountered backpressure. In
+  // particular, a CSR read such as time cannot change underneath valid.
+  when(freshEligible && !io.completion.ready) {
+    heldValid := true.B
+    heldBits := freshCompletion.bits
+  }
+
+  when(io.completion.fire) {
+    deliveredValid := true.B
+    deliveredToken := io.completion.bits.robToken
+    when(heldValid) {
+      heldValid := false.B
     }
   }
 }
@@ -283,15 +334,15 @@ class TinyPrivilegedBackend(val config: CoreConfig) extends Module {
   system.io.currentPrivilege := csrFile.io.currentPrivilege
   io.currentPrivilege := csrFile.io.currentPrivilege
 
-  assert(!(system.io.completion.valid && execution.io.response.valid),
-    "oldest-only F5 cannot produce normal and system completions simultaneously")
-  dependencyBackend.io.completion.valid := system.io.completion.valid || execution.io.response.valid
-  dependencyBackend.io.completion.bits := Mux(
-    system.io.completion.valid,
-    system.io.completion.bits,
-    execution.io.response.bits
-  )
-  execution.io.response.ready := !system.io.completion.valid
+  // A8 makes simultaneous pending producers legal and arbitrates them instead
+  // of relying on oldest-only mutual exclusion. The ROB still receives one
+  // completion per cycle and remains the final full-identity validator.
+  val completions = Module(new TinyCompletionArbiter(xlen, 2))
+  completions.io.in(0) <> system.io.completion
+  completions.io.in(1) <> execution.io.response
+  dependencyBackend.io.completion.valid := completions.io.out.valid
+  dependencyBackend.io.completion.bits := completions.io.out.bits
+  completions.io.out.ready := true.B
 
   io.branchRedirect.valid := dependencyBackend.io.acceptedRecovery.valid
   io.branchRedirect.bits := 0.U.asTypeOf(new RecoveryRedirect(xlen))
