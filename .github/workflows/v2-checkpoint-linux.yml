@@ -1,0 +1,204 @@
+name: V2 Linux PID1 Checkpoint Replay
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - diag/v2-f7-pid1-checkpoint
+    paths:
+      - 'sim/v2_checkpoint_forkserver_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'Makefile.v2-checkpoint'
+      - '.github/workflows/v2-checkpoint-linux.yml'
+  pull_request:
+    branches:
+      - feature/aethercore-v2-f7-software-parity
+    paths:
+      - 'sim/v2_checkpoint_forkserver_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'Makefile.v2-checkpoint'
+      - '.github/workflows/v2-checkpoint-linux.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-linux-checkpoint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: Boot once to PID1 and replay SEIP twice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+      F7_SOURCE_SHA: 418a4b798410df45c0218f1a0122cdf0199211f6
+      REUSE_SIM_SHA: 5a22b7038abf482231adb1174e69f791b9d87d44
+
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Verify checkpoint branch does not change F7 RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code "$F7_SOURCE_SHA" -- src/main/scala/aethercore
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        id: rv64-toolchain-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore qualified RV64 Linux/OpenSBI software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Restore previously qualified F7 PID1 RTL accelerator
+        id: old-v2-sim
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/v2-rv64-linux-minimal-initramfs/${{ env.REUSE_SIM_SHA }}
+          key: checkpoint-probe-no-exact-hit-${{ github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-rv64-minimal-sim-v1-${{ env.REUSE_SIM_SHA }}-
+
+      - name: Install hosted prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true' || steps.rv64-toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git curl xz-utils cpio
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse or build unchanged Linux 6.6.143 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+
+      - name: Build unchanged deterministic PID1 initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+
+      - name: Compile checkpoint harness against unchanged F7 RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/v2-linux-checkpoint"
+          reused="$HOME/.cache/aethercore/v2-rv64-linux-minimal-initramfs/$REUSE_SIM_SHA/rtl"
+          local_rtl="$build/rtl"
+          mkdir -p "$build"
+          if [[ -n "$(find "$reused" -maxdepth 1 -name '*.sv' -print -quit 2>/dev/null || true)" ]]; then
+            rtl="$reused"
+            echo "V2_CHECKPOINT_RTL_REUSE: status=PASS source=$rtl"
+          else
+            rtl="$local_rtl"
+            echo "V2_CHECKPOINT_RTL_REUSE: status=MISS; elaborating unchanged F7 RTL"
+            make -f Makefile.v2-checkpoint \
+              BUILD_DIR="$build" RTL_DIR="$rtl" rtl
+          fi
+          make -f Makefile.v2-checkpoint \
+            BUILD_DIR="$build" \
+            RTL_DIR="$rtl" \
+            JOBS="$(nproc)" \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            sim-existing-rtl
+          echo "V2_CHECKPOINT_BUILD=$build" >> "$GITHUB_ENV"
+          echo "V2_CHECKPOINT_RTL=$rtl" >> "$GITHUB_ENV"
+
+      - name: Boot once to PID1 and replay UART SEIP twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.v2-checkpoint \
+            BUILD_DIR="$V2_CHECKPOINT_BUILD" \
+            RTL_DIR="$V2_CHECKPOINT_RTL" \
+            FW_BIN="$GITHUB_WORKSPACE/build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin" \
+            CHECKPOINT_TRIGGER='Run /init as init process' \
+            CHILD_SUCCESS_MARKER='RV64 USER UART IRQ OK' \
+            CHILD_COUNT=2 \
+            BOOT_MAX_CYCLES=750000000 \
+            CHILD_MAX_CYCLES=20000000 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            REQUIRE_POST_CHECKPOINT_SEIP=1 \
+            run-existing
+          log="$V2_CHECKPOINT_BUILD/logs/checkpoint.log"
+          grep -q '^V2_CHECKPOINT_READY ' "$log"
+          [[ "$(grep -c '^V2_CHECKPOINT_CHILD_PASS ' "$log")" -eq 2 ]]
+          grep -q '^V2_CHECKPOINT_PASS children=2 ' "$log"
+
+      - name: Upload Linux checkpoint evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-linux-pid1-checkpoint-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/v2-linux-checkpoint/logs/rtl-build.log
+            ${{ runner.temp }}/v2-linux-checkpoint/logs/verilator-build.log
+            ${{ runner.temp }}/v2-linux-checkpoint/logs/checkpoint.log
+            ${{ runner.temp }}/v2-linux-checkpoint/firmware.sha256
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt

@@ -1,0 +1,92 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/v2-checkpoint
+RTL_DIR ?= $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+TOP := AetherCoreV2OpenSbiRV64SimTop
+ELABORATE_MAIN := aethercore.ElaborateV2OpenSbiRV64
+VERILATOR ?= verilator
+VERILATOR_MODEL_OPT ?= -O3
+VERILATOR_MAKE_OPT ?= -MAKEFLAGS "OPT_FAST=-O3 OPT_GLOBAL=-O3"
+SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native
+JOBS ?= 6
+
+FW_BIN ?=
+BOOT_MAX_CYCLES ?= 750000000
+CHECKPOINT_TRIGGER ?= Run /init as init process
+CHILD_SUCCESS_MARKER ?= RV64 USER UART IRQ OK
+CHILD_COUNT ?= 2
+CHILD_MAX_CYCLES ?= 100000000
+PROGRESS_INTERVAL_CYCLES ?= 10000000
+REQUIRE_POST_CHECKPOINT_SEIP ?= 1
+RUN_DEPS ?= sim
+
+.PHONY: all rtl sim sim-existing-rtl run run-existing clean
+
+all: run
+
+rtl:
+	mkdir -p $(RTL_DIR) $(BUILD_DIR)/logs
+	@test -f ./mill || { echo "ERROR: mill launcher is missing"; exit 4; }
+	chmod +x ./mill
+	set +e; \
+		./mill aethercore.runMain $(ELABORATE_MAIN) --target-dir $(RTL_DIR) \
+			2>&1 | tee $(BUILD_DIR)/logs/rtl-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+sim: rtl sim-existing-rtl
+
+sim-existing-rtl:
+	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { \
+		echo "ERROR: no reusable v2 RTL in $(RTL_DIR)"; exit 4; \
+	}
+	mkdir -p $(BUILD_DIR)/logs
+	set +e; \
+		$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_MAKE_OPT) \
+			--cc --exe --build -Wall -Wno-fatal \
+			--top-module $(TOP) -Mdir $(OBJ_DIR) \
+			-CFLAGS "$(SIM_CXXFLAGS)" \
+			$(RTL_DIR)/*.sv $(abspath sim/v2_checkpoint_forkserver_main.cpp) \
+			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+run: $(RUN_DEPS)
+	@test -n "$(FW_BIN)" || { echo "ERROR: FW_BIN must name an OpenSBI payload"; exit 2; }
+	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI payload $(FW_BIN)"; exit 2; }
+	@test -x "$(OBJ_DIR)/V$(TOP)" || { echo "ERROR: missing v2 checkpoint simulator"; exit 3; }
+	mkdir -p $(BUILD_DIR)/logs
+	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
+	set +e; \
+		$(OBJ_DIR)/V$(TOP) \
+			"$(FW_BIN)" \
+			"$(BOOT_MAX_CYCLES)" \
+			"$(CHECKPOINT_TRIGGER)" \
+			"$(CHILD_SUCCESS_MARKER)" \
+			"$(CHILD_COUNT)" \
+			"$(CHILD_MAX_CYCLES)" \
+			"$(PROGRESS_INTERVAL_CYCLES)" \
+			"$(REQUIRE_POST_CHECKPOINT_SEIP)" \
+			2>&1 | tee $(BUILD_DIR)/logs/checkpoint.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	if [[ $$rc -ne 0 ]]; then \
+		echo "ERROR: v2 checkpoint forkserver failed (runner rc=$$rc)"; \
+		exit $$rc; \
+	fi
+	grep -q '^V2_CHECKPOINT_READY ' $(BUILD_DIR)/logs/checkpoint.log || { \
+		echo "ERROR: checkpoint trigger was not reached"; exit 21; \
+	}
+	grep -q '^V2_CHECKPOINT_PASS ' $(BUILD_DIR)/logs/checkpoint.log || { \
+		echo "ERROR: checkpoint children did not all pass"; exit 22; \
+	}
+
+run-existing:
+	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) RUN_DEPS= run
+
+clean:
+	rm -rf $(BUILD_DIR)
