@@ -248,6 +248,9 @@ trait V2F6SfenceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     dut.io.memoryResponse.valid.poke(false.B)
     awaitCommit(dut)
     dut.io.commit.exception.expect(false.B)
+    dut.io.commit.memValid.expect(true.B)
+    dut.io.commit.memWrite.expect(false.B)
+    dut.io.commit.memAddr.expect(expectedPa.U)
     dut.clock.step()
   }
 
@@ -309,7 +312,6 @@ trait V2F6SfenceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dispatchLoad(dut, supervisorPc + 16, rd = 4, rs1 = 1)
       walk(dut, va, rootPpn, l1Ppn, l0Ppn, leaf2)
       acceptRead(dut, pa2, BigInt("55556666", 16))
-      dut.io.commit.memAddr.expect(pa2.U)
       dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
       dut.io.occupancy.expect(0.U)
     }
