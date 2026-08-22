@@ -102,8 +102,13 @@ int runCase(OpenSbiTop& top, VerilatedContext& ctx, Memory& mem,
   const auto startCompressed = c.compressed;
   const auto startUserspaceCompressed = c.userspaceCompressed;
   const auto startSeip = c.seip;
-  std::string input = w.command;
-  if (input.back() != '\n') input.push_back('\n');
+  // A single dash is a diagnostic no-input case. This is useful when the
+  // checkpoint is taken immediately before autonomous PID1/IRQ progress: the
+  // child can prove a post-checkpoint SEIP + marker without fabricating an RX
+  // transaction. Ordinary workloads retain the qualified command semantics.
+  std::string input = w.command == "-" ? std::string{} : w.command;
+  const bool requireRx = !input.empty();
+  if (!input.empty() && input.back() != '\n') input.push_back('\n');
   std::size_t inputPos = 0;
   bool rxIrq = false, postSeip = false, milestone = false;
   std::string uart;
@@ -111,7 +116,8 @@ int runCase(OpenSbiTop& top, VerilatedContext& ctx, Memory& mem,
   std::uint64_t nextProgress = progressEvery;
 
   std::cerr << "\nL32_FORKSERVER_CASE_START id=" << w.id << " cycles=" << cycles
-            << " bytes=" << input.size() << " marker=" << w.milestone << "\n";
+            << " bytes=" << input.size() << " require-rx=" << (requireRx ? 1 : 0)
+            << " marker=" << w.milestone << "\n";
   for (std::uint64_t delta = 0; delta < maxCycles; ++delta) {
     const bool sending = inputPos < input.size();
     if (cycle(top, ctx, mem, cycles, c, sending,
@@ -147,7 +153,7 @@ int runCase(OpenSbiTop& top, VerilatedContext& ctx, Memory& mem,
                 << (sec > 0 ? (delta + 1) / sec : 0.0) << "\n";
       nextProgress += progressEvery;
     }
-    if (milestone && inputPos == input.size() && rxIrq && postSeip) {
+    if (milestone && inputPos == input.size() && (!requireRx || rxIrq) && postSeip) {
       const auto userCompressedDelta = c.userspaceCompressed - startUserspaceCompressed;
       if (requireUserspaceCompressed && userCompressedDelta == 0) {
         std::cout.flush();
@@ -175,7 +181,8 @@ int runCase(OpenSbiTop& top, VerilatedContext& ctx, Memory& mem,
   std::cout.flush();
   std::cerr << "\nL32_FORKSERVER_CASE_TIMEOUT id=" << w.id
             << " delta-cycles=" << cycles - startCycles << " input=" << inputPos << '/'
-            << input.size() << " rx-irq=" << (rxIrq ? 1 : 0)
+            << input.size() << " require-rx=" << (requireRx ? 1 : 0)
+            << " rx-irq=" << (rxIrq ? 1 : 0)
             << " post-input-seip=" << (postSeip ? 1 : 0)
             << " milestone=" << (milestone ? 1 : 0)
             << " delta-userspace-compressed=" << c.userspaceCompressed - startUserspaceCompressed
