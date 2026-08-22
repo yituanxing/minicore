@@ -10,12 +10,20 @@ on:
       - 'sim/l32_opensbi_runtime.h'
       - 'Makefile.v2-checkpoint'
       - '.github/workflows/v2-checkpoint-smoke.yml'
+  pull_request:
+    branches:
+      - feature/aethercore-v2-f7-software-parity
+    paths:
+      - 'sim/v2_checkpoint_forkserver_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'Makefile.v2-checkpoint'
+      - '.github/workflows/v2-checkpoint-smoke.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethercore-v2-checkpoint-${{ github.ref }}
+  group: aethercore-v2-checkpoint-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,7 +38,7 @@ jobs:
       - name: Checkout exact diagnostic head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
       - name: Restore Scala dependency cache
