@@ -15,6 +15,21 @@ constexpr std::uint64_t kRamBase = 0x80000000ULL;
 constexpr std::size_t kRamSize = 256ULL * 1024ULL * 1024ULL;
 constexpr std::uint32_t kEbreak = 0x00100073U;
 
+// Chisel AtomicOp declaration order. Keep this transport-level map explicit so
+// the host never re-decodes RISC-V instruction bits.
+constexpr std::uint32_t kAtomicNone = 0;
+constexpr std::uint32_t kAtomicLr = 1;
+constexpr std::uint32_t kAtomicSc = 2;
+constexpr std::uint32_t kAtomicSwap = 3;
+constexpr std::uint32_t kAtomicAdd = 4;
+constexpr std::uint32_t kAtomicXor = 5;
+constexpr std::uint32_t kAtomicAnd = 6;
+constexpr std::uint32_t kAtomicOr = 7;
+constexpr std::uint32_t kAtomicMin = 8;
+constexpr std::uint32_t kAtomicMax = 9;
+constexpr std::uint32_t kAtomicMinu = 10;
+constexpr std::uint32_t kAtomicMaxu = 11;
+
 /**
  * Shared byte-addressed RAM for the OpenSBI/Linux simulation boundary.
  *
@@ -22,6 +37,10 @@ constexpr std::uint32_t kEbreak = 0x00100073U;
  * accounting, interrupt qualification and forkserver policy remain in their
  * scenario-specific runners. The historical l32sim namespace is retained as
  * a compatibility surface while the transport itself is XLEN-neutral.
+ *
+ * V2 may additionally expose AetherMem atomic metadata. In that case this RAM
+ * is the final LR/SC reservation and AMO read-modify-write owner. V1 tops do
+ * not expose those ports and continue through the byte-identical ordinary path.
  */
 class Memory {
  public:
@@ -33,6 +52,7 @@ class Memory {
     input.read(reinterpret_cast<char*>(bytes_.data()),
                static_cast<std::streamsize>(bytes_.size()));
     if (input.bad()) throw std::runtime_error("failed while reading image: " + path);
+    clearReservation();
   }
 
   bool contains(std::uint64_t address, std::size_t size = 1) const {
@@ -79,6 +99,94 @@ class Memory {
     writeMasked(address, data, mask, 4);
   }
 
+  void clearReservation() {
+    reservationValid_ = false;
+    reservationAddress_ = 0;
+    reservationSize_ = 0;
+  }
+
+  bool reservationMatches(std::uint64_t address, std::size_t size) const {
+    return reservationValid_ && reservationAddress_ == address && reservationSize_ == size;
+  }
+
+  /** Combinational response value for one accepted-looking AetherMem atomic. */
+  std::uint64_t atomicResponse(std::uint64_t address, std::size_t size,
+                               std::uint32_t atomicOp) const {
+    if (size != 4 && size != 8)
+      throw std::runtime_error("AetherMem atomic width must be Word or DWord");
+    if (atomicOp == kAtomicSc)
+      return reservationMatches(address, size) ? 0 : 1;
+    if (atomicOp == kAtomicLr ||
+        (atomicOp >= kAtomicSwap && atomicOp <= kAtomicMaxu))
+      return readData(address, size);
+    throw std::runtime_error("unsupported AetherMem atomic operation");
+  }
+
+  /** Commit the memory-side consequence exactly once for an accepted request. */
+  void commitAtomic(std::uint64_t address, std::size_t size,
+                    std::uint64_t operand, std::uint64_t mask,
+                    std::uint32_t atomicOp) {
+    if (size != 4 && size != 8)
+      throw std::runtime_error("AetherMem atomic width must be Word or DWord");
+
+    if (atomicOp == kAtomicLr) {
+      reservationValid_ = true;
+      reservationAddress_ = address;
+      reservationSize_ = size;
+      return;
+    }
+
+    if (atomicOp == kAtomicSc) {
+      const bool success = reservationMatches(address, size);
+      clearReservation();
+      if (success) writeMasked(address, operand, mask, size);
+      return;
+    }
+
+    const std::uint64_t oldValue = readData(address, size);
+    const std::uint64_t widthMask =
+        size == 8 ? ~std::uint64_t{0} : std::uint64_t{0xffffffffULL};
+    const std::uint64_t oldMasked = oldValue & widthMask;
+    const std::uint64_t operandMasked = operand & widthMask;
+    std::uint64_t newValue = operandMasked;
+
+    switch (atomicOp) {
+      case kAtomicSwap: newValue = operandMasked; break;
+      case kAtomicAdd: newValue = (oldMasked + operandMasked) & widthMask; break;
+      case kAtomicXor: newValue = oldMasked ^ operandMasked; break;
+      case kAtomicAnd: newValue = oldMasked & operandMasked; break;
+      case kAtomicOr: newValue = oldMasked | operandMasked; break;
+      case kAtomicMin:
+        if (size == 4) {
+          const auto lhs = static_cast<std::int32_t>(static_cast<std::uint32_t>(oldMasked));
+          const auto rhs = static_cast<std::int32_t>(static_cast<std::uint32_t>(operandMasked));
+          newValue = static_cast<std::uint32_t>(lhs < rhs ? lhs : rhs);
+        } else {
+          const auto lhs = static_cast<std::int64_t>(oldMasked);
+          const auto rhs = static_cast<std::int64_t>(operandMasked);
+          newValue = static_cast<std::uint64_t>(lhs < rhs ? lhs : rhs);
+        }
+        break;
+      case kAtomicMax:
+        if (size == 4) {
+          const auto lhs = static_cast<std::int32_t>(static_cast<std::uint32_t>(oldMasked));
+          const auto rhs = static_cast<std::int32_t>(static_cast<std::uint32_t>(operandMasked));
+          newValue = static_cast<std::uint32_t>(lhs > rhs ? lhs : rhs);
+        } else {
+          const auto lhs = static_cast<std::int64_t>(oldMasked);
+          const auto rhs = static_cast<std::int64_t>(operandMasked);
+          newValue = static_cast<std::uint64_t>(lhs > rhs ? lhs : rhs);
+        }
+        break;
+      case kAtomicMinu: newValue = oldMasked < operandMasked ? oldMasked : operandMasked; break;
+      case kAtomicMaxu: newValue = oldMasked > operandMasked ? oldMasked : operandMasked; break;
+      default: throw std::runtime_error("unsupported AetherMem AMO operation");
+    }
+
+    writeMasked(address, newValue, mask, size);
+    clearReservation();
+  }
+
  private:
   std::size_t checkedOffset(std::uint64_t address, std::size_t size) const {
     if (!contains(address, size)) throw std::runtime_error("memory access outside RAM");
@@ -86,6 +194,9 @@ class Memory {
   }
 
   std::vector<std::uint8_t> bytes_;
+  bool reservationValid_ = false;
+  std::uint64_t reservationAddress_ = 0;
+  std::size_t reservationSize_ = 0;
 };
 
 /** Chisel MemSize encodes Byte/Half/Word/DWord in declaration order. */
@@ -119,8 +230,18 @@ void driveMemory(Top& top, const Memory& memory) {
   const bool dfault = dvalid && !memory.contains(daddr, dbytes);
   top.io_memReady = true;
   top.io_memFault = dfault;
-  top.io_memRdata =
-      (!dvalid || dfault) ? 0 : memory.readData(daddr, dbytes);
+
+  bool atomic = false;
+  std::uint32_t atomicOp = kAtomicNone;
+  if constexpr (requires { top.io_memAtomic; top.io_memAtomicOp; }) {
+    atomic = static_cast<bool>(top.io_memAtomic);
+    atomicOp = static_cast<std::uint32_t>(top.io_memAtomicOp);
+  }
+
+  top.io_memRdata = (!dvalid || dfault)
+      ? 0
+      : (atomic ? memory.atomicResponse(daddr, dbytes, atomicOp)
+                : memory.readData(daddr, dbytes));
 
   const bool ptwValid = top.io_ptwValid;
   const auto ptwAddr = static_cast<std::uint64_t>(top.io_ptwAddr);
@@ -137,8 +258,8 @@ void driveMemory(Top& top, const Memory& memory) {
 /**
  * Execute one complete simulator cycle while preserving the qualified runtime
  * ordering: drive/evaluate twice at clock-low, commit an accepted physical
- * store into host RAM, then evaluate the rising edge and advance Verilator
- * time. The caller owns architectural observation after the rising edge.
+ * store/atomic into host RAM, then evaluate the rising edge and advance
+ * Verilator time. The caller owns architectural observation after the edge.
  */
 template <typename Top>
 bool step(Top& top, VerilatedContext& context, Memory& memory,
@@ -152,8 +273,25 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
   top.eval();
   const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
-  if (!top.reset && top.io_memValid && top.io_memWrite && top.io_memReady &&
-      !top.io_memFault) {
+  const bool acceptedMemory = !top.reset && top.io_memValid && top.io_memReady &&
+      !top.io_memFault;
+  bool atomic = false;
+  std::uint32_t atomicOp = kAtomicNone;
+  if constexpr (requires { top.io_memAtomic; top.io_memAtomicOp; }) {
+    atomic = static_cast<bool>(top.io_memAtomic);
+    atomicOp = static_cast<std::uint32_t>(top.io_memAtomicOp);
+  }
+
+  if (acceptedMemory && atomic) {
+    const auto dbytes = dataBytesFromMemSize(
+        static_cast<std::uint32_t>(top.io_memSize));
+    memory.commitAtomic(
+        static_cast<std::uint64_t>(top.io_memAddr),
+        dbytes,
+        static_cast<std::uint64_t>(top.io_memWdata),
+        static_cast<std::uint64_t>(top.io_memWmask),
+        atomicOp);
+  } else if (acceptedMemory && top.io_memWrite) {
     const auto dbytes = dataBytesFromMemSize(
         static_cast<std::uint32_t>(top.io_memSize));
     memory.writeMasked(
@@ -161,6 +299,9 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
         static_cast<std::uint64_t>(top.io_memWdata),
         static_cast<std::uint64_t>(top.io_memWmask),
         dbytes);
+    // Conservative single-hart rule: any accepted ordinary store invalidates
+    // the host-side reservation. This never weakens SC correctness.
+    memory.clearReservation();
   }
 
   top.clock = 1;
