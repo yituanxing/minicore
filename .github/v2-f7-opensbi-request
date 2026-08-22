@@ -1,4 +1,4 @@
 AetherCore v2 F7 OpenSBI exact-head milestone request.
 
-This tracked marker exists only to trigger the trusted push lane after the hosted
-F7/fast development gates have established the current implementation boundary.
+request_revision=2
+reason=hosted platform elaboration smoke added before trusted firmware execution
