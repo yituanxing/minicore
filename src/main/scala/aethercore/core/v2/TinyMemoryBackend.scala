@@ -2,7 +2,7 @@ package aethercore.core.v2
 
 import chisel3._
 import chisel3.util._
-import aethercore.common.{CommitTrace, PrivilegeMode}
+import aethercore.common.{AtomicOp, CommitTrace, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
 import aethercore.core.{MachineCsrBit, MachineCsrFile, PmpChecker, PmpConstants, PmpGeometry}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
@@ -10,7 +10,7 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 /**
   * F6 composition harness: F5 precise retirement plus the correctness-first
   * one-outstanding LSU. F7 may opt into the clean-boundary asynchronous owner
-  * without changing the frozen F6 default behavior.
+  * and A-extension transactions without changing the frozen F6 defaults.
   *
   * The same ROB/dependency/execute/CSR leaf modules are composed here with one
   * memory completion source. Ordering/lifetime remains owned by TinyRob; the
@@ -24,7 +24,8 @@ class TinyMemoryBackend(
     val txnIdBits: Int = 2,
     val enableAsyncInterrupts: Boolean = false,
     val withMachineExternalInterrupt: Boolean = false,
-    val withSupervisorExternalInterrupt: Boolean = false
+    val withSupervisorExternalInterrupt: Boolean = false,
+    val allowAtomics: Boolean = false
 ) extends Module {
   private val isa = config.isa
   private val xlen = isa.xlen
@@ -50,6 +51,8 @@ class TinyMemoryBackend(
     "supervisor external interrupt wiring requires the F7 asynchronous owner")
   require(!withSupervisorExternalInterrupt || isa.hasS,
     "supervisor external interrupt wiring requires S-mode")
+  require(!allowAtomics || isa.hasA,
+    "A-extension LSU opt-in requires an ISA profile containing A")
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new RobDispatch(xlen)))
@@ -123,7 +126,8 @@ class TinyMemoryBackend(
     geometry,
     paddrBits = PhysicalBits,
     tlbEntries = tlbEntries,
-    txnIdBits = txnIdBits
+    txnIdBits = txnIdBits,
+    allowAtomics = allowAtomics
   ))
   val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
 
@@ -301,10 +305,16 @@ class TinyMemoryBackend(
     memoryIssuedValid := false.B
   }
 
-  // A store may become externally visible only while the exact store lifetime
-  // is the ROB head. Translation/PMP still have to succeed inside the LSU.
-  lsu.io.storePermit.valid := headIsMemory &&
-    head.bits.decoded.memory.kind === MemoryOperationKind.Store
+  // Ordinary stores and atomic writers may become externally visible only while
+  // the exact lifetime is the ROB head. LR is read-only and does not need this
+  // permission. A locally failing SC also never externalizes.
+  private val headAtomicWriter = allowAtomics.B &&
+    head.bits.decoded.memory.kind === MemoryOperationKind.Atomic &&
+    head.bits.decoded.memory.atomicOp =/= AtomicOp.None &&
+    head.bits.decoded.memory.atomicOp =/= AtomicOp.Lr
+  lsu.io.storePermit.valid := headIsMemory && (
+    head.bits.decoded.memory.kind === MemoryOperationKind.Store || headAtomicWriter
+  )
   lsu.io.storePermit.bits := head.bits.robToken
 
   lsu.io.effectivePrivilege := csrFile.io.effectiveDataPrivilege
@@ -319,6 +329,12 @@ class TinyMemoryBackend(
   lsu.io.pmpEnabled := isa.hasPmp.B
   lsu.io.pmpConfig := csrFile.io.pmpConfig
   lsu.io.pmpAddress := csrFile.io.pmpAddress
+  if (allowAtomics) {
+    // Privileged architectural boundaries conservatively invalidate an LR
+    // reservation. Ordinary stores/SC/AMO clear it inside the LSU itself.
+    lsu.io.reservationClear.get :=
+      trapAtRetire || returnAtRetire || wfiAtRetire || interruptTake
+  }
 
   // Page-table reads are implicit Supervisor-mode accesses and must themselves
   // pass PMP before leaving the core. This mirrors the qualified v1 composition:
