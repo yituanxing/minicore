@@ -297,12 +297,20 @@ class TinyMemoryBackend(
   lsu.io.request.bits.storeData := dependencyBackend.io.headRs2.value
   lsu.io.request.bits.rawInst := head.bits.decoded.rawInst
 
+  // The once-only latch belongs to the current head lifetime, not to an
+  // unbounded history of numeric tokens. RobToken generation may legitimately
+  // wrap after the head has moved through other lifetimes; remembering a token
+  // across that change would eventually suppress a new instruction that reuses
+  // the same index/generation pair.
+  when(memoryIssuedValid &&
+       (!head.valid || !sameRobToken(memoryIssuedToken, head.bits.robToken))) {
+    memoryIssuedValid := false.B
+  }
+  // A new request on the replacement head wins over the stale-latch clear in
+  // the same cycle and becomes the new once-only owner.
   when(lsu.io.request.fire) {
     memoryIssuedValid := true.B
     memoryIssuedToken := head.bits.robToken
-  }
-  when(!head.valid) {
-    memoryIssuedValid := false.B
   }
 
   // Ordinary stores and atomic writers may become externally visible only while
