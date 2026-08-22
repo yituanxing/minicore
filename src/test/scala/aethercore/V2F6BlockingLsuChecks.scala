@@ -104,172 +104,170 @@ trait V2F6BlockingLsuChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     txn
   }
 
-  it should "keep physical-address geometry independent of XLEN" in {
+  behavior of "AetherCore v2 F6 correctness-first blocking LSU"
+
+  it should "preserve RV32 Sv32 physical-address geometry independently of XLEN" in {
     simulate(new TinyBlockingLsu(PageTableGeometry.Sv32)) { dut =>
       dut.io.resolvedPhysicalAddress.getWidth shouldBe 34
       dut.io.memoryRequest.bits.paddr.getWidth shouldBe 34
       dut.io.memoryTrace.bits.paddr.getWidth shouldBe 34
     }
-    simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
-      dut.io.resolvedPhysicalAddress.getWidth shouldBe 56
-      dut.io.memoryRequest.bits.paddr.getWidth shouldBe 56
-      dut.io.memoryTrace.bits.paddr.getWidth shouldBe 56
-    }
   }
 
-  it should "sign extend a tagged RV64 byte load and ignore a stale memory transaction response" in {
+  it should "exercise the RV64 Sv39 blocking LSU contract in one simulator lifecycle" in {
     simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
-      pokeEnvironment(dut)
-      dispatch(
-        dut,
-        kind = MemoryOperationKind.Load,
-        size = MemSize.Byte,
-        unsigned = false,
-        base = 0x1000
-      )
+      withClue("PA56 geometry: ") {
+        dut.io.resolvedPhysicalAddress.getWidth shouldBe 56
+        dut.io.memoryRequest.bits.paddr.getWidth shouldBe 56
+        dut.io.memoryTrace.bits.paddr.getWidth shouldBe 56
+      }
 
-      val txn = firePhysicalRequest(dut)
+      withClue("signed load and stale transaction rejection: ") {
+        pokeEnvironment(dut)
+        dispatch(
+          dut,
+          kind = MemoryOperationKind.Load,
+          size = MemSize.Byte,
+          unsigned = false,
+          base = 0x1000
+        )
 
-      dut.io.memoryResponse.valid.poke(true.B)
-      dut.io.memoryResponse.bits.txnId.poke(((txn + 1) & 3).U)
-      dut.io.memoryResponse.bits.rdata.poke(0x80.U)
-      dut.io.completion.valid.expect(false.B)
-      dut.clock.step()
+        val txn = firePhysicalRequest(dut)
+        dut.io.memoryResponse.valid.poke(true.B)
+        dut.io.memoryResponse.bits.txnId.poke(((txn + 1) & 3).U)
+        dut.io.memoryResponse.bits.rdata.poke(0x80.U)
+        dut.io.completion.valid.expect(false.B)
+        dut.clock.step()
 
-      dut.io.memoryResponse.bits.txnId.poke(txn.U)
-      dut.io.memoryResponse.bits.rdata.poke(0x80.U)
-      dut.io.memoryResponse.bits.last.poke(true.B)
-      dut.io.completion.valid.expect(true.B)
-      dut.io.completion.bits.robToken.index.expect(1.U)
-      dut.io.completion.bits.robToken.generation.expect(2.U)
-      dut.io.completion.bits.hasValue.expect(true.B)
-      dut.io.completion.bits.value.expect("hffffffffffffff80".U)
-      dut.io.completion.bits.exception.valid.expect(false.B)
-      dut.io.memoryTrace.valid.expect(true.B)
-      dut.io.memoryTrace.bits.write.expect(false.B)
-      dut.io.memoryTrace.bits.paddr.expect(0x1000.U)
-      dut.clock.step()
-      dut.io.memoryResponse.valid.poke(false.B)
-      dut.io.busy.expect(false.B)
-    }
-  }
+        dut.io.memoryResponse.bits.txnId.poke(txn.U)
+        dut.io.memoryResponse.bits.rdata.poke(0x80.U)
+        dut.io.memoryResponse.bits.last.poke(true.B)
+        dut.io.completion.valid.expect(true.B)
+        dut.io.completion.bits.robToken.index.expect(1.U)
+        dut.io.completion.bits.robToken.generation.expect(2.U)
+        dut.io.completion.bits.hasValue.expect(true.B)
+        dut.io.completion.bits.value.expect("hffffffffffffff80".U)
+        dut.io.completion.bits.exception.valid.expect(false.B)
+        dut.io.memoryTrace.valid.expect(true.B)
+        dut.io.memoryTrace.bits.write.expect(false.B)
+        dut.io.memoryTrace.bits.paddr.expect(0x1000.U)
+        dut.clock.step()
+        dut.io.memoryResponse.valid.poke(false.B)
+        dut.io.busy.expect(false.B)
+      }
 
-  it should "hold a store behind the exact full-generation ROB permit" in {
-    simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
-      pokeEnvironment(dut)
-      dispatch(
-        dut,
-        kind = MemoryOperationKind.Store,
-        size = MemSize.Word,
-        unsigned = false,
-        base = 0x2000,
-        storeData = 0x12345678,
-        index = 2,
-        generation = 1,
-        rawInst = 0x00802023
-      )
+      withClue("exact-generation store permit: ") {
+        pokeEnvironment(dut)
+        dispatch(
+          dut,
+          kind = MemoryOperationKind.Store,
+          size = MemSize.Word,
+          unsigned = false,
+          base = 0x2000,
+          storeData = 0x12345678,
+          index = 2,
+          generation = 1,
+          rawInst = 0x00802023
+        )
 
-      stepUntil(dut) { dut.io.resolvedPhysicalValid.peek().litValue == 1 }
-      dut.io.memoryRequest.valid.expect(false.B)
+        stepUntil(dut) { dut.io.resolvedPhysicalValid.peek().litValue == 1 }
+        dut.io.memoryRequest.valid.expect(false.B)
 
-      dut.io.storePermit.valid.poke(true.B)
-      dut.io.storePermit.bits.index.poke(2.U)
-      dut.io.storePermit.bits.generation.poke(0.U)
-      dut.io.memoryRequest.valid.expect(false.B)
+        dut.io.storePermit.valid.poke(true.B)
+        dut.io.storePermit.bits.index.poke(2.U)
+        dut.io.storePermit.bits.generation.poke(0.U)
+        dut.io.memoryRequest.valid.expect(false.B)
 
-      dut.io.storePermit.bits.generation.poke(1.U)
-      dut.io.memoryRequest.valid.expect(true.B)
-      dut.io.memoryRequest.bits.op.expect(AetherMemOp.Write)
-      dut.io.memoryRequest.bits.paddr.expect(0x2000.U)
-      dut.io.memoryRequest.bits.wdata.expect(0x12345678.U)
-      dut.io.memoryRequest.bits.wmask.expect("hf".U)
-      val txn = dut.io.memoryRequest.bits.txnId.peek().litValue
-      dut.io.memoryRequest.ready.poke(true.B)
-      dut.clock.step()
-      dut.io.memoryRequest.ready.poke(false.B)
+        dut.io.storePermit.bits.generation.poke(1.U)
+        dut.io.memoryRequest.valid.expect(true.B)
+        dut.io.memoryRequest.bits.op.expect(AetherMemOp.Write)
+        dut.io.memoryRequest.bits.paddr.expect(0x2000.U)
+        dut.io.memoryRequest.bits.wdata.expect(0x12345678.U)
+        dut.io.memoryRequest.bits.wmask.expect("hf".U)
+        val txn = dut.io.memoryRequest.bits.txnId.peek().litValue
+        dut.io.memoryRequest.ready.poke(true.B)
+        dut.clock.step()
+        dut.io.memoryRequest.ready.poke(false.B)
 
-      dut.io.memoryResponse.valid.poke(true.B)
-      dut.io.memoryResponse.bits.txnId.poke(txn.U)
-      dut.io.memoryResponse.bits.rdata.poke(0.U)
-      dut.io.memoryResponse.bits.last.poke(true.B)
-      dut.io.completion.valid.expect(true.B)
-      dut.io.completion.bits.hasValue.expect(false.B)
-      dut.io.completion.bits.exception.valid.expect(false.B)
-      dut.io.memoryTrace.valid.expect(true.B)
-      dut.io.memoryTrace.bits.robToken.index.expect(2.U)
-      dut.io.memoryTrace.bits.robToken.generation.expect(1.U)
-      dut.io.memoryTrace.bits.write.expect(true.B)
-      dut.io.memoryTrace.bits.wmask.expect("hf".U)
-      dut.clock.step()
-    }
-  }
+        dut.io.memoryResponse.valid.poke(true.B)
+        dut.io.memoryResponse.bits.txnId.poke(txn.U)
+        dut.io.memoryResponse.bits.rdata.poke(0.U)
+        dut.io.memoryResponse.bits.last.poke(true.B)
+        dut.io.completion.valid.expect(true.B)
+        dut.io.completion.bits.hasValue.expect(false.B)
+        dut.io.completion.bits.exception.valid.expect(false.B)
+        dut.io.memoryTrace.valid.expect(true.B)
+        dut.io.memoryTrace.bits.robToken.index.expect(2.U)
+        dut.io.memoryTrace.bits.robToken.generation.expect(1.U)
+        dut.io.memoryTrace.bits.write.expect(true.B)
+        dut.io.memoryTrace.bits.wmask.expect("hf".U)
+        dut.clock.step()
+        dut.io.memoryResponse.valid.poke(false.B)
+        dut.io.busy.expect(false.B)
+      }
 
-  it should "raise precise local alignment faults without issuing physical memory" in {
-    simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
-      pokeEnvironment(dut)
-      dispatch(
-        dut,
-        kind = MemoryOperationKind.Store,
-        size = MemSize.Word,
-        unsigned = false,
-        base = 0x3002,
-        storeData = 0x55
-      )
+      withClue("local alignment exception: ") {
+        pokeEnvironment(dut)
+        dispatch(
+          dut,
+          kind = MemoryOperationKind.Store,
+          size = MemSize.Word,
+          unsigned = false,
+          base = 0x3002,
+          storeData = 0x55
+        )
 
-      dut.io.completion.valid.expect(true.B)
-      dut.io.completion.bits.exception.valid.expect(true.B)
-      dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.StoreAddressMisaligned.U)
-      dut.io.completion.bits.exception.value.expect(0x3002.U)
-      dut.io.memoryRequest.valid.expect(false.B)
-      dut.io.pteValid.expect(false.B)
-      dut.clock.step()
-      dut.io.busy.expect(false.B)
-    }
-  }
+        dut.io.completion.valid.expect(true.B)
+        dut.io.completion.bits.exception.valid.expect(true.B)
+        dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.StoreAddressMisaligned.U)
+        dut.io.completion.bits.exception.value.expect(0x3002.U)
+        dut.io.memoryRequest.valid.expect(false.B)
+        dut.io.pteValid.expect(false.B)
+        dut.clock.step()
+        dut.io.busy.expect(false.B)
+      }
 
-  it should "turn a denied translated physical access into an access fault without externalizing it" in {
-    simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
-      pokeEnvironment(dut, privilege = PrivilegeMode.Supervisor)
-      dut.io.pmpEnabled.poke(true.B)
-      // All PMP entries are OFF. An unmatched S-mode access is denied.
-      dispatch(
-        dut,
-        kind = MemoryOperationKind.Load,
-        size = MemSize.Word,
-        unsigned = true,
-        base = 0x4000
-      )
+      withClue("PMP denial without externalization: ") {
+        pokeEnvironment(dut, privilege = PrivilegeMode.Supervisor)
+        dut.io.pmpEnabled.poke(true.B)
+        // All PMP entries are OFF. An unmatched S-mode access is denied.
+        dispatch(
+          dut,
+          kind = MemoryOperationKind.Load,
+          size = MemSize.Word,
+          unsigned = true,
+          base = 0x4000
+        )
 
-      stepUntil(dut) { dut.io.completion.valid.peek().litValue == 1 }
-      dut.io.completion.bits.exception.valid.expect(true.B)
-      dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.LoadAccessFault.U)
-      dut.io.completion.bits.exception.value.expect(0x4000.U)
-      dut.io.memoryRequest.valid.expect(false.B)
-      dut.clock.step()
-      dut.io.busy.expect(false.B)
-    }
-  }
+        stepUntil(dut) { dut.io.completion.valid.peek().litValue == 1 }
+        dut.io.completion.bits.exception.valid.expect(true.B)
+        dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.LoadAccessFault.U)
+        dut.io.completion.bits.exception.value.expect(0x4000.U)
+        dut.io.memoryRequest.valid.expect(false.B)
+        dut.clock.step()
+        dut.io.busy.expect(false.B)
+      }
 
-  it should "fail unsupported atomics closed instead of wedging the blocking LSU" in {
-    simulate(new TinyBlockingLsu(PageTableGeometry.Sv39)) { dut =>
-      pokeEnvironment(dut)
-      dispatch(
-        dut,
-        kind = MemoryOperationKind.Atomic,
-        size = MemSize.DWord,
-        unsigned = false,
-        base = 0x5000,
-        atomicOp = AtomicOp.Add,
-        rawInst = 0x00b5302f
-      )
+      withClue("unsupported atomic fail-closed behavior: ") {
+        pokeEnvironment(dut)
+        dispatch(
+          dut,
+          kind = MemoryOperationKind.Atomic,
+          size = MemSize.DWord,
+          unsigned = false,
+          base = 0x5000,
+          atomicOp = AtomicOp.Add,
+          rawInst = 0x00b5302f
+        )
 
-      dut.io.completion.valid.expect(true.B)
-      dut.io.completion.bits.exception.valid.expect(true.B)
-      dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.IllegalInstruction.U)
-      dut.io.completion.bits.exception.value.expect(0x00b5302f.U)
-      dut.io.memoryRequest.valid.expect(false.B)
-      dut.clock.step()
-      dut.io.busy.expect(false.B)
+        dut.io.completion.valid.expect(true.B)
+        dut.io.completion.bits.exception.valid.expect(true.B)
+        dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.IllegalInstruction.U)
+        dut.io.completion.bits.exception.value.expect(0x00b5302f.U)
+        dut.io.memoryRequest.valid.expect(false.B)
+        dut.clock.step()
+        dut.io.busy.expect(false.B)
+      }
     }
   }
 }
