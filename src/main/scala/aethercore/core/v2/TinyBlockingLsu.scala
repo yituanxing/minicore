@@ -65,6 +65,12 @@ class TinyMemoryTrace(
   * a non-atomic Read/Write pair. LR/SC additionally keep a conservative local
   * reservation, while the memory system remains the final reservation/atomicity
   * authority for an externally issued SC.
+  *
+  * A8 makes the terminal completion Decoupled. A ready consumer sees the same
+  * flow-through completion timing as F6/F7; under backpressure the complete
+  * response is captured and the LSU retains the active transaction lifetime
+  * until completion.fire. A terminal response can therefore never disappear
+  * merely because another producer won the completion port that cycle.
   */
 class TinyBlockingLsu(
     val geometry: PageTableGeometry,
@@ -87,7 +93,7 @@ class TinyBlockingLsu(
 
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(new TinyMemoryRequest(Xlen, IdentityBits, GenerationBits)))
-    val completion = Valid(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
+    val completion = Decoupled(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
     val memoryTrace = Valid(new TinyMemoryTrace(Xlen, PhysicalBits, IdentityBits, GenerationBits))
 
     // Live exact-head permission. Ordinary stores plus SC/AMO writers must hold
@@ -134,6 +140,8 @@ class TinyBlockingLsu(
   val physicalIssued = RegInit(false.B)
   val activeTxn = RegInit(0.U(txnIdBits.W))
   val nextTxn = RegInit(0.U(txnIdBits.W))
+  val completionHeldValid = RegInit(false.B)
+  val completionHeldBits = Reg(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
 
   // The local reservation is intentionally conservative. A matching SC still
   // crosses AetherMem as Atomic.Sc so external agents/multi-hart memory remain
@@ -203,7 +211,7 @@ class TinyBlockingLsu(
   val localFault = unsupported || misaligned
 
   val adapter = Module(new DataPathAdapter(geometry, PhysicalBits, tlbEntries))
-  adapter.io.requestValid := busy && !localFault
+  adapter.io.requestValid := busy && !localFault && !completionHeldValid
   adapter.io.flush := io.translationFlush
   adapter.io.virtualAddress := effectiveAddress
   adapter.io.privilege := io.effectivePrivilege
@@ -246,7 +254,7 @@ class TinyBlockingLsu(
   io.resolvedPhysicalAddress := adapter.io.dataAddress
 
   io.memoryRequest.valid := adapter.io.dataValid && !pmpDenied && !atomicPmaDenied &&
-    !localScFailure && !physicalIssued && writeMayExternalize
+    !localScFailure && !physicalIssued && writeMayExternalize && !completionHeldValid
   io.memoryRequest.bits.txnId := nextTxn
   io.memoryRequest.bits.op := Mux(
     isAtomic,
@@ -268,7 +276,9 @@ class TinyBlockingLsu(
 
   // A one-outstanding LSU may discard a stale response with a different
   // transaction ID, but only the exact active ID can complete the adapter.
-  io.memoryResponse.ready := physicalIssued
+  // Once a terminal response has been captured, stop consuming physical
+  // responses until the architectural completion transport accepts it.
+  io.memoryResponse.ready := physicalIssued && !completionHeldValid
   val matchingResponse = io.memoryResponse.fire && io.memoryResponse.bits.txnId === activeTxn
   adapter.io.dataReady := pmpDenied || atomicPmaDenied || localScFailure || matchingResponse
   adapter.io.dataRdata := io.memoryResponse.bits.rdata
@@ -366,43 +376,56 @@ class TinyBlockingLsu(
     }
   }
 
-  io.completion.valid := false.B
-  io.completion.bits := 0.U.asTypeOf(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
-  io.completion.bits.robToken := active.robToken
-  io.completion.bits.producerTag := active.producerTag
-  io.completion.bits.valueRef := active.valueRef
+  private val freshCompletion = Wire(Valid(
+    new ExecutionResponse(Xlen, IdentityBits, GenerationBits)
+  ))
+  freshCompletion.valid := false.B
+  freshCompletion.bits := 0.U.asTypeOf(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
+  freshCompletion.bits.robToken := active.robToken
+  freshCompletion.bits.producerTag := active.producerTag
+  freshCompletion.bits.valueRef := active.valueRef
 
-  val adapterDone = busy && !localFault && adapter.io.requestComplete
-  when(busy && localFault) {
-    io.completion.valid := true.B
-    io.completion.bits.exception.valid := true.B
+  val adapterDone = busy && !localFault && adapter.io.requestComplete && !completionHeldValid
+  when(busy && localFault && !completionHeldValid) {
+    freshCompletion.valid := true.B
+    freshCompletion.bits.exception.valid := true.B
     when(unsupported) {
-      io.completion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U
-      io.completion.bits.exception.value := active.rawInst.pad(Xlen)
+      freshCompletion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U
+      freshCompletion.bits.exception.value := active.rawInst.pad(Xlen)
     }.otherwise {
-      io.completion.bits.exception.cause := Mux(
+      freshCompletion.bits.exception.cause := Mux(
         accessIsLoad,
         MachineExceptionCode.LoadAddressMisaligned.U,
         MachineExceptionCode.StoreAddressMisaligned.U
       )
-      io.completion.bits.exception.value := effectiveAddress
+      freshCompletion.bits.exception.value := effectiveAddress
     }
   }.elsewhen(adapterDone) {
     val fault = adapter.io.pageFault || adapter.io.accessFault
-    io.completion.valid := true.B
-    io.completion.bits.hasValue := (isLoad || isAtomic) && !fault
-    io.completion.bits.value := Mux(
+    freshCompletion.valid := true.B
+    freshCompletion.bits.hasValue := (isLoad || isAtomic) && !fault
+    freshCompletion.bits.value := Mux(
       atomicSc,
       Mux(localScFailure, 1.U, adapter.io.readData),
       Mux(isAtomic, extendedAtomicOld(adapter.io.readData), extendedLoad(adapter.io.readData))
     )
-    io.completion.bits.exception.valid := fault
-    io.completion.bits.exception.cause := Mux(
+    freshCompletion.bits.exception.valid := fault
+    freshCompletion.bits.exception.cause := Mux(
       adapter.io.pageFault,
       Mux(accessIsLoad, MachineExceptionCode.LoadPageFault.U, MachineExceptionCode.StorePageFault.U),
       Mux(accessIsLoad, MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
     )
-    io.completion.bits.exception.value := effectiveAddress
+    freshCompletion.bits.exception.value := effectiveAddress
+  }
+
+  io.completion.valid := completionHeldValid || freshCompletion.valid
+  io.completion.bits := Mux(completionHeldValid, completionHeldBits, freshCompletion.bits)
+
+  // Backpressure converts the flow-through response into an owned held response.
+  // Bits are captured exactly once, then remain stable until completion.fire.
+  when(freshCompletion.valid && !io.completion.ready) {
+    completionHeldValid := true.B
+    completionHeldBits := freshCompletion.bits
   }
 
   val physicalSuccess = matchingResponse && io.memoryResponse.bits.last && !io.memoryResponse.bits.fault
@@ -436,8 +459,11 @@ class TinyBlockingLsu(
     }
   }
 
-  when(io.completion.valid) {
+  // The memory uOp lifetime is released only when its completion is actually
+  // accepted. This is the key A8 difference from F6/F7 Valid-only transport.
+  when(io.completion.fire) {
     busy := false.B
     physicalIssued := false.B
+    completionHeldValid := false.B
   }
 }
