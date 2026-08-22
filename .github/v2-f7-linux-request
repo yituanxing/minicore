@@ -1,4 +1,4 @@
 AetherCore v2 F7 Linux exact-head milestone request.
 
-request_revision=2
-reason=Linux 6.6.143 version banner passed; advance unchanged early boot to Memory milestone
+request_revision=3
+reason=Memory milestone passed; advance unchanged Linux 6.6.143 to riscv_clocksource plus real retired interrupt/STIP
