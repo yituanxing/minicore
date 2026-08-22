@@ -57,24 +57,21 @@ class TinyMemoryTrace(
 }
 
 /**
-  * F6 correctness-first blocking LSU.
+  * Correctness-first one-outstanding LSU.
   *
-  * Exactly one architectural memory uOp may be live. Address translation and
-  * page/access-fault generation reuse DataPathAdapter; physical permission
-  * checking reuses PmpChecker. Loads may issue once translation/PMP succeed.
-  * Stores additionally require a live commit/head permit carrying the same full
-  * RobToken, so an address-resolved store cannot become externally visible just
-  * because execution reached the LSU.
-  *
-  * This slice deliberately leaves atomics for a later F6 extension and fails
-  * them closed as Illegal Instruction instead of allowing an unsupported uOp to
-  * wedge the ROB head.
+  * F6 defaults to ordinary load/store only. F7 may opt into A-extension
+  * transactions without changing the frozen F6 contract. Atomic RMW operations
+  * cross AetherMem as one Atomic request; the LSU never decomposes an AMO into
+  * a non-atomic Read/Write pair. LR/SC additionally keep a conservative local
+  * reservation, while the memory system remains the final reservation/atomicity
+  * authority for an externally issued SC.
   */
 class TinyBlockingLsu(
     val geometry: PageTableGeometry,
     val paddrBits: Int = -1,
     val tlbEntries: Int = 8,
-    val txnIdBits: Int = 2
+    val txnIdBits: Int = 2,
+    val allowAtomics: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val IdentityBits = TinyRobGeometry.IndexBits
@@ -93,9 +90,12 @@ class TinyBlockingLsu(
     val completion = Valid(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
     val memoryTrace = Valid(new TinyMemoryTrace(Xlen, PhysicalBits, IdentityBits, GenerationBits))
 
-    // This is a live permission indication, not a one-cycle speculative pulse.
-    // Integration will derive it only for the current ROB head.
+    // Live exact-head permission. Ordinary stores plus SC/AMO writers must hold
+    // this full RobToken before any externally visible write-like transaction.
     val storePermit = Flipped(Valid(new RobToken(IdentityBits, GenerationBits)))
+    // Architectural boundaries may conservatively invalidate an LR reservation.
+    // Keep this port absent in the frozen F6/default elaboration.
+    val reservationClear = if (allowAtomics) Some(Input(Bool())) else None
 
     val effectivePrivilege = Input(UInt(2.W))
     val satpTranslationEnabled = Input(Bool())
@@ -135,6 +135,13 @@ class TinyBlockingLsu(
   val activeTxn = RegInit(0.U(txnIdBits.W))
   val nextTxn = RegInit(0.U(txnIdBits.W))
 
+  // The local reservation is intentionally conservative. A matching SC still
+  // crosses AetherMem as Atomic.Sc so external agents/multi-hart memory remain
+  // able to reject the store conditionally.
+  val reservationValid = if (allowAtomics) Some(RegInit(false.B)) else None
+  val reservationAddress = if (allowAtomics) Some(Reg(UInt(PhysicalBits.W))) else None
+  val reservationSize = if (allowAtomics) Some(Reg(MemSize())) else None
+
   io.request.ready := !busy
   io.busy := busy
 
@@ -147,9 +154,23 @@ class TinyBlockingLsu(
   val effectiveAddress = active.base + active.offset
   val isLoad = active.kind === MemoryOperationKind.Load
   val isStore = active.kind === MemoryOperationKind.Store
-  val supportedKind = isLoad || isStore
-  val sizeSupported = if (Xlen == 32) active.size =/= MemSize.DWord else true.B
-  val unsupported = busy && (!supportedKind || !sizeSupported || active.atomicOp =/= AtomicOp.None)
+  val isAtomic = active.kind === MemoryOperationKind.Atomic
+  val atomicLr = isAtomic && active.atomicOp === AtomicOp.Lr
+  val atomicSc = isAtomic && active.atomicOp === AtomicOp.Sc
+  val atomicRmw = isAtomic && active.atomicOp =/= AtomicOp.None && !atomicLr && !atomicSc
+  val atomicWriter = atomicSc || atomicRmw
+  val accessIsLoad = isLoad || atomicLr
+  val accessNeedsWritePermission = isStore || atomicWriter
+
+  val ordinaryKind = isLoad || isStore
+  val atomicKindSupported = allowAtomics.B && isAtomic && active.atomicOp =/= AtomicOp.None
+  val supportedKind = ordinaryKind || atomicKindSupported
+  val ordinarySizeSupported = if (Xlen == 32) active.size =/= MemSize.DWord else true.B
+  val atomicSizeSupported = active.size === MemSize.Word ||
+    (if (Xlen == 64) active.size === MemSize.DWord else false.B)
+  val sizeSupported = Mux(isAtomic, atomicSizeSupported, ordinarySizeSupported)
+  val ordinaryCarriesAtomicTag = ordinaryKind && active.atomicOp =/= AtomicOp.None
+  val unsupported = busy && (!supportedKind || !sizeSupported || ordinaryCarriesAtomicTag)
 
   val accessBytes = WireDefault(BusBytes.U(4.W))
   val alignmentMask = WireDefault((BusBytes - 1).U(Xlen.W))
@@ -186,8 +207,8 @@ class TinyBlockingLsu(
   adapter.io.flush := io.translationFlush
   adapter.io.virtualAddress := effectiveAddress
   adapter.io.privilege := io.effectivePrivilege
-  adapter.io.translateWrite := isStore
-  adapter.io.write := isStore
+  adapter.io.translateWrite := accessNeedsWritePermission
+  adapter.io.write := accessNeedsWritePermission
   adapter.io.wdata := active.storeData
   adapter.io.wmask := storeMask
   adapter.io.size := active.size
@@ -206,26 +227,37 @@ class TinyBlockingLsu(
   pmp.io.privilege := io.effectivePrivilege
   pmp.io.address := adapter.io.dataAddress
   pmp.io.bytes := accessBytes
-  pmp.io.write := isStore
+  pmp.io.write := accessNeedsWritePermission
   pmp.io.execute := false.B
   pmp.io.config := io.pmpConfig
   pmp.io.pmpAddress := io.pmpAddress
 
   val pmpDenied = adapter.io.dataValid && io.pmpEnabled && !pmp.io.allow
+  val atomicPmaDenied = adapter.io.dataValid && isAtomic && !io.resolvedAttributes.supportsAtomic
   val permitMatches = io.storePermit.valid && sameRobToken(io.storePermit.bits, active.robToken)
-  val storeMayExternalize = !isStore || permitMatches
+  val writeMayExternalize = !accessNeedsWritePermission || permitMatches
+  val localReservationMatches = if (allowAtomics) {
+    reservationValid.get && reservationSize.get === active.size &&
+      reservationAddress.get === adapter.io.dataAddress
+  } else false.B
+  val localScFailure = adapter.io.dataValid && atomicSc && !localReservationMatches
 
   io.resolvedPhysicalValid := adapter.io.dataValid
   io.resolvedPhysicalAddress := adapter.io.dataAddress
 
-  io.memoryRequest.valid := adapter.io.dataValid && !pmpDenied && !physicalIssued && storeMayExternalize
+  io.memoryRequest.valid := adapter.io.dataValid && !pmpDenied && !atomicPmaDenied &&
+    !localScFailure && !physicalIssued && writeMayExternalize
   io.memoryRequest.bits.txnId := nextTxn
-  io.memoryRequest.bits.op := Mux(isStore, AetherMemOp.Write, AetherMemOp.Read)
+  io.memoryRequest.bits.op := Mux(
+    isAtomic,
+    AetherMemOp.Atomic,
+    Mux(isStore, AetherMemOp.Write, AetherMemOp.Read)
+  )
   io.memoryRequest.bits.paddr := adapter.io.dataAddress
   io.memoryRequest.bits.size := active.size
   io.memoryRequest.bits.wdata := active.storeData
-  io.memoryRequest.bits.wmask := Mux(isStore, storeMask, 0.U)
-  io.memoryRequest.bits.atomicOp := AtomicOp.None
+  io.memoryRequest.bits.wmask := Mux(accessNeedsWritePermission, storeMask, 0.U)
+  io.memoryRequest.bits.atomicOp := Mux(isAtomic, active.atomicOp, AtomicOp.None)
   io.memoryRequest.bits.attributes := io.resolvedAttributes
 
   when(io.memoryRequest.fire) {
@@ -238,12 +270,12 @@ class TinyBlockingLsu(
   // transaction ID, but only the exact active ID can complete the adapter.
   io.memoryResponse.ready := physicalIssued
   val matchingResponse = io.memoryResponse.fire && io.memoryResponse.bits.txnId === activeTxn
-  adapter.io.dataReady := pmpDenied || matchingResponse
+  adapter.io.dataReady := pmpDenied || atomicPmaDenied || localScFailure || matchingResponse
   adapter.io.dataRdata := io.memoryResponse.bits.rdata
-  // Multi-beat physical responses are outside this first blocking slice. Fail
-  // closed instead of silently treating a non-final beat as an architectural
-  // completion.
-  adapter.io.dataFault := pmpDenied ||
+  // Multi-beat physical responses remain outside the blocking slice. PMA/PMP
+  // denials are local access faults; a local SC reservation miss is a normal
+  // architectural SC failure, not a fault.
+  adapter.io.dataFault := pmpDenied || atomicPmaDenied ||
     (matchingResponse && (io.memoryResponse.bits.fault || !io.memoryResponse.bits.last))
 
   def extendedLoad(data: UInt): UInt = {
@@ -269,6 +301,71 @@ class TinyBlockingLsu(
     result
   }
 
+  def extendedAtomicOld(data: UInt): UInt = {
+    if (Xlen == 32) {
+      data
+    } else {
+      Mux(
+        active.size === MemSize.Word,
+        Cat(Fill(32, data(31)), data(31, 0)),
+        data
+      )
+    }
+  }
+
+  // Compute the architectural write value only for trace/debug visibility.
+  // The actual indivisible RMW is performed by AetherMemOp.Atomic downstream.
+  val atomicOld = io.memoryResponse.bits.rdata
+  val atomicSignedOperand = if (Xlen == 64) {
+    Mux(
+      active.size === MemSize.Word,
+      Cat(Fill(32, active.storeData(31)), active.storeData(31, 0)),
+      active.storeData
+    )
+  } else active.storeData
+  val atomicUnsignedOperand = if (Xlen == 64) {
+    Mux(
+      active.size === MemSize.Word,
+      Cat(0.U(32.W), active.storeData(31, 0)),
+      active.storeData
+    )
+  } else active.storeData
+  val atomicSignedOld = if (Xlen == 64) {
+    Mux(active.size === MemSize.Word, Cat(Fill(32, atomicOld(31)), atomicOld(31, 0)), atomicOld)
+  } else atomicOld
+  val atomicUnsignedOld = if (Xlen == 64) {
+    Mux(active.size === MemSize.Word, Cat(0.U(32.W), atomicOld(31, 0)), atomicOld)
+  } else atomicOld
+
+  val atomicWriteData = WireDefault(active.storeData)
+  switch(active.atomicOp) {
+    is(AtomicOp.Swap) { atomicWriteData := active.storeData }
+    is(AtomicOp.Add)  { atomicWriteData := atomicOld + active.storeData }
+    is(AtomicOp.Xor)  { atomicWriteData := atomicOld ^ active.storeData }
+    is(AtomicOp.And)  { atomicWriteData := atomicOld & active.storeData }
+    is(AtomicOp.Or)   { atomicWriteData := atomicOld | active.storeData }
+    is(AtomicOp.Min)  {
+      atomicWriteData := Mux(
+        atomicSignedOld.asSInt < atomicSignedOperand.asSInt,
+        atomicSignedOld,
+        atomicSignedOperand
+      )
+    }
+    is(AtomicOp.Max)  {
+      atomicWriteData := Mux(
+        atomicSignedOld.asSInt > atomicSignedOperand.asSInt,
+        atomicSignedOld,
+        atomicSignedOperand
+      )
+    }
+    is(AtomicOp.Minu) {
+      atomicWriteData := Mux(atomicUnsignedOld < atomicUnsignedOperand, atomicUnsignedOld, atomicUnsignedOperand)
+    }
+    is(AtomicOp.Maxu) {
+      atomicWriteData := Mux(atomicUnsignedOld > atomicUnsignedOperand, atomicUnsignedOld, atomicUnsignedOperand)
+    }
+  }
+
   io.completion.valid := false.B
   io.completion.bits := 0.U.asTypeOf(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
   io.completion.bits.robToken := active.robToken
@@ -284,7 +381,7 @@ class TinyBlockingLsu(
       io.completion.bits.exception.value := active.rawInst.pad(Xlen)
     }.otherwise {
       io.completion.bits.exception.cause := Mux(
-        isLoad,
+        accessIsLoad,
         MachineExceptionCode.LoadAddressMisaligned.U,
         MachineExceptionCode.StoreAddressMisaligned.U
       )
@@ -293,24 +390,51 @@ class TinyBlockingLsu(
   }.elsewhen(adapterDone) {
     val fault = adapter.io.pageFault || adapter.io.accessFault
     io.completion.valid := true.B
-    io.completion.bits.hasValue := isLoad && !fault
-    io.completion.bits.value := extendedLoad(adapter.io.readData)
+    io.completion.bits.hasValue := (isLoad || isAtomic) && !fault
+    io.completion.bits.value := Mux(
+      atomicSc,
+      Mux(localScFailure, 1.U, adapter.io.readData),
+      Mux(isAtomic, extendedAtomicOld(adapter.io.readData), extendedLoad(adapter.io.readData))
+    )
     io.completion.bits.exception.valid := fault
     io.completion.bits.exception.cause := Mux(
       adapter.io.pageFault,
-      Mux(isLoad, MachineExceptionCode.LoadPageFault.U, MachineExceptionCode.StorePageFault.U),
-      Mux(isLoad, MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
+      Mux(accessIsLoad, MachineExceptionCode.LoadPageFault.U, MachineExceptionCode.StorePageFault.U),
+      Mux(accessIsLoad, MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
     )
     io.completion.bits.exception.value := effectiveAddress
   }
 
-  io.memoryTrace.valid := matchingResponse && io.memoryResponse.bits.last && !io.memoryResponse.bits.fault
+  val physicalSuccess = matchingResponse && io.memoryResponse.bits.last && !io.memoryResponse.bits.fault
+  val scSucceeded = atomicSc && physicalSuccess && io.memoryResponse.bits.rdata === 0.U
+  val traceValid = physicalSuccess && (!atomicSc || scSucceeded)
+  val traceWrite = isStore || atomicRmw || scSucceeded
+
+  io.memoryTrace.valid := traceValid
   io.memoryTrace.bits := 0.U.asTypeOf(new TinyMemoryTrace(Xlen, PhysicalBits, IdentityBits, GenerationBits))
   io.memoryTrace.bits.robToken := active.robToken
   io.memoryTrace.bits.paddr := adapter.io.dataAddress
-  io.memoryTrace.bits.write := isStore
-  io.memoryTrace.bits.wdata := Mux(isStore, active.storeData, 0.U)
-  io.memoryTrace.bits.wmask := Mux(isStore, storeMask, 0.U)
+  io.memoryTrace.bits.write := traceWrite
+  io.memoryTrace.bits.wdata := Mux(
+    atomicRmw,
+    atomicWriteData,
+    Mux(isStore || scSucceeded, active.storeData, 0.U)
+  )
+  io.memoryTrace.bits.wmask := Mux(traceWrite, storeMask, 0.U)
+
+  if (allowAtomics) {
+    val completedWithoutFault = adapterDone && !adapter.io.pageFault && !adapter.io.accessFault
+    when(completedWithoutFault && atomicLr && physicalSuccess) {
+      reservationValid.get := true.B
+      reservationAddress.get := adapter.io.dataAddress
+      reservationSize.get := active.size
+    }.elsewhen(completedWithoutFault && (atomicSc || atomicRmw || isStore)) {
+      reservationValid.get := false.B
+    }
+    when(io.reservationClear.get) {
+      reservationValid.get := false.B
+    }
+  }
 
   when(io.completion.valid) {
     busy := false.B
