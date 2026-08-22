@@ -118,12 +118,17 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
 
-      - name: Validate tools and reuse unchanged Linux/OpenSBI
+      - name: Validate pinned tools
         shell: bash
         run: |
           set -euo pipefail
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build or reuse unchanged Linux 6.6.143 plus OpenSBI
+        shell: bash
+        run: |
+          set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
           grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
