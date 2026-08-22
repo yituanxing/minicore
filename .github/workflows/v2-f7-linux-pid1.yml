@@ -66,11 +66,6 @@ jobs:
             autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
             libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
             curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
-          chmod +x ./mill tools/ensure_verilator_5_024.sh \
-            tools/ensure_riscv64_linux_gcc_13_3.sh \
-            tools/ci/rv64_linux_early_build.sh \
-            tools/ci/rv64_minimal_initramfs_build.sh \
-            tools/ci/rv64_minimal_init_payload_build.sh
 
       - name: Verify v2 boundary observer and unchanged workload contracts
         shell: bash
