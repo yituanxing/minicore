@@ -1,2 +1,2 @@
-run=3
-reason=Rerun unchanged Linux PID1 UART/STIP/SEIP proof with the measured oldest-only F7 cycle budget; correctness gates remain unchanged
+run=4
+reason=Final synchronized F7 freeze candidate; rerun unchanged Linux PID1 UART/STIP/SEIP proof on the exact same head as formal clocksource/STIP qualification

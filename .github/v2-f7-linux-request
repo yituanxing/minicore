@@ -1,4 +1,4 @@
 AetherCore v2 F7 Linux exact-head milestone request.
 
-request_revision=5
-reason=Final source-owned observer qualification candidate; run unchanged Linux 6.6.143 clocksource plus real STIP on the same exact head as PID1 UART/STIP/SEIP
+request_revision=6
+reason=Final synchronized F7 freeze candidate; rerun unchanged Linux 6.6.143 clocksource plus real STIP on the exact same head as PID1 UART/STIP/SEIP
