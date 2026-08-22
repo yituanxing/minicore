@@ -1,6 +1,7 @@
 package aethercore.core.v2
 
 import chisel3._
+import chisel3.util._
 import aethercore.common._
 import aethercore.config.IsaConfig
 import aethercore.core.{Decoder, Immediate}
