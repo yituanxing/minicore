@@ -162,21 +162,34 @@ jobs:
       - name: Execute real PID1 UART interrupt proof through F7 v2
         shell: bash
         run: |
-          set -euo pipefail
-          git diff --exit-code
-          make -f Makefile.l32-linux-boot \
-            BUILD_DIR="$HOME/.cache/aethercore/v2-rv64-linux-minimal-initramfs/$TARGET_SHA" \
-            TOP=AetherCoreV2OpenSbiRV64SimTop \
-            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
-            FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
-            JOBS="$(nproc)" \
-            MAX_CYCLES=600000000 \
-            MILESTONE='RV64 USER UART IRQ OK' \
-            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
-            PROGRESS_INTERVAL_CYCLES=10000000 \
-            VERILATOR='verilator -LDFLAGS -ldl' \
-            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
-            run-local
+          set -uo pipefail
+          dst="$GITHUB_WORKSPACE/build/v2-f7-linux-pid1-runtime"
+          mkdir -p "$dst"
+          set +e
+          (
+            set -euo pipefail
+            echo "target_sha=$TARGET_SHA"
+            echo 'git_status_before:'
+            git status --short
+            echo 'git_diff_before:'
+            git diff --exit-code
+            make -f Makefile.l32-linux-boot \
+              BUILD_DIR="$HOME/.cache/aethercore/v2-rv64-linux-minimal-initramfs/$TARGET_SHA" \
+              TOP=AetherCoreV2OpenSbiRV64SimTop \
+              ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
+              FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+              JOBS="$(nproc)" \
+              MAX_CYCLES=600000000 \
+              MILESTONE='RV64 USER UART IRQ OK' \
+              MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+              PROGRESS_INTERVAL_CYCLES=10000000 \
+              VERILATOR='verilator -LDFLAGS -ldl' \
+              SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+              run-local
+          ) > >(tee "$dst/execute.log") 2>&1
+          rc=$?
+          printf 'execute_exit=%s\n' "$rc" | tee "$dst/execute-status.txt"
+          exit "$rc"
 
       - name: Preserve PID1 runtime evidence
         if: always()
