@@ -1,4 +1,0 @@
-AetherCore v2 F7 Linux interrupt observer exact-head probe.
-
-request_revision=2
-reason=Retry after staging the pinned RV64 Linux toolchain environment across workflow steps; observer diagnosis, CPU RTL, OpenSBI and Linux remain unchanged.
