@@ -55,7 +55,8 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
   private val systemKind = decoded.system.kind
   private val isSystemHead = io.head.valid && io.head.bits.executionClass === ExecutionClass.System
   private val hasPredecodedException = io.head.valid && decoded.exception.valid
-  private val ready = io.headDependenciesValid && io.headOperandsReady
+  private val headRecordReady = io.headDependenciesValid
+  private val operandsReady = io.headDependenciesValid && io.headOperandsReady
 
   io.csrReadAddr := decoded.system.csrAddress
   io.completion.valid := false.B
@@ -117,10 +118,12 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
       systemKind === SystemOperationKind.Fence ||
       systemKind === SystemOperationKind.FenceI
 
-  when(ready && hasPredecodedException) {
+  // A predecoded exception is already an architectural semantic fact and must
+  // not wait for a source value that the faulting instruction will never use.
+  when(headRecordReady && hasPredecodedException) {
     io.completion.valid := true.B
     io.completion.bits.exception := decoded.exception
-  }.elsewhen(ready && isSystemHead && supportedSystem) {
+  }.elsewhen(operandsReady && isSystemHead && supportedSystem) {
     io.completion.valid := true.B
 
     switch(systemKind) {
@@ -203,8 +206,10 @@ class TinyPrivilegedBackend(val config: CoreConfig) extends Module {
   ))
 
   private val retiring = dependencyBackend.io.retiring
+  private val retiringSystem = retiring.valid &&
+    retiring.bits.uop.executionClass === ExecutionClass.System
   private val trapAtRetire = retiring.valid && retiring.bits.exception.valid
-  private val returnAtRetire = retiring.valid &&
+  private val returnAtRetire = retiringSystem &&
     !retiring.bits.exception.valid &&
     retiring.bits.privileged.trapReturn
   private val privilegedBoundary = trapAtRetire || returnAtRetire
@@ -255,7 +260,7 @@ class TinyPrivilegedBackend(val config: CoreConfig) extends Module {
   io.branchRedirect.bits.robToken := dependencyBackend.io.acceptedRecovery.bits.robToken
   io.branchRedirect.bits.target := dependencyBackend.io.acceptedRecovery.bits.branchTarget
 
-  csrFile.io.writeEnable := retiring.valid &&
+  csrFile.io.writeEnable := retiringSystem &&
     !retiring.bits.exception.valid &&
     retiring.bits.privileged.csrWriteValid
   csrFile.io.writeAddr := retiring.bits.privileged.csrAddress
