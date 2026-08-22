@@ -1,4 +1,4 @@
 AetherCore v2 F7 Linux exact-head milestone request.
 
-request_revision=3
-reason=Memory milestone passed; advance unchanged Linux 6.6.143 to riscv_clocksource plus real retired interrupt/STIP
+request_revision=4
+reason=Shared runner now observes clean-boundary asynchronous interrupts independently from retirement; rerun unchanged Linux 6.6.143 clocksource plus real STIP on exact head
