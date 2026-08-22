@@ -1,4 +1,4 @@
 AetherCore v2 F7 OpenSBI exact-head milestone request.
 
-request_revision=3
-reason=publish exact-head pending/success/failure commit status for trusted first-exec
+request_revision=4
+reason=hosted announce publishes pending status before trusted self-hosted allocation
