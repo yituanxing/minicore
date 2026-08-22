@@ -37,10 +37,10 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Pinned Linux 6.6.143 early-memory proof queued/running on F7 v2\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Pinned Linux 6.6.143 clocksource/STIP proof queued/running on F7 v2\",\"target_url\":\"$target_url\"}"
 
   first-exec:
-    name: Unchanged Linux 6.6.143 early boot on F7 v2 RV64
+    name: Unchanged Linux 6.6.143 clocksource/STIP on F7 v2 RV64
     needs: announce
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -146,7 +146,7 @@ jobs:
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
           grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
 
-      - name: Execute Linux early boot through F7 v2 core
+      - name: Execute Linux clocksource and supervisor timer through F7 v2 core
         shell: bash
         run: |
           set -euo pipefail
@@ -157,8 +157,8 @@ jobs:
             FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=120000000 \
-            MILESTONE='Memory:' \
-            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            MILESTONE='clocksource: riscv_clocksource' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=0 \
             PROGRESS_INTERVAL_CYCLES=5000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
@@ -175,7 +175,7 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Linux 6.6.143 early-memory milestone reached on F7 v2\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Linux 6.6.143 clocksource plus retired STIP reached on F7 v2\",\"target_url\":\"$target_url\"}"
 
       - name: Publish failed exact-head status
         if: failure()
@@ -188,7 +188,7 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"F7 v2 Linux early-memory proof failed; inspect exact frontier\",\"target_url\":\"$target_url\"}"
+            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"F7 v2 Linux clocksource/STIP proof failed; inspect exact frontier\",\"target_url\":\"$target_url\"}"
 
       - name: Upload Linux first-exec evidence
         if: always()
@@ -214,7 +214,7 @@ jobs:
             echo
             echo "- exact head: \`$TARGET_SHA\`"
             echo '- unchanged software: Linux 6.6.143 + pinned OpenSBI 1.6'
-            echo '- milestone: `Memory:`; covers FDT/reserved-memory, zone discovery, Sv39 virtual layout and early allocator; no interrupt/PID1 qualification yet'
+            echo '- milestone: `clocksource: riscv_clocksource` plus at least one retired interrupt and one retired STIP; proves the unchanged Linux timer path beyond early memory'
             echo '- top: `AetherCoreV2OpenSbiRV64SimTop`'
             echo '- runtime budget: 120,000,000 cycles'
           } >> "$GITHUB_STEP_SUMMARY"
