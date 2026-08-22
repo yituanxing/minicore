@@ -57,3 +57,9 @@ class V2F7SemanticDecodeSpec
     with Matchers
     with ChiselSim
     with V2F7SemanticDecodeChecks
+
+class V2F7BareCoreSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7BareCoreChecks
