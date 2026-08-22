@@ -63,3 +63,9 @@ class V2F7BareCoreSpec
     with Matchers
     with ChiselSim
     with V2F7BareCoreChecks
+
+class V2F7PagedCoreSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7PagedCoreChecks
