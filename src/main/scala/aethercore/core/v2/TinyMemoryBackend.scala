@@ -65,6 +65,10 @@ class TinyMemoryBackend(
     val memoryRequest = Decoupled(new AetherMemRequest(PhysicalBits, xlen, txnIdBits))
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(xlen, txnIdBits)))
     val lsuBusy = Output(Bool())
+
+    // Retirement-time system consequence for a future frontend/fetch TLB owner.
+    // The current F6 backend also consumes this pulse for its data translation TLB.
+    val translationFence = Output(Bool())
   })
 
   private def sameRobToken(lhs: RobToken, rhs: RobToken): Bool =
@@ -73,7 +77,7 @@ class TinyMemoryBackend(
   val dependencyBackend = Module(new TinyDependencyBackend(xlen))
   val issue = Module(new TinyOldestIssue(xlen))
   val execution = Module(new TinyExecutionCluster(xlen, isa.hasC))
-  val system = Module(new TinySystemCompletion(isa))
+  val system = Module(new TinySystemCompletion(isa, allowSfenceVma = true))
   val csrFile = Module(new MachineCsrFile(
     isa,
     PhysicalBits,
@@ -95,6 +99,9 @@ class TinyMemoryBackend(
   private val returnAtRetire = retiringSystem &&
     !retiring.bits.exception.valid &&
     retiring.bits.privileged.trapReturn
+  private val sfenceAtRetire = retiringSystem &&
+    !retiring.bits.exception.valid &&
+    retiring.bits.uop.decoded.system.kind === SystemOperationKind.SfenceVma
   private val privilegedBoundary = trapAtRetire || returnAtRetire
 
   dependencyBackend.io.dispatch.valid := io.dispatch.valid && !privilegedBoundary
@@ -176,8 +183,10 @@ class TinyMemoryBackend(
   lsu.io.satpRootPpn := csrFile.io.satpRootPpn
   lsu.io.supervisorSum := csrFile.io.supervisorSum
   lsu.io.supervisorMxr := csrFile.io.supervisorMxr
-  // SFENCE.VMA is still deliberately outside F6's first integrated slice.
-  lsu.io.translationFlush := false.B
+  // SFENCE.VMA is globally conservative in the current TLB contract. The pulse
+  // is generated only from a legal, exception-free retirement below.
+  lsu.io.translationFlush := sfenceAtRetire
+  io.translationFence := sfenceAtRetire
   lsu.io.pmpEnabled := isa.hasPmp.B
   lsu.io.pmpConfig := csrFile.io.pmpConfig
   lsu.io.pmpAddress := csrFile.io.pmpAddress
