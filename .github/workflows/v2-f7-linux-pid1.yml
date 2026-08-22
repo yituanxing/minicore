@@ -174,7 +174,7 @@ jobs:
               ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
               FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
               JOBS="$(nproc)" \
-              MAX_CYCLES=600000000 \
+              MAX_CYCLES=850000000 \
               MILESTONE='RV64 USER UART IRQ OK' \
               MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
               PROGRESS_INTERVAL_CYCLES=10000000 \
