@@ -2,9 +2,9 @@ package aethercore.core.v2
 
 import chisel3._
 import chisel3.util._
-import aethercore.common.CommitTrace
+import aethercore.common.{CommitTrace, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{MachineCsrFile, PmpConstants}
+import aethercore.core.{MachineCsrFile, PmpChecker, PmpConstants}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -86,6 +86,7 @@ class TinyMemoryBackend(
     tlbEntries = tlbEntries,
     txnIdBits = txnIdBits
   ))
+  val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
 
   private val retiring = dependencyBackend.io.retiring
   private val retiringSystem = retiring.valid &&
@@ -181,11 +182,24 @@ class TinyMemoryBackend(
   lsu.io.pmpConfig := csrFile.io.pmpConfig
   lsu.io.pmpAddress := csrFile.io.pmpAddress
 
-  io.pteValid := lsu.io.pteValid
+  // Page-table reads are implicit Supervisor-mode accesses and must themselves
+  // pass PMP before leaving the core. This mirrors the qualified v1 composition:
+  // a denied PTE fetch is consumed locally and reported to the walker as an
+  // access fault; no external PTW request is emitted.
+  ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
+  ptwPmp.io.address := lsu.io.pteAddress
+  ptwPmp.io.bytes := geometry.pteBytes.U
+  ptwPmp.io.write := false.B
+  ptwPmp.io.execute := false.B
+  ptwPmp.io.config := csrFile.io.pmpConfig
+  ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
+  private val ptwPmpFault = lsu.io.pteValid && isa.hasPmp.B && !ptwPmp.io.allow
+
+  io.pteValid := lsu.io.pteValid && !ptwPmpFault
   io.pteAddress := lsu.io.pteAddress
-  lsu.io.pteReady := io.pteReady
+  lsu.io.pteReady := Mux(ptwPmpFault, true.B, io.pteReady)
   lsu.io.pteData := io.pteData
-  lsu.io.pteFault := io.pteFault
+  lsu.io.pteFault := ptwPmpFault || (io.pteValid && io.pteFault)
 
   io.resolvedPhysicalValid := lsu.io.resolvedPhysicalValid
   io.resolvedPhysicalAddress := lsu.io.resolvedPhysicalAddress
