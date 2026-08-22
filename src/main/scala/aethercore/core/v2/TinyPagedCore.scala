@@ -16,10 +16,9 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
   * into predecoded architectural exceptions before ROB allocation.
   *
   * F7 may additionally opt into clean-boundary asynchronous interrupts/WFI.
-  * Interrupt qualification immediately closes dispatch; architectural trap
-  * entry happens only after the ROB drains, using this frontend's next PC as
-  * mepc/sepc. The default remains disabled so the already-qualified paged slice
-  * and frozen F6 behavior are unchanged.
+  * A-extension profiles use the same semantic memory seam and enable Atomic
+  * AetherMem transactions; profiles without A retain the frozen fail-closed
+  * behavior.
   */
 class TinyPagedCore(
     val config: CoreConfig,
@@ -77,7 +76,8 @@ class TinyPagedCore(
     txnIdBits = txnIdBits,
     enableAsyncInterrupts = enableAsyncInterrupts,
     withMachineExternalInterrupt = withMachineExternalInterrupt,
-    withSupervisorExternalInterrupt = withSupervisorExternalInterrupt
+    withSupervisorExternalInterrupt = withSupervisorExternalInterrupt,
+    allowAtomics = isa.hasA
   ))
   val decode = Module(new TinySemanticDecode(isa))
   val fetch = Module(new InstructionFetchAdapter(geometry, PhysicalBits, tlbEntries))
@@ -112,10 +112,10 @@ class TinyPagedCore(
   io.halted := wfiWaiting
   io.interruptHold := interruptHold
 
-  // A serializing architectural operation (CSR/SFENCE/xRET/fence/WFI today, and
-  // aq/rl atomics once F7 implements A) closes the speculative fetch window.
-  // This avoids carrying stale translated instruction bits across a retirement
-  // that changes SATP/PMP/privilege state, without adding a replay mechanism.
+  // A serializing architectural operation (CSR/SFENCE/xRET/fence/WFI today,
+  // plus aq/rl atomics) closes the speculative fetch window. This avoids
+  // carrying stale translated instruction bits across an architectural context
+  // boundary without adding a replay mechanism.
   private val serializedRetires = serialized && backend.io.commit.valid &&
     backend.io.commit.pc === serializedPc
 
