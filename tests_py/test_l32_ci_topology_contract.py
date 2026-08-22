@@ -42,14 +42,24 @@ class L32CiTopologyContractTest(unittest.TestCase):
                 self.assertNotIn("runs-on: [self-hosted, Linux, X64, minicore]", text)
 
         # Fast Gate deliberately runs on every PR and classifies changed paths
-        # inside a small hosted job instead of duplicating a large paths list in
-        # the event trigger. Shared RTL/test changes must select the Chisel,
-        # Supervisor and FreeRTOS hardware lanes.
+        # inside a small hosted job. Pure v2 edits own a short stage-local lane;
+        # shared Scala still selects compatibility and software lanes.
         fast = (WORKFLOWS / "fast-gate.yml").read_text()
         self.assertIn("Classify fast-gate paths", fast)
-        self.assertIn("^(src/main/scala/|src/test/scala/|build\\.mill$|mill$)", fast)
-        self.assertIn("run_chisel=true", fast)
+        self.assertIn("run_v2: ${{ steps.changes.outputs.run_v2 }}", fast)
+        self.assertIn("run_legacy_chisel: ${{ steps.changes.outputs.run_legacy_chisel }}", fast)
+        self.assertIn("run_smode_v1: ${{ steps.changes.outputs.run_smode_v1 }}", fast)
+        self.assertIn("run_freertos: ${{ steps.changes.outputs.run_freertos }}", fast)
+        self.assertIn(
+            "^(src/main/scala/aethercore/core/v2/|src/test/scala/aethercore/V2[^/]*\\.scala$)",
+            fast,
+        )
+        self.assertIn("V2 focused development gate", fast)
+        self.assertIn("Legacy/shared Chisel compatibility", fast)
+        self.assertIn("Supervisor and FreeRTOS compatibility", fast)
         self.assertIn("run_hardware=true", fast)
+        self.assertIn("needs: classify\n    if: needs.classify.outputs.run_hardware == 'true'", fast)
+        self.assertNotIn("AETHERCORE_MILL_NO_DAEMON", fast)
 
         pid1 = (WORKFLOWS / "rv64-minimal-initramfs-v1.yml").read_text()
         self.assertIn("Run real RV64 PID 1 UART interrupt proof", pid1)

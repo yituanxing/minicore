@@ -30,8 +30,15 @@ class PrivilegedRedirect(val xlen: Int) extends Bundle {
   * turned into tagged exception completions. xRET is validated and recorded as
   * a pending return effect. All architectural state changes happen later when
   * the matching ROB head retires.
+  *
+  * Later phases may opt into a semantic operation whose architectural effect is
+  * still owned at retirement. F6 uses this narrow seam for SFENCE.VMA while the
+  * default remains false, preserving the frozen F5 behavior.
   */
-class TinySystemCompletion(val isa: IsaConfig) extends Module {
+class TinySystemCompletion(
+    val isa: IsaConfig,
+    val allowSfenceVma: Boolean = false
+) extends Module {
   private val xlen = isa.xlen
   private val IdentityBits = TinyRobGeometry.IndexBits
   private val GenerationBits = TinyRobGeometry.GenerationBits
@@ -115,6 +122,7 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
     decoded.system.xret === XRetOp.Supervisor && isa.hasS.B &&
       io.currentPrivilege >= PrivilegeMode.Supervisor.U
   private val xretLegal = machineReturnLegal || supervisorReturnLegal
+  private val sfenceAvailable = allowSfenceVma.B && isa.hasPagedVirtualMemory.B
 
   private val implementedSystem =
     systemKind === SystemOperationKind.Csr ||
@@ -122,7 +130,8 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
       systemKind === SystemOperationKind.Ebreak ||
       systemKind === SystemOperationKind.Xret ||
       systemKind === SystemOperationKind.Fence ||
-      (systemKind === SystemOperationKind.FenceI && isa.hasZifencei.B)
+      (systemKind === SystemOperationKind.FenceI && isa.hasZifencei.B) ||
+      (systemKind === SystemOperationKind.SfenceVma && sfenceAvailable)
 
   // A predecoded exception is already an architectural semantic fact and must
   // not wait for a source value that the faulting instruction will never use.
@@ -169,10 +178,17 @@ class TinySystemCompletion(val isa: IsaConfig) extends Module {
         }
         // With strict-oldest issue and no caches in the v2 bring-up backend,
         // FENCE/FENCE.I are conservative serialized no-ops. FENCE.I reaches
-        // this case only when Zifencei is present. SFENCE.VMA and WFI fail
-        // closed above until their owning phases arrive.
+        // this case only when Zifencei is present.
         is(SystemOperationKind.Fence)  { }
         is(SystemOperationKind.FenceI) { }
+        // F6 opts into a full data-side translation flush at retirement. The
+        // completion itself is side-effect free. TVM is not implemented by the
+        // current qualified MachineCsrFile, so legality is S/M privilege only.
+        is(SystemOperationKind.SfenceVma) {
+          when(io.currentPrivilege < PrivilegeMode.Supervisor.U) {
+            markIllegalInstruction()
+          }
+        }
       }
     }
   }

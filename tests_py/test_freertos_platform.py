@@ -170,13 +170,17 @@ class FreeRtosPlatformTest(unittest.TestCase):
         self.assertNotIn("clean: false", text)
         self.assertIn('AETHERCORE_VERILATOR_FAST_VERIFY: "1"', text)
         self.assertIn("chmod +x mill", text)
-        self.assertIn('root="$RUNNER_TEMP/aethercore-fast"', text)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-v2-dev"', text)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-software-compat"', text)
         self.assertIn("MILL_OUTPUT_DIR=", text)
         self.assertIn("FAST_FREERTOS_BUILD=", text)
         self.assertIn("AETHERCORE_JOBS=$(nproc)", text)
         self.assertIn("uses: actions/cache@v4", text)
         self.assertIn("TRACE=0 run-local", text)
+        self.assertIn("Supervisor and FreeRTOS compatibility", text)
+        self.assertIn("needs.classify.outputs.run_freertos == 'true'", text)
         self.assertIn("aethercore.WaitForInterruptCoreSpec", text)
+        self.assertNotIn("AETHERCORE_MILL_NO_DAEMON", text)
         self.assertNotIn("full_gate_freertos_difftest.sh", text)
 
     def test_verilator_fast_verify_skips_only_the_disposable_probe(self) -> None:

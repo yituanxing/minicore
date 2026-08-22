@@ -123,7 +123,11 @@ class L32LinuxBuildContractTest(unittest.TestCase):
         self.assertIn("uses: actions/cache@v4", fast)
         self.assertIn("~/.cache/aethercore/toolchains", fast)
         self.assertIn("~/.cache/aethercore/references", fast)
-        self.assertIn('root="$RUNNER_TEMP/aethercore-fast"', fast)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-v2-dev"', fast)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-legacy-chisel"', fast)
+        self.assertIn('root="$RUNNER_TEMP/aethercore-software-compat"', fast)
+        self.assertIn("MILL_OUTPUT_DIR=", fast)
+        self.assertNotIn("AETHERCORE_MILL_NO_DAEMON", fast)
         self.assertNotIn("git clean -ffdx", fast)
 
     def test_remaining_self_hosted_busybox_classifier_preserves_persistent_outputs(self):
