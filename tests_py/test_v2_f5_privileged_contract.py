@@ -53,12 +53,11 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
 
     def test_system_completion_is_side_effect_free(self):
         text = PRIVILEGED.read_text()
-        before_backend = text.split("class TinyPrivilegedBackend", 1)[0]
-        self.assertIn("class TinySystemCompletion", before_backend)
-        self.assertNotIn("MachineCsrFile", before_backend)
-        self.assertNotIn("writeEnable", before_backend)
-        self.assertIn("io.completion.bits.privileged.csrWriteValid", before_backend)
-        self.assertIn("io.completion.bits.privileged.trapReturn", before_backend)
+        system_body = text.split("class TinySystemCompletion", 1)[1].split("class TinyPrivilegedBackend", 1)[0]
+        self.assertNotIn("MachineCsrFile", system_body)
+        self.assertNotIn("writeEnable", system_body)
+        self.assertIn("io.completion.bits.privileged.csrWriteValid", system_body)
+        self.assertIn("io.completion.bits.privileged.trapReturn", system_body)
 
     def test_redirects_are_retirement_owned_and_narrow(self):
         text = PRIVILEGED.read_text()
@@ -66,15 +65,14 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
         self.assertIn("val robToken = new RobToken", text)
         self.assertIn("val target = UInt(xlen.W)", text)
         self.assertIn("val kind = PrivilegedRedirectKind()", text)
-        self.assertNotIn("ProducerTag", text.split("class PrivilegedRedirect", 1)[1].split("class TinySystemCompletion", 1)[0])
-        self.assertNotIn("ValueRef", text.split("class PrivilegedRedirect", 1)[1].split("class TinySystemCompletion", 1)[0])
+        redirect_body = text.split("class PrivilegedRedirect", 1)[1].split("class TinySystemCompletion", 1)[0]
+        self.assertNotIn("ProducerTag", redirect_body)
+        self.assertNotIn("ValueRef", redirect_body)
         self.assertIn("io.privilegedRedirect.valid := privilegedBoundary", text)
         self.assertIn("io.dispatch.ready := dependencyBackend.io.dispatch.ready && !privilegedBoundary", text)
 
     def test_f5_does_not_claim_deferred_owners(self):
         text = PRIVILEGED.read_text()
-        # WFI/SFENCE are named only as deliberately unsupported semantics; F5
-        # must not introduce their machinery or memory/general OoO structures.
         forbidden = [
             "IssueQueue",
             "ReservationStation",
