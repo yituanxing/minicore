@@ -16,13 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   f7-frontier:
     name: F7 semantic/frontend frontier
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
@@ -46,6 +41,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Restore exact fixed Verilator cache
+        id: verilator-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -53,6 +49,17 @@ jobs:
             ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
             ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
 
       - name: Configure F7 build directory
         shell: bash
@@ -73,9 +80,20 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-
             aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-
 
-      - name: Revalidate fixed Verilator
+      - name: Validate or build exact Verilator
         shell: bash
         run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Save exact validated Verilator on cache miss
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
 
       - name: Run F7 frontier checks
         shell: bash
