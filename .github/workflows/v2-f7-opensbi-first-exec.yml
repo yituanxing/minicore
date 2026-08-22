@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: aethercore-v2-f7-opensbi-${{ github.ref }}
@@ -24,8 +25,23 @@ jobs:
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       TARGET_SHA: ${{ github.sha }}
+      OPENSBI_STATUS_CONTEXT: AetherCore V2 F7 OpenSBI First Execution
 
     steps:
+      - name: Publish pending exact-head status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"pending\",\"context\":\"$OPENSBI_STATUS_CONTEXT\",\"description\":\"Pinned unchanged OpenSBI 1.6 executing on F7 v2\",\"target_url\":\"$target_url\"}"
+
       - name: Checkout exact head without deleting persistent caches
         shell: bash
         env:
@@ -135,6 +151,36 @@ jobs:
           grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
           grep -Fq 'banner=1' "$log"
 
+      - name: Publish successful exact-head status
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"success\",\"context\":\"$OPENSBI_STATUS_CONTEXT\",\"description\":\"OpenSBI 1.6 + S-mode SBI payload passed on F7 v2\",\"target_url\":\"$target_url\"}"
+
+      - name: Publish failed exact-head status
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"failure\",\"context\":\"$OPENSBI_STATUS_CONTEXT\",\"description\":\"F7 v2 OpenSBI first-exec milestone failed; inspect run\",\"target_url\":\"$target_url\"}"
+
       - name: Write F7 OpenSBI frontier summary
         if: always()
         shell: bash
@@ -144,6 +190,7 @@ jobs:
             echo
             echo "- exact head: \`${TARGET_SHA}\`"
             echo '- trigger: trusted push request marker or explicit workflow dispatch; never public pull_request -> self-hosted'
+            echo '- status: classic commit status is published for exact-head observability without PR comments'
             echo '- firmware: pinned unchanged OpenSBI 1.6 at bd613dd92113f683052acfb23d9dc8ba60029e0a'
             echo '- toolchain: pinned Bootlin RV64 Linux-target GCC 13.3.0 / binutils 2.41'
             echo '- core: F7 TinyPagedCore, RV64IMA + Zicsr + Zifencei, M/S/U, Sv39, PMP16/PA56'
