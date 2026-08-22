@@ -8,7 +8,19 @@ import aethercore.core.RegisterFile
 private[v2] object TinyRobGeometry {
   val Entries: Int = 4
   val IndexBits: Int = 2
-  val GenerationBits: Int = 2
+
+  // A generation is a bounded lifetime discriminator, not a globally unique
+  // instruction number. F7's two-bit field was sufficient for oldest-only
+  // behavior but aliases after only four lifetimes of the same slot. Selective
+  // issue will allow killed variable-latency work to return after the slot has
+  // been reused, so A8 deliberately gives each slot a much larger reuse budget.
+  //
+  // Producers that can retain a RobToken after squash must still have a bounded
+  // terminal-response lifetime shorter than this reuse budget. Potentially
+  // unbounded external memory transactions use AetherMem txnId/MSHR lifetime
+  // ownership instead of relying on RobToken generation alone.
+  val GenerationBits: Int = 8
+  val GenerationReuseBudget: Int = 1 << GenerationBits
 }
 
 /** Backend semantics before lifetime/dependency/value identities are allocated. */
@@ -195,7 +207,8 @@ class TinyRob(val xlen: Int) extends Module {
         entries(index).valid := false.B
         entries(index).complete := false.B
         // A killed slot gets a new lifetime immediately. Any future late
-        // response carrying the old generation will fail completionMatches.
+        // response carrying the old generation will fail completionMatches as
+        // long as the producer obeys the bounded-response lifetime contract.
         slotGenerations(index) := slotGenerations(index) + 1.U
       }
     }
