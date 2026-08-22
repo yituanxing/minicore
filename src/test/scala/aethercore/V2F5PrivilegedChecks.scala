@@ -9,7 +9,7 @@ import aethercore.config.{CoreConfig, CoreProfiles}
 import aethercore.core.{MachineCsrAddress, SupervisorCsrAddress}
 import aethercore.core.v2._
 
-trait V2F5PrivilegedChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
+trait V2F5PrivilegedChecks extends V2F5PrivilegedClosureChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private def pokeDispatchBase(
       dut: TinyPrivilegedBackend,
       pc: BigInt,
