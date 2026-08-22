@@ -71,12 +71,19 @@ class TinyOldestIssue(val xlen: Int) extends Module {
   io.request.bits.instBytes := io.head.bits.decoded.instBytes
   io.request.bits.immediate := io.head.bits.decoded.immediate
 
+  // Once-only issue belongs to the current observed head lifetime. Numeric
+  // RobTokens are bounded generation tags and may be reused after the head has
+  // moved through other lifetimes; keeping the latch across a head change would
+  // eventually suppress a genuinely new uOp after generation wrap.
+  when(issuedValid &&
+       (!io.head.valid || !sameRobToken(issuedToken, io.head.bits.robToken))) {
+    issuedValid := false.B
+  }
+  // If a replacement head issues on the same cycle that the stale latch is
+  // cleared, the new request wins and becomes the current once-only owner.
   when(io.request.fire) {
     issuedValid := true.B
     issuedToken := io.head.bits.robToken
-  }
-  when(!io.head.valid) {
-    issuedValid := false.B
   }
 }
 

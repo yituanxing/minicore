@@ -1,0 +1,5 @@
+AetherCore v2 F7 OpenSBI stall symbolization request.
+
+source_run=32559536547
+frontier_head=e26ceb6bb07edfd4c2ec899b2ed710543fcaed87
+reason=symbolize terminal commit PCs before changing CPU RTL

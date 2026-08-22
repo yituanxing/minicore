@@ -235,47 +235,48 @@ int main(int argc, char** argv) {
                       << " value=0x" << lastExceptionValue << std::dec << "\n";
           }
         }
-        if (top.io_commit_interrupt) {
-          ++interrupts;
-          const auto interruptCause =
-              static_cast<std::uint64_t>(top.io_commit_interruptCause);
-          if (interrupts == 1) {
-            std::cerr << "\nL32_FIRST_INTERRUPT cycles=" << cycles
+      }
+
+      if (top.io_commit_interrupt) {
+        ++interrupts;
+        const auto interruptCause =
+            static_cast<std::uint64_t>(top.io_commit_interruptCause);
+        if (interrupts == 1) {
+          std::cerr << "\nL32_FIRST_INTERRUPT cycles=" << cycles
+                    << " commits=" << commits
+                    << " pc=0x" << std::hex
+                    << static_cast<std::uint64_t>(top.io_commit_interruptPc)
+                    << " cause=0x" << interruptCause
+                    << std::dec << "\n";
+        }
+        if (isInterruptCause(interruptCause, kSupervisorTimerInterruptCode)) {
+          ++supervisorTimerInterrupts;
+          if (supervisorTimerInterrupts == 1) {
+            std::cerr << "\nL32_FIRST_SUPERVISOR_TIMER_INTERRUPT cycles=" << cycles
                       << " commits=" << commits
                       << " pc=0x" << std::hex
                       << static_cast<std::uint64_t>(top.io_commit_interruptPc)
                       << " cause=0x" << interruptCause
                       << std::dec << "\n";
           }
-          if (isInterruptCause(interruptCause, kSupervisorTimerInterruptCode)) {
-            ++supervisorTimerInterrupts;
-            if (supervisorTimerInterrupts == 1) {
-              std::cerr << "\nL32_FIRST_SUPERVISOR_TIMER_INTERRUPT cycles=" << cycles
-                        << " commits=" << commits
-                        << " pc=0x" << std::hex
-                        << static_cast<std::uint64_t>(top.io_commit_interruptPc)
-                        << " cause=0x" << interruptCause
-                        << std::dec << "\n";
-            }
+        }
+        if (isInterruptCause(interruptCause, kSupervisorExternalInterruptCode)) {
+          ++supervisorExternalInterrupts;
+          if (supervisorExternalInterrupts == 1) {
+            std::cerr << "\nL32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT cycles=" << cycles
+                      << " commits=" << commits
+                      << " pc=0x" << std::hex
+                      << static_cast<std::uint64_t>(top.io_commit_interruptPc)
+                      << " cause=0x" << interruptCause
+                      << std::dec << "\n";
           }
-          if (isInterruptCause(interruptCause, kSupervisorExternalInterruptCode)) {
-            ++supervisorExternalInterrupts;
-            if (supervisorExternalInterrupts == 1) {
-              std::cerr << "\nL32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT cycles=" << cycles
-                        << " commits=" << commits
-                        << " pc=0x" << std::hex
-                        << static_cast<std::uint64_t>(top.io_commit_interruptPc)
-                        << " cause=0x" << interruptCause
-                        << std::dec << "\n";
-            }
-            if (inputStarted && supervisorExternalInterrupts > seipAtInputStart &&
-                !sawPostInputSeip) {
-              sawPostInputSeip = true;
-              std::cerr << "\nL32_UART_INPUT_SEIP cycles=" << cycles
-                        << " commits=" << commits
-                        << " seip-before=" << seipAtInputStart
-                        << " seip-now=" << supervisorExternalInterrupts << "\n";
-            }
+          if (inputStarted && supervisorExternalInterrupts > seipAtInputStart &&
+              !sawPostInputSeip) {
+            sawPostInputSeip = true;
+            std::cerr << "\nL32_UART_INPUT_SEIP cycles=" << cycles
+                      << " commits=" << commits
+                      << " seip-before=" << seipAtInputStart
+                      << " seip-now=" << supervisorExternalInterrupts << "\n";
           }
         }
       }

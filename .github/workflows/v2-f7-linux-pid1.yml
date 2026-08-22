@@ -1,0 +1,267 @@
+name: AetherCore V2 F7 Linux PID1 UART IRQ Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/aethercore-v2-f7-software-parity
+    paths:
+      - '.github/workflows/v2-f7-linux-pid1.yml'
+      - '.github/v2-f7-linux-pid1-request'
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: aethercore-v2-f7-linux-pid1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  qualify:
+    name: Unchanged Linux PID1 UART/STIP/SEIP on F7 v2 RV64
+    needs: verilator-tool
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      STATUS_CONTEXT: AetherCore V2 F7 Linux PID1 UART IRQ
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Publish pending exact-head status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Unchanged Linux PID1 UART/STIP/SEIP qualification running\",\"target_url\":\"$target_url\"}"
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Verify v2 boundary observer and unchanged workload contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('sim/opensbi_boot_main.cpp').read_text()
+          assert s.count('      if (top.io_commit_valid) {\n') == 1
+          assert s.count('      if (top.io_commit_interrupt) {\n') == 1
+          assert '        if (top.io_commit_interrupt) {\n' not in s
+          PY
+          bash -n tools/ci/rv64_linux_early_build.sh
+          bash -n tools/ci/rv64_minimal_initramfs_build.sh
+          bash -n tools/ci/rv64_minimal_init_payload_build.sh
+          python3 -m unittest tests_py.test_rv64_minimal_initramfs_contract -v
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Restore exact-head v2 simulation accelerator
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/v2-rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-rv64-minimal-sim-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse or build unchanged Linux 6.6.143 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+
+      - name: Build unchanged deterministic PID1 initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Execute real PID1 UART interrupt proof through F7 v2
+        shell: bash
+        run: |
+          set -uo pipefail
+          dst="$GITHUB_WORKSPACE/build/v2-f7-linux-pid1-runtime"
+          mkdir -p "$dst"
+          set +e
+          (
+            set -euo pipefail
+            echo "target_sha=$TARGET_SHA"
+            echo 'git_status_before:'
+            git status --short
+            echo 'git_diff_before:'
+            git diff --exit-code
+            make -f Makefile.l32-linux-boot \
+              BUILD_DIR="$HOME/.cache/aethercore/v2-rv64-linux-minimal-initramfs/$TARGET_SHA" \
+              TOP=AetherCoreV2OpenSbiRV64SimTop \
+              ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
+              FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+              JOBS="$(nproc)" \
+              MAX_CYCLES=850000000 \
+              MILESTONE='RV64 USER UART IRQ OK' \
+              MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+              PROGRESS_INTERVAL_CYCLES=10000000 \
+              VERILATOR='verilator -LDFLAGS -ldl' \
+              SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+              run-local
+          ) > >(tee "$dst/execute.log") 2>&1
+          rc=$?
+          printf 'execute_exit=%s\n' "$rc" | tee "$dst/execute-status.txt"
+          exit "$rc"
+
+      - name: Preserve PID1 runtime evidence
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          src="$HOME/.cache/aethercore/v2-rv64-linux-minimal-initramfs/$TARGET_SHA"
+          dst="build/v2-f7-linux-pid1-runtime"
+          mkdir -p "$dst"
+          if [[ -f "$src/firmware.sha256" ]]; then
+            cp "$src/firmware.sha256" "$dst/"
+          fi
+          if [[ -d "$src/logs" ]]; then
+            cp -a "$src/logs/." "$dst/"
+          fi
+          {
+            echo "target_sha=$TARGET_SHA"
+            echo "source=$src"
+            echo 'files:'
+            find "$dst" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          } > "$dst/manifest.txt"
+          if [[ -s "$dst/boot-probe.log" ]]; then
+            echo '::group::v2 PID1 boot-probe tail'
+            tail -n 400 "$dst/boot-probe.log"
+            echo '::endgroup::'
+          else
+            echo '::warning::PID1 boot-probe.log was not found in the exact-head simulation cache'
+          fi
+
+      - name: Save exact-head v2 simulation accelerator
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/v2-rv64-linux-minimal-initramfs/${{ env.TARGET_SHA }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-rv64-minimal-sim-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
+
+      - name: Publish successful exact-head status
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"F7 v2 reached real PID1 UART marker with STIP and SEIP\",\"target_url\":\"$target_url\"}"
+
+      - name: Publish failed exact-head status
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"F7 v2 PID1 UART/STIP/SEIP qualification failed\",\"target_url\":\"$target_url\"}"
+
+      - name: Upload exact qualification evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-f7-linux-pid1-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-linux-initramfs/evidence/
+            build/rv64-minimal-init-boot/result.txt
+            build/rv64-minimal-init-boot/evidence/
+            build/rv64-minimal-init-boot/opensbi-initramfs-build.log
+            build/v2-f7-linux-pid1-runtime/

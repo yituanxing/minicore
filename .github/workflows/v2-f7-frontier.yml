@@ -1,0 +1,128 @@
+name: AetherCore V2 F7 Frontier Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
+      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
+      - 'src/test/scala/aethercore/V2F7*.scala'
+      - 'src/test/scala/aethercore/V2StageSpecs.scala'
+      - '.github/workflows/v2-f7-frontier.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-f7-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  f7-frontier:
+    name: F7 semantic/frontend frontier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Configure F7 build directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-v2-f7"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Restore previous F7 Mill output accelerator
+        id: mill-output-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-f7/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-
+
+      - name: Validate or build exact Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Save exact validated Verilator on cache miss
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Run F7 frontier checks
+        shell: bash
+        run: |
+          ./mill aethercore.test.testOnly \
+            aethercore.V2F7SemanticDecodeSpec \
+            aethercore.V2F7BareCoreSpec \
+            aethercore.V2F7PagedCoreSpec \
+            aethercore.V2F7AsyncInterruptSpec \
+            aethercore.V2F7AtomicLsuSpec \
+            aethercore.V2F7AtomicCoreSpec
+
+      - name: Elaborate F7 RV64 OpenSBI platform smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/aethercore-v2-f7/opensbi-smoke"
+          rm -rf "$target"
+          mkdir -p "$target"
+          ./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64 --target-dir "$target"
+          find "$target" -maxdepth 1 -name '*.sv' -print | sort
+          find "$target" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Save validated F7 Mill output accelerator
+        if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-f7/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-f7-millout-v1-${{ github.event.pull_request.head.sha || github.sha }}

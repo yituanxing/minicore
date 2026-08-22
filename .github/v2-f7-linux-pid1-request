@@ -1,0 +1,2 @@
+run=4
+reason=Final synchronized F7 freeze candidate; rerun unchanged Linux PID1 UART/STIP/SEIP proof on the exact same head as formal clocksource/STIP qualification

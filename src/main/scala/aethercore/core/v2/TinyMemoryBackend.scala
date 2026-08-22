@@ -2,27 +2,30 @@ package aethercore.core.v2
 
 import chisel3._
 import chisel3.util._
-import aethercore.common.{CommitTrace, PrivilegeMode}
+import aethercore.common.{AtomicOp, CommitTrace, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{MachineCsrFile, PmpChecker, PmpConstants}
+import aethercore.core.{MachineCsrBit, MachineCsrFile, PmpChecker, PmpConstants, PmpGeometry}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
   * F6 composition harness: F5 precise retirement plus the correctness-first
-  * one-outstanding LSU.
+  * one-outstanding LSU. F7 may opt into the clean-boundary asynchronous owner
+  * and A-extension transactions without changing the frozen F6 defaults.
   *
-  * This is deliberately a new phase harness rather than a mutation of the
-  * frozen F5 TinyPrivilegedBackend. The same ROB/dependency/execute/CSR leaf
-  * modules are composed here with one additional memory completion source.
-  * Ordering/lifetime remains owned by TinyRob; the LSU owns translation/PMP and
-  * one physical transaction; architectural memory trace becomes visible only
-  * when a generation-matching ROB head retires.
+  * The same ROB/dependency/execute/CSR leaf modules are composed here with one
+  * memory completion source. Ordering/lifetime remains owned by TinyRob; the
+  * LSU owns translation/PMP and one physical transaction; architectural memory
+  * trace becomes visible only when a generation-matching ROB head retires.
   */
 class TinyMemoryBackend(
     val config: CoreConfig,
     val geometry: PageTableGeometry,
     val tlbEntries: Int = 8,
-    val txnIdBits: Int = 2
+    val txnIdBits: Int = 2,
+    val enableAsyncInterrupts: Boolean = false,
+    val withMachineExternalInterrupt: Boolean = false,
+    val withSupervisorExternalInterrupt: Boolean = false,
+    val allowAtomics: Boolean = false
 ) extends Module {
   private val isa = config.isa
   private val xlen = isa.xlen
@@ -31,6 +34,7 @@ class TinyMemoryBackend(
   private val Entries = TinyRobGeometry.Entries
   private val PhysicalBits = config.platform.paddrBits
   private val BusBits = config.platform.busDataBits
+  private val PmpAddressBits = PmpGeometry(xlen, PhysicalBits).encodedAddressBits
 
   require(geometry.xlen == xlen, s"F6 geometry XLEN=${geometry.xlen} does not match core XLEN=$xlen")
   require(
@@ -41,6 +45,14 @@ class TinyMemoryBackend(
     BusBits == xlen,
     s"first F6 integration requires busDataBits == XLEN, got bus=$BusBits xlen=$xlen"
   )
+  require(!withMachineExternalInterrupt || enableAsyncInterrupts,
+    "machine external interrupt wiring requires the F7 asynchronous owner")
+  require(!withSupervisorExternalInterrupt || enableAsyncInterrupts,
+    "supervisor external interrupt wiring requires the F7 asynchronous owner")
+  require(!withSupervisorExternalInterrupt || isa.hasS,
+    "supervisor external interrupt wiring requires S-mode")
+  require(!allowAtomics || isa.hasA,
+    "A-extension LSU opt-in requires an ISA profile containing A")
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new RobDispatch(xlen)))
@@ -49,8 +61,30 @@ class TinyMemoryBackend(
     val branchRedirect = Valid(new RecoveryRedirect(xlen))
     val privilegedRedirect = Valid(new PrivilegedRedirect(xlen))
     val currentPrivilege = Output(UInt(2.W))
+    // Read-only architectural context exported for the F7 instruction-side
+    // translation/PMP owner. MachineCsrFile remains the single mutable owner.
+    val frontendSatpTranslationEnabled = Output(Bool())
+    val frontendSatpRootPpn = Output(UInt(geometry.ppnBits.W))
+    val frontendSupervisorMxr = Output(Bool())
+    val frontendPmpConfig = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
+    val frontendPmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt(PmpAddressBits.W)))
     val time = if (isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
+
+    // F7 async contract. A qualified interrupt closes dispatch immediately,
+    // but CSR trap state changes only after the ROB drains to a clean boundary.
+    val async = if (enableAsyncInterrupts) Some(new Bundle {
+      val boundaryPc = Input(UInt(xlen.W))
+      val timerPending = Input(Bool())
+      val machineExternalPending =
+        if (withMachineExternalInterrupt) Some(Input(Bool())) else None
+      val supervisorExternalPending =
+        if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
+      val interruptHold = Output(Bool())
+      val wakeRequest = Output(Bool())
+      val wfiWaiting = Output(Bool())
+      val interruptRedirect = Output(Valid(UInt(xlen.W)))
+    }) else None
 
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PhysicalBits.W))
@@ -77,18 +111,23 @@ class TinyMemoryBackend(
   val dependencyBackend = Module(new TinyDependencyBackend(xlen))
   val issue = Module(new TinyOldestIssue(xlen))
   val execution = Module(new TinyExecutionCluster(xlen, isa.hasC))
-  val system = Module(new TinySystemCompletion(isa, allowSfenceVma = true))
+  val system = Module(new TinySystemCompletion(
+    isa,
+    allowSfenceVma = true,
+    allowWfi = enableAsyncInterrupts
+  ))
   val csrFile = Module(new MachineCsrFile(
     isa,
     PhysicalBits,
-    withMachineExternalInterrupt = false,
-    withSupervisorExternalInterrupt = false
+    withMachineExternalInterrupt = enableAsyncInterrupts && withMachineExternalInterrupt,
+    withSupervisorExternalInterrupt = enableAsyncInterrupts && withSupervisorExternalInterrupt
   ))
   val lsu = Module(new TinyBlockingLsu(
     geometry,
     paddrBits = PhysicalBits,
     tlbEntries = tlbEntries,
-    txnIdBits = txnIdBits
+    txnIdBits = txnIdBits,
+    allowAtomics = allowAtomics
   ))
   val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
 
@@ -102,11 +141,100 @@ class TinyMemoryBackend(
   private val sfenceAtRetire = retiringSystem &&
     !retiring.bits.exception.valid &&
     retiring.bits.uop.decoded.system.kind === SystemOperationKind.SfenceVma
+  private val wfiAtRetire = enableAsyncInterrupts.B && retiringSystem &&
+    !retiring.bits.exception.valid &&
+    retiring.bits.uop.decoded.system.kind === SystemOperationKind.Wfi
   private val privilegedBoundary = trapAtRetire || returnAtRetire
 
-  dependencyBackend.io.dispatch.valid := io.dispatch.valid && !privilegedBoundary
+  private val rawMachineTimer =
+    if (enableAsyncInterrupts) io.async.get.timerPending else false.B
+  private val rawMachineExternal =
+    if (enableAsyncInterrupts && withMachineExternalInterrupt)
+      io.async.get.machineExternalPending.get
+    else false.B
+  private val rawSupervisorExternal =
+    if (enableAsyncInterrupts && withSupervisorExternalInterrupt)
+      io.async.get.supervisorExternalPending.get
+    else false.B
+
+  csrFile.io.timerInterrupt := rawMachineTimer
+  if (enableAsyncInterrupts && withMachineExternalInterrupt) {
+    csrFile.io.externalInterrupt.get := rawMachineExternal
+  }
+  if (enableAsyncInterrupts && withSupervisorExternalInterrupt) {
+    csrFile.io.supervisorExternalInterruptPending.get := rawSupervisorExternal
+  }
+
+  private val rawSupervisorTimer =
+    if (enableAsyncInterrupts && isa.hasSupervisorTimerInterrupt)
+      csrFile.io.supervisorTimerPending.get
+    else false.B
+  private val machineTimerQualified =
+    if (enableAsyncInterrupts) csrFile.io.machineTimerInterrupt else false.B
+  private val machineExternalQualified =
+    if (enableAsyncInterrupts && withMachineExternalInterrupt)
+      csrFile.io.machineExternalInterrupt.get
+    else false.B
+  private val supervisorTimerQualified =
+    if (enableAsyncInterrupts && isa.hasSupervisorTimerInterrupt)
+      csrFile.io.supervisorTimerInterrupt.get
+    else false.B
+  private val supervisorExternalQualified =
+    if (enableAsyncInterrupts && withSupervisorExternalInterrupt)
+      csrFile.io.supervisorExternalInterrupt.get
+    else false.B
+
+  private val rawWakeRequest =
+    rawMachineTimer || rawMachineExternal || rawSupervisorTimer || rawSupervisorExternal
+  private val qualifiedInterrupt =
+    machineExternalQualified || machineTimerQualified ||
+      supervisorExternalQualified || supervisorTimerQualified
+  private val interruptFlag = BigInt(1) << (xlen - 1)
+  private val interruptCause = Mux(
+    machineExternalQualified,
+    (interruptFlag | BigInt(MachineCsrBit.MachineExternalInterrupt)).U(xlen.W),
+    Mux(
+      machineTimerQualified,
+      (interruptFlag | BigInt(MachineCsrBit.MachineTimerInterrupt)).U(xlen.W),
+      Mux(
+        supervisorExternalQualified,
+        (interruptFlag | BigInt(MachineCsrBit.SupervisorExternalInterrupt)).U(xlen.W),
+        (interruptFlag | BigInt(MachineCsrBit.SupervisorTimerInterrupt)).U(xlen.W)
+      )
+    )
+  )
+
+  private val wfiWaiting = if (enableAsyncInterrupts) Some(RegInit(false.B)) else None
+  if (enableAsyncInterrupts) {
+    when(wfiAtRetire && !rawWakeRequest) {
+      wfiWaiting.get := true.B
+    }
+    when(wfiWaiting.get && rawWakeRequest) {
+      wfiWaiting.get := false.B
+    }
+  }
+
+  // Delay asynchronous trap entry until every already-accepted instruction has
+  // either retired or been recovered. This yields a clean architectural next-PC
+  // boundary without deriving mepc/sepc from speculative frontend state.
+  private val interruptTake = enableAsyncInterrupts.B && qualifiedInterrupt &&
+    dependencyBackend.io.occupancy === 0.U && !privilegedBoundary
+  if (enableAsyncInterrupts) {
+    io.async.get.interruptHold := qualifiedInterrupt
+    io.async.get.wakeRequest := rawWakeRequest
+    io.async.get.wfiWaiting := wfiWaiting.get
+    io.async.get.interruptRedirect.valid := interruptTake
+    io.async.get.interruptRedirect.bits := csrFile.io.trapVector
+    when(interruptTake) {
+      wfiWaiting.get := false.B
+    }
+  }
+
+  private val asyncDispatchBlock =
+    enableAsyncInterrupts.B && (qualifiedInterrupt || wfiWaiting.map(identity).getOrElse(false.B))
+  dependencyBackend.io.dispatch.valid := io.dispatch.valid && !privilegedBoundary && !asyncDispatchBlock
   dependencyBackend.io.dispatch.bits := io.dispatch.bits
-  io.dispatch.ready := dependencyBackend.io.dispatch.ready && !privilegedBoundary
+  io.dispatch.ready := dependencyBackend.io.dispatch.ready && !privilegedBoundary && !asyncDispatchBlock
   io.allocated := dependencyBackend.io.allocated
   io.occupancy := dependencyBackend.io.occupancy
 
@@ -135,6 +263,11 @@ class TinyMemoryBackend(
   system.io.csrReadWritable := csrFile.io.readWritable
   system.io.currentPrivilege := csrFile.io.currentPrivilege
   io.currentPrivilege := csrFile.io.currentPrivilege
+  io.frontendSatpTranslationEnabled := csrFile.io.satpTranslationEnabled
+  io.frontendSatpRootPpn := csrFile.io.satpRootPpn
+  io.frontendSupervisorMxr := csrFile.io.supervisorMxr
+  io.frontendPmpConfig := csrFile.io.pmpConfig
+  io.frontendPmpAddress := csrFile.io.pmpAddress
 
   // One-shot oldest-only memory issue. The architectural rs1/rs2 dependency
   // values are materialized only after F2 says the current ROB head is ready.
@@ -164,18 +297,32 @@ class TinyMemoryBackend(
   lsu.io.request.bits.storeData := dependencyBackend.io.headRs2.value
   lsu.io.request.bits.rawInst := head.bits.decoded.rawInst
 
+  // The once-only latch belongs to the current head lifetime, not to an
+  // unbounded history of numeric tokens. RobToken generation may legitimately
+  // wrap after the head has moved through other lifetimes; remembering a token
+  // across that change would eventually suppress a new instruction that reuses
+  // the same index/generation pair.
+  when(memoryIssuedValid &&
+       (!head.valid || !sameRobToken(memoryIssuedToken, head.bits.robToken))) {
+    memoryIssuedValid := false.B
+  }
+  // A new request on the replacement head wins over the stale-latch clear in
+  // the same cycle and becomes the new once-only owner.
   when(lsu.io.request.fire) {
     memoryIssuedValid := true.B
     memoryIssuedToken := head.bits.robToken
   }
-  when(!head.valid) {
-    memoryIssuedValid := false.B
-  }
 
-  // A store may become externally visible only while the exact store lifetime
-  // is the ROB head. Translation/PMP still have to succeed inside the LSU.
-  lsu.io.storePermit.valid := headIsMemory &&
-    head.bits.decoded.memory.kind === MemoryOperationKind.Store
+  // Ordinary stores and atomic writers may become externally visible only while
+  // the exact lifetime is the ROB head. LR is read-only and does not need this
+  // permission. A locally failing SC also never externalizes.
+  private val headAtomicWriter = allowAtomics.B &&
+    head.bits.decoded.memory.kind === MemoryOperationKind.Atomic &&
+    head.bits.decoded.memory.atomicOp =/= AtomicOp.None &&
+    head.bits.decoded.memory.atomicOp =/= AtomicOp.Lr
+  lsu.io.storePermit.valid := headIsMemory && (
+    head.bits.decoded.memory.kind === MemoryOperationKind.Store || headAtomicWriter
+  )
   lsu.io.storePermit.bits := head.bits.robToken
 
   lsu.io.effectivePrivilege := csrFile.io.effectiveDataPrivilege
@@ -190,6 +337,12 @@ class TinyMemoryBackend(
   lsu.io.pmpEnabled := isa.hasPmp.B
   lsu.io.pmpConfig := csrFile.io.pmpConfig
   lsu.io.pmpAddress := csrFile.io.pmpAddress
+  if (allowAtomics) {
+    // Privileged architectural boundaries conservatively invalidate an LR
+    // reservation. Ordinary stores/SC/AMO clear it inside the LSU itself.
+    lsu.io.reservationClear.get :=
+      trapAtRetire || returnAtRetire || wfiAtRetire || interruptTake
+  }
 
   // Page-table reads are implicit Supervisor-mode accesses and must themselves
   // pass PMP before leaving the core. This mirrors the qualified v1 composition:
@@ -253,14 +406,17 @@ class TinyMemoryBackend(
     retiring.bits.privileged.csrWriteValid
   csrFile.io.writeAddr := retiring.bits.privileged.csrAddress
   csrFile.io.writeData := retiring.bits.privileged.csrWriteData
-  csrFile.io.timerInterrupt := false.B
   if (isa.hasTimeCounter) {
     csrFile.io.time.get := io.time.get
   }
-  csrFile.io.trapEnter := trapAtRetire
-  csrFile.io.trapPc := retiring.bits.uop.decoded.pc
-  csrFile.io.trapCause := retiring.bits.exception.cause
-  csrFile.io.trapValue := retiring.bits.exception.value
+  csrFile.io.trapEnter := trapAtRetire || interruptTake
+  csrFile.io.trapPc := Mux(
+    interruptTake,
+    if (enableAsyncInterrupts) io.async.get.boundaryPc else 0.U,
+    retiring.bits.uop.decoded.pc
+  )
+  csrFile.io.trapCause := Mux(interruptTake, interruptCause, retiring.bits.exception.cause)
+  csrFile.io.trapValue := Mux(interruptTake, 0.U, retiring.bits.exception.value)
   csrFile.io.trapReturn := returnAtRetire
   csrFile.io.trapReturnSupervisor :=
     returnAtRetire && retiring.bits.privileged.trapReturnSupervisor
@@ -304,6 +460,9 @@ class TinyMemoryBackend(
 
   // Start from the already-qualified F5 commit semantics and only replace the
   // memory observation fields with the generation-tagged F6 retirement trace.
+  // CommitTrace.valid remains an instruction-retirement pulse. interrupt is an
+  // independent architectural boundary event and may therefore be true while
+  // valid is false (notably after xRET or while waking from WFI).
   private val baseCommit = dependencyBackend.io.commit
   io.commit := 0.U.asTypeOf(new CommitTrace(
     xlen = xlen,
@@ -326,9 +485,13 @@ class TinyMemoryBackend(
   io.commit.exception := baseCommit.exception
   io.commit.exceptionCause := baseCommit.exceptionCause
   io.commit.exceptionValue := baseCommit.exceptionValue
-  io.commit.interrupt := baseCommit.interrupt
-  io.commit.interruptCause := baseCommit.interruptCause
-  io.commit.interruptPc := baseCommit.interruptPc
+  io.commit.interrupt := interruptTake
+  io.commit.interruptCause := Mux(interruptTake, interruptCause, 0.U)
+  io.commit.interruptPc := Mux(
+    interruptTake,
+    if (enableAsyncInterrupts) io.async.get.boundaryPc else 0.U,
+    0.U
+  )
 
   when(retiringTraceMatches) {
     pendingTraceValid(retiring.bits.uop.robToken.index) := false.B
@@ -342,5 +505,12 @@ class TinyMemoryBackend(
     for (index <- 0 until Entries) {
       pendingTraceValid(index) := false.B
     }
+  }
+
+  if (enableAsyncInterrupts) {
+    assert(!(interruptTake && dependencyBackend.io.commit.valid),
+      "F7 async interrupt must enter only at an empty clean ROB boundary")
+    assert(!(io.async.get.interruptRedirect.valid && io.privilegedRedirect.valid),
+      "async and ROB-owned privileged redirects must be mutually exclusive")
   }
 }

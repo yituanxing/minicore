@@ -32,12 +32,15 @@ class PrivilegedRedirect(val xlen: Int) extends Bundle {
   * the matching ROB head retires.
   *
   * Later phases may opt into a semantic operation whose architectural effect is
-  * still owned at retirement. F6 uses this narrow seam for SFENCE.VMA while the
-  * default remains false, preserving the frozen F5 behavior.
+  * still owned at retirement. F6 uses this narrow seam for SFENCE.VMA. F7 may
+  * opt into WFI once an explicit asynchronous wake/interrupt owner is present.
+  * Defaults remain false so the frozen earlier phases keep their fail-closed
+  * behavior.
   */
 class TinySystemCompletion(
     val isa: IsaConfig,
-    val allowSfenceVma: Boolean = false
+    val allowSfenceVma: Boolean = false,
+    val allowWfi: Boolean = false
 ) extends Module {
   private val xlen = isa.xlen
   private val IdentityBits = TinyRobGeometry.IndexBits
@@ -123,6 +126,7 @@ class TinySystemCompletion(
       io.currentPrivilege >= PrivilegeMode.Supervisor.U
   private val xretLegal = machineReturnLegal || supervisorReturnLegal
   private val sfenceAvailable = allowSfenceVma.B && isa.hasPagedVirtualMemory.B
+  private val wfiAvailable = allowWfi.B
 
   private val implementedSystem =
     systemKind === SystemOperationKind.Csr ||
@@ -131,7 +135,8 @@ class TinySystemCompletion(
       systemKind === SystemOperationKind.Xret ||
       systemKind === SystemOperationKind.Fence ||
       (systemKind === SystemOperationKind.FenceI && isa.hasZifencei.B) ||
-      (systemKind === SystemOperationKind.SfenceVma && sfenceAvailable)
+      (systemKind === SystemOperationKind.SfenceVma && sfenceAvailable) ||
+      (systemKind === SystemOperationKind.Wfi && wfiAvailable)
 
   // A predecoded exception is already an architectural semantic fact and must
   // not wait for a source value that the faulting instruction will never use.
@@ -173,6 +178,14 @@ class TinySystemCompletion(
             io.completion.bits.privileged.trapReturnSupervisor :=
               decoded.system.xret === XRetOp.Supervisor
           }.otherwise {
+            markIllegalInstruction()
+          }
+        }
+        // F7's asynchronous owner consumes the retirement event. WFI remains
+        // side-effect free here so only Commit-time state can put the frontend
+        // to sleep. U-mode is illegal in the current privileged profile.
+        is(SystemOperationKind.Wfi) {
+          when(io.currentPrivilege === PrivilegeMode.User.U) {
             markIllegalInstruction()
           }
         }

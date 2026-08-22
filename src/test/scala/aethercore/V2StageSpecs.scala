@@ -51,3 +51,41 @@ class V2F6BlockingLsuSpec
     with V2F6Sv32MemoryChecks
     with V2F6SfenceChecks
     with V2F6MemoryClosureChecks
+
+class V2F7SemanticDecodeSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7SemanticDecodeChecks
+
+class V2F7BareCoreSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7BareCoreChecks
+    with V2F7GenerationWrapChecks
+
+class V2F7PagedCoreSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7PagedCoreChecks
+
+class V2F7AsyncInterruptSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7AsyncInterruptChecks
+
+class V2F7AtomicLsuSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7AtomicLsuChecks
+
+class V2F7AtomicCoreSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2F7AtomicCoreChecks
+    with V2F7OpenSbiAtomicChecks
