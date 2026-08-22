@@ -186,6 +186,32 @@ trait V2F5PrivilegedClosureChecks { this: AnyFlatSpec with Matchers with ChiselS
       )
     }
 
+  private def closureExpectIllegalSystem(
+      config: aethercore.config.CoreConfig,
+      kind: SystemOperationKind.Type,
+      raw: BigInt,
+      pc: BigInt
+  ): Unit = {
+    simulate(new TinyPrivilegedBackend(config)) { dut =>
+      dut.io.dispatch.valid.poke(false.B)
+      closureDispatch(dut) {
+        closurePokeBase(
+          dut,
+          pc,
+          ExecutionClass.System,
+          rawInst = raw,
+          systemKind = kind
+        )
+      }
+      closureAwaitCommit(dut)
+      dut.io.commit.exception.expect(true.B)
+      dut.io.commit.exceptionCause.expect(MachineExceptionCode.IllegalInstruction.U)
+      dut.io.commit.exceptionValue.expect(raw.U)
+      dut.io.commit.rdWrite.expect(false.B)
+      dut.io.privilegedRedirect.valid.expect(true.B)
+    }
+  }
+
   behavior of "AetherCore v2 F5 privileged closure"
 
   it should "execute CSR immediate write/set/clear at retirement" in {
@@ -329,12 +355,12 @@ trait V2F5PrivilegedClosureChecks { this: AnyFlatSpec with Matchers with ChiselS
     }
   }
 
-  it should "retire FENCE and FENCE.I as serialized cacheless no-ops" in {
-    for ((kind, raw) <- Seq(
-      (SystemOperationKind.Fence, BigInt("0000000f", 16)),
-      (SystemOperationKind.FenceI, BigInt("0000100f", 16))
+  it should "retire available FENCE operations as serialized cacheless no-ops" in {
+    for ((config, kind, raw) <- Seq(
+      (CoreProfiles.rv32imSoftware, SystemOperationKind.Fence, BigInt("0000000f", 16)),
+      (CoreProfiles.rv64imCurrent, SystemOperationKind.FenceI, BigInt("0000100f", 16))
     )) {
-      simulate(new TinyPrivilegedBackend(CoreProfiles.rv32imSoftware)) { dut =>
+      simulate(new TinyPrivilegedBackend(config)) { dut =>
         dut.io.dispatch.valid.poke(false.B)
         closureDispatch(dut) {
           closurePokeBase(
@@ -353,6 +379,27 @@ trait V2F5PrivilegedClosureChecks { this: AnyFlatSpec with Matchers with ChiselS
         dut.io.occupancy.expect(0.U)
       }
     }
+  }
+
+  it should "fail closed on unavailable or deferred system operations" in {
+    closureExpectIllegalSystem(
+      CoreProfiles.rv32imSoftware,
+      SystemOperationKind.FenceI,
+      BigInt("0000100f", 16),
+      BigInt("80005540", 16)
+    )
+    closureExpectIllegalSystem(
+      CoreProfiles.rv32imSoftware,
+      SystemOperationKind.Wfi,
+      BigInt("10500073", 16),
+      BigInt("80005544", 16)
+    )
+    closureExpectIllegalSystem(
+      CoreProfiles.rv32imsuSoftware,
+      SystemOperationKind.SfenceVma,
+      BigInt("12000073", 16),
+      BigInt("80005548", 16)
+    )
   }
 
   it should "source the architectural time CSR from the backend input" in {
