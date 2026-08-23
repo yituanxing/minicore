@@ -58,8 +58,9 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.computeAvailability.branch.expect(true.B)
       dut.io.computeAvailability.multiply.expect(true.B)
 
-      // Let DIV finish while holding its completion. Its resource stays busy
-      // until the real response handshake, not until a scheduler prediction.
+      // Let DIV finish while holding its completion. Before the edge that moves
+      // the result out of the divider, the real iterative resource is still
+      // unavailable. Once the completion drains, availability returns normally.
       var cycles = 0
       while (!dut.io.response.valid.peek().litToBoolean && cycles < 40) {
         dut.clock.step()
@@ -74,7 +75,11 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.response.ready.poke(false.B)
       dut.io.computeAvailability.divide.expect(true.B)
 
-      // A held one-cycle Branch completion affects Branch only.
+      // P8.3 gives each one-cycle compute FU an elastic completion-egress slot.
+      // A Branch result held at the shared drain therefore does not make the
+      // Branch leaf itself unavailable: it can evacuate the old result into its
+      // empty egress slot while accepting a new lifetime. This remains the real
+      // resource request.ready signal, not a scheduler-owned prediction.
       pokeRequest(dut, ExecutionClass.Branch, AluOp.Add, index = 2, lhs = 1, rhs = 1)
       dut.io.request.bits.controlFlowKind.poke(ControlFlowKind.Conditional)
       dut.io.request.bits.branchType.poke(BranchType.Eq)
@@ -86,7 +91,7 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.request.valid.poke(false.B)
       dut.io.response.valid.expect(true.B)
       dut.io.response.bits.robToken.index.expect(2.U)
-      dut.io.computeAvailability.branch.expect(false.B)
+      dut.io.computeAvailability.branch.expect(true.B)
       dut.io.computeAvailability.integer.expect(true.B)
       dut.io.computeAvailability.multiply.expect(true.B)
       dut.io.computeAvailability.divide.expect(true.B)
@@ -96,7 +101,10 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.response.ready.poke(false.B)
       dut.io.computeAvailability.branch.expect(true.B)
 
-      // A held one-cycle integer completion similarly affects only Integer.
+      // Integer has the same elastic handoff contract. Finite backpressure once
+      // both the leaf register and its egress slot are occupied is proved by the
+      // dedicated P8.3 completion-overlap spec; this inherited A8 check only
+      // asserts that availability continues to mirror the real leaf interface.
       pokeRequest(dut, ExecutionClass.Integer, AluOp.Add, index = 1, lhs = 4, rhs = 5)
       dut.io.request.valid.poke(true.B)
       dut.io.request.ready.expect(true.B)
@@ -104,7 +112,7 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.request.valid.poke(false.B)
       dut.io.response.valid.expect(true.B)
       dut.io.response.bits.robToken.index.expect(1.U)
-      dut.io.computeAvailability.integer.expect(false.B)
+      dut.io.computeAvailability.integer.expect(true.B)
       dut.io.computeAvailability.branch.expect(true.B)
       dut.io.computeAvailability.multiply.expect(true.B)
       dut.io.computeAvailability.divide.expect(true.B)
