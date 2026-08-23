@@ -1,6 +1,7 @@
 package aethercore.core.v2
 
 import chisel3._
+import chisel3.util.Valid
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
