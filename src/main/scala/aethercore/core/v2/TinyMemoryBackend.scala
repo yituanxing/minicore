@@ -230,6 +230,19 @@ class TinyMemoryBackend(
     }
   }
 
+  // P8.2 generalized recovery makes retirement intentionally depend on the
+  // current accepted completion so recovery can atomically suppress an older
+  // head retirement. Keep LSU context inputs off that combinational path: the
+  // head cannot become a new memory operation until the next clock anyway.
+  // CSR ordinary-write forwarding is captured here; trap/xRET transitions need
+  // one conservative refresh cycle after their state update. SFENCE data-TLB
+  // invalidation is likewise replayed in that protected cycle.
+  private val lsuEffectivePrivilege =
+    RegNext(csrFile.io.effectiveDataPrivilege, PrivilegeMode.Machine.U(2.W))
+  private val lsuContextRefresh =
+    RegNext(retiringSystem || privilegedBoundary || interruptTake, false.B)
+  private val lsuTranslationFlush = RegNext(sfenceAtRetire, false.B)
+
   private val asyncDispatchBlock =
     enableAsyncInterrupts.B && (qualifiedInterrupt || wfiWaiting.map(identity).getOrElse(false.B))
   dependencyBackend.io.dispatch.valid := io.dispatch.valid && !privilegedBoundary && !asyncDispatchBlock
@@ -303,7 +316,9 @@ class TinyMemoryBackend(
   lsu.io.request.valid := headIsMemory &&
     dependencyBackend.io.headDependenciesValid &&
     dependencyBackend.io.headOperandsReady &&
-    !memoryAlreadyIssued
+    !memoryAlreadyIssued &&
+    !lsuContextRefresh &&
+    !lsuTranslationFlush
   lsu.io.request.bits := 0.U.asTypeOf(new TinyMemoryRequest(xlen, IdentityBits, GenerationBits))
   lsu.io.request.bits.robToken := head.bits.robToken
   lsu.io.request.bits.producerTag := head.bits.producerTag
@@ -354,14 +369,15 @@ class TinyMemoryBackend(
   )
   lsu.io.storePermit.bits := head.bits.robToken
 
-  lsu.io.effectivePrivilege := csrFile.io.effectiveDataPrivilege
+  lsu.io.effectivePrivilege := lsuEffectivePrivilege
   lsu.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
   lsu.io.satpRootPpn := csrFile.io.satpRootPpn
   lsu.io.supervisorSum := csrFile.io.supervisorSum
   lsu.io.supervisorMxr := csrFile.io.supervisorMxr
-  // SFENCE.VMA is globally conservative in the current TLB contract. The pulse
-  // is generated only from a legal, exception-free retirement below.
-  lsu.io.translationFlush := sfenceAtRetire
+  // Preserve the architectural fence pulse at retirement for frontend owners,
+  // but replay the data-side flush through a register so generalized recovery's
+  // completion-dependent retirement cannot feed back into the LSU completion.
+  lsu.io.translationFlush := lsuTranslationFlush
   io.translationFence := sfenceAtRetire
   lsu.io.pmpEnabled := isa.hasPmp.B
   lsu.io.pmpConfig := csrFile.io.pmpConfig
