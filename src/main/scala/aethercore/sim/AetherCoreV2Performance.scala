@@ -145,7 +145,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   private val backend = core.backend
   private val selective = backend.selectiveIssue.io.request
   private val selectiveFire = selective.fire
-  private val operation = selective.bits.operation
+  private val operation = selective.bits.aluOp
   private val head = backend.dependencyBackend.io.schedulingWindow(0)
 
   private val multiplyOperation =
