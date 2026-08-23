@@ -49,7 +49,7 @@ jobs:
     name: Prove generalized recovery ownership
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    timeout-minutes: 25
     env:
       TARGET_SHA: ${{ github.sha }}
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
@@ -124,6 +124,14 @@ jobs:
           set -euo pipefail
           ./mill aethercore.test.testOnly \
             aethercore.core.v2.V2P82RecoveryRebuildSpec
+
+      - name: Re-run inherited production composition probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.V2A8ProductionSelectiveIssueSpec \
+            aethercore.V2F7BareCoreSpec
 
       - name: Run R3 redirect and late-response integration proof
         shell: bash
