@@ -226,9 +226,35 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
 
   perf.io.events := events
 
-  // The runner already observes exitValid. Emit one machine-readable snapshot
-  // at the same architectural exit event without adding a new host-side API.
-  when(io.exitValid) {
+  // The real Linux qualification workload does not terminate: PID1 prints its
+  // UART proof marker and then yields forever. Detect that simulation-only marker
+  // here so the snapshot is taken at the same architectural proof boundary rather
+  // than at an arbitrary periodic cycle. exitValid remains useful for terminating
+  // microbenchmarks that reuse this measured shell.
+  private val perfMarkerBytes = VecInit(Seq(
+    0x52.U(8.W), 0x56.U(8.W), 0x36.U(8.W), 0x34.U(8.W), 0x20.U(8.W),
+    0x55.U(8.W), 0x53.U(8.W), 0x45.U(8.W), 0x52.U(8.W), 0x20.U(8.W),
+    0x55.U(8.W), 0x41.U(8.W), 0x52.U(8.W), 0x54.U(8.W), 0x20.U(8.W),
+    0x49.U(8.W), 0x52.U(8.W), 0x51.U(8.W), 0x20.U(8.W), 0x4f.U(8.W),
+    0x4b.U(8.W), 0x0a.U(8.W)
+  ))
+  private val perfMarkerIndex = RegInit(0.U(log2Ceil(perfMarkerBytes.length).W))
+  private val perfMarkerHit = WireDefault(false.B)
+
+  when(io.uartValid) {
+    when(io.uartByte === perfMarkerBytes(perfMarkerIndex)) {
+      when(perfMarkerIndex === (perfMarkerBytes.length - 1).U) {
+        perfMarkerIndex := 0.U
+        perfMarkerHit := true.B
+      }.otherwise {
+        perfMarkerIndex := perfMarkerIndex + 1.U
+      }
+    }.otherwise {
+      perfMarkerIndex := Mux(io.uartByte === perfMarkerBytes(0), 1.U, 0.U)
+    }
+  }
+
+  when(perfMarkerHit || io.exitValid) {
     printf(p"AETHERCORE_V2_PERF cycles=${perf.io.counters.cycles} commits=${perf.io.counters.commits} dispatch_accepted=${perf.io.counters.dispatchAccepted} dispatch_blocked=${perf.io.counters.dispatchBlocked}\n")
     printf(p"AETHERCORE_V2_PERF rob0=${perf.io.counters.robOccupancy0} rob1=${perf.io.counters.robOccupancy1} rob2=${perf.io.counters.robOccupancy2} rob3=${perf.io.counters.robOccupancy3} rob4=${perf.io.counters.robOccupancy4}\n")
     printf(p"AETHERCORE_V2_PERF issue_int=${perf.io.counters.integerIssue} issue_mul=${perf.io.counters.multiplyIssue} issue_div=${perf.io.counters.divideIssue} issue_branch=${perf.io.counters.branchIssue} issue_mem=${perf.io.counters.memoryIssue} system_completion=${perf.io.counters.systemCompletion}\n")

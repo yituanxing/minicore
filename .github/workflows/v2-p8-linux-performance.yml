@@ -1,0 +1,259 @@
+name: AetherCore V2 P8 Linux Performance Gate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-p8-linux-performance.yml'
+      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
+      - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/test/scala/aethercore/V2P8PerformanceChecks.scala'
+      - 'src/test/scala/aethercore/V2StageSpecs.scala'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'sim/v2_rv64_opensbi_shim/**'
+      - 'software/rv64/linux_early.env'
+      - 'software/rv64/opensbi_first_exec.env'
+      - 'software/rv64_userspace/minimal_init.S'
+      - 'tools/ci/rv64_linux_early_build.sh'
+      - 'tools/ci/rv64_minimal_initramfs_build.sh'
+      - 'tools/ci/rv64_minimal_init_payload_build.sh'
+      - 'tools/ensure_verilator_5_024.sh'
+      - 'tools/ensure_riscv64_linux_gcc_13_3.sh'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-p8-linux-performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  measure:
+    name: Unchanged Linux PID1 plus exact P8 snapshot on v2 RV64
+    needs: verilator-tool
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Verify exact head and measurement contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          grep -q 'AetherCoreV2MeasuredOpenSbiRV64SimTop' src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala
+          grep -q 'AETHERCORE_V2_PERF' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
+          grep -q 'RV64 USER UART IRQ OK' software/rv64_userspace/minimal_init.S
+          bash -n tools/ci/rv64_linux_early_build.sh
+          bash -n tools/ci/rv64_minimal_initramfs_build.sh
+          bash -n tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Restore exact-head measured-v2 simulation cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/v2-p8-rv64-linux/${{ env.TARGET_SHA }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-p8-rv64-linux-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Freeze focused P8 counter semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          ./mill aethercore.test.testOnly aethercore.V2P8PerformanceSpec
+
+      - name: Reuse or build unchanged Linux 6.6.143 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+
+      - name: Build unchanged deterministic PID1 initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Execute real PID1 proof through measured v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          dst="$GITHUB_WORKSPACE/build/v2-p8-linux-perf"
+          mkdir -p "$dst"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$HOME/.cache/aethercore/v2-p8-rv64-linux/$TARGET_SHA" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
+            FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=850000000 \
+            MILESTONE='RV64 USER UART IRQ OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local 2>&1 | tee "$dst/execute.log"
+
+      - name: Validate exact P8 runtime snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          log = Path('build/v2-p8-linux-perf/execute.log')
+          text = log.read_text(errors='replace')
+          lines = [line for line in text.splitlines() if 'AETHERCORE_V2_PERF ' in line]
+          if not lines:
+              raise SystemExit('missing AETHERCORE_V2_PERF runtime snapshot')
+
+          values = {}
+          for line in lines:
+              for key, raw in re.findall(r'([a-z0-9_]+)=\s*([0-9]+)', line):
+                  values[key] = int(raw)
+
+          required = {
+              'cycles', 'commits', 'dispatch_accepted', 'dispatch_blocked',
+              'rob0', 'rob1', 'rob2', 'rob3', 'rob4',
+              'issue_int', 'issue_mul', 'issue_div', 'issue_branch', 'issue_mem',
+              'system_completion', 'selective_candidate', 'selective_bypass',
+              'lsu_compute_overlap', 'head_not_ready', 'commit_idle_nonempty',
+              'lsu_busy', 'memory_launch_blocked', 'mem_req', 'mem_resp',
+              'ptw_active', 'system_head', 'completion_collision',
+              'completion_backpressure',
+          }
+          missing = sorted(required - values.keys())
+          if missing:
+              raise SystemExit(f'incomplete AETHERCORE_V2_PERF snapshot: {missing}')
+
+          cycles = values['cycles']
+          commits = values['commits']
+          rob_sum = sum(values[f'rob{i}'] for i in range(5))
+          selective_accepted = values['issue_int'] + values['issue_mul'] + values['issue_div']
+
+          assert cycles > 0
+          assert commits > 0
+          assert commits <= cycles
+          assert rob_sum == cycles, (rob_sum, cycles)
+          assert values['selective_candidate'] >= selective_accepted
+          assert values['selective_bypass'] <= selective_accepted
+          assert values['lsu_compute_overlap'] <= selective_accepted
+          assert values['mem_req'] >= values['mem_resp']
+          assert values['mem_req'] - values['mem_resp'] <= 1
+
+          out = Path('build/v2-p8-linux-perf/perf-snapshot.txt')
+          out.write_text('\n'.join(f'{key}={values[key]}' for key in sorted(required)) + '\n')
+          print(
+              'AETHERCORE_V2_PERF_SANITY_PASS '
+              f'cycles={cycles} commits={commits} '
+              f'ipc={commits / cycles:.6f} '
+              f'selective_bypass={values["selective_bypass"]} '
+              f'lsu_overlap={values["lsu_compute_overlap"]}'
+          )
+          PY
+
+      - name: Preserve exact-head measured-v2 simulation cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/v2-p8-rv64-linux/${{ env.TARGET_SHA }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-p8-rv64-linux-v1-${{ env.TARGET_SHA }}-${{ hashFiles('src/main/scala/aethercore/**', 'sim/**', 'Makefile.l32-linux-boot', 'build.mill') }}
+
+      - name: Upload P8 Linux measurement evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-p8-linux-perf-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-linux-initramfs/evidence/
+            build/rv64-minimal-init-boot/result.txt
+            build/rv64-minimal-init-boot/evidence/
+            build/v2-p8-linux-perf/
