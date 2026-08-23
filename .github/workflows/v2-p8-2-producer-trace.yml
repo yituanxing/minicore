@@ -1,6 +1,5 @@
-name: AetherCore V2 P8.2 Producer Trace Diagnostic
+name: AetherCore V2 P8.2 Dependency Write Diagnostic
 
-# Dedicated checkout-only diagnostic. Production RTL is not modified by this workflow.
 on:
   push:
     branches:
@@ -14,37 +13,32 @@ permissions:
 
 jobs:
   announce:
-    name: Publish producer-trace run identity
     runs-on: ubuntu-24.04
     steps:
-      - name: Publish pending trace status
+      - name: Publish diagnostic run identity
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 - <<'PY' > /tmp/p82-trace-status.json
+          python3 - <<'PY' >/tmp/status.json
           import json, os
           print(json.dumps({
-              'state': 'pending',
-              'context': 'aethercore/v2-p8.2-producer-trace',
-              'description': 'checkout-only projection trace',
-              'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+            'state': 'pending',
+            'context': 'aethercore/v2-p8.2-producer-trace',
+            'description': 'leaf dependency allocation A/B',
+            'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
           }))
           PY
-          curl -fsS -L -X POST \
-            -H 'Accept: application/vnd.github+json' \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            --data-binary @/tmp/p82-trace-status.json
+          curl -fsS -L -X POST -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" --data-binary @/tmp/status.json
 
   verilator-tool:
-    name: Produce or verify hosted Verilator
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
-  trace:
-    name: Trace dependency projection seam
+  test:
+    name: Test leaf dependency allocation writes
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -52,62 +46,48 @@ jobs:
       TARGET_SHA: ${{ github.sha }}
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
-
     steps:
-      - name: Checkout exact diagnostic head
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Inject projection traces into checkout only
+      - name: Apply checkout-only leaf-write variant
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
-          text = path.read_text()
-
-          state_anchor = '  private val headEntry = dependencies(io.head.bits.robToken.index)\n'
-          state_lines = [
-              '  when(io.allocate.valid || io.retire.valid || io.recovery.valid || rebuildBusy) {',
-              '    printf(p"P82_VIEW_TRACE d2_valid=${dependencies(2).valid} d2_ready=${dependencies(2).rs1.ready} d2_id=${dependencies(2).rs1.producerTag.id} d2_value=${dependencies(2).rs1.value} view2_valid=${io.slotView(2).valid} view2_ready=${io.slotView(2).rs1.ready} view2_id=${io.slotView(2).rs1.producerTag.id} view2_value=${io.slotView(2).rs1.value} alloc=${io.allocate.valid} retire=${io.retire.valid} rebuild=${rebuildBusy}\\n")',
-              '  }',
-              '',
+          p = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
+          s = p.read_text()
+          old = '''    dependencies(slot).rs1 := allocateRs1
+    dependencies(slot).rs2 := allocateRs2
+'''
+          new_lines = [
+            '    dependencies(slot).rs1.ready := allocateRs1.ready',
+            '    dependencies(slot).rs1.value := allocateRs1.value',
+            '    dependencies(slot).rs1.producerTag.id := allocateRs1.producerTag.id',
+            '    dependencies(slot).rs1.producerTag.generation := allocateRs1.producerTag.generation',
+            '    dependencies(slot).rs2.ready := allocateRs2.ready',
+            '    dependencies(slot).rs2.value := allocateRs2.value',
+            '    dependencies(slot).rs2.producerTag.id := allocateRs2.producerTag.id',
+            '    dependencies(slot).rs2.producerTag.generation := allocateRs2.producerTag.generation',
           ]
-          state_trace = '\n'.join(state_lines) + '\n'
-          if text.count(state_anchor) != 1:
-              raise SystemExit('unexpected headEntry anchor count')
-          text = text.replace(state_anchor, state_trace + state_anchor)
-
-          backend_anchor = '  io.headDependenciesValid := dependencyState.io.headDependenciesValid\n'
-          backend_lines = [
-              '  when(rob.io.allocated.valid || io.retiring.valid) {',
-              '    printf(p"P82_SCHED_TRACE slot2_valid=${dependencyState.io.slotView(2).valid} slot2_ready=${dependencyState.io.slotView(2).rs1.ready} slot2_id=${dependencyState.io.slotView(2).rs1.producerTag.id} slot2_value=${dependencyState.io.slotView(2).rs1.value} win1_valid=${io.schedulingWindow(1).valid} win1_dep=${io.schedulingWindow(1).dependenciesValid} win1_ready=${io.schedulingWindow(1).rs1.ready} win1_id=${io.schedulingWindow(1).rs1.producerTag.id} win1_value=${io.schedulingWindow(1).rs1.value} allocated=${rob.io.allocated.valid} retiring=${io.retiring.valid}\\n")',
-              '  }',
-              '',
-          ]
-          backend_trace = '\n'.join(backend_lines) + '\n'
-          if text.count(backend_anchor) != 1:
-              raise SystemExit('unexpected headDependencies anchor count')
-          text = text.replace(backend_anchor, backend_trace + backend_anchor)
-
-          path.write_text(text)
+          new = '\n'.join(new_lines) + '\n'
+          if s.count(old) != 1:
+            raise SystemExit('unexpected allocation write anchor')
+          p.write_text(s.replace(old, new))
           PY
 
-      - name: Restore Scala dependency cache
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cache/coursier
             ~/.cache/mill
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
-          restore-keys: |
-            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+          restore-keys: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-      - name: Restore exact fixed Verilator cache
-        uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/aethercore/toolchains/verilator-5.024
@@ -115,28 +95,13 @@ jobs:
             ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
 
-      - name: Configure diagnostic build directory
+      - name: Run exact red case with leaf writes
         shell: bash
         run: |
           set -euo pipefail
           chmod +x mill
-          root="$RUNNER_TEMP/aethercore-v2-p82-trace"
+          root="$RUNNER_TEMP/aethercore-v2-p82-leaf-write"
           mkdir -p "$root/mill-out"
-          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
-
-      - name: Revalidate fixed Verilator
-        shell: bash
-        run: bash tools/ensure_verilator_5_024.sh
-
-      - name: Compile diagnostic test surface
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./mill aethercore.test.compile
-
-      - name: Run backend projection trace
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./mill aethercore.test.testOnly \
-            aethercore.core.v2.V2P82RecoveryRebuildSpec
+          export MILL_OUTPUT_DIR="$root/mill-out"
+          bash tools/ensure_verilator_5_024.sh
+          ./mill aethercore.test.testOnly aethercore.core.v2.V2P82RecoveryRebuildSpec
