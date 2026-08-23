@@ -55,6 +55,7 @@ class V2F6BlockingLsuSpec
     with V2A8SchedulingViewChecks
     with V2A8SelectiveIssueChecks
     with V2A8SelectiveExecutionChecks
+    with V2A8SelectiveBarrierChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec
@@ -79,6 +80,7 @@ class V2A8SelectiveExecutionSpec
     with Matchers
     with ChiselSim
     with V2A8SelectiveExecutionChecks
+    with V2A8SelectiveBarrierChecks
 
 class V2F7SemanticDecodeSpec
     extends AnyFlatSpec
