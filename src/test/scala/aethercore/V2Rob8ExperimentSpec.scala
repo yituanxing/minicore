@@ -90,7 +90,11 @@ class V2Rob8ExperimentSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.completion.bits.exception.valid.poke(false.B)
     dut.io.completion.bits.exception.cause.poke(0.U)
     dut.io.completion.bits.exception.value.poke(0.U)
-    dut.io.completion.bits.privileged.poke(0.U.asTypeOf(new PendingPrivilegedEffect(64)))
+    dut.io.completion.bits.privileged.csrWriteValid.poke(false.B)
+    dut.io.completion.bits.privileged.csrAddress.poke(0.U)
+    dut.io.completion.bits.privileged.csrWriteData.poke(0.U)
+    dut.io.completion.bits.privileged.trapReturn.poke(false.B)
+    dut.io.completion.bits.privileged.trapReturnSupervisor.poke(false.B)
     dut.clock.step()
     dut.io.completion.valid.poke(false.B)
   }
