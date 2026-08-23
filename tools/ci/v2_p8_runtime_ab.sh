@@ -15,7 +15,6 @@ ELABORATE_MAIN="${ELABORATE_MAIN:-aethercore.ElaborateV2OpenSbiRV64}"
 mkdir -p "$OUT_ROOT"
 SEED_BUILD="$OUT_ROOT/rtl-seed"
 
-# Elaborate exactly once; both host binaries consume byte-identical RTL.
 make -f Makefile.l32-linux-boot \
   BUILD_DIR="$SEED_BUILD" \
   TOP="$TOP" \
@@ -27,10 +26,8 @@ required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob
 build_variant() {
   local variant="$1"
   local extra=""
-  # Adaptive settle is now the measured-v2 default. Keep the old two-low-eval
-  # path explicit so every future speed change retains a qualified reference.
-  [[ "$variant" == baseline ]] && extra='-DAETHERCORE_SIM_REFERENCE_SETTLE'
-  [[ "$variant" == baseline || "$variant" == adaptive ]] || { echo "bad variant: $variant" >&2; return 2; }
+  [[ "$variant" == requestguard ]] && extra='-DAETHERCORE_SIM_REQUEST_GUARD_SETTLE'
+  [[ "$variant" == adaptive || "$variant" == requestguard ]] || { echo "bad variant: $variant" >&2; return 2; }
 
   local obj="$OUT_ROOT/obj-$variant"
   local log="$OUT_ROOT/$variant.compile.log"
@@ -79,7 +76,7 @@ PY
 RESULTS="$OUT_ROOT/results.tsv"
 printf 'variant\trunner_rc\trun_seconds\twall_cycles_per_second\tprogress_cycles_per_second\n' > "$RESULTS"
 
-for variant in baseline adaptive; do
+for variant in adaptive requestguard; do
   build_variant "$variant"
   sim="$OUT_ROOT/obj-$variant/V$TOP"
   [[ -x "$sim" ]] || { echo "ERROR: missing simulator $sim" >&2; exit 3; }
@@ -109,18 +106,17 @@ PY
   printf '%s\t%s\t%s\t%s\t%s\n' "$variant" "$rc" "$run_seconds" "$wall_cps" "$progress_cps" >> "$RESULTS"
 done
 
-# Correctness gate: same stop condition and byte-identical full 38-field snapshot.
-base_rc="$(awk -F '\t' '$1=="baseline" {print $2}' "$RESULTS")"
 adaptive_rc="$(awk -F '\t' '$1=="adaptive" {print $2}' "$RESULTS")"
-[[ "$base_rc" == "$adaptive_rc" ]] || {
-  echo "AETHERCORE_RUNTIME_AB_RC_MISMATCH baseline=$base_rc adaptive=$adaptive_rc" >&2
+guard_rc="$(awk -F '\t' '$1=="requestguard" {print $2}' "$RESULTS")"
+[[ "$adaptive_rc" == "$guard_rc" ]] || {
+  echo "AETHERCORE_RUNTIME_AB_RC_MISMATCH adaptive=$adaptive_rc requestguard=$guard_rc" >&2
   exit 19
 }
 
-diff -u "$OUT_ROOT/baseline.snapshot.txt" "$OUT_ROOT/adaptive.snapshot.txt" \
-  > "$OUT_ROOT/baseline-vs-adaptive.diff" || {
+diff -u "$OUT_ROOT/adaptive.snapshot.txt" "$OUT_ROOT/requestguard.snapshot.txt" \
+  > "$OUT_ROOT/adaptive-vs-requestguard.diff" || {
     echo 'AETHERCORE_RUNTIME_AB_COUNTER_MISMATCH' >&2
-    cat "$OUT_ROOT/baseline-vs-adaptive.diff" >&2
+    cat "$OUT_ROOT/adaptive-vs-requestguard.diff" >&2
     exit 20
   }
 echo 'AETHERCORE_RUNTIME_AB_COUNTERS_MATCH fields=38'
@@ -129,12 +125,12 @@ python3 - "$RESULTS" <<'PY'
 import csv, sys
 with open(sys.argv[1], newline='') as f:
     rows = {r['variant']: r for r in csv.DictReader(f, delimiter='\t')}
-base = float(rows['baseline']['wall_cycles_per_second'])
 adaptive = float(rows['adaptive']['wall_cycles_per_second'])
-speedup = adaptive / base
-print(f'AETHERCORE_RUNTIME_AB_RESULT baseline_cps={base:.0f} adaptive_cps={adaptive:.0f} speedup={speedup:.4f}x')
+guard = float(rows['requestguard']['wall_cycles_per_second'])
+speedup = guard / adaptive
+print(f'AETHERCORE_REQUEST_GUARD_AB_RESULT adaptive_cps={adaptive:.0f} requestguard_cps={guard:.0f} speedup={speedup:.4f}x')
 if speedup >= 1.03:
-    print(f'AETHERCORE_RUNTIME_AB_PROMOTE_CANDIDATE speedup={speedup:.4f}x')
+    print(f'AETHERCORE_REQUEST_GUARD_AB_PROMOTE_CANDIDATE speedup={speedup:.4f}x')
 else:
-    print(f'AETHERCORE_RUNTIME_AB_NO_PROMOTION speedup={speedup:.4f}x')
+    print(f'AETHERCORE_REQUEST_GUARD_AB_NO_PROMOTION speedup={speedup:.4f}x')
 PY
