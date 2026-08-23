@@ -33,17 +33,18 @@ def test_first_selective_slice_remains_single_launch_per_cycle() -> None:
 
 def test_selector_is_fail_closed_and_stops_at_serialization_boundaries() -> None:
     text = SELECTOR.read_text(encoding="utf-8")
-    assert "ExecutionClass.Integer" in text
-    assert "ExecutionClass.MulDiv" in text
-    assert "entry.uop.executionClass === ExecutionClass.System" in text
-    assert "entry.uop.decoded.ordering" not in text  # guard against accidental typo below
+    assert "older.uop.executionClass === ExecutionClass.System" in text
     assert "older.uop.decoded.ordering =/= OrderingClass.Normal" in text
     assert "older.uop.decoded.exception.valid" in text
     assert "!entry.uop.decoded.exception.valid" in text
     assert "entry.uop.decoded.ordering === OrderingClass.Normal" in text
-    selector_body = text.split("class TinySelectiveComputeIssue", 1)[1]
-    assert "ExecutionClass.Memory" not in selector_body
-    assert "ExecutionClass.Branch" not in selector_body
+
+    safe_class = text.split("val safeClass =", 1)[1].split("eligible(age)", 1)[0]
+    assert "ExecutionClass.Integer" in safe_class
+    assert "ExecutionClass.MulDiv" in safe_class
+    assert "ExecutionClass.Memory" not in safe_class
+    assert "ExecutionClass.Branch" not in safe_class
+    assert "ExecutionClass.System" not in safe_class
 
 
 def test_scheduler_view_does_not_duplicate_rob_or_dependency_storage() -> None:
