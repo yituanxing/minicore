@@ -28,7 +28,7 @@ class TinyComputeAvailability extends Bundle {
   */
 class TinySelectiveComputeIssue(
     val xlen: Int,
-    val scanEntries: Int = TinyRobGeometry.Entries
+    val scanEntries: Int = math.min(4, TinyRobGeometry.Entries)
 ) extends Module {
   require(xlen == 32 || xlen == 64, s"selective issue XLEN must be 32 or 64, got $xlen")
 
