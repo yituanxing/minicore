@@ -60,9 +60,7 @@ jobs:
           from pathlib import Path
           p = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
           s = p.read_text()
-          old = '''    dependencies(slot).rs1 := allocateRs1
-    dependencies(slot).rs2 := allocateRs2
-'''
+          old = '    dependencies(slot).rs1 := allocateRs1\n    dependencies(slot).rs2 := allocateRs2\n'
           new_lines = [
             '    dependencies(slot).rs1.ready := allocateRs1.ready',
             '    dependencies(slot).rs1.value := allocateRs1.value',
