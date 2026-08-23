@@ -146,6 +146,58 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
 
   behavior of "AetherCore v2 P8.2 bounded recovery rebuild"
 
+  it should "retain a younger completed producer across unrelated older retirement and allocation" in {
+    simulate(new TinyDependencyBackend(64)) { dut =>
+      initialize(dut)
+      val base = BigInt("b0800000", 16)
+      val value = BigInt(77)
+
+      val older = allocate(dut, base, ExecutionClass.Integer)
+      val producer = allocate(
+        dut,
+        base + 4,
+        ExecutionClass.Integer,
+        rd = 5,
+        writesRd = true,
+        producesValue = true
+      )
+
+      // Complete the younger producer while the unrelated older head remains
+      // incomplete. Its value must stay available through ProducerTag state.
+      pokeCompletion(dut, producer, hasValue = true, value = value)
+      dut.clock.step()
+      dut.io.completion.valid.poke(false.B)
+      dut.io.commit.valid.expect(false.B)
+
+      // Now complete the unrelated older head. On the following cycle it is
+      // ready to retire; allocate a consumer of x5 in exactly that cycle. This
+      // is the shape that P8.2 recovery exposed, but without any recovery state.
+      pokeCompletion(dut, older, hasValue = false, value = 0)
+      dut.clock.step()
+      dut.io.completion.valid.poke(false.B)
+      dut.io.commit.valid.expect(true.B)
+
+      val consumer = allocate(
+        dut,
+        base + 8,
+        ExecutionClass.Integer,
+        rd = 6,
+        rs1 = 5,
+        usesRs1 = true,
+        writesRd = true,
+        producesValue = true
+      )
+
+      dut.io.schedulingWindow(0).uop.robToken.index.expect(producer.index.U)
+      dut.io.schedulingWindow(1).uop.robToken.index.expect(consumer.index.U)
+      dut.io.schedulingWindow(1).dependenciesValid.expect(true.B)
+      dut.io.schedulingWindow(1).rs1.producerTag.id.expect(producer.producerId.U)
+      dut.io.schedulingWindow(1).rs1.producerTag.generation.expect(producer.producerGeneration.U)
+      dut.io.schedulingWindow(1).rs1.ready.expect(true.B)
+      dut.io.schedulingWindow(1).rs1.value.expect(value.U)
+    }
+  }
+
   it should "restore the youngest surviving producer after a killed WAW" in {
     for (xlen <- Seq(32, 64)) {
       simulate(new TinyDependencyBackend(xlen)) { dut =>
