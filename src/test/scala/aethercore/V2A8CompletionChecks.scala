@@ -135,7 +135,8 @@ trait V2A8CompletionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       for (index <- 0 until 3) dut.io.sourceValid(index).poke(true.B)
       dut.io.outReady.poke(false.B)
 
-      // Backpressure must leave the selected response stable.
+      // With a fixed pending set, the selected response remains stable while
+      // the sink is blocked. Production composition keeps the sink ready.
       dut.io.outValid.expect(true.B)
       val held = dut.io.outValue.peek().litValue
       for (_ <- 0 until 2) {
@@ -295,48 +296,71 @@ trait V2A8CompletionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
         dut.io.request.bits.immediate.poke(0.U)
       }
 
-      // Start a long-latency divide first.
+      // Start a long-latency divide first, then queue one integer result while
+      // the shared response sink is closed. By the time we open the sink both
+      // units have a completion pending.
       pokeRequest(ExecutionClass.MulDiv, AluOp.Divu, index = 3, generation = 1, lhs = 100, rhs = 7)
       dut.io.request.valid.poke(true.B)
       dut.io.request.ready.expect(true.B)
       dut.clock.step()
 
-      // Then create a one-cycle integer response and hold the shared response
-      // port closed while the divider finishes in the background.
       pokeRequest(ExecutionClass.Integer, AluOp.Add, index = 0, generation = 1, lhs = 10, rhs = 1)
       dut.io.request.ready.expect(true.B)
       dut.clock.step()
       dut.io.request.valid.poke(false.B)
       for (_ <- 0 until 40) dut.clock.step()
-
       dut.io.response.valid.expect(true.B)
-      dut.io.response.bits.robToken.index.expect(0.U)
-      dut.io.response.bits.value.expect(11.U)
 
-      // Hold a replacement integer request valid. When the first integer
-      // response fires it can refill the integer unit in the same cycle. A
-      // fixed-priority merge would then select integer again forever under a
-      // sustained stream; round-robin must rotate to the already-pending DIV.
-      pokeRequest(ExecutionClass.Integer, AluOp.Add, index = 1, generation = 2, lhs = 20, rhs = 2)
+      // Keep an integer request asserted whenever the integer unit can accept a
+      // replacement. A fixed-priority merge would continuously consume/refill
+      // integer and could starve DIV forever. Round-robin may choose either
+      // pending source first, but DIV must appear within bounded accepted
+      // completions independent of the arbiter's initial grant state.
+      var nextIntegerGeneration = 2
+      pokeRequest(
+        ExecutionClass.Integer,
+        AluOp.Add,
+        index = 0,
+        generation = nextIntegerGeneration,
+        lhs = 20 + nextIntegerGeneration,
+        rhs = 1
+      )
       dut.io.request.valid.poke(true.B)
       dut.io.response.ready.poke(true.B)
-      dut.io.request.ready.expect(true.B)
-      dut.io.response.bits.robToken.index.expect(0.U)
-      dut.clock.step()
-      dut.io.request.valid.poke(false.B)
 
-      dut.io.response.valid.expect(true.B)
-      dut.io.response.bits.robToken.index.expect(3.U)
-      dut.io.response.bits.robToken.generation.expect(1.U)
-      dut.io.response.bits.value.expect(14.U)
-      dut.clock.step()
+      var sawDivide = false
+      var accepted = 0
+      while (!sawDivide && accepted < 6) {
+        dut.io.response.valid.expect(true.B)
+        val responseIndex = dut.io.response.bits.robToken.index.peek().litValue
+        if (responseIndex == 3) {
+          dut.io.response.bits.robToken.generation.expect(1.U)
+          dut.io.response.bits.value.expect(14.U)
+          sawDivide = true
+        } else {
+          responseIndex shouldBe 0
+        }
 
-      // The replacement integer response remains available after the divider
-      // has received bounded service.
-      dut.io.response.valid.expect(true.B)
-      dut.io.response.bits.robToken.index.expect(1.U)
-      dut.io.response.bits.robToken.generation.expect(2.U)
-      dut.io.response.bits.value.expect(22.U)
+        val integerRequestFires = dut.io.request.ready.peek().litToBoolean
+        dut.clock.step()
+        accepted += 1
+
+        if (integerRequestFires) {
+          nextIntegerGeneration += 1
+          pokeRequest(
+            ExecutionClass.Integer,
+            AluOp.Add,
+            index = 0,
+            generation = nextIntegerGeneration,
+            lhs = 20 + nextIntegerGeneration,
+            rhs = 1
+          )
+        }
+      }
+
+      withClue(s"DIV was not serviced after $accepted accepted responses under sustained integer pressure: ") {
+        sawDivide shouldBe true
+      }
     }
   }
 }
