@@ -23,9 +23,10 @@ class TinyComputeAvailability extends Bundle {
   * This module owns policy and once-only issue state, but no uOp/dependency
   * storage. It scans the four live ROB ages and may select only exception-free,
   * normally ordered Integer or Mul/Div work whose operands and target resource
-  * are ready. Branch and Memory may be bypassed because selected compute is
-  * side-effect free; System, explicit serialization and known exception
-  * boundaries stop younger issue. Architectural Commit remains in order.
+  * are ready. Branch may be bypassed; Memory may be bypassed only after the
+  * exact head request has been accepted by the LSU. System, explicit
+  * serialization and known exception boundaries stop younger issue.
+  * Architectural Commit remains in order.
   */
 class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"selective issue XLEN must be 32 or 64, got $xlen")
@@ -37,6 +38,9 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   val io = IO(new Bundle {
     val window = Input(Vec(Entries, new TinySchedulingEntry(xlen)))
     val allocated = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
+    // Production asserts block while a not-yet-accepted head Memory request is
+    // valid, as well as during accepted recovery. Consequently, a ready age0
+    // Memory with block deasserted is already owned by the blocking LSU.
     val block = Input(Bool())
     val availability = Input(new TinyComputeAvailability)
     val request = Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
@@ -62,18 +66,28 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
       (executionClass === ExecutionClass.MulDiv && isDivide(op) && io.availability.divide)
   }
 
-  // A candidate may bypass ordinary compute/branch/memory work, but it must not
-  // cross an older architectural serialization point or an already-known trap.
-  // Keep this as an age-prefix permission instead of teaching the scheduler any
-  // CSR/fence implementation details.
+  // A candidate may bypass ordinary compute and Branch work. Memory is stricter:
+  // exact-head launch is the only ownership transfer into the LSU, so a Memory
+  // at age>0 is necessarily unlaunched and blocks younger selective compute.
+  // For age0, dependencies/operands must already be ready and production block
+  // must have fallen after the LSU accepted the request. System, serialization
+  // and known exceptions remain unconditional architectural barriers.
   private val bypassOpen = Wire(Vec(Entries, Bool()))
   bypassOpen(0) := true.B
   for (age <- 1 until Entries) {
     val older = io.window(age - 1)
+    val olderIsMemory = older.valid &&
+      older.uop.executionClass === ExecutionClass.Memory
+    val olderMemoryLaunched = if (age == 1) {
+      older.dependenciesValid && older.operandsReady && !io.block
+    } else {
+      false.B
+    }
     val olderBlocksBypass = older.valid && (
       older.uop.executionClass === ExecutionClass.System ||
       older.uop.decoded.ordering =/= OrderingClass.Normal ||
-      older.uop.decoded.exception.valid
+      older.uop.decoded.exception.valid ||
+      (olderIsMemory && !olderMemoryLaunched)
     )
     bypassOpen(age) := bypassOpen(age - 1) && !olderBlocksBypass
   }
