@@ -100,6 +100,19 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
     dut.io.dispatch.valid.poke(false.B)
   }
 
+  private def appendCommit(
+      dut: TinyMemoryBackend,
+      commits: scala.collection.mutable.ArrayBuffer[(BigInt, Int, BigInt)]
+  ): Unit = {
+    if (dut.io.commit.valid.peek().litToBoolean) {
+      commits += ((
+        dut.io.commit.pc.peek().litValue,
+        dut.io.commit.rd.peek().litValue.toInt,
+        dut.io.commit.rdData.peek().litValue
+      ))
+    }
+  }
+
   private def collectCommits(
       dut: TinyMemoryBackend,
       count: Int,
@@ -108,13 +121,7 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
     val commits = scala.collection.mutable.ArrayBuffer.empty[(BigInt, Int, BigInt)]
     var cycles = 0
     while (commits.size < count && cycles < maxCycles) {
-      if (dut.io.commit.valid.peek().litToBoolean) {
-        commits += ((
-          dut.io.commit.pc.peek().litValue,
-          dut.io.commit.rd.peek().litValue.toInt,
-          dut.io.commit.rdData.peek().litValue
-        ))
-      }
+      appendCommit(dut, commits)
       dut.clock.step()
       cycles += 1
     }
@@ -161,35 +168,40 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
         sawIndependent shouldBe true
       }
 
-      // Nothing may retire around the still-running oldest DIV.
+      // Nothing can retire while the oldest iterative DIV is still running.
       dut.io.commit.valid.expect(false.B)
 
-      // Once P completes, C must wake and issue using the produced value. Keep
-      // watching the production selector rather than a test-only standalone one.
+      // From here continuously observe both the production selector and Commit.
+      // P may become retireable in the same cycle that C wakes, so collecting
+      // only after observing C would miss a one-cycle architectural pulse.
+      val commits = scala.collection.mutable.ArrayBuffer.empty[(BigInt, Int, BigInt)]
       var sawConsumer = false
       cycles = 0
-      while (!sawConsumer && cycles < 64) {
+      while ((commits.size < 3 || !sawConsumer) && cycles < 96) {
         if (dut.selectiveIssue.io.request.valid.peek().litToBoolean &&
             dut.selectiveIssue.io.request.bits.robToken.index.peek().litValue == 1) {
           dut.selectiveIssue.io.request.bits.lhs.expect(0.U)
           dut.selectiveIssue.io.request.bits.rhs.expect(1.U)
           sawConsumer = true
         }
+        appendCommit(dut, commits)
         dut.clock.step()
         cycles += 1
       }
+
       withClue("woken older consumer never returned to selective issue: ") {
         sawConsumer shouldBe true
       }
-
-      val commits = collectCommits(dut, 3)
-      commits.map(_._1) shouldBe Seq(pPc, cPc, iPc)
-      commits.map(_._2) shouldBe Seq(1, 2, 3)
-      commits.map(_._3) shouldBe Seq(BigInt(0), BigInt(1), BigInt(33))
+      withClue(s"expected three ordered commits but saw ${commits.size}: ") {
+        commits.size shouldBe 3
+      }
+      commits.map(_._1).toSeq shouldBe Seq(pPc, cPc, iPc)
+      commits.map(_._2).toSeq shouldBe Seq(1, 2, 3)
+      commits.map(_._3).toSeq shouldBe Seq(BigInt(0), BigInt(1), BigInt(33))
     }
   }
 
-  it should "give an unlaunched head load priority then overlap younger compute while memory waits" in {
+  it should "overlap younger compute after the head load has launched into the LSU" in {
     simulate(new TinyMemoryBackend(config, PageTableGeometry.Sv32)) { dut =>
       initialize(dut)
       val loadPc = BigInt("80011000", 16)
@@ -211,33 +223,45 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
         pokeDispatch(dut, intPc, ExecutionClass.Integer, rd = 2, immediate = 55)
       }
 
-      // Before the head load has been accepted by the LSU, global launch policy
-      // must not spend the same cycle on the younger Integer.
-      dut.io.memoryRequest.valid.expect(true.B)
-      dut.selectiveIssue.io.request.valid.expect(false.B)
+      // By now the exact-head load has already crossed the LSU request seam;
+      // its physical AetherMem request may still be waiting. This distinction is
+      // intentional: LSU launch gets first use of its cycle, then subsequent
+      // cycles may overlap younger side-effect-free compute with translation or
+      // memory latency.
+      dut.io.lsuBusy.expect(true.B)
       dut.io.commit.valid.expect(false.B)
 
-      val txn = dut.io.memoryRequest.bits.txnId.peek().litValue
-      dut.io.memoryRequest.ready.poke(true.B)
-      dut.clock.step()
-      dut.io.memoryRequest.ready.poke(false.B)
-
-      // The load is now physically outstanding. Its one-shot LSU launch no
-      // longer blocks the selector, so younger side-effect-free compute may run.
       var sawInteger = false
+      var sawPhysicalRequest = false
+      var txn = BigInt(0)
       var cycles = 0
-      while (!sawInteger && cycles < 8) {
+      while ((!sawInteger || !sawPhysicalRequest) && cycles < 24) {
         if (dut.selectiveIssue.io.request.valid.peek().litToBoolean &&
             dut.selectiveIssue.io.request.bits.robToken.index.peek().litValue == 1) {
           sawInteger = true
+        }
+        if (dut.io.memoryRequest.valid.peek().litToBoolean) {
+          sawPhysicalRequest = true
+          txn = dut.io.memoryRequest.bits.txnId.peek().litValue
         }
         dut.io.commit.valid.expect(false.B)
         dut.clock.step()
         cycles += 1
       }
-      withClue("younger Integer did not overlap the outstanding head load: ") {
+      withClue("younger Integer did not overlap the launched head load: ") {
         sawInteger shouldBe true
       }
+      withClue("head load did not reach the physical memory request seam: ") {
+        sawPhysicalRequest shouldBe true
+      }
+
+      // The physical request was intentionally held by ready=false. Accept it
+      // only after proving the younger compute had an overlap opportunity.
+      dut.io.memoryRequest.valid.expect(true.B)
+      dut.io.memoryRequest.bits.txnId.expect(txn.U)
+      dut.io.memoryRequest.ready.poke(true.B)
+      dut.clock.step()
+      dut.io.memoryRequest.ready.poke(false.B)
 
       // Complete the oldest load. The already-completed younger Integer still
       // cannot retire before it.
