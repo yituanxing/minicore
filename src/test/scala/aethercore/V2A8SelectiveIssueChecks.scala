@@ -29,12 +29,13 @@ private class A8SelectiveIssueHarness extends Module {
   issue.io.allocated := backend.io.allocated
   issue.io.block := false.B
   issue.io.availability.integer := true.B
+  issue.io.availability.branch := true.B
   issue.io.availability.multiply := true.B
   issue.io.availability.divide := true.B
   io.request <> issue.io.request
 }
 
-/** Focused A8.3b checks for oldest-ready side-effect-free compute issue. */
+/** Focused A8/P8 checks for oldest-ready speculative execution issue. */
 trait V2A8SelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private def pokeWindowEntry(
       dut: TinySelectiveComputeIssue,
@@ -110,6 +111,7 @@ trait V2A8SelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim 
     dut.io.allocated.valid.poke(false.B)
     dut.io.block.poke(false.B)
     dut.io.availability.integer.poke(true.B)
+    dut.io.availability.branch.poke(true.B)
     dut.io.availability.multiply.poke(true.B)
     dut.io.availability.divide.poke(true.B)
     dut.io.request.ready.poke(true.B)
@@ -197,9 +199,9 @@ trait V2A8SelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim 
     dut.io.completion.valid.poke(false.B)
   }
 
-  behavior of "AetherCore v2 A8 selective compute issue"
+  behavior of "AetherCore v2 A8 selective execution issue"
 
-  it should "choose the oldest ready safe compute entry exactly once" in {
+  it should "choose the oldest ready safe speculative entry exactly once" in {
     simulate(new TinySelectiveComputeIssue(32)) { dut =>
       initializeSelector(dut)
       pokeWindowEntry(dut, 0, valid = true, complete = false, ExecutionClass.Integer, AluOp.Add, 0, 0, operandsReady = false)
@@ -220,29 +222,36 @@ trait V2A8SelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim 
     }
   }
 
-  it should "skip a ready uOp whose target resource is busy and fail closed on non-compute classes" in {
+  it should "select an arbitrary-age Branch and still respect FU and architectural barriers" in {
     simulate(new TinySelectiveComputeIssue(32)) { dut =>
       initializeSelector(dut)
+      // An unavailable DIV may be bypassed by a younger ready Branch.
       dut.io.availability.divide.poke(false.B)
       pokeWindowEntry(dut, 0, valid = true, complete = false, ExecutionClass.MulDiv, AluOp.Divu, 0, 0, operandsReady = true, lhs = 100, rhs = 7)
-      pokeWindowEntry(dut, 1, valid = true, complete = false, ExecutionClass.Integer, AluOp.Add, 1, 0, operandsReady = true, lhs = 4, rhs = 5)
+      pokeWindowEntry(dut, 1, valid = true, complete = false, ExecutionClass.Branch, AluOp.Add, 1, 0, operandsReady = true, lhs = 4, rhs = 5)
+      dut.io.window(1).uop.decoded.controlFlow.kind.poke(ControlFlowKind.Conditional)
+      dut.io.window(1).uop.decoded.controlFlow.branchType.poke(BranchType.Eq)
       dut.io.request.valid.expect(true.B)
       dut.io.request.bits.robToken.index.expect(1.U)
+      dut.io.request.bits.executionClass.expect(ExecutionClass.Branch)
+      dut.clock.step()
 
       // Once DIV becomes available the older age0 entry wins.
-      dut.io.request.ready.poke(false.B)
       dut.io.availability.divide.poke(true.B)
       dut.io.request.bits.robToken.index.expect(0.U)
+      dut.clock.step()
 
       clearWindow(dut)
-      dut.io.request.ready.poke(true.B)
-      pokeWindowEntry(dut, 0, valid = true, complete = false, ExecutionClass.Branch, AluOp.Add, 0, 0, operandsReady = true)
-      pokeWindowEntry(dut, 1, valid = true, complete = false, ExecutionClass.Memory, AluOp.Add, 1, 0, operandsReady = true)
-      pokeWindowEntry(dut, 2, valid = true, complete = false, ExecutionClass.System, AluOp.Add, 2, 0, operandsReady = true)
-      pokeWindowEntry(dut, 3, valid = true, complete = false, ExecutionClass.Integer, AluOp.Add, 3, 0, operandsReady = true)
-      // age1 Memory is not the exact head, so it cannot have launched into the
-      // LSU yet and must block younger selective compute. The following System
-      // is an independent architectural barrier as well.
+      pokeWindowEntry(dut, 0, valid = true, complete = false, ExecutionClass.Memory, AluOp.Add, 0, 1, operandsReady = false)
+      pokeWindowEntry(dut, 1, valid = true, complete = false, ExecutionClass.Branch, AluOp.Add, 1, 1, operandsReady = true)
+      dut.io.window(1).uop.decoded.controlFlow.kind.poke(ControlFlowKind.DirectJump)
+      // An unlaunched head Memory remains an architectural issue barrier even
+      // though the younger Branch itself is now a legal selective class.
+      dut.io.request.valid.expect(false.B)
+
+      clearWindow(dut)
+      pokeWindowEntry(dut, 0, valid = true, complete = false, ExecutionClass.System, AluOp.Add, 0, 2, operandsReady = true)
+      pokeWindowEntry(dut, 1, valid = true, complete = false, ExecutionClass.Branch, AluOp.Add, 1, 2, operandsReady = true)
       dut.io.request.valid.expect(false.B)
 
       dut.io.block.poke(true.B)
