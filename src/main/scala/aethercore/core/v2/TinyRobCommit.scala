@@ -45,6 +45,23 @@ class RobRetirement(val xlen: Int) extends Bundle {
   val privileged = new PendingPrivilegedEffect(xlen)
 }
 
+/**
+  * Read-only ROB scheduling projection in architectural age order.
+  *
+  * This is deliberately not an issue queue: it owns no duplicate uOp state and
+  * no readiness policy. TinyRob remains the sole order/lifetime owner; later
+  * scheduling logic may only observe this projection.
+  */
+class TinyRobWindowEntry(val xlen: Int) extends Bundle {
+  val valid = Bool()
+  val complete = Bool()
+  val uop = new BackendUop(
+    xlen,
+    TinyRobGeometry.IndexBits,
+    TinyRobGeometry.GenerationBits
+  )
+}
+
 private class TinyRobEntry(val xlen: Int) extends Bundle {
   val valid = Bool()
   val complete = Bool()
@@ -82,6 +99,7 @@ class TinyRob(val xlen: Int) extends Module {
     val acceptedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val acceptedPrivilegedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val headView = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
+    val window = Output(Vec(Entries, new TinyRobWindowEntry(xlen)))
     val retire = Decoupled(new RobRetirement(xlen))
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
   })
@@ -97,6 +115,19 @@ class TinyRob(val xlen: Int) extends Module {
   private val retireHead = entries(head)
   io.headView.valid := retireHead.valid
   io.headView.bits := retireHead.uop
+
+  // A8.3 exports the live ROB as an age-ordered read-only window. Dynamic
+  // indexing wraps naturally in the fixed two-bit slot domain; age<count is
+  // the authoritative live-range bound. No state is copied into this view.
+  for (age <- 0 until Entries) {
+    val slot = (head + age.U)(IndexBits - 1, 0)
+    val entry = entries(slot)
+    val live = age.U < count && entry.valid
+    io.window(age) := 0.U.asTypeOf(new TinyRobWindowEntry(xlen))
+    io.window(age).valid := live
+    io.window(age).complete := live && entry.complete
+    io.window(age).uop := entry.uop
+  }
 
   io.retire.valid := retireHead.valid && retireHead.complete
   io.retire.bits := 0.U.asTypeOf(new RobRetirement(xlen))
