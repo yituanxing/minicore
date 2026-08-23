@@ -1,0 +1,189 @@
+name: AetherCore V2 P8 ROB8 A/B
+
+on:
+  push:
+    branches:
+      - 'perf/aethercore-v2-rob8-ab'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-p8-rob8-ab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  measure:
+    name: ROB4 vs ROB8/window8 Linux clocksource boundary
+    needs: verilator-tool
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      BASELINE_SHA: 25e2899de149ac38cac57cf6718e1f781d32a022
+      TARGET_SHA: ${{ github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact ROB8 experiment head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Verify experiment identities and contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          git cat-file -e "$BASELINE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASELINE_SHA" "$TARGET_SHA"
+          grep -q 'val Entries: Int = 8' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
+          grep -q 'val IndexBits: Int = 3' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
+          grep -q 'AetherCoreV2Rob8ExperimentTop' src/main/scala/aethercore/sim/AetherCoreV2Rob8Experiment.scala
+          bash -n tools/ci/v2_p8_rob8_ab.sh
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Run geometry-sensitive v2 focused checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          ./mill aethercore.test.testOnly \
+            aethercore.V2F1RobCommitSpec \
+            aethercore.V2F2DependencySpec \
+            aethercore.V2F3ExecutionSpec \
+            aethercore.V2F4RecoverySpec \
+            aethercore.V2F5PrivilegedSpec \
+            aethercore.V2F6BlockingLsuSpec \
+            aethercore.V2F7BareCoreSpec \
+            aethercore.V2F7PagedCoreSpec
+
+      - name: Reuse or build unchanged Linux 6.6.143 workload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Execute bounded ROB4 vs ROB8 architecture A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/v2_p8_rob8_ab.sh
+          BASELINE_SHA="$BASELINE_SHA" \
+          TARGET_SHA="$TARGET_SHA" \
+          MAX_CYCLES=120000000 \
+          MILESTONE='clocksource: riscv_clocksource' \
+          PROGRESS_INTERVAL_CYCLES=10000000 \
+          bash tools/ci/v2_p8_rob8_ab.sh
+
+      - name: Publish ROB8 A/B summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### AetherCore V2 ROB8/window8 bounded A/B'
+            echo
+            echo '- baseline ROB4: `'$BASELINE_SHA'`'
+            echo '- target ROB8/window8: `'$TARGET_SHA'`'
+            echo '- boundary: `clocksource: riscv_clocksource`'
+            echo
+            if [[ -s build/v2-p8-rob8-ab/result.txt ]]; then
+              echo '```text'
+              cat build/v2-p8-rob8-ab/result.txt
+              echo '```'
+            else
+              echo 'ROB8 A/B result unavailable; inspect uploaded logs.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ROB8 A/B evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-p8-rob8-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/v2-p8-rob8-ab/identity.txt
+            build/v2-p8-rob8-ab/workload.sha256
+            build/v2-p8-rob8-ab/result.txt
+            build/v2-p8-rob8-ab/baseline.snapshot.txt
+            build/v2-p8-rob8-ab/target.snapshot.txt
+            build/v2-p8-rob8-ab/baseline.occupancy.txt
+            build/v2-p8-rob8-ab/target.occupancy.txt
+            build/v2-p8-rob8-ab/baseline.run.log
+            build/v2-p8-rob8-ab/target.run.log
