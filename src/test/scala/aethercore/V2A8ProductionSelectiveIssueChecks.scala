@@ -5,8 +5,32 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.common.{AluOp, AtomicOp, BranchType, CsrOp, MemSize, XRetOp}
-import aethercore.config.{CoreProfiles, PageTableGeometry}
+import aethercore.config.{CoreConfig, CoreProfiles, PageTableGeometry}
 import aethercore.core.v2._
+
+/** Test-only top-level observation of actual selective-compute launches.
+  *
+  * ChiselSim intentionally exposes top-level IO rather than arbitrary child
+  * hierarchy. Keep production TinyMemoryBackend unchanged and surface only the
+  * accepted selective request here so the end-to-end proof observes a real fire,
+  * not merely final in-order retirement.
+  */
+private class A8ObservableMemoryBackend(
+    coreConfig: CoreConfig,
+    geometry: PageTableGeometry
+) extends TinyMemoryBackend(coreConfig, geometry) {
+  val observedSelectiveIssue = IO(Output(new Bundle {
+    val fire = Bool()
+    val robIndex = UInt(TinyRobGeometry.IndexBits.W)
+    val lhs = UInt(coreConfig.isa.xlen.W)
+    val rhs = UInt(coreConfig.isa.xlen.W)
+  }))
+
+  observedSelectiveIssue.fire := selectiveIssue.io.request.fire
+  observedSelectiveIssue.robIndex := selectiveIssue.io.request.bits.robToken.index
+  observedSelectiveIssue.lhs := selectiveIssue.io.request.bits.lhs
+  observedSelectiveIssue.rhs := selectiveIssue.io.request.bits.rhs
+}
 
 /** End-to-end A8 proof after selective compute is wired into TinyMemoryBackend. */
 trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
@@ -134,7 +158,7 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
   behavior of "AetherCore v2 A8 production selective issue"
 
   it should "bypass a blocked older compute consumer while preserving in-order Commit" in {
-    simulate(new TinyMemoryBackend(config, PageTableGeometry.Sv32)) { dut =>
+    simulate(new A8ObservableMemoryBackend(config, PageTableGeometry.Sv32)) { dut =>
       initialize(dut)
       val pPc = BigInt("80010000", 16)
       val cPc = pPc + 4
@@ -153,12 +177,12 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
       }
 
       // P was launched while C/I were being allocated. C is still blocked by
-      // P, so the real production selector must expose I as its next request.
+      // P, so the real production selector must actually launch I next.
       var cycles = 0
       var sawIndependent = false
       while (!sawIndependent && cycles < 12) {
-        if (dut.selectiveIssue.io.request.valid.peek().litToBoolean &&
-            dut.selectiveIssue.io.request.bits.robToken.index.peek().litValue == 2) {
+        if (dut.observedSelectiveIssue.fire.peek().litToBoolean &&
+            dut.observedSelectiveIssue.robIndex.peek().litValue == 2) {
           sawIndependent = true
         }
         dut.clock.step()
@@ -171,17 +195,17 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
       // Nothing can retire while the oldest iterative DIV is still running.
       dut.io.commit.valid.expect(false.B)
 
-      // From here continuously observe both the production selector and Commit.
+      // From here continuously observe accepted selective launches and Commit.
       // P may become retireable in the same cycle that C wakes, so collecting
       // only after observing C would miss a one-cycle architectural pulse.
       val commits = scala.collection.mutable.ArrayBuffer.empty[(BigInt, Int, BigInt)]
       var sawConsumer = false
       cycles = 0
       while ((commits.size < 3 || !sawConsumer) && cycles < 96) {
-        if (dut.selectiveIssue.io.request.valid.peek().litToBoolean &&
-            dut.selectiveIssue.io.request.bits.robToken.index.peek().litValue == 1) {
-          dut.selectiveIssue.io.request.bits.lhs.expect(0.U)
-          dut.selectiveIssue.io.request.bits.rhs.expect(1.U)
+        if (dut.observedSelectiveIssue.fire.peek().litToBoolean &&
+            dut.observedSelectiveIssue.robIndex.peek().litValue == 1) {
+          dut.observedSelectiveIssue.lhs.expect(0.U)
+          dut.observedSelectiveIssue.rhs.expect(1.U)
           sawConsumer = true
         }
         appendCommit(dut, commits)
@@ -202,7 +226,7 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
   }
 
   it should "overlap younger compute after the head load has launched into the LSU" in {
-    simulate(new TinyMemoryBackend(config, PageTableGeometry.Sv32)) { dut =>
+    simulate(new A8ObservableMemoryBackend(config, PageTableGeometry.Sv32)) { dut =>
       initialize(dut)
       val loadPc = BigInt("80011000", 16)
       val intPc = loadPc + 4
@@ -236,8 +260,8 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
       var txn = BigInt(0)
       var cycles = 0
       while ((!sawInteger || !sawPhysicalRequest) && cycles < 24) {
-        if (dut.selectiveIssue.io.request.valid.peek().litToBoolean &&
-            dut.selectiveIssue.io.request.bits.robToken.index.peek().litValue == 1) {
+        if (dut.observedSelectiveIssue.fire.peek().litToBoolean &&
+            dut.observedSelectiveIssue.robIndex.peek().litValue == 1) {
           sawInteger = true
         }
         if (dut.io.memoryRequest.valid.peek().litToBoolean) {
