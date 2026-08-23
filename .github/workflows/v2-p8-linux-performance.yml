@@ -61,6 +61,7 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
           grep -q 'AetherCoreV2MeasuredOpenSbiRV64SimTop' src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala
           grep -q 'AETHERCORE_V2_PERF' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
+          grep -q 'V2LinuxProofMarkerRecognizer' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
           grep -q 'RV64 USER UART IRQ OK' software/rv64_userspace/minimal_init.S
           bash -n tools/ci/rv64_linux_early_build.sh
           bash -n tools/ci/rv64_minimal_initramfs_build.sh
@@ -154,6 +155,20 @@ jobs:
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
 
+      - name: Record exact workload identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          dst="$GITHUB_WORKSPACE/build/v2-p8-linux-perf"
+          mkdir -p "$dst"
+          {
+            echo "target_sha=$TARGET_SHA"
+            sha256sum \
+              build/rv64-linux-initramfs/minimal-init/init \
+              build/rv64-linux-initramfs/obj/arch/riscv/boot/Image \
+              build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          } | tee "$dst/workload-identity.txt"
+
       - name: Execute real PID1 proof through measured v2
         shell: bash
         run: |
@@ -171,7 +186,7 @@ jobs:
             MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
             PROGRESS_INTERVAL_CYCLES=10000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
-            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             run-local 2>&1 | tee "$dst/execute.log"
 
       - name: Validate exact P8 runtime snapshot
@@ -198,9 +213,12 @@ jobs:
               'rob0', 'rob1', 'rob2', 'rob3', 'rob4',
               'issue_int', 'issue_mul', 'issue_div', 'issue_branch', 'issue_mem',
               'system_completion', 'selective_candidate', 'selective_bypass',
-              'lsu_compute_overlap', 'head_not_ready', 'commit_idle_nonempty',
-              'lsu_busy', 'memory_launch_blocked', 'mem_req', 'mem_resp',
-              'ptw_active', 'system_head', 'completion_collision',
+              'bypass_compute_head', 'bypass_branch_head', 'bypass_memory_head',
+              'bypass_other_head', 'lsu_compute_overlap', 'head_not_ready',
+              'head_ready_not_issued', 'commit_idle_nonempty', 'compute_head',
+              'branch_head', 'memory_head', 'system_head', 'interrupt_hold',
+              'wfi_halted', 'lsu_busy', 'memory_launch_blocked', 'mem_req',
+              'mem_resp', 'ptw_active', 'completion_collision',
               'completion_backpressure',
           }
           missing = sorted(required - values.keys())
@@ -211,6 +229,10 @@ jobs:
           commits = values['commits']
           rob_sum = sum(values[f'rob{i}'] for i in range(5))
           selective_accepted = values['issue_int'] + values['issue_mul'] + values['issue_div']
+          bypass_reasons = (
+              values['bypass_compute_head'] + values['bypass_branch_head'] +
+              values['bypass_memory_head'] + values['bypass_other_head']
+          )
 
           assert cycles > 0
           assert commits > 0
@@ -218,16 +240,33 @@ jobs:
           assert rob_sum == cycles, (rob_sum, cycles)
           assert values['selective_candidate'] >= selective_accepted
           assert values['selective_bypass'] <= selective_accepted
+          assert bypass_reasons == values['selective_bypass'], (bypass_reasons, values['selective_bypass'])
+          assert values['bypass_other_head'] == 0, values['bypass_other_head']
           assert values['lsu_compute_overlap'] <= selective_accepted
           assert values['mem_req'] >= values['mem_resp']
           assert values['mem_req'] - values['mem_resp'] <= 1
 
+          for key in (
+              'head_not_ready', 'head_ready_not_issued', 'commit_idle_nonempty',
+              'compute_head', 'branch_head', 'memory_head', 'system_head',
+              'interrupt_hold', 'wfi_halted', 'lsu_busy', 'memory_launch_blocked',
+              'ptw_active', 'completion_collision', 'completion_backpressure',
+          ):
+              assert values[key] <= cycles, (key, values[key], cycles)
+
           out = Path('build/v2-p8-linux-perf/perf-snapshot.txt')
           out.write_text('\n'.join(f'{key}={values[key]}' for key in sorted(required)) + '\n')
+
+          pct = lambda key: 100.0 * values[key] / cycles
           print(
               'AETHERCORE_V2_PERF_SANITY_PASS '
-              f'cycles={cycles} commits={commits} '
-              f'ipc={commits / cycles:.6f} '
+              f'cycles={cycles} commits={commits} ipc={commits / cycles:.6f} '
+              f'head_not_ready_pct={pct("head_not_ready"):.3f} '
+              f'head_ready_not_issued_pct={pct("head_ready_not_issued"):.3f} '
+              f'lsu_busy_pct={pct("lsu_busy"):.3f} '
+              f'branch_head_pct={pct("branch_head"):.3f} '
+              f'memory_head_pct={pct("memory_head"):.3f} '
+              f'interrupt_hold_pct={pct("interrupt_hold"):.3f} '
               f'selective_bypass={values["selective_bypass"]} '
               f'lsu_overlap={values["lsu_compute_overlap"]}'
           )
@@ -254,6 +293,7 @@ jobs:
             build/rv64-linux-early/evidence/
             build/rv64-linux-initramfs/result.txt
             build/rv64-linux-initramfs/evidence/
+            build/rv64-linux-initramfs/minimal-init/init
             build/rv64-minimal-init-boot/result.txt
             build/rv64-minimal-init-boot/evidence/
             build/v2-p8-linux-perf/

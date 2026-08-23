@@ -6,6 +6,48 @@ import chisel3.util.experimental.BoringUtils
 import aethercore.common.AluOp
 import aethercore.core.v2.ExecutionClass
 
+object V2LinuxProofMarker {
+  // Intentionally exclude CR/LF. Linux tty output may normalize line endings;
+  // the performance boundary is the proof phrase itself, not its terminator.
+  val Text = "RV64 USER UART IRQ OK"
+}
+
+/** One-shot recognizer for the unchanged Linux PID1 UART proof phrase. */
+class V2LinuxProofMarkerRecognizer extends Module {
+  val io = IO(new Bundle {
+    val valid = Input(Bool())
+    val byte = Input(UInt(8.W))
+    val hit = Output(Bool())
+  })
+
+  private val markerByteValues =
+    V2LinuxProofMarker.Text.getBytes("US-ASCII").toSeq.map(_ & 0xff)
+  private val markerBytes = VecInit(markerByteValues.map(_.U(8.W)))
+  private val markerLength = markerByteValues.length
+  private val markerIndex = RegInit(0.U(log2Ceil(markerLength).W))
+  private val alreadyHit = RegInit(false.B)
+
+  private val byteMatches =
+    io.valid && !alreadyHit && io.byte === markerBytes(markerIndex)
+  private val finalByte = markerIndex === (markerLength - 1).U
+
+  io.hit := byteMatches && finalByte
+
+  when(io.valid && !alreadyHit) {
+    when(io.byte === markerBytes(markerIndex)) {
+      when(finalByte) {
+        markerIndex := 0.U
+        alreadyHit := true.B
+      }.otherwise {
+        markerIndex := markerIndex + 1.U
+      }
+    }.otherwise {
+      // Preserve the only possible one-byte prefix overlap.
+      markerIndex := Mux(io.byte === markerBytes(0), 1.U, 0.U)
+    }
+  }
+}
+
 /** One-cycle event sample for the P8.0 performance measurement contract.
   *
   * These signals are observation only. No performance event is consumed by the
@@ -25,15 +67,26 @@ class V2PerformanceEvents extends Bundle {
   val memoryIssue = Bool()
   val systemCompletion = Bool()
   val selectiveBypassIssue = Bool()
+  val selectiveBypassComputeHead = Bool()
+  val selectiveBypassBranchHead = Bool()
+  val selectiveBypassMemoryHead = Bool()
+  val selectiveBypassOtherHead = Bool()
 
   val headNotReady = Bool()
+  val headReadyNotIssued = Bool()
   val commitIdleRobNonEmpty = Bool()
+  val computeHead = Bool()
+  val branchHead = Bool()
+  val memoryHead = Bool()
+  val systemHead = Bool()
+  val interruptHold = Bool()
+  val wfiHalted = Bool()
+
   val lsuBusy = Bool()
   val memoryLaunchBlocked = Bool()
   val memoryRequest = Bool()
   val memoryResponse = Bool()
   val ptwActive = Bool()
-  val systemHead = Bool()
 
   val completionCollision = Bool()
   val completionBackpressure = Bool()
@@ -61,15 +114,26 @@ class V2PerformanceCounters extends Bundle {
   val memoryIssue = UInt(64.W)
   val systemCompletion = UInt(64.W)
   val selectiveBypassIssue = UInt(64.W)
+  val selectiveBypassComputeHead = UInt(64.W)
+  val selectiveBypassBranchHead = UInt(64.W)
+  val selectiveBypassMemoryHead = UInt(64.W)
+  val selectiveBypassOtherHead = UInt(64.W)
 
   val headNotReady = UInt(64.W)
+  val headReadyNotIssued = UInt(64.W)
   val commitIdleRobNonEmpty = UInt(64.W)
+  val computeHead = UInt(64.W)
+  val branchHead = UInt(64.W)
+  val memoryHead = UInt(64.W)
+  val systemHead = UInt(64.W)
+  val interruptHold = UInt(64.W)
+  val wfiHalted = UInt(64.W)
+
   val lsuBusy = UInt(64.W)
   val memoryLaunchBlocked = UInt(64.W)
   val memoryRequest = UInt(64.W)
   val memoryResponse = UInt(64.W)
   val ptwActive = UInt(64.W)
-  val systemHead = UInt(64.W)
 
   val completionCollision = UInt(64.W)
   val completionBackpressure = UInt(64.W)
@@ -115,15 +179,26 @@ class V2PerformanceCounterBank extends Module {
   io.counters.memoryIssue := count(io.events.memoryIssue)
   io.counters.systemCompletion := count(io.events.systemCompletion)
   io.counters.selectiveBypassIssue := count(io.events.selectiveBypassIssue)
+  io.counters.selectiveBypassComputeHead := count(io.events.selectiveBypassComputeHead)
+  io.counters.selectiveBypassBranchHead := count(io.events.selectiveBypassBranchHead)
+  io.counters.selectiveBypassMemoryHead := count(io.events.selectiveBypassMemoryHead)
+  io.counters.selectiveBypassOtherHead := count(io.events.selectiveBypassOtherHead)
 
   io.counters.headNotReady := count(io.events.headNotReady)
+  io.counters.headReadyNotIssued := count(io.events.headReadyNotIssued)
   io.counters.commitIdleRobNonEmpty := count(io.events.commitIdleRobNonEmpty)
+  io.counters.computeHead := count(io.events.computeHead)
+  io.counters.branchHead := count(io.events.branchHead)
+  io.counters.memoryHead := count(io.events.memoryHead)
+  io.counters.systemHead := count(io.events.systemHead)
+  io.counters.interruptHold := count(io.events.interruptHold)
+  io.counters.wfiHalted := count(io.events.wfiHalted)
+
   io.counters.lsuBusy := count(io.events.lsuBusy)
   io.counters.memoryLaunchBlocked := count(io.events.memoryLaunchBlocked)
   io.counters.memoryRequest := count(io.events.memoryRequest)
   io.counters.memoryResponse := count(io.events.memoryResponse)
   io.counters.ptwActive := count(io.events.ptwActive)
-  io.counters.systemHead := count(io.events.systemHead)
 
   io.counters.completionCollision := count(io.events.completionCollision)
   io.counters.completionBackpressure := count(io.events.completionBackpressure)
@@ -181,9 +256,26 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
     operation === AluOp.Div || operation === AluOp.Divu ||
       operation === AluOp.Rem || operation === AluOp.Remu
 
+  private val headLive = head.valid && !head.complete
+  private val headClass = head.uop.executionClass
+  private val headIsCompute =
+    headClass === ExecutionClass.Integer || headClass === ExecutionClass.MulDiv
+  private val headIsBranch = headClass === ExecutionClass.Branch
+  private val headIsMemory = headClass === ExecutionClass.Memory
+  private val headIsSystem = headClass === ExecutionClass.System
+
   private val selectedDiffersFromHead =
     selectiveBits.robToken.index =/= head.uop.robToken.index ||
       selectiveBits.robToken.generation =/= head.uop.robToken.generation
+  private val selectiveBypass = selectiveFire && head.valid && selectedDiffersFromHead
+  private val selectiveHeadFire = selectiveFire && head.valid && !selectedDiffersFromHead
+
+  private val headSchedulable = headLive && !head.uop.decoded.exception.valid &&
+    head.operandsReady && (headIsCompute || headIsBranch || headIsMemory)
+  private val headLaunchFire =
+    (headIsCompute && selectiveHeadFire) ||
+      (headIsBranch && branchFire) ||
+      (headIsMemory && lsuRequestFire)
 
   private val completionValidCount = PopCount(Cat(
     systemCompletionValid,
@@ -207,18 +299,28 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   events.branchIssue := branchFire
   events.memoryIssue := lsuRequestFire
   events.systemCompletion := systemCompletionFire
-  events.selectiveBypassIssue := selectiveFire && head.valid && selectedDiffersFromHead
+  events.selectiveBypassIssue := selectiveBypass
+  events.selectiveBypassComputeHead := selectiveBypass && headIsCompute
+  events.selectiveBypassBranchHead := selectiveBypass && headIsBranch
+  events.selectiveBypassMemoryHead := selectiveBypass && headIsMemory
+  events.selectiveBypassOtherHead := selectiveBypass && !(headIsCompute || headIsBranch || headIsMemory)
 
-  events.headNotReady := head.valid && !head.complete &&
+  events.headNotReady := headLive &&
     !head.uop.decoded.exception.valid && !head.operandsReady
+  events.headReadyNotIssued := headSchedulable && !headLaunchFire
   events.commitIdleRobNonEmpty := core.io.occupancy =/= 0.U && !core.io.commit.valid
+  events.computeHead := headLive && headIsCompute
+  events.branchHead := headLive && headIsBranch
+  events.memoryHead := headLive && headIsMemory
+  events.systemHead := headLive && headIsSystem
+  events.interruptHold := core.io.interruptHold
+  events.wfiHalted := core.io.halted
+
   events.lsuBusy := core.io.lsuBusy
   events.memoryLaunchBlocked := lsuRequestValid && !lsuRequestReady
   events.memoryRequest := core.io.memoryRequest.fire
   events.memoryResponse := core.io.memoryResponse.fire
   events.ptwActive := io.ptwValid
-  events.systemHead := head.valid && !head.complete &&
-    head.uop.executionClass === ExecutionClass.System
 
   events.completionCollision := completionValidCount > 1.U
   events.completionBackpressure := completionBackpressured
@@ -226,40 +328,25 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
 
   perf.io.events := events
 
-  // The real Linux qualification workload does not terminate: PID1 prints its
-  // UART proof marker and then yields forever. Detect that simulation-only marker
-  // here so the snapshot is taken at the same architectural proof boundary rather
-  // than at an arbitrary periodic cycle. exitValid remains useful for terminating
-  // microbenchmarks that reuse this measured shell.
-  private val perfMarkerBytes = VecInit(Seq(
-    0x52.U(8.W), 0x56.U(8.W), 0x36.U(8.W), 0x34.U(8.W), 0x20.U(8.W),
-    0x55.U(8.W), 0x53.U(8.W), 0x45.U(8.W), 0x52.U(8.W), 0x20.U(8.W),
-    0x55.U(8.W), 0x41.U(8.W), 0x52.U(8.W), 0x54.U(8.W), 0x20.U(8.W),
-    0x49.U(8.W), 0x52.U(8.W), 0x51.U(8.W), 0x20.U(8.W), 0x4f.U(8.W),
-    0x4b.U(8.W), 0x0a.U(8.W)
-  ))
-  private val perfMarkerIndex = RegInit(0.U(log2Ceil(perfMarkerBytes.length).W))
-  private val perfMarkerHit = WireDefault(false.B)
+  // Linux PID1 prints the proof phrase and then yields forever. Recognize the
+  // phrase itself, before CR/LF, so tty line-ending normalization cannot suppress
+  // the measurement boundary. exitValid remains a second boundary for terminating
+  // workloads, but the wrapper emits at most one snapshot.
+  private val marker = Module(new V2LinuxProofMarkerRecognizer)
+  marker.io.valid := io.uartValid
+  marker.io.byte := io.uartByte
 
-  when(io.uartValid) {
-    when(io.uartByte === perfMarkerBytes(perfMarkerIndex)) {
-      when(perfMarkerIndex === (perfMarkerBytes.length - 1).U) {
-        perfMarkerIndex := 0.U
-        perfMarkerHit := true.B
-      }.otherwise {
-        perfMarkerIndex := perfMarkerIndex + 1.U
-      }
-    }.otherwise {
-      perfMarkerIndex := Mux(io.uartByte === perfMarkerBytes(0), 1.U, 0.U)
-    }
-  }
+  private val snapshotEmitted = RegInit(false.B)
+  private val snapshotTrigger = !snapshotEmitted && (marker.io.hit || io.exitValid)
 
-  when(perfMarkerHit || io.exitValid) {
+  when(snapshotTrigger) {
+    snapshotEmitted := true.B
     printf(p"AETHERCORE_V2_PERF cycles=${perf.io.counters.cycles} commits=${perf.io.counters.commits} dispatch_accepted=${perf.io.counters.dispatchAccepted} dispatch_blocked=${perf.io.counters.dispatchBlocked}\n")
     printf(p"AETHERCORE_V2_PERF rob0=${perf.io.counters.robOccupancy0} rob1=${perf.io.counters.robOccupancy1} rob2=${perf.io.counters.robOccupancy2} rob3=${perf.io.counters.robOccupancy3} rob4=${perf.io.counters.robOccupancy4}\n")
     printf(p"AETHERCORE_V2_PERF issue_int=${perf.io.counters.integerIssue} issue_mul=${perf.io.counters.multiplyIssue} issue_div=${perf.io.counters.divideIssue} issue_branch=${perf.io.counters.branchIssue} issue_mem=${perf.io.counters.memoryIssue} system_completion=${perf.io.counters.systemCompletion}\n")
-    printf(p"AETHERCORE_V2_PERF selective_candidate=${perf.io.counters.selectiveCandidate} selective_bypass=${perf.io.counters.selectiveBypassIssue} lsu_compute_overlap=${perf.io.counters.lsuComputeOverlapIssue}\n")
-    printf(p"AETHERCORE_V2_PERF head_not_ready=${perf.io.counters.headNotReady} commit_idle_nonempty=${perf.io.counters.commitIdleRobNonEmpty} lsu_busy=${perf.io.counters.lsuBusy} memory_launch_blocked=${perf.io.counters.memoryLaunchBlocked}\n")
-    printf(p"AETHERCORE_V2_PERF mem_req=${perf.io.counters.memoryRequest} mem_resp=${perf.io.counters.memoryResponse} ptw_active=${perf.io.counters.ptwActive} system_head=${perf.io.counters.systemHead} completion_collision=${perf.io.counters.completionCollision} completion_backpressure=${perf.io.counters.completionBackpressure}\n")
+    printf(p"AETHERCORE_V2_PERF selective_candidate=${perf.io.counters.selectiveCandidate} selective_bypass=${perf.io.counters.selectiveBypassIssue} bypass_compute_head=${perf.io.counters.selectiveBypassComputeHead} bypass_branch_head=${perf.io.counters.selectiveBypassBranchHead} bypass_memory_head=${perf.io.counters.selectiveBypassMemoryHead} bypass_other_head=${perf.io.counters.selectiveBypassOtherHead} lsu_compute_overlap=${perf.io.counters.lsuComputeOverlapIssue}\n")
+    printf(p"AETHERCORE_V2_PERF head_not_ready=${perf.io.counters.headNotReady} head_ready_not_issued=${perf.io.counters.headReadyNotIssued} commit_idle_nonempty=${perf.io.counters.commitIdleRobNonEmpty} compute_head=${perf.io.counters.computeHead} branch_head=${perf.io.counters.branchHead} memory_head=${perf.io.counters.memoryHead} system_head=${perf.io.counters.systemHead}\n")
+    printf(p"AETHERCORE_V2_PERF interrupt_hold=${perf.io.counters.interruptHold} wfi_halted=${perf.io.counters.wfiHalted} lsu_busy=${perf.io.counters.lsuBusy} memory_launch_blocked=${perf.io.counters.memoryLaunchBlocked} ptw_active=${perf.io.counters.ptwActive}\n")
+    printf(p"AETHERCORE_V2_PERF mem_req=${perf.io.counters.memoryRequest} mem_resp=${perf.io.counters.memoryResponse} completion_collision=${perf.io.counters.completionCollision} completion_backpressure=${perf.io.counters.completionBackpressure}\n")
   }
 }

@@ -43,11 +43,11 @@ At minimum report:
 - ROB occupancy histogram (0..4);
 - issue fires by class: integer/branch, mul-div, memory, system;
 - head-not-ready cycles;
-- head-ready-but-not-issued cycles;
+- head-ready-but-not-issued cycles with an exact schedulable-head predicate;
 - LSU busy cycles and memory request/response counts;
 - PTW-active / translation-stall cycles where observable;
 - commit-idle with non-empty ROB cycles;
-- privileged/interrupt serialization cycles.
+- privileged/interrupt serialization cycles, including clean-boundary interrupt hold and WFI halt time.
 
 Each stall category must have an explicit predicate and should avoid double-counting where practical. A hierarchical attribution is preferred over a misleading sum of overlapping counters.
 
@@ -55,7 +55,7 @@ Each stall category must have an explicit predicate and should avoid double-coun
 
 The production selective-compute slice was qualified at #151 before the first whole-program counter collection. P8.0 therefore measures both the remaining bottlenecks and the real utilization of that mechanism. The measurement implementation is a simulation-only wrapper around the unchanged production core; no counter output feeds any scheduling, completion, LSU or Commit decision.
 
-The first frozen predicates are:
+The frozen predicates are:
 
 - `cycles`: one sample for every simulation cycle after reset;
 - `commits`: `CommitTrace.valid`;
@@ -70,20 +70,33 @@ The first frozen predicates are:
 - `issue_mem`: exact production LSU request `fire`;
 - `system_completion`: System completion `fire`; this is deliberately not mislabeled as a generic FU issue because System has no independent issue-request seam;
 - `selective_bypass`: accepted selective request whose exact `RobToken` differs from the current age-0 SchedulingView token;
+- `bypass_compute_head` / `bypass_branch_head` / `bypass_memory_head`: classify each actual selective bypass by the blocked/current head execution class;
+- `bypass_other_head`: fail-closed diagnostic bucket; production policy expects this to remain zero because System/None heads must not be bypassed;
 - `head_not_ready`: age-0 SchedulingView entry is live, incomplete, exception-free and its operands are not ready;
+- `head_ready_not_issued`: age-0 entry is live, incomplete, exception-free, operand-ready, belongs to Integer/MulDiv/Branch/Memory, and no accepted exact-head launch occurs that cycle;
+- `compute_head` / `branch_head` / `memory_head` / `system_head`: live incomplete age-0 residency by execution class;
 - `commit_idle_nonempty`: ROB occupancy is nonzero while CommitTrace is not valid;
+- `interrupt_hold`: the real `TinyPagedCore.interruptHold` clean-boundary drain state;
+- `wfi_halted`: the real `TinyPagedCore.halted` / WFI-waiting state;
 - `lsu_busy`: real blocking LSU busy output;
 - `memory_launch_blocked`: exact-head LSU request is valid but not accepted;
 - `mem_req` / `mem_resp`: internal AetherMem request/response handshakes at the core/platform seam;
 - `ptw_active`: platform PTW request valid;
-- `system_head`: age-0 SchedulingView entry is a live incomplete System operation;
 - `completion_collision`: more than one of System/LSU/Execute completion sources is simultaneously valid;
 - `completion_backpressure`: at least one valid completion source is not ready;
 - `lsu_compute_overlap`: a selective-compute request is accepted while the real LSU remains busy.
 
-The older aggregate name `head-ready-but-not-issued` is **not** materialized by guessing from a ready head alone. Once a uOp has already launched, the same live head can remain ready while legitimately waiting for completion; counting that state as issue-resource pressure would be false attribution. Until an exact once-only issued-state observation seam is required, P8.0 uses the causal request/backpressure predicates above instead.
+`head_ready_not_issued` deliberately excludes System operations. It is a scheduler/resource-pressure predicate, not a claim that every ready live head should issue every cycle. Already-launched work waiting for completion is excluded by the exact accepted-launch and class-specific ownership rules above.
 
-The Linux/OpenSBI simulation prints machine-readable `AETHERCORE_V2_PERF` snapshots at the existing architectural exit event. Counter arithmetic and ROB4 histogram semantics are separately frozen by focused ChiselSim regression.
+The unchanged Linux PID1 workload does not terminate after its proof. The measured shell therefore takes a one-shot machine-readable `AETHERCORE_V2_PERF` snapshot as soon as the UART phrase `RV64 USER UART IRQ OK` is complete, **before CR/LF line termination**. This makes the boundary insensitive to tty CR/LF normalization. `exitValid` remains a second one-shot boundary for terminating workloads. Counter arithmetic, marker semantics and ROB4 histogram behavior are separately frozen by focused ChiselSim regression.
+
+## Whole-workload identity rule
+
+A total-cycle comparison is apples-to-apples only when the **final executable workload identity** matches. Matching source revisions, Linux version, compiler version and baseline kernel Image are necessary but not sufficient; the deterministic PID1 ELF, initramfs Image and final OpenSBI `fw_payload.bin` hashes must also match.
+
+P8 evidence therefore records those final hashes with every measured Linux run. If they differ, cycle/commit deltas may be reported as diagnostic observations but must not be attributed to a microarchitectural change. Detailed causal counters from a single exact workload remain valid for bottleneck attribution.
+
+This rule exists because the first #152 measurement exposed an otherwise invisible reproducibility gap: the frozen F7 and P8 runs used identical `minimal_init.S`, build script and baseline Linux Image, yet their final minimal-initramfs payload hashes differed. That gap must be resolved before treating the frozen F7 total-cycle number as a strict performance baseline.
 
 ## First expected optimization
 
@@ -106,11 +119,12 @@ The goal is to isolate the value of each bounded mechanism before adding larger 
 
 1. freeze baseline counters and counter-contract tests;
 2. collect focused microbenchmark and real OpenSBI/Linux samples;
-3. identify dominant stalls by percentage of cycles;
-4. implement one bounded mechanism;
-5. compare cycles/commits/stall distribution against the exact baseline;
-6. run all correctness gates on the candidate exact head;
-7. keep the mechanism only if measured benefit justifies its complexity.
+3. verify final workload hashes before whole-program baseline comparison;
+4. identify dominant stalls by percentage of cycles and causal overlap;
+5. implement one bounded mechanism;
+6. compare cycles/commits/stall distribution against an exact-identity baseline;
+7. run all correctness gates on the candidate exact head;
+8. keep the mechanism only if measured benefit justifies its complexity.
 
 ## Diagnostic acceleration
 
