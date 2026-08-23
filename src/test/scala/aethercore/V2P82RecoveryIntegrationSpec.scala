@@ -91,6 +91,8 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
       executionClass: ExecutionClass.Type,
       op: AluOp.Type = AluOp.Add,
       rd: Int = 0,
+      rs1: Int = 0,
+      usesRs1: Boolean = false,
       lhsSource: OperandSourceKind.Type = OperandSourceKind.Zero,
       rhsSource: OperandSourceKind.Type = OperandSourceKind.Immediate,
       immediate: BigInt = 0,
@@ -111,10 +113,10 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
     dut.io.dispatch.bits.decoded.wordOp.poke(false.B)
     dut.io.dispatch.bits.decoded.lhsSource.poke(lhsSource)
     dut.io.dispatch.bits.decoded.rhsSource.poke(rhsSource)
-    dut.io.dispatch.bits.decoded.rs1.poke(0.U)
+    dut.io.dispatch.bits.decoded.rs1.poke(rs1.U)
     dut.io.dispatch.bits.decoded.rs2.poke(0.U)
     dut.io.dispatch.bits.decoded.rd.poke(rd.U)
-    dut.io.dispatch.bits.decoded.usesRs1.poke(false.B)
+    dut.io.dispatch.bits.decoded.usesRs1.poke(usesRs1.B)
     dut.io.dispatch.bits.decoded.usesRs2.poke(false.B)
     dut.io.dispatch.bits.decoded.writesRd.poke((rd != 0).B)
     dut.io.dispatch.bits.decoded.immediate.poke(immediate.U)
@@ -144,6 +146,8 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
       executionClass: ExecutionClass.Type,
       op: AluOp.Type = AluOp.Add,
       rd: Int = 0,
+      rs1: Int = 0,
+      usesRs1: Boolean = false,
       lhsSource: OperandSourceKind.Type = OperandSourceKind.Zero,
       rhsSource: OperandSourceKind.Type = OperandSourceKind.Immediate,
       immediate: BigInt = 0,
@@ -159,6 +163,8 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
       executionClass,
       op,
       rd,
+      rs1,
+      usesRs1,
       lhsSource,
       rhsSource,
       immediate,
@@ -231,7 +237,9 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
           dut,
           branchPc,
           ExecutionClass.Branch,
-          lhsSource = OperandSourceKind.Zero,
+          rs1 = 1,
+          usesRs1 = true,
+          lhsSource = OperandSourceKind.Rs1,
           rhsSource = OperandSourceKind.Zero,
           immediate = target - branchPc,
           controlFlowKind = ControlFlowKind.Conditional,
@@ -248,9 +256,9 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
           immediate = 7
         )
 
-        // The head load has transferred ownership into the LSU. Branch may be
-        // bypassed by safe compute, so the younger long DIV must really launch
-        // before the load is allowed to finish.
+        // R4 now makes Branch itself eligible for oldest-ready selective issue.
+        // Keep the older Branch dependency-blocked on the head Load so the
+        // younger long DIV must genuinely launch before the Load completes.
         var cycles = 0
         var sawStaleDivIssue = false
         while (!sawStaleDivIssue && cycles < 24) {
@@ -265,7 +273,7 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
           if (!sawStaleDivIssue) dut.clock.step()
           cycles += 1
         }
-        withClue("younger DIV never became genuinely in-flight behind launched Load + older Branch: ") {
+        withClue("younger DIV never became genuinely in-flight behind launched Load + dependency-blocked Branch: ") {
           sawStaleDivIssue shouldBe true
         }
 
@@ -280,18 +288,18 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
         dut.clock.step()
         dut.io.memoryRequest.ready.poke(false.B)
 
+        // Return zero so BEQ x1,x0 is both dependency-driven and taken. The Load
+        // completion wakes the surviving Branch; R4 may issue it before it ever
+        // becomes the ROB head while the younger DIV is still physically live.
         dut.io.memoryResponse.valid.poke(true.B)
         dut.io.memoryResponse.bits.txnId.poke(txn.U)
-        dut.io.memoryResponse.bits.rdata.poke("h12345678".U)
+        dut.io.memoryResponse.bits.rdata.poke(0.U)
         dut.io.memoryResponse.bits.fault.poke(false.B)
         dut.io.memoryResponse.bits.last.poke(true.B)
         dut.io.memoryResponse.ready.expect(true.B)
         dut.clock.step()
         dut.io.memoryResponse.valid.poke(false.B)
 
-        // Once the load retires, Branch becomes the conservative head owner.
-        // Its taken response must recover while the younger DIV is still live
-        // inside the iterative execution unit.
         cycles = 0
         var sawRedirect = false
         while (!sawRedirect && cycles < 24) {
@@ -306,7 +314,7 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
           }
           cycles += 1
         }
-        withClue("taken Branch never reached the production recovery seam: ") {
+        withClue("woken taken Branch never reached the production recovery seam: ") {
           sawRedirect shouldBe true
         }
         dut.clock.step()
