@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'arch/aethercore-v2-p8-2-generalized-recovery'
+      - 'arch/aethercore-v2-p8-2-r4-selective-branch'
   workflow_dispatch:
 
 permissions:
@@ -72,6 +73,7 @@ jobs:
           grep -q 'class V2P82RecoveryRebuildSpec' src/test/scala/aethercore/V2P82RecoveryRebuildSpec.scala
           grep -q 'class V2P82DependencyStateReleaseSpec' src/test/scala/aethercore/V2P82DependencyStateReleaseSpec.scala
           grep -q 'class V2P82RecoveryIntegrationSpec' src/test/scala/aethercore/V2P82RecoveryIntegrationSpec.scala
+          grep -q 'executionClass === ExecutionClass.Branch && io.availability.branch' src/main/scala/aethercore/core/v2/TinySelectiveIssue.scala
 
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
@@ -110,6 +112,14 @@ jobs:
         run: |
           set -euo pipefail
           ./mill aethercore.test.compile
+
+      - name: Run R4 selective Branch scheduler and FU proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.V2A8SelectiveIssueSpec \
+            aethercore.V2A8SelectiveExecutionSpec
 
       - name: Run dependency-state release probe first
         shell: bash
