@@ -1,9 +1,9 @@
-name: AetherCore V2 P8 ROB8 A/B
+name: AetherCore V2 P8 ROB8 Window4 A/B
 
 on:
   push:
     branches:
-      - 'perf/aethercore-v2-rob8-ab'
+      - 'perf/aethercore-v2-rob8-window4-ab'
   workflow_dispatch:
 
 permissions:
@@ -11,12 +11,12 @@ permissions:
   statuses: write
 
 concurrency:
-  group: aethercore-v2-p8-rob8-ab-${{ github.ref }}
+  group: aethercore-v2-p8-rob8-window4-ab-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   announce:
-    name: Publish discoverable ROB8 run identity
+    name: Publish discoverable ROB8/window4 run identity
     runs-on: ubuntu-24.04
     steps:
       - name: Publish pending commit status
@@ -29,8 +29,8 @@ jobs:
           import json, os
           print(json.dumps({
               'state': 'pending',
-              'context': 'aethercore/v2-rob8-ab',
-              'description': 'ROB4 vs ROB8/window8 Linux A/B running',
+              'context': 'aethercore/v2-rob8-window4-ab',
+              'description': 'ROB4 vs ROB8/window4 Linux A/B running',
               'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
           }))
           PY
@@ -46,7 +46,7 @@ jobs:
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
   measure:
-    name: ROB4 vs ROB8/window8 Linux clocksource boundary
+    name: ROB4 vs ROB8/window4 Linux clocksource boundary
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 50
@@ -59,7 +59,7 @@ jobs:
       RV64_LINUX_JOBS: '4'
 
     steps:
-      - name: Checkout exact ROB8 experiment head
+      - name: Checkout exact ROB8/window4 experiment head
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
@@ -75,6 +75,7 @@ jobs:
           git merge-base --is-ancestor "$BASELINE_SHA" "$TARGET_SHA"
           grep -q 'val Entries: Int = 8' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
           grep -q 'val IndexBits: Int = 3' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
+          grep -q 'math.min(4, TinyRobGeometry.Entries)' src/main/scala/aethercore/core/v2/TinySelectiveIssue.scala
           grep -q 'AetherCoreV2Rob8ExperimentTop' src/main/scala/aethercore/sim/AetherCoreV2Rob8Experiment.scala
           grep -q 'class V2Rob8ExperimentSpec' src/test/scala/aethercore/V2Rob8ExperimentSpec.scala
           bash -n tools/ci/v2_p8_rob8_ab.sh
@@ -146,7 +147,7 @@ jobs:
           chmod +x mill
           ./mill aethercore.test.compile
 
-      - name: Prove ROB8 production geometry and core seams
+      - name: Prove ROB8 production geometry and bounded scheduler seam
         shell: bash
         run: |
           set -euo pipefail
@@ -165,7 +166,7 @@ jobs:
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
 
-      - name: Execute bounded ROB4 vs ROB8 architecture A/B
+      - name: Execute bounded ROB4 vs ROB8/window4 architecture A/B
         shell: bash
         run: |
           set -euo pipefail
@@ -177,16 +178,16 @@ jobs:
           PROGRESS_INTERVAL_CYCLES=10000000 \
           bash tools/ci/v2_p8_rob8_ab.sh
 
-      - name: Publish ROB8 A/B summary
+      - name: Publish ROB8/window4 A/B summary
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           {
-            echo '### AetherCore V2 ROB8/window8 bounded A/B'
+            echo '### AetherCore V2 ROB8/window4 bounded A/B'
             echo
-            echo '- baseline ROB4: `'$BASELINE_SHA'`'
-            echo '- target ROB8/window8: `'$TARGET_SHA'`'
+            echo '- baseline ROB4/window4: `'$BASELINE_SHA'`'
+            echo '- target ROB8/window4: `'$TARGET_SHA'`'
             echo '- boundary: `clocksource: riscv_clocksource`'
             echo
             if [[ -s build/v2-p8-rob8-ab/result.txt ]]; then
@@ -194,16 +195,16 @@ jobs:
               cat build/v2-p8-rob8-ab/result.txt
               echo '```'
             else
-              echo 'ROB8 A/B result unavailable; inspect uploaded logs.'
+              echo 'ROB8/window4 A/B result unavailable; inspect uploaded logs.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload ROB8 A/B evidence
+      - name: Upload ROB8/window4 A/B evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: aethercore-v2-p8-rob8-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          name: aethercore-v2-p8-rob8-window4-ab-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: warn
           path: |
@@ -217,7 +218,7 @@ jobs:
             build/v2-p8-rob8-ab/baseline.run.log
             build/v2-p8-rob8-ab/target.run.log
 
-      - name: Publish final ROB8 commit status
+      - name: Publish final ROB8/window4 commit status
         if: always()
         shell: bash
         env:
@@ -227,7 +228,7 @@ jobs:
           set -euo pipefail
           state=failure
           [[ "$JOB_STATUS" == success ]] && state=success
-          description="${JOB_STATUS}: ROB8 A/B result unavailable"
+          description="${JOB_STATUS}: ROB8/window4 A/B result unavailable"
           if [[ -s build/v2-p8-rob8-ab/result.txt ]]; then
             baseline_cycles="$(grep '^baseline_cycles=' build/v2-p8-rob8-ab/result.txt | cut -d= -f2)"
             target_cycles="$(grep '^target_cycles=' build/v2-p8-rob8-ab/result.txt | cut -d= -f2)"
@@ -239,7 +240,7 @@ jobs:
           import json, os
           print(json.dumps({
               'state': os.environ['state'],
-              'context': 'aethercore/v2-rob8-ab',
+              'context': 'aethercore/v2-rob8-window4-ab',
               'description': os.environ['description'][:140],
               'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
           }))
