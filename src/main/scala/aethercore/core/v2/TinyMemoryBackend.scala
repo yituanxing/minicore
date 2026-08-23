@@ -129,6 +129,7 @@ class TinyMemoryBackend(
     allowAtomics = allowAtomics
   ))
   val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
+  private val recoveryBusy = dependencyBackend.io.recoveryBusy
 
   private val retiring = dependencyBackend.io.retiring
   private val retiringSystem = retiring.valid &&
@@ -261,12 +262,13 @@ class TinyMemoryBackend(
   selectiveIssue.io.block :=
     dependencyBackend.io.acceptedRecovery.valid ||
       dependencyBackend.io.acceptedPrivilegedRecovery.valid ||
-      dependencyBackend.io.recoveryBusy ||
+      recoveryBusy ||
       lsu.io.request.valid
 
   execution.io.request <> selectiveIssue.io.request
 
   system.io.head := dependencyBackend.io.head
+  system.io.head.valid := dependencyBackend.io.head.valid && !recoveryBusy
   system.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
   system.io.headRs1 := dependencyBackend.io.headRs1
   system.io.headOperandsReady := dependencyBackend.io.headOperandsReady
@@ -295,6 +297,7 @@ class TinyMemoryBackend(
     sameRobToken(memoryIssuedToken, head.bits.robToken)
 
   lsu.io.request.valid := headIsMemory &&
+    !recoveryBusy &&
     dependencyBackend.io.headDependenciesValid &&
     dependencyBackend.io.headOperandsReady &&
     !memoryAlreadyIssued &&
