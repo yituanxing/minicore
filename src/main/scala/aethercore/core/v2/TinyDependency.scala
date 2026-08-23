@@ -82,10 +82,11 @@ class TinySchedulingEntry(val xlen: Int) extends Bundle {
 /**
   * Fixed dependency tracker.
   *
-  * F4 normal recovery keeps the surviving head producer because JAL/JALR may
-  * still publish a link value. F5 privileged recovery is different: the head
-  * is already complete and will trap/return at the next retirement boundary,
-  * so all speculative RAT, producer and dependency state can be discarded.
+  * P8.2 normal recovery preserves every older survivor plus the recovering
+  * Branch, clears only killed younger dependency/producer state, then rebuilds
+  * the speculative rename map from the surviving ROB window in age order.
+  * Privileged recovery remains different: the precise head trap/xRET boundary
+  * discards all speculative dependency state.
   */
 class TinyDependencyState(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-dependency XLEN must be 32 or 64, got $xlen")
@@ -93,6 +94,7 @@ class TinyDependencyState(val xlen: Int) extends Module {
   private val Entries = TinyRobGeometry.Entries
   private val IdentityBits = TinyRobGeometry.IndexBits
   private val GenerationBits = TinyRobGeometry.GenerationBits
+  private val CountBits = log2Ceil(Entries + 1)
 
   val io = IO(new Bundle {
     val allocate = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
@@ -100,10 +102,13 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val committedRs2 = Input(UInt(xlen.W))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val recovery = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
+    val recoverySurvivorCount = Input(UInt(CountBits.W))
+    val recoveryWindow = Input(Vec(Entries, new TinyRobWindowEntry(xlen)))
     val privilegedRecovery = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val retire = Flipped(Valid(new RobRetirement(xlen)))
     val head = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
 
+    val recoveryBusy = Output(Bool())
     val slotView = Output(Vec(
       Entries,
       new TinyDependencySlotView(xlen, IdentityBits, GenerationBits)
@@ -132,11 +137,19 @@ class TinyDependencyState(val xlen: Int) extends Module {
     )
   )
 
+  private val rebuildBusy = RegInit(false.B)
+  private val rebuildAge = RegInit(0.U(IdentityBits.W))
+  private val rebuildCount = RegInit(0.U(CountBits.W))
+  io.recoveryBusy := rebuildBusy
+
   private def sameProducer(a: ProducerTag, b: ProducerTag): Bool =
     a.id === b.id && a.generation === b.generation
 
   private def sameRobToken(a: RobToken, b: RobToken): Bool =
     a.index === b.index && a.generation === b.generation
+
+  private def createsProducer(uop: BackendUop): Bool =
+    uop.decoded.writesRd && uop.decoded.rd =/= 0.U && uop.producesValue
 
   private def resolveSource(
       address: UInt,
@@ -277,63 +290,28 @@ class TinyDependencyState(val xlen: Int) extends Module {
   when(io.allocate.valid) {
     val allocated = io.allocate.bits
     val slot = allocated.robToken.index
-    val createsProducer = allocated.decoded.writesRd &&
-      allocated.decoded.rd =/= 0.U &&
-      allocated.producesValue
+    val allocatedCreatesProducer = createsProducer(allocated)
 
     dependencies(slot).valid := true.B
     dependencies(slot).robToken := allocated.robToken
     dependencies(slot).rs1 := allocateRs1
     dependencies(slot).rs2 := allocateRs2
 
-    producers(allocated.producerTag.id).valid := createsProducer
+    producers(allocated.producerTag.id).valid := allocatedCreatesProducer
     producers(allocated.producerTag.id).producerTag := allocated.producerTag
     producers(allocated.producerTag.id).ready := false.B
     producers(allocated.producerTag.id).value := 0.U
 
-    when(createsProducer) {
+    when(allocatedCreatesProducer) {
       rename(allocated.decoded.rd).valid := true.B
       rename(allocated.decoded.rd).producerTag := allocated.producerTag
     }
   }
 
-  // Normal branch recovery keeps the surviving head producer/link value.
-  when(io.recovery.valid) {
-    assert(io.head.valid, "accepted recovery must retain a live ROB head")
-    assert(sameRobToken(io.head.bits.robToken, io.recovery.bits.robToken),
-      "accepted recovery must name the surviving ROB head")
-
-    val survivor = io.head.bits
-    val survivorCreatesProducer = survivor.decoded.writesRd &&
-      survivor.decoded.rd =/= 0.U &&
-      survivor.producesValue
-
-    for (register <- 0 until 32) {
-      rename(register).valid := false.B
-    }
-    for (index <- 0 until Entries) {
-      when(index.U =/= survivor.robToken.index) {
-        dependencies(index).valid := false.B
-      }
-      when(index.U =/= survivor.producerTag.id) {
-        producers(index).valid := false.B
-        producers(index).ready := false.B
-      }
-    }
-
-    producers(survivor.producerTag.id).valid := survivorCreatesProducer
-    producers(survivor.producerTag.id).producerTag := survivor.producerTag
-    producers(survivor.producerTag.id).ready := survivorCreatesProducer && io.recovery.bits.hasValue
-    producers(survivor.producerTag.id).value := io.recovery.bits.value
-    when(survivorCreatesProducer) {
-      rename(survivor.decoded.rd).valid := true.B
-      rename(survivor.decoded.rd).producerTag := survivor.producerTag
-    }
-  }
-
-  // Trap/xRET recovery has no speculative survivor dependency: the head is
-  // already complete and will retire on the next boundary. Clear everything so
-  // the redirect target starts from committed architectural state only.
+  // Recovery/rebuild control has explicit priority over the age-by-age rebuild.
+  // The recovery cycle itself replays age0 immediately. This preserves the old
+  // head-only F4 timing when survivorCount==1 while middle-aged branches rebuild
+  // the remaining mappings sequentially with bounded state.
   when(io.privilegedRecovery.valid) {
     assert(io.head.valid, "privileged recovery must retain a live ROB head until retirement")
     assert(sameRobToken(io.head.bits.robToken, io.privilegedRecovery.bits.robToken),
@@ -347,13 +325,81 @@ class TinyDependencyState(val xlen: Int) extends Module {
       producers(index).valid := false.B
       producers(index).ready := false.B
     }
+    rebuildBusy := false.B
+    rebuildAge := 0.U
+    rebuildCount := 0.U
+  }.elsewhen(io.recovery.valid) {
+    assert(io.recoverySurvivorCount > 0.U,
+      "normal recovery must retain at least the recovering Branch")
+    assert(io.recoverySurvivorCount <= Entries.U,
+      "normal recovery survivor count must fit the bounded ROB")
+
+    val recoveryTokenSeen = WireDefault(false.B)
+    for (age <- 0 until Entries) {
+      val entry = io.recoveryWindow(age)
+      when(entry.valid && sameRobToken(entry.uop.robToken, io.recovery.bits.robToken)) {
+        recoveryTokenSeen := true.B
+        assert(io.recoverySurvivorCount === (age + 1).U,
+          "normal recovery survivor count must end at the recovering Branch")
+      }
+    }
+    assert(recoveryTokenSeen, "normal recovery must name a live entry in the ROB window")
+
+    for (register <- 0 until 32) {
+      rename(register).valid := false.B
+    }
+
+    // Kill only dependency/producer ownership belonging to younger ROB ages.
+    // ProducerTag is used for producer state; do not infer it from RobToken.
+    for (age <- 0 until Entries) {
+      val entry = io.recoveryWindow(age)
+      when(entry.valid && age.U >= io.recoverySurvivorCount) {
+        dependencies(entry.uop.robToken.index).valid := false.B
+        producers(entry.uop.producerTag.id).valid := false.B
+        producers(entry.uop.producerTag.id).ready := false.B
+      }
+    }
+
+    val oldest = io.recoveryWindow(0).uop
+    when(io.recoveryWindow(0).valid && createsProducer(oldest)) {
+      rename(oldest.decoded.rd).valid := true.B
+      rename(oldest.decoded.rd).producerTag := oldest.producerTag
+    }
+
+    rebuildCount := io.recoverySurvivorCount
+    when(io.recoverySurvivorCount > 1.U) {
+      rebuildBusy := true.B
+      rebuildAge := 1.U
+    }.otherwise {
+      rebuildBusy := false.B
+      rebuildAge := 0.U
+    }
+  }.elsewhen(rebuildBusy) {
+    val replay = io.recoveryWindow(rebuildAge)
+    assert(replay.valid, "recovery rebuild age must remain a live ROB survivor")
+
+    when(createsProducer(replay.uop)) {
+      val producer = producers(replay.uop.producerTag.id)
+      assert(producer.valid && sameProducer(producer.producerTag, replay.uop.producerTag),
+        "recovery rebuild must retain exact survivor producer state")
+      rename(replay.uop.decoded.rd).valid := true.B
+      rename(replay.uop.decoded.rd).producerTag := replay.uop.producerTag
+    }
+
+    val nextAge = rebuildAge +& 1.U
+    when(nextAge >= rebuildCount) {
+      rebuildBusy := false.B
+      rebuildAge := 0.U
+    }.otherwise {
+      rebuildAge := rebuildAge + 1.U
+    }
   }
 }
 
 /**
-  * F2 integration substrate, extended with read-only F5 retirement/recovery
-  * observability. Ordering/lifetime remains owned by TinyRob and architectural
-  * integer state remains owned by V2Commit.
+  * F2 integration substrate, extended with P8.2 recovery/rebuild observability.
+  * Ordering/lifetime remains owned by TinyRob and architectural integer state
+  * remains owned by V2Commit.
   */
 class TinyDependencyBackend(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"v2 F2 backend XLEN must be 32 or 64, got $xlen")
@@ -361,13 +407,16 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   private val Entries = TinyRobGeometry.Entries
   private val IdentityBits = TinyRobGeometry.IndexBits
   private val GenerationBits = TinyRobGeometry.GenerationBits
+  private val CountBits = log2Ceil(Entries + 1)
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new RobDispatch(xlen)))
     val allocated = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
     val completion = Flipped(Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits)))
     val acceptedRecovery = Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+    val acceptedRecoverySurvivorCount = Output(UInt(CountBits.W))
     val acceptedPrivilegedRecovery = Valid(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+    val recoveryBusy = Output(Bool())
     val retiring = Valid(new RobRetirement(xlen))
     val commit = Output(new CommitTrace(xlen = xlen))
     val head = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
@@ -376,7 +425,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     val headRs1 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headRs2 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headOperandsReady = Output(Bool())
-    val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
+    val occupancy = Output(UInt(CountBits.W))
   })
 
   val rob = Module(new TinyRob(xlen))
@@ -384,9 +433,11 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   val commitStage = Module(new V2Commit(xlen))
   val registerFile = Module(new RegisterFile(xlen))
 
-  rob.io.dispatch.valid := io.dispatch.valid
+  private val recoveryBusy = dependencyState.io.recoveryBusy
+
+  rob.io.dispatch.valid := io.dispatch.valid && !recoveryBusy
   rob.io.dispatch.bits := io.dispatch.bits
-  io.dispatch.ready := rob.io.dispatch.ready
+  io.dispatch.ready := rob.io.dispatch.ready && !recoveryBusy
   io.allocated := rob.io.allocated
 
   rob.io.completion.valid := io.completion.valid
@@ -394,7 +445,29 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   io.acceptedRecovery := rob.io.acceptedRecovery
   io.acceptedPrivilegedRecovery := rob.io.acceptedPrivilegedRecovery
 
-  commitStage.io.retire <> rob.io.retire
+  private val recoverySurvivorCount = WireDefault(0.U(CountBits.W))
+  for (age <- 0 until Entries) {
+    val entry = rob.io.window(age)
+    val matchesRecovery = rob.io.acceptedRecovery.valid && entry.valid &&
+      entry.uop.robToken.index === rob.io.acceptedRecovery.bits.robToken.index &&
+      entry.uop.robToken.generation === rob.io.acceptedRecovery.bits.robToken.generation
+    when(matchesRecovery) {
+      recoverySurvivorCount := (age + 1).U
+    }
+  }
+  when(rob.io.acceptedRecovery.valid) {
+    assert(recoverySurvivorCount =/= 0.U,
+      "accepted normal recovery must resolve an exact survivor boundary")
+  }
+  io.acceptedRecoverySurvivorCount := recoverySurvivorCount
+  io.recoveryBusy := recoveryBusy
+
+  // P8.2 rebuild is a short backend barrier. The recovery cycle itself is
+  // already ROB-atomic; while the sequential rebuild is active, hold retirement
+  // and dispatch so the surviving age-ordered window remains stable.
+  commitStage.io.retire.valid := rob.io.retire.valid && !recoveryBusy
+  commitStage.io.retire.bits := rob.io.retire.bits
+  rob.io.retire.ready := commitStage.io.retire.ready && !recoveryBusy
   io.retiring.valid := rob.io.retire.valid && rob.io.retire.ready
   io.retiring.bits := rob.io.retire.bits
   io.commit := commitStage.io.commit
@@ -412,6 +485,8 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   dependencyState.io.committedRs2 := registerFile.io.rs2Data
   dependencyState.io.completion := rob.io.acceptedCompletion
   dependencyState.io.recovery := rob.io.acceptedRecovery
+  dependencyState.io.recoverySurvivorCount := recoverySurvivorCount
+  dependencyState.io.recoveryWindow := rob.io.window
   dependencyState.io.privilegedRecovery := rob.io.acceptedPrivilegedRecovery
   dependencyState.io.retire.valid := rob.io.retire.valid && rob.io.retire.ready
   dependencyState.io.retire.bits := rob.io.retire.bits
