@@ -8,13 +8,13 @@ import aethercore.core.{MachineCsrBit, MachineCsrFile, PmpChecker, PmpConstants,
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
-  * F6 composition harness matured after F7 with conservative selective compute.
+  * F6 composition harness matured after F7 with bounded selective execution.
   *
-  * Memory remains one-outstanding/head-issued, System remains head-owned, and
-  * Branch remains head-issued so the existing precise recovery contract stays
-  * unchanged. Only side-effect-free Integer/MulDiv work may issue oldest-ready
-  * from the read-only scheduling window. Commit, CSR/trap state, store
-  * visibility, translation and PMP ownership remain unchanged.
+  * Memory remains one-outstanding/head-issued and System remains head-owned.
+  * Integer, Mul/Div and (after P8.2 generalized recovery) Branch share one
+  * oldest-ready selective issue owner over the read-only scheduling window.
+  * Commit, CSR/trap state, store visibility, translation and PMP ownership
+  * remain unchanged.
   */
 class TinyMemoryBackend(
     val config: CoreConfig,
@@ -108,7 +108,6 @@ class TinyMemoryBackend(
     lhs.index === rhs.index && lhs.generation === rhs.generation
 
   val dependencyBackend = Module(new TinyDependencyBackend(xlen))
-  val branchIssue = Module(new TinyOldestIssue(xlen))
   val selectiveIssue = Module(new TinySelectiveComputeIssue(xlen))
   val execution = Module(new TinySelectiveExecutionCluster(xlen, isa.hasC))
   val system = Module(new TinySystemCompletion(
@@ -251,39 +250,21 @@ class TinyMemoryBackend(
   io.allocated := dependencyBackend.io.allocated
   io.occupancy := dependencyBackend.io.occupancy
 
-  // Branch keeps the frozen head-only execution/recovery policy. Selective
-  // compute sees the whole read-only scheduling window but cannot select Branch,
-  // Memory or System by construction.
-  branchIssue.io.head := dependencyBackend.io.head
-  branchIssue.io.head.valid := dependencyBackend.io.head.valid &&
-    dependencyBackend.io.head.bits.executionClass === ExecutionClass.Branch &&
-    !dependencyBackend.io.head.bits.decoded.exception.valid
-  branchIssue.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
-  branchIssue.io.headRs1 := dependencyBackend.io.headRs1
-  branchIssue.io.headRs2 := dependencyBackend.io.headRs2
-  branchIssue.io.headOperandsReady := dependencyBackend.io.headOperandsReady
-
+  // P8.2 R4: Integer, Mul/Div and Branch share exactly one oldest-ready issue
+  // owner. Memory/System remain conservative boundaries by construction.
   selectiveIssue.io.window := dependencyBackend.io.schedulingWindow
   selectiveIssue.io.allocated := dependencyBackend.io.allocated
   selectiveIssue.io.availability := execution.io.computeAvailability
-  // A just-validated recovery must not launch a younger lifetime that is being
-  // killed this cycle. A not-yet-issued head memory request also has launch
-  // priority so the first selective slice remains globally single-issue.
+  // A validated recovery must not launch a lifetime being killed this cycle,
+  // and the bounded RAT/dependency rebuild is an explicit backend issue barrier.
+  // A not-yet-issued head Memory request also owns the single launch slot.
   selectiveIssue.io.block :=
     dependencyBackend.io.acceptedRecovery.valid ||
       dependencyBackend.io.acceptedPrivilegedRecovery.valid ||
+      dependencyBackend.io.recoveryBusy ||
       lsu.io.request.valid
 
-  // Branch wins the one execution launch slot when the exact head is ready;
-  // otherwise oldest-ready safe compute may use it. Once a branch has launched,
-  // its once-only latch lets younger compute overlap while the branch resolves.
-  private val executionRequests = Module(new Arbiter(
-    new ExecutionRequest(xlen, IdentityBits, GenerationBits),
-    2
-  ))
-  executionRequests.io.in(0) <> branchIssue.io.request
-  executionRequests.io.in(1) <> selectiveIssue.io.request
-  execution.io.request <> executionRequests.io.out
+  execution.io.request <> selectiveIssue.io.request
 
   system.io.head := dependencyBackend.io.head
   system.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
@@ -348,11 +329,9 @@ class TinyMemoryBackend(
     memoryIssuedToken := head.bits.robToken
   }
 
-  // The first selective slice remains one-launch-per-cycle across Branch,
-  // Memory and compute. Memory gets priority through selectiveIssue.block;
-  // branch-vs-compute priority is owned by executionRequests above.
+  // The first selective slice remains one-launch-per-cycle across speculative
+  // execution and Memory. Memory gets priority through selectiveIssue.block.
   assert(PopCount(Cat(
-    branchIssue.io.request.fire,
     selectiveIssue.io.request.fire,
     lsu.io.request.fire
   )) <= 1.U, "A8 selective backend must remain single-issue per cycle")
@@ -531,12 +510,18 @@ class TinyMemoryBackend(
     pendingTraceValid(retiring.bits.uop.robToken.index) := false.B
   }
 
-  // Recovery kills every younger lifetime. Memory remains strict head-only, so
-  // no younger memory request can have externalized; speculative compute is
-  // side-effect free and is rejected later if an already-issued killed response
-  // returns with its stale lifetime identity.
-  when(dependencyBackend.io.acceptedRecovery.valid ||
-       dependencyBackend.io.acceptedPrivilegedRecovery.valid) {
+  // A normal Branch recovery preserves all older survivors. Clear only trace
+  // state owned by younger killed lifetimes; a precise privileged boundary is
+  // still a full speculative flush.
+  when(dependencyBackend.io.acceptedRecovery.valid) {
+    for (age <- 0 until Entries) {
+      val entry = dependencyBackend.io.schedulingWindow(age)
+      when(entry.valid && age.U >= dependencyBackend.io.acceptedRecoverySurvivorCount) {
+        pendingTraceValid(entry.uop.robToken.index) := false.B
+      }
+    }
+  }
+  when(dependencyBackend.io.acceptedPrivilegedRecovery.valid) {
     for (index <- 0 until Entries) {
       pendingTraceValid(index) := false.B
     }
