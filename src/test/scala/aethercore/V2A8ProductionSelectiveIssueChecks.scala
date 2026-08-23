@@ -8,7 +8,7 @@ import aethercore.common.{AluOp, AtomicOp, BranchType, CsrOp, MemSize, XRetOp}
 import aethercore.config.{CoreConfig, CoreProfiles, PageTableGeometry}
 import aethercore.core.v2._
 
-/** Test-only top-level observation of actual selective-compute launches.
+/** Test-only top-level observation of actual selective execution launches.
   *
   * ChiselSim intentionally exposes top-level IO rather than arbitrary child
   * hierarchy. Keep production TinyMemoryBackend unchanged and surface only the
@@ -22,17 +22,19 @@ private class A8ObservableMemoryBackend(
   val observedSelectiveIssue = IO(Output(new Bundle {
     val fire = Bool()
     val robIndex = UInt(TinyRobGeometry.IndexBits.W)
+    val executionClass = ExecutionClass()
     val lhs = UInt(coreConfig.isa.xlen.W)
     val rhs = UInt(coreConfig.isa.xlen.W)
   }))
 
   observedSelectiveIssue.fire := selectiveIssue.io.request.fire
   observedSelectiveIssue.robIndex := selectiveIssue.io.request.bits.robToken.index
+  observedSelectiveIssue.executionClass := selectiveIssue.io.request.bits.executionClass
   observedSelectiveIssue.lhs := selectiveIssue.io.request.bits.lhs
   observedSelectiveIssue.rhs := selectiveIssue.io.request.bits.rhs
 }
 
-/** End-to-end A8 proof after selective compute is wired into TinyMemoryBackend. */
+/** End-to-end A8/P8 proof after selective execution is wired into TinyMemoryBackend. */
 trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private val config = CoreProfiles.rv32imasuSv32PmpSoftware
 
@@ -68,7 +70,9 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
       immediate: BigInt = 0,
       memoryKind: MemoryOperationKind.Type = MemoryOperationKind.None,
       memorySize: MemSize.Type = MemSize.Word,
-      memoryUnsigned: Boolean = false
+      memoryUnsigned: Boolean = false,
+      controlFlowKind: ControlFlowKind.Type = ControlFlowKind.None,
+      branchType: BranchType.Type = BranchType.None
   ): Unit = {
     dut.io.dispatch.valid.poke(true.B)
     dut.io.dispatch.bits.executionClass.poke(executionClass)
@@ -90,8 +94,8 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
     dut.io.dispatch.bits.decoded.usesRs2.poke(false.B)
     dut.io.dispatch.bits.decoded.writesRd.poke((rd != 0).B)
     dut.io.dispatch.bits.decoded.immediate.poke(immediate.U)
-    dut.io.dispatch.bits.decoded.controlFlow.kind.poke(ControlFlowKind.None)
-    dut.io.dispatch.bits.decoded.controlFlow.branchType.poke(BranchType.None)
+    dut.io.dispatch.bits.decoded.controlFlow.kind.poke(controlFlowKind)
+    dut.io.dispatch.bits.decoded.controlFlow.branchType.poke(branchType)
     dut.io.dispatch.bits.decoded.memory.kind.poke(memoryKind)
     dut.io.dispatch.bits.decoded.memory.size.poke(memorySize)
     dut.io.dispatch.bits.decoded.memory.unsigned.poke(memoryUnsigned.B)
@@ -303,6 +307,66 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
       commits.map(_._2) shouldBe Seq(1, 2)
       commits.head._3 shouldBe BigInt("12345678", 16)
       commits(1)._3 shouldBe BigInt(55)
+    }
+  }
+
+  it should "issue a middle-aged Branch through the production selector and recover younger work" in {
+    simulate(new A8ObservableMemoryBackend(config, PageTableGeometry.Sv32)) { dut =>
+      initialize(dut)
+      val divPc = BigInt("80012000", 16)
+      val branchPc = divPc + 4
+      val killedPc = divPc + 8
+      val target = divPc + 0x80
+
+      // Keep an older long-latency DIV in flight so the Branch is definitively
+      // not the ROB head when it launches. The Branch is a taken direct jump;
+      // age2 is deliberately younger and must disappear at recovery.
+      dispatch(dut) {
+        pokeDispatch(dut, divPc, ExecutionClass.MulDiv, AluOp.Divu, rd = 1, immediate = 7)
+      }
+      dispatch(dut) {
+        pokeDispatch(
+          dut,
+          branchPc,
+          ExecutionClass.Branch,
+          immediate = target - branchPc,
+          controlFlowKind = ControlFlowKind.DirectJump
+        )
+      }
+      dispatch(dut) {
+        pokeDispatch(dut, killedPc, ExecutionClass.Integer, rd = 3, immediate = 99)
+      }
+
+      var sawSelectiveBranch = false
+      var sawRedirect = false
+      var cycles = 0
+      while ((!sawSelectiveBranch || !sawRedirect) && cycles < 24) {
+        if (dut.observedSelectiveIssue.fire.peek().litToBoolean &&
+            dut.observedSelectiveIssue.robIndex.peek().litValue == 1) {
+          dut.observedSelectiveIssue.executionClass.expect(ExecutionClass.Branch)
+          sawSelectiveBranch = true
+        }
+        if (dut.io.branchRedirect.valid.peek().litToBoolean) {
+          dut.io.branchRedirect.bits.robToken.index.expect(1.U)
+          dut.io.branchRedirect.bits.target.expect(target.U)
+          sawRedirect = true
+        }
+        dut.clock.step()
+        cycles += 1
+      }
+      withClue("middle-aged Branch never fired through production selective issue: ") {
+        sawSelectiveBranch shouldBe true
+      }
+      withClue("middle-aged Branch never produced generalized recovery redirect: ") {
+        sawRedirect shouldBe true
+      }
+
+      // Recovery keeps DIV + Branch and kills only the younger Integer.
+      dut.io.occupancy.expect(2.U)
+
+      val commits = collectCommits(dut, 2, maxCycles = 128)
+      commits.map(_._1) shouldBe Seq(divPc, branchPc)
+      commits.exists(_._1 == killedPc) shouldBe false
     }
   }
 }
