@@ -27,7 +27,9 @@ required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob
 build_variant() {
   local variant="$1"
   local extra=""
-  [[ "$variant" == adaptive ]] && extra='-DAETHERCORE_SIM_ADAPTIVE_SETTLE'
+  # Adaptive settle is now the measured-v2 default. Keep the old two-low-eval
+  # path explicit so every future speed change retains a qualified reference.
+  [[ "$variant" == baseline ]] && extra='-DAETHERCORE_SIM_REFERENCE_SETTLE'
   [[ "$variant" == baseline || "$variant" == adaptive ]] || { echo "bad variant: $variant" >&2; return 2; }
 
   local obj="$OUT_ROOT/obj-$variant"
