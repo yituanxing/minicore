@@ -110,12 +110,114 @@ void observeAfterStep(const Top& top) {
   }
 }
 
+#ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+// Re-drive only the external memory feedback after the first low-phase eval.
+// If every host-driven input remains bit-identical, another eval has no new
+// external information to settle. If any input changes, retain the qualified
+// second low-phase eval exactly.
+template <typename Top>
+bool redriveMemoryChanged(Top& top, const Memory& memory) {
+  bool changed = false;
+  auto assign = [&](auto& port, auto value) {
+    const auto before = port;
+    port = value;
+    changed = changed || port != before;
+  };
+
+  const bool ivalid = top.io_imemValid;
+  const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
+  const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
+  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4;
+  const bool ifault = ivalid &&
+      (invalidInstructionWidth || !memory.contains(iaddr, ibytes));
+  assign(top.io_imemFault, ifault);
+  assign(top.io_imemInst,
+         (!ivalid || ifault) ? 0U : memory.readInstruction(iaddr, ibytes));
+
+  const bool dvalid = top.io_memValid;
+  const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
+  const auto dbytes = dataBytesFromMemSize(static_cast<std::uint32_t>(top.io_memSize));
+  const bool dfault = dvalid && !memory.contains(daddr, dbytes);
+  assign(top.io_memReady, true);
+  assign(top.io_memFault, dfault);
+
+  bool atomic = false;
+  std::uint32_t atomicOp = kAtomicNone;
+  if constexpr (requires { top.io_memAtomic; top.io_memAtomicOp; }) {
+    atomic = static_cast<bool>(top.io_memAtomic);
+    atomicOp = static_cast<std::uint32_t>(top.io_memAtomicOp);
+  }
+  const std::uint64_t drdata = (!dvalid || dfault)
+      ? 0ULL
+      : (atomic ? memory.atomicResponse(daddr, dbytes, atomicOp)
+                : memory.readData(daddr, dbytes));
+  assign(top.io_memRdata, drdata);
+
+  const bool ptwValid = top.io_ptwValid;
+  const auto ptwAddr = static_cast<std::uint64_t>(top.io_ptwAddr);
+  constexpr std::size_t ptwBytes = sizeof(top.io_ptwRdata);
+  static_assert(ptwBytes == 4 || ptwBytes == 8,
+                "page-table response port must carry a 4- or 8-byte PTE");
+  const bool ptwFault = ptwValid && !memory.contains(ptwAddr, ptwBytes);
+  assign(top.io_ptwReady, true);
+  assign(top.io_ptwFault, ptwFault);
+  assign(top.io_ptwRdata,
+         (!ptwValid || ptwFault) ? 0ULL : memory.readData(ptwAddr, ptwBytes));
+  return changed;
+}
+
+template <typename Top>
+bool adaptiveStep(Top& top, VerilatedContext& context, Memory& memory,
+                  bool rxValid, std::uint8_t rxByte) {
+  top.clock = 0;
+  top.io_rxValid = rxValid;
+  top.io_rxByte = rxValid ? rxByte : 0;
+  driveMemory(top, memory);
+  top.eval();
+  if (redriveMemoryChanged(top, memory)) top.eval();
+  const bool rxAccepted = top.io_rxValid && top.io_rxReady;
+
+  const bool acceptedMemory = !top.reset && top.io_memValid && top.io_memReady &&
+      !top.io_memFault;
+  bool atomic = false;
+  std::uint32_t atomicOp = kAtomicNone;
+  if constexpr (requires { top.io_memAtomic; top.io_memAtomicOp; }) {
+    atomic = static_cast<bool>(top.io_memAtomic);
+    atomicOp = static_cast<std::uint32_t>(top.io_memAtomicOp);
+  }
+
+  if (acceptedMemory && atomic) {
+    const auto dbytes = dataBytesFromMemSize(static_cast<std::uint32_t>(top.io_memSize));
+    memory.commitAtomic(
+        static_cast<std::uint64_t>(top.io_memAddr), dbytes,
+        static_cast<std::uint64_t>(top.io_memWdata),
+        static_cast<std::uint64_t>(top.io_memWmask), atomicOp);
+  } else if (acceptedMemory && top.io_memWrite) {
+    const auto dbytes = dataBytesFromMemSize(static_cast<std::uint32_t>(top.io_memSize));
+    memory.writeMasked(
+        static_cast<std::uint64_t>(top.io_memAddr),
+        static_cast<std::uint64_t>(top.io_memWdata),
+        static_cast<std::uint64_t>(top.io_memWmask), dbytes);
+    memory.clearReservation();
+  }
+
+  top.clock = 1;
+  top.eval();
+  context.timeInc(1);
+  return rxAccepted;
+}
+#endif
+
 }  // namespace v2perf_detail
 
 template <typename Top>
 bool v2PerfStep(Top& top, VerilatedContext& context, Memory& memory,
                 bool rxValid, std::uint8_t rxByte) {
+#ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+  const bool accepted = v2perf_detail::adaptiveStep(top, context, memory, rxValid, rxByte);
+#else
   const bool accepted = step(top, context, memory, rxValid, rxByte);
+#endif
   v2perf_detail::observeAfterStep(top);
   return accepted;
 }
