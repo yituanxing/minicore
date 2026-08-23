@@ -240,8 +240,10 @@ trait V2A8SelectiveIssueChecks { this: AnyFlatSpec with Matchers with ChiselSim 
       pokeWindowEntry(dut, 1, valid = true, complete = false, ExecutionClass.Memory, AluOp.Add, 1, 0, operandsReady = true)
       pokeWindowEntry(dut, 2, valid = true, complete = false, ExecutionClass.System, AluOp.Add, 2, 0, operandsReady = true)
       pokeWindowEntry(dut, 3, valid = true, complete = false, ExecutionClass.Integer, AluOp.Add, 3, 0, operandsReady = true)
-      dut.io.request.valid.expect(true.B)
-      dut.io.request.bits.robToken.index.expect(3.U)
+      // age1 Memory is not the exact head, so it cannot have launched into the
+      // LSU yet and must block younger selective compute. The following System
+      // is an independent architectural barrier as well.
+      dut.io.request.valid.expect(false.B)
 
       dut.io.block.poke(true.B)
       dut.io.request.valid.expect(false.B)
