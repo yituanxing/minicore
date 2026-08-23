@@ -1,0 +1,140 @@
+name: AetherCore V2 Simulator RAM Speed Micro A-B
+
+on:
+  pull_request:
+    branches:
+      - perf/aethercore-v2-sim-speed
+    paths:
+      - '.github/workflows/v2-p8-sim-speed-micro.yml'
+      - 'software/rv64_baremetal/v2_sim_speed_loop.S'
+      - 'tools/ci/v2_p8_runtime_ab.sh'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/v2_rv64_opensbi_shim/**'
+      - 'src/main/scala/aethercore/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-sim-speed-ram-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-ab:
+    name: 12M-cycle adaptive vs fixed-width RAM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Verify exact RAM speed contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          grep -q 'AETHERCORE_SIM_ADAPTIVE_SETTLE' sim/v2_rv64_opensbi_shim/v2_perf_host_hook.h
+          grep -q 'AETHERCORE_SIM_FIXED_WIDTH_RAM' sim/l32_opensbi_runtime.h
+          grep -q 'adaptive_ram' tools/ci/v2_p8_runtime_ab.sh
+          grep -q 'AETHERCORE_RUNTIME_AB_COUNTERS_MATCH' tools/ci/v2_p8_runtime_ab.sh
+          grep -q '^_start:' software/rv64_baremetal/v2_sim_speed_loop.S
+          bash -n tools/ci/v2_p8_runtime_ab.sh
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex \
+            build-essential curl xz-utils git python3 openjdk-17-jdk-headless
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build deterministic RV64 bare-metal speed image
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:?missing pinned RV64 toolchain}"
+          mkdir -p build/v2-sim-speed-micro
+          elf=build/v2-sim-speed-micro/speed-loop.elf
+          bin=build/v2-sim-speed-micro/speed-loop.bin
+          "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}gcc" \
+            -march=rv64ima_zicsr_zifencei -mabi=lp64 \
+            -nostdlib -static -no-pie \
+            -Wl,--build-id=none -Wl,-e,_start -Wl,-Ttext=0x80000000 \
+            -Wl,-z,max-page-size=4096 \
+            software/rv64_baremetal/v2_sim_speed_loop.S -o "$elf"
+          "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}objcopy" -O binary "$elf" "$bin"
+          test -s "$bin"
+          entry="$("${AETHERCORE_RV64_LINUX_CROSS_COMPILE}readelf" -h "$elf" | awk '/Entry point address:/{print $4; exit}')"
+          [[ "$((entry))" -eq "$((0x80000000))" ]]
+          sha256sum "$elf" "$bin" | tee build/v2-sim-speed-micro/sha256.txt
+
+      - name: Run adaptive versus RAM real-model A-B
+        shell: bash
+        run: |
+          set -euo pipefail
+          FW_BIN=build/v2-sim-speed-micro/speed-loop.bin \
+          MAX_CYCLES=12000000 PROGRESS_INTERVAL_CYCLES=10000000 \
+            bash tools/ci/v2_p8_runtime_ab.sh
+
+      - name: Upload RAM speed evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-sim-speed-ram-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/v2-sim-speed-micro/
+            build/v2-p8-runtime-ab/

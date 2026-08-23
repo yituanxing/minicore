@@ -27,8 +27,18 @@ required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob
 build_variant() {
   local variant="$1"
   local extra=""
-  [[ "$variant" == adaptive ]] && extra='-DAETHERCORE_SIM_ADAPTIVE_SETTLE'
-  [[ "$variant" == baseline || "$variant" == adaptive ]] || { echo "bad variant: $variant" >&2; return 2; }
+  case "$variant" in
+    adaptive)
+      extra='-DAETHERCORE_SIM_ADAPTIVE_SETTLE'
+      ;;
+    adaptive_ram)
+      extra='-DAETHERCORE_SIM_ADAPTIVE_SETTLE -DAETHERCORE_SIM_FIXED_WIDTH_RAM'
+      ;;
+    *)
+      echo "bad variant: $variant" >&2
+      return 2
+      ;;
+  esac
 
   local obj="$OUT_ROOT/obj-$variant"
   local log="$OUT_ROOT/$variant.compile.log"
@@ -77,7 +87,7 @@ PY
 RESULTS="$OUT_ROOT/results.tsv"
 printf 'variant\trunner_rc\trun_seconds\twall_cycles_per_second\tprogress_cycles_per_second\n' > "$RESULTS"
 
-for variant in baseline adaptive; do
+for variant in adaptive adaptive_ram; do
   build_variant "$variant"
   sim="$OUT_ROOT/obj-$variant/V$TOP"
   [[ -x "$sim" ]] || { echo "ERROR: missing simulator $sim" >&2; exit 3; }
@@ -108,17 +118,17 @@ PY
 done
 
 # Correctness gate: same stop condition and byte-identical full 38-field snapshot.
-base_rc="$(awk -F '\t' '$1=="baseline" {print $2}' "$RESULTS")"
 adaptive_rc="$(awk -F '\t' '$1=="adaptive" {print $2}' "$RESULTS")"
-[[ "$base_rc" == "$adaptive_rc" ]] || {
-  echo "AETHERCORE_RUNTIME_AB_RC_MISMATCH baseline=$base_rc adaptive=$adaptive_rc" >&2
+ram_rc="$(awk -F '\t' '$1=="adaptive_ram" {print $2}' "$RESULTS")"
+[[ "$adaptive_rc" == "$ram_rc" ]] || {
+  echo "AETHERCORE_RUNTIME_AB_RC_MISMATCH adaptive=$adaptive_rc adaptive_ram=$ram_rc" >&2
   exit 19
 }
 
-diff -u "$OUT_ROOT/baseline.snapshot.txt" "$OUT_ROOT/adaptive.snapshot.txt" \
-  > "$OUT_ROOT/baseline-vs-adaptive.diff" || {
+diff -u "$OUT_ROOT/adaptive.snapshot.txt" "$OUT_ROOT/adaptive_ram.snapshot.txt" \
+  > "$OUT_ROOT/adaptive-vs-adaptive_ram.diff" || {
     echo 'AETHERCORE_RUNTIME_AB_COUNTER_MISMATCH' >&2
-    cat "$OUT_ROOT/baseline-vs-adaptive.diff" >&2
+    cat "$OUT_ROOT/adaptive-vs-adaptive_ram.diff" >&2
     exit 20
   }
 echo 'AETHERCORE_RUNTIME_AB_COUNTERS_MATCH fields=38'
@@ -127,11 +137,11 @@ python3 - "$RESULTS" <<'PY'
 import csv, sys
 with open(sys.argv[1], newline='') as f:
     rows = {r['variant']: r for r in csv.DictReader(f, delimiter='\t')}
-base = float(rows['baseline']['wall_cycles_per_second'])
-adaptive = float(rows['adaptive']['wall_cycles_per_second'])
-speedup = adaptive / base
-print(f'AETHERCORE_RUNTIME_AB_RESULT baseline_cps={base:.0f} adaptive_cps={adaptive:.0f} speedup={speedup:.4f}x')
-if speedup >= 1.03:
+base = float(rows['adaptive']['wall_cycles_per_second'])
+ram = float(rows['adaptive_ram']['wall_cycles_per_second'])
+speedup = ram / base
+print(f'AETHERCORE_RUNTIME_AB_RESULT adaptive_cps={base:.0f} adaptive_ram_cps={ram:.0f} speedup={speedup:.4f}x')
+if speedup >= 1.01:
     print(f'AETHERCORE_RUNTIME_AB_PROMOTE_CANDIDATE speedup={speedup:.4f}x')
 else:
     print(f'AETHERCORE_RUNTIME_AB_NO_PROMOTION speedup={speedup:.4f}x')
