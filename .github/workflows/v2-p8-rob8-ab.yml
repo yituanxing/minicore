@@ -49,6 +49,7 @@ jobs:
           grep -q 'val Entries: Int = 8' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
           grep -q 'val IndexBits: Int = 3' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
           grep -q 'AetherCoreV2Rob8ExperimentTop' src/main/scala/aethercore/sim/AetherCoreV2Rob8Experiment.scala
+          grep -q 'class V2Rob8ExperimentSpec' src/test/scala/aethercore/V2Rob8ExperimentSpec.scala
           bash -n tools/ci/v2_p8_rob8_ab.sh
 
       - name: Install hosted prerequisites
@@ -111,20 +112,21 @@ jobs:
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Run geometry-sensitive v2 focused checks
+      - name: Compile complete Scala test surface
         shell: bash
         run: |
           set -euo pipefail
           chmod +x mill
+          ./mill aethercore.test.compile
+
+      - name: Prove ROB8 production geometry and core seams
+        shell: bash
+        run: |
+          set -euo pipefail
           ./mill aethercore.test.testOnly \
-            aethercore.V2F1RobCommitSpec \
-            aethercore.V2F2DependencySpec \
-            aethercore.V2F3ExecutionSpec \
-            aethercore.V2F4RecoverySpec \
-            aethercore.V2F5PrivilegedSpec \
-            aethercore.V2F6BlockingLsuSpec \
-            aethercore.V2F7BareCoreSpec \
-            aethercore.V2F7PagedCoreSpec
+            aethercore.core.v2.V2Rob8ExperimentSpec \
+            aethercore.V2A8CompletionSpec \
+            aethercore.V2A8SelectiveExecutionSpec
 
       - name: Reuse or build unchanged Linux 6.6.143 workload
         shell: bash
