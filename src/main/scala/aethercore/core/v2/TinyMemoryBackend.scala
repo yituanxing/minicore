@@ -130,6 +130,7 @@ class TinyMemoryBackend(
     allowAtomics = allowAtomics
   ))
   val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
+  private val recoveryBusy = dependencyBackend.io.recoveryBusy
 
   private val retiring = dependencyBackend.io.retiring
   private val retiringSystem = retiring.valid &&
@@ -251,11 +252,11 @@ class TinyMemoryBackend(
   io.allocated := dependencyBackend.io.allocated
   io.occupancy := dependencyBackend.io.occupancy
 
-  // Branch keeps the frozen head-only execution/recovery policy. Selective
-  // compute sees the whole read-only scheduling window but cannot select Branch,
-  // Memory or System by construction.
+  // Branch remains head-issued until R4, but R3 makes rebuild a real backend
+  // launch barrier so no new Branch lifetime starts while RAT repair is active.
   branchIssue.io.head := dependencyBackend.io.head
   branchIssue.io.head.valid := dependencyBackend.io.head.valid &&
+    !recoveryBusy &&
     dependencyBackend.io.head.bits.executionClass === ExecutionClass.Branch &&
     !dependencyBackend.io.head.bits.decoded.exception.valid
   branchIssue.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
@@ -266,12 +267,12 @@ class TinyMemoryBackend(
   selectiveIssue.io.window := dependencyBackend.io.schedulingWindow
   selectiveIssue.io.allocated := dependencyBackend.io.allocated
   selectiveIssue.io.availability := execution.io.computeAvailability
-  // A just-validated recovery must not launch a younger lifetime that is being
-  // killed this cycle. A not-yet-issued head memory request also has launch
-  // priority so the first selective slice remains globally single-issue.
+  // Recovery acceptance and the bounded rebuild both block fresh selective
+  // launches. Already-issued execution responses remain free to complete.
   selectiveIssue.io.block :=
     dependencyBackend.io.acceptedRecovery.valid ||
       dependencyBackend.io.acceptedPrivilegedRecovery.valid ||
+      recoveryBusy ||
       lsu.io.request.valid
 
   // Branch wins the one execution launch slot when the exact head is ready;
@@ -286,6 +287,7 @@ class TinyMemoryBackend(
   execution.io.request <> executionRequests.io.out
 
   system.io.head := dependencyBackend.io.head
+  system.io.head.valid := dependencyBackend.io.head.valid && !recoveryBusy
   system.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
   system.io.headRs1 := dependencyBackend.io.headRs1
   system.io.headOperandsReady := dependencyBackend.io.headOperandsReady
@@ -314,6 +316,7 @@ class TinyMemoryBackend(
     sameRobToken(memoryIssuedToken, head.bits.robToken)
 
   lsu.io.request.valid := headIsMemory &&
+    !recoveryBusy &&
     dependencyBackend.io.headDependenciesValid &&
     dependencyBackend.io.headOperandsReady &&
     !memoryAlreadyIssued &&
@@ -430,6 +433,9 @@ class TinyMemoryBackend(
   dependencyBackend.io.completion.bits := completions.io.out.bits
   completions.io.out.ready := true.B
 
+  // Redirect is immediate on the validated recovery cycle. Fetch may redirect
+  // before sequential RAT rebuild finishes; dispatch remains blocked by the
+  // dependency backend until the survivor map is coherent again.
   io.branchRedirect.valid := dependencyBackend.io.acceptedRecovery.valid
   io.branchRedirect.bits := 0.U.asTypeOf(new RecoveryRedirect(xlen))
   io.branchRedirect.bits.robToken := dependencyBackend.io.acceptedRecovery.bits.robToken
@@ -531,12 +537,21 @@ class TinyMemoryBackend(
     pendingTraceValid(retiring.bits.uop.robToken.index) := false.B
   }
 
-  // Recovery kills every younger lifetime. Memory remains strict head-only, so
-  // no younger memory request can have externalized; speculative compute is
-  // side-effect free and is rejected later if an already-issued killed response
-  // returns with its stale lifetime identity.
-  when(dependencyBackend.io.acceptedRecovery.valid ||
-       dependencyBackend.io.acceptedPrivilegedRecovery.valid) {
+  // P8.2 normal recovery consumes the same architectural survivor boundary as
+  // dependency rebuild. Keep trace ownership for older survivors and clear only
+  // killed younger physical slots from the pre-squash age-ordered window.
+  when(dependencyBackend.io.acceptedRecovery.valid) {
+    for (age <- 0 until Entries) {
+      val entry = dependencyBackend.io.schedulingWindow(age)
+      when(entry.valid && age.U >= dependencyBackend.io.acceptedRecoverySurvivorCount) {
+        pendingTraceValid(entry.uop.robToken.index) := false.B
+      }
+    }
+  }
+
+  // Precise trap/xRET recovery is still head-owned and leaves no speculative
+  // survivor state, so its trace cleanup remains a conservative clear-all.
+  when(dependencyBackend.io.acceptedPrivilegedRecovery.valid) {
     for (index <- 0 until Entries) {
       pendingTraceValid(index) := false.B
     }

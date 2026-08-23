@@ -72,6 +72,7 @@ jobs:
           grep -q 'class V2P82RecoveryRebuildSpec' src/test/scala/aethercore/V2P82RecoveryRebuildSpec.scala
           grep -q 'class V2P82DependencyStateReleaseSpec' src/test/scala/aethercore/V2P82DependencyStateReleaseSpec.scala
           grep -q 'class V2P82RecoveryIntegrationSpec' src/test/scala/aethercore/V2P82RecoveryIntegrationSpec.scala
+          grep -q 'class V2P82RecoveryIntegrationSpec' src/test/scala/aethercore/core/v2/V2P82RecoveryMemoryTraceSpec.scala
 
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
@@ -133,12 +134,13 @@ jobs:
             aethercore.V2A8ProductionSelectiveIssueSpec \
             aethercore.V2F7BareCoreSpec
 
-      - name: Run R3 redirect and late-response integration proof
+      - name: Run R3 cross-backend integration proofs
         shell: bash
         run: |
           set -euo pipefail
           ./mill aethercore.test.testOnly \
-            aethercore.V2P82RecoveryIntegrationSpec
+            aethercore.V2P82RecoveryIntegrationSpec \
+            aethercore.core.v2.V2P82RecoveryIntegrationSpec
 
       - name: Run inherited recovery proofs
         shell: bash
