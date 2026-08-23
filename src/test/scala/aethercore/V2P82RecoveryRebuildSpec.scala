@@ -213,8 +213,9 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         dut.io.commit.valid.expect(true.B)
 
         // Dispatch resumes in the same cycle that the complete older head may
-        // retire. The new consumer must resolve x5 through the surviving Branch,
-        // not the killed younger WAW and not stale committed RF state.
+        // retire. The direct dependency-state proof separately covers the
+        // retire+allocate edge itself. Here we verify the backend projection on
+        // the next stable cycle after the surviving Branch retires.
         val consumer = allocate(
           dut,
           target,
@@ -228,16 +229,13 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         consumer.index shouldBe killedWaw.index
         consumer.generation should not be killedWaw.generation
 
-        dut.io.schedulingWindow(0).uop.robToken.index.expect(branch.index.U)
-        dut.io.schedulingWindow(1).uop.robToken.index.expect(consumer.index.U)
-        dut.io.schedulingWindow(1).dependenciesValid.expect(true.B)
-        // Diagnose mapping ownership before value storage. If these fail, RAT
-        // rebuild did not restore the surviving Branch; if they pass but value
-        // fails, the mapping is correct and producer value retention is wrong.
-        dut.io.schedulingWindow(1).rs1.producerTag.id.expect(branch.producerId.U)
-        dut.io.schedulingWindow(1).rs1.producerTag.generation.expect(branch.producerGeneration.U)
-        dut.io.schedulingWindow(1).rs1.ready.expect(true.B)
-        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+        dut.clock.step()
+        dut.io.schedulingWindow(0).uop.robToken.index.expect(consumer.index.U)
+        dut.io.schedulingWindow(0).dependenciesValid.expect(true.B)
+        dut.io.schedulingWindow(0).rs1.producerTag.id.expect(branch.producerId.U)
+        dut.io.schedulingWindow(0).rs1.producerTag.generation.expect(branch.producerGeneration.U)
+        dut.io.schedulingWindow(0).rs1.ready.expect(true.B)
+        dut.io.schedulingWindow(0).rs1.value.expect(link.U)
 
         // The killed WAW's late completion cannot wake or complete the reused
         // physical slot after generation advance.
@@ -245,8 +243,8 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         dut.io.acceptedRecovery.valid.expect(false.B)
         dut.clock.step()
         dut.io.completion.valid.poke(false.B)
-        dut.io.schedulingWindow(1).complete.expect(false.B)
-        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+        dut.io.schedulingWindow(0).complete.expect(false.B)
+        dut.io.schedulingWindow(0).rs1.value.expect(link.U)
       }
     }
   }
