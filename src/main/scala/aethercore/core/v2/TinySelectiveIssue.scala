@@ -98,44 +98,56 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
       !alreadyIssued
   }
 
-  // Emit candidates youngest-to-oldest so Chisel's last-connect priority leaves
-  // age0 as the winner whenever multiple entries are eligible.
-  private val selectedValid = WireDefault(false.B)
-  private val selected = WireDefault(0.U.asTypeOf(new TinySchedulingEntry(xlen)))
-  for (age <- (Entries - 1) to 0 by -1) {
-    when(eligible(age)) {
-      selectedValid := true.B
-      selected := io.window(age)
-    }
-  }
-
-  private def materializeSource(kind: OperandSourceKind.Type): UInt = {
+  // Materialize operands from each static scheduling-view entry before choosing
+  // the oldest-ready request. This keeps the 3-bit OperandSourceKind local to a
+  // single entry instead of first muxing the enum across ROB ages; the latter
+  // produces width-expanded conditional expressions in Verilator.
+  private def materializeSource(entry: TinySchedulingEntry, kind: OperandSourceKind.Type): UInt = {
     val value = WireDefault(0.U(xlen.W))
     switch(kind) {
       is(OperandSourceKind.Zero)      { value := 0.U }
-      is(OperandSourceKind.Rs1)       { value := selected.rs1.value }
-      is(OperandSourceKind.Rs2)       { value := selected.rs2.value }
-      is(OperandSourceKind.Pc)        { value := selected.uop.decoded.pc }
-      is(OperandSourceKind.Immediate) { value := selected.uop.decoded.immediate }
+      is(OperandSourceKind.Rs1)       { value := entry.rs1.value }
+      is(OperandSourceKind.Rs2)       { value := entry.rs2.value }
+      is(OperandSourceKind.Pc)        { value := entry.uop.decoded.pc }
+      is(OperandSourceKind.Immediate) { value := entry.uop.decoded.immediate }
     }
     value
   }
 
+  private val candidates = Wire(Vec(Entries, new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+  for (age <- 0 until Entries) {
+    val entry = io.window(age)
+    val candidate = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+    candidate.robToken := entry.uop.robToken
+    candidate.producerTag := entry.uop.producerTag
+    candidate.valueRef := entry.uop.valueRef
+    candidate.executionClass := entry.uop.executionClass
+    candidate.aluOp := entry.uop.decoded.aluOp
+    candidate.wordOp := entry.uop.decoded.wordOp
+    candidate.controlFlowKind := entry.uop.decoded.controlFlow.kind
+    candidate.branchType := entry.uop.decoded.controlFlow.branchType
+    candidate.lhs := materializeSource(entry, entry.uop.decoded.lhsSource)
+    candidate.rhs := materializeSource(entry, entry.uop.decoded.rhsSource)
+    candidate.pc := entry.uop.decoded.pc
+    candidate.instBytes := entry.uop.decoded.instBytes
+    candidate.immediate := entry.uop.decoded.immediate
+    candidates(age) := candidate
+  }
+
+  // Emit candidates youngest-to-oldest so Chisel's last-connect priority leaves
+  // age0 as the winner whenever multiple entries are eligible. Only the fully
+  // materialized request is muxed across ages.
+  private val selectedValid = WireDefault(false.B)
+  private val selectedRequest = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+  for (age <- (Entries - 1) to 0 by -1) {
+    when(eligible(age)) {
+      selectedValid := true.B
+      selectedRequest := candidates(age)
+    }
+  }
+
   io.request.valid := selectedValid && !io.block
-  io.request.bits := 0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
-  io.request.bits.robToken := selected.uop.robToken
-  io.request.bits.producerTag := selected.uop.producerTag
-  io.request.bits.valueRef := selected.uop.valueRef
-  io.request.bits.executionClass := selected.uop.executionClass
-  io.request.bits.aluOp := selected.uop.decoded.aluOp
-  io.request.bits.wordOp := selected.uop.decoded.wordOp
-  io.request.bits.controlFlowKind := selected.uop.decoded.controlFlow.kind
-  io.request.bits.branchType := selected.uop.decoded.controlFlow.branchType
-  io.request.bits.lhs := materializeSource(selected.uop.decoded.lhsSource)
-  io.request.bits.rhs := materializeSource(selected.uop.decoded.rhsSource)
-  io.request.bits.pc := selected.uop.decoded.pc
-  io.request.bits.instBytes := selected.uop.decoded.instBytes
-  io.request.bits.immediate := selected.uop.decoded.immediate
+  io.request.bits := selectedRequest
 
   // Allocation starts a fresh physical-slot issue lifetime even if the bounded
   // generation space eventually wraps. No uOp is copied into this scoreboard.
