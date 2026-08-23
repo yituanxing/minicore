@@ -122,6 +122,47 @@ void observeAfterStep(const Top& top) {
 }
 
 #ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+struct MemoryRequestKey {
+  bool imemValid = false;
+  std::uint64_t imemAddr = 0;
+  std::uint32_t imemBytes = 0;
+  bool memValid = false;
+  std::uint64_t memAddr = 0;
+  std::uint32_t memSize = 0;
+  bool memAtomic = false;
+  std::uint32_t memAtomicOp = 0;
+  bool ptwValid = false;
+  std::uint64_t ptwAddr = 0;
+
+  bool operator==(const MemoryRequestKey&) const = default;
+};
+
+template <typename Top>
+MemoryRequestKey captureMemoryRequestKey(const Top& top) {
+  MemoryRequestKey key;
+  key.imemValid = static_cast<bool>(top.io_imemValid);
+  if (key.imemValid) {
+    key.imemAddr = static_cast<std::uint64_t>(top.io_imemAddr);
+    key.imemBytes = static_cast<std::uint32_t>(top.io_imemBytes);
+  }
+
+  key.memValid = static_cast<bool>(top.io_memValid);
+  if (key.memValid) {
+    key.memAddr = static_cast<std::uint64_t>(top.io_memAddr);
+    key.memSize = static_cast<std::uint32_t>(top.io_memSize);
+    if constexpr (requires { top.io_memAtomic; top.io_memAtomicOp; }) {
+      key.memAtomic = static_cast<bool>(top.io_memAtomic);
+      if (key.memAtomic)
+        key.memAtomicOp = static_cast<std::uint32_t>(top.io_memAtomicOp);
+    }
+  }
+
+  key.ptwValid = static_cast<bool>(top.io_ptwValid);
+  if (key.ptwValid)
+    key.ptwAddr = static_cast<std::uint64_t>(top.io_ptwAddr);
+  return key;
+}
+
 // Re-drive only the external memory feedback after the first low-phase eval.
 // If every host-driven input remains bit-identical, another eval has no new
 // external information to settle. If any input changes, retain the qualified
@@ -183,9 +224,19 @@ bool adaptiveStep(Top& top, VerilatedContext& context, Memory& memory,
   top.clock = 0;
   top.io_rxValid = rxValid;
   top.io_rxByte = rxValid ? rxByte : 0;
+#ifdef AETHERCORE_SIM_REQUEST_GUARD_SETTLE
+  const auto requestBefore = captureMemoryRequestKey(top);
+#endif
   driveMemory(top, memory);
   top.eval();
+#ifdef AETHERCORE_SIM_REQUEST_GUARD_SETTLE
+  if (!(captureMemoryRequestKey(top) == requestBefore)) {
+    driveMemory(top, memory);
+    top.eval();
+  }
+#else
   if (redriveMemoryChanged(top, memory)) top.eval();
+#endif
   const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
   const bool acceptedMemory = !top.reset && top.io_memValid && top.io_memReady &&
