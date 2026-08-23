@@ -28,7 +28,7 @@ jobs:
           print(json.dumps({
               'state': 'pending',
               'context': 'aethercore/v2-p8.2-producer-trace',
-              'description': 'checkout-only recovering producer trace',
+              'description': 'checkout-only release source trace',
               'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
           }))
           PY
@@ -44,7 +44,7 @@ jobs:
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
   trace:
-    name: Trace recovering Branch producer
+    name: Trace release source resolution
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -60,7 +60,7 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Inject producer trace into checkout only
+      - name: Inject source-resolution trace into checkout only
         shell: bash
         run: |
           set -euo pipefail
@@ -68,17 +68,19 @@ jobs:
           from pathlib import Path
           path = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
           text = path.read_text()
-          needle = '  io.recoveryBusy := rebuildBusy\n'
-          overlay_lines = [
-              '  io.recoveryBusy := rebuildBusy',
-              '',
-              '  when(io.recovery.valid || rebuildBusy || io.retire.valid || io.allocate.valid) {',
-              '    printf(p"P82_DEP_TRACE p1_valid=${producers(1).valid} p1_id=${producers(1).producerTag.id} p1_gen=${producers(1).producerTag.generation} p1_ready=${producers(1).ready} p1_value=${producers(1).value} saved=${rebuildRecoveryValue} recovery=${io.recovery.valid} rebuild=${rebuildBusy} retire=${io.retire.valid} allocate=${io.allocate.valid}\\n")',
-              '  }',
-          ]
-          overlay = '\n'.join(overlay_lines) + '\n'
+          needle = '''  private val allocateRs2 = resolveSource(
+            io.allocate.bits.decoded.rs2,
+            io.allocate.bits.decoded.usesRs2,
+            io.committedRs2
+          )
+          '''
+          overlay = needle + '''
+          when(io.allocate.valid || io.retire.valid || io.recovery.valid || rebuildBusy) {
+            printf(p"P82_SRC_TRACE rename5_valid=${rename(5).valid} rename5_id=${rename(5).producerTag.id} rename5_gen=${rename(5).producerTag.generation} p1_valid=${producers(1).valid} p1_ready=${producers(1).ready} p1_value=${producers(1).value} comp_valid=${io.completion.valid} comp_has=${io.completion.bits.hasValue} comp_id=${io.completion.bits.producerTag.id} comp_gen=${io.completion.bits.producerTag.generation} comp_value=${io.completion.bits.value} alloc_valid=${io.allocate.valid} alloc_rs1=${io.allocate.bits.decoded.rs1} alloc_ready=${allocateRs1.ready} alloc_value=${allocateRs1.value} committed=${io.committedRs1} retire=${io.retire.valid} recovery=${io.recovery.valid} rebuild=${rebuildBusy}\\n")
+          }
+          '''
           if text.count(needle) != 1:
-              raise SystemExit('unexpected recoveryBusy anchor count')
+              raise SystemExit('unexpected allocateRs2 anchor count')
           path.write_text(text.replace(needle, overlay))
           PY
 
@@ -119,13 +121,6 @@ jobs:
         run: |
           set -euo pipefail
           ./mill aethercore.test.compile
-
-      - name: Run direct dependency-state trace
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./mill aethercore.test.testOnly \
-            aethercore.core.v2.V2P82DependencyStateReleaseSpec
 
       - name: Run backend release trace
         shell: bash
