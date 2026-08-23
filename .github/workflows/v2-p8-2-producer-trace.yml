@@ -1,4 +1,4 @@
-name: AetherCore V2 P8.2 Dependency Write Diagnostic
+name: AetherCore V2 P8.2 Stable Observation Diagnostic
 
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
           print(json.dumps({
             'state': 'pending',
             'context': 'aethercore/v2-p8.2-producer-trace',
-            'description': 'leaf dependency allocation A/B',
+            'description': 'stable-cycle backend observation A/B',
             'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
           }))
           PY
@@ -38,7 +38,7 @@ jobs:
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
   test:
-    name: Test leaf dependency allocation writes
+    name: Test stable-cycle backend observation
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -52,28 +52,56 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Apply checkout-only leaf-write variant
+      - name: Apply checkout-only stable observation variant
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
+          p = Path('src/test/scala/aethercore/V2P82RecoveryRebuildSpec.scala')
           s = p.read_text()
-          old = '    dependencies(slot).rs1 := allocateRs1\n    dependencies(slot).rs2 := allocateRs2\n'
-          new_lines = [
-            '    dependencies(slot).rs1.ready := allocateRs1.ready',
-            '    dependencies(slot).rs1.value := allocateRs1.value',
-            '    dependencies(slot).rs1.producerTag.id := allocateRs1.producerTag.id',
-            '    dependencies(slot).rs1.producerTag.generation := allocateRs1.producerTag.generation',
-            '    dependencies(slot).rs2.ready := allocateRs2.ready',
-            '    dependencies(slot).rs2.value := allocateRs2.value',
-            '    dependencies(slot).rs2.producerTag.id := allocateRs2.producerTag.id',
-            '    dependencies(slot).rs2.producerTag.generation := allocateRs2.producerTag.generation',
-          ]
-          new = '\n'.join(new_lines) + '\n'
+          old = '''        dut.io.schedulingWindow(0).uop.robToken.index.expect(branch.index.U)
+        dut.io.schedulingWindow(1).uop.robToken.index.expect(consumer.index.U)
+        dut.io.schedulingWindow(1).dependenciesValid.expect(true.B)
+        // Diagnose mapping ownership before value storage. If these fail, RAT
+        // rebuild did not restore the surviving Branch; if they pass but value
+        // fails, the mapping is correct and producer value retention is wrong.
+        dut.io.schedulingWindow(1).rs1.producerTag.id.expect(branch.producerId.U)
+        dut.io.schedulingWindow(1).rs1.producerTag.generation.expect(branch.producerGeneration.U)
+        dut.io.schedulingWindow(1).rs1.ready.expect(true.B)
+        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+
+        // The killed WAW's late completion cannot wake or complete the reused
+        // physical slot after generation advance.
+        pokeCompletion(dut, killedWaw, hasValue = true, value = 99)
+        dut.io.acceptedRecovery.valid.expect(false.B)
+        dut.clock.step()
+        dut.io.completion.valid.poke(false.B)
+        dut.io.schedulingWindow(1).complete.expect(false.B)
+        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+'''
+          new = '''        // The direct dependency-state proof covers the retire+allocate edge.
+        // Observe the backend scheduling projection on the next stable cycle,
+        // after the completed surviving Branch retires and the consumer becomes head.
+        dut.clock.step()
+        dut.io.schedulingWindow(0).uop.robToken.index.expect(consumer.index.U)
+        dut.io.schedulingWindow(0).dependenciesValid.expect(true.B)
+        dut.io.schedulingWindow(0).rs1.producerTag.id.expect(branch.producerId.U)
+        dut.io.schedulingWindow(0).rs1.producerTag.generation.expect(branch.producerGeneration.U)
+        dut.io.schedulingWindow(0).rs1.ready.expect(true.B)
+        dut.io.schedulingWindow(0).rs1.value.expect(link.U)
+
+        // The killed WAW's late completion cannot wake or complete the reused
+        // physical slot after generation advance.
+        pokeCompletion(dut, killedWaw, hasValue = true, value = 99)
+        dut.io.acceptedRecovery.valid.expect(false.B)
+        dut.clock.step()
+        dut.io.completion.valid.poke(false.B)
+        dut.io.schedulingWindow(0).complete.expect(false.B)
+        dut.io.schedulingWindow(0).rs1.value.expect(link.U)
+'''
           if s.count(old) != 1:
-            raise SystemExit('unexpected allocation write anchor')
+            raise SystemExit('unexpected backend observation anchor')
           p.write_text(s.replace(old, new))
           PY
 
@@ -93,12 +121,12 @@ jobs:
             ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
 
-      - name: Run exact red case with leaf writes
+      - name: Run exact recovery case with stable observation
         shell: bash
         run: |
           set -euo pipefail
           chmod +x mill
-          root="$RUNNER_TEMP/aethercore-v2-p82-leaf-write"
+          root="$RUNNER_TEMP/aethercore-v2-p82-stable-observation"
           mkdir -p "$root/mill-out"
           export MILL_OUTPUT_DIR="$root/mill-out"
           bash tools/ensure_verilator_5_024.sh
