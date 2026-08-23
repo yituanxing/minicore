@@ -74,6 +74,7 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == 'arch/aethercore-v2-p8-2-integration' ]]; then
             grep -q 'private val recoveryBusy = dependencyBackend.io.recoveryBusy' src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala
             grep -q 'acceptedRecoverySurvivorCount' src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala
+            grep -q 'class V2P82RecoveryIntegrationSpec' src/test/scala/aethercore/V2P82RecoveryIntegrationSpec.scala
           fi
 
       - name: Restore Scala dependency cache
@@ -118,11 +119,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./mill aethercore.test.testOnly \
-            aethercore.core.v2.V2P82GeneralizedRecoverySpec \
-            aethercore.core.v2.V2P82RecoveryRebuildSpec \
-            aethercore.V2F4RecoverySpec \
+          tests=(
+            aethercore.core.v2.V2P82GeneralizedRecoverySpec
+            aethercore.core.v2.V2P82RecoveryRebuildSpec
+            aethercore.V2F4RecoverySpec
             aethercore.V2F5PrivilegedSpec
+          )
+          if [[ "$GITHUB_REF_NAME" == 'arch/aethercore-v2-p8-2-integration' ]]; then
+            tests+=(aethercore.core.v2.V2P82RecoveryIntegrationSpec)
+          fi
+          ./mill aethercore.test.testOnly "${tests[@]}"
 
       - name: Publish final P8.2 commit status
         if: always()
