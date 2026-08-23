@@ -72,6 +72,29 @@ jobs:
           grep -q 'class V2P82RecoveryRebuildSpec' src/test/scala/aethercore/V2P82RecoveryRebuildSpec.scala
           grep -q 'class V2P82DependencyStateReleaseSpec' src/test/scala/aethercore/V2P82DependencyStateReleaseSpec.scala
 
+      - name: Inject temporary recovering-producer trace
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
+          text = path.read_text()
+          needle = '  io.recoveryBusy := rebuildBusy\n'
+          overlay = '''  io.recoveryBusy := rebuildBusy
+
+  // CI-only diagnostic overlay. This checkout mutation is never committed to
+  // production RTL; it identifies the exact cycle that loses the recovering
+  // Branch producer payload.
+  when(io.recovery.valid || rebuildBusy || io.retire.valid || io.allocate.valid) {
+    printf(p"P82_DEP_TRACE p1_valid=${producers(1).valid} p1_id=${producers(1).producerTag.id} p1_gen=${producers(1).producerTag.generation} p1_ready=${producers(1).ready} p1_value=${producers(1).value} saved=${rebuildRecoveryValue} recovery=${io.recovery.valid} rebuild=${rebuildBusy} retire=${io.retire.valid} allocate=${io.allocate.valid}\\n")
+  }
+'''
+          if text.count(needle) != 1:
+              raise SystemExit('unexpected recoveryBusy anchor count')
+          path.write_text(text.replace(needle, overlay))
+          PY
+
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
         with:
