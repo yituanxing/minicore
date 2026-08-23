@@ -15,13 +15,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  announce:
+    name: Publish discoverable ROB8 run identity
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish pending commit status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/rob8-pending.json
+          import json, os
+          print(json.dumps({
+              'state': 'pending',
+              'context': 'aethercore/v2-rob8-ab',
+              'description': 'ROB4 vs ROB8/window8 Linux A/B running',
+              'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl -fsS -L -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            --data-binary @/tmp/rob8-pending.json
+
   verilator-tool:
     name: Produce or verify hosted Verilator
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
   measure:
     name: ROB4 vs ROB8/window8 Linux clocksource boundary
-    needs: verilator-tool
+    needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
@@ -191,7 +217,7 @@ jobs:
             build/v2-p8-rob8-ab/baseline.run.log
             build/v2-p8-rob8-ab/target.run.log
 
-      - name: Publish discoverable ROB8 commit status
+      - name: Publish final ROB8 commit status
         if: always()
         shell: bash
         env:
