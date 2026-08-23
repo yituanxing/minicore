@@ -23,7 +23,9 @@ class TinyComputeAvailability extends Bundle {
   * This module owns policy and once-only issue state, but no uOp/dependency
   * storage. It scans the four live ROB ages and may select only exception-free,
   * normally ordered Integer or Mul/Div work whose operands and target resource
-  * are ready. Branch, Memory and System remain head-owned elsewhere.
+  * are ready. Branch and Memory may be bypassed because selected compute is
+  * side-effect free; System, explicit serialization and known exception
+  * boundaries stop younger issue. Architectural Commit remains in order.
   */
 class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"selective issue XLEN must be 32 or 64, got $xlen")
@@ -60,6 +62,22 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
       (executionClass === ExecutionClass.MulDiv && isDivide(op) && io.availability.divide)
   }
 
+  // A candidate may bypass ordinary compute/branch/memory work, but it must not
+  // cross an older architectural serialization point or an already-known trap.
+  // Keep this as an age-prefix permission instead of teaching the scheduler any
+  // CSR/fence implementation details.
+  private val bypassOpen = Wire(Vec(Entries, Bool()))
+  bypassOpen(0) := true.B
+  for (age <- 1 until Entries) {
+    val older = io.window(age - 1)
+    val olderBlocksBypass = older.valid && (
+      older.uop.executionClass === ExecutionClass.System ||
+      older.uop.decoded.ordering =/= OrderingClass.Normal ||
+      older.uop.decoded.exception.valid
+    )
+    bypassOpen(age) := bypassOpen(age - 1) && !olderBlocksBypass
+  }
+
   private val eligible = Wire(Vec(Entries, Bool()))
   for (age <- 0 until Entries) {
     val entry = io.window(age)
@@ -68,7 +86,8 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val safeClass = entry.uop.executionClass === ExecutionClass.Integer ||
       entry.uop.executionClass === ExecutionClass.MulDiv
 
-    eligible(age) := entry.valid &&
+    eligible(age) := bypassOpen(age) &&
+      entry.valid &&
       !entry.complete &&
       entry.dependenciesValid &&
       entry.operandsReady &&
