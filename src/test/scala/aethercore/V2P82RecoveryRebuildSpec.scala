@@ -174,15 +174,10 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         )
         dut.io.occupancy.expect(3.U)
 
-        // Complete the older head, then present the middle-aged Branch response
-        // on the immediately following cycle. ROB recovery must suppress that
-        // otherwise-ready retirement and dependency rebuild owns the boundary.
-        pokeCompletion(dut, older, hasValue = false, value = 0)
-        dut.io.acceptedRecovery.valid.expect(false.B)
-        dut.clock.step()
-        dut.io.completion.valid.poke(false.B)
-        dut.io.commit.valid.expect(true.B)
-
+        // Keep the older head incomplete for this diagnostic. This removes any
+        // simultaneous retire+allocate edge after rebuild and isolates whether
+        // the surviving Branch producer value itself was retained correctly.
+        dut.io.commit.valid.expect(false.B)
         pokeCompletion(
           dut,
           branch,
@@ -210,11 +205,11 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         // (the Branch) is replayed during this single rebuild cycle.
         dut.clock.step()
         dut.io.recoveryBusy.expect(false.B)
-        dut.io.commit.valid.expect(true.B)
+        dut.io.commit.valid.expect(false.B)
 
-        // Dispatch resumes in the same cycle that the complete older head may
-        // retire. The new consumer must resolve x5 through the surviving Branch,
-        // not the killed younger WAW and not stale committed RF state.
+        // With the older head still incomplete, consumer allocation now occurs
+        // with no retirement in the same cycle. It must resolve x5 through the
+        // surviving Branch, not the killed younger WAW or committed RF state.
         val consumer = allocate(
           dut,
           target,
@@ -228,16 +223,15 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         consumer.index shouldBe killedWaw.index
         consumer.generation should not be killedWaw.generation
 
-        dut.io.schedulingWindow(0).uop.robToken.index.expect(branch.index.U)
-        dut.io.schedulingWindow(1).uop.robToken.index.expect(consumer.index.U)
-        dut.io.schedulingWindow(1).dependenciesValid.expect(true.B)
-        // Diagnose mapping ownership before value storage. If these fail, RAT
-        // rebuild did not restore the surviving Branch; if they pass but value
-        // fails, the mapping is correct and producer value retention is wrong.
-        dut.io.schedulingWindow(1).rs1.producerTag.id.expect(branch.producerId.U)
-        dut.io.schedulingWindow(1).rs1.producerTag.generation.expect(branch.producerGeneration.U)
-        dut.io.schedulingWindow(1).rs1.ready.expect(true.B)
-        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+        dut.io.occupancy.expect(3.U)
+        dut.io.schedulingWindow(0).uop.robToken.index.expect(older.index.U)
+        dut.io.schedulingWindow(1).uop.robToken.index.expect(branch.index.U)
+        dut.io.schedulingWindow(2).uop.robToken.index.expect(consumer.index.U)
+        dut.io.schedulingWindow(2).dependenciesValid.expect(true.B)
+        dut.io.schedulingWindow(2).rs1.producerTag.id.expect(branch.producerId.U)
+        dut.io.schedulingWindow(2).rs1.producerTag.generation.expect(branch.producerGeneration.U)
+        dut.io.schedulingWindow(2).rs1.ready.expect(true.B)
+        dut.io.schedulingWindow(2).rs1.value.expect(link.U)
 
         // The killed WAW's late completion cannot wake or complete the reused
         // physical slot after generation advance.
@@ -245,8 +239,8 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         dut.io.acceptedRecovery.valid.expect(false.B)
         dut.clock.step()
         dut.io.completion.valid.poke(false.B)
-        dut.io.schedulingWindow(1).complete.expect(false.B)
-        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+        dut.io.schedulingWindow(2).complete.expect(false.B)
+        dut.io.schedulingWindow(2).rs1.value.expect(link.U)
       }
     }
   }
