@@ -79,10 +79,11 @@ private class TinyRobEntry(val xlen: Int) extends Bundle {
 /**
   * Fixed four-entry ROB.
   *
-  * F4 added validated head-only normal branch recovery. F5 extends the same
-  * lifetime authority to synchronous traps and xRET: a matching head
-  * completion carrying an exception or validated trap-return effect may squash
-  * every younger entry, but the head itself survives until precise retirement.
+  * F4 added validated head-only normal branch recovery. P8.2 generalizes the
+  * same lifetime authority to any live Branch entry: older work and the Branch
+  * survive, younger entries are killed, and killed physical slots receive a new
+  * generation immediately. F5 privileged recovery remains head-only because a
+  * precise trap/xRET boundary is still owned by in-order retirement.
   */
 class TinyRob(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-ROB XLEN must be 32 or 64, got $xlen")
@@ -117,8 +118,8 @@ class TinyRob(val xlen: Int) extends Module {
   io.headView.bits := retireHead.uop
 
   // A8.3 exports the live ROB as an age-ordered read-only window. Dynamic
-  // indexing wraps naturally in the fixed two-bit slot domain; age<count is
-  // the authoritative live-range bound. No state is copied into this view.
+  // indexing wraps naturally in the fixed slot domain; age<count is the
+  // authoritative live-range bound. No state is copied into this view.
   for (age <- 0 until Entries) {
     val slot = (head + age.U)(IndexBits - 1, 0)
     val entry = entries(slot)
@@ -129,19 +130,15 @@ class TinyRob(val xlen: Int) extends Module {
     io.window(age).uop := entry.uop
   }
 
-  io.retire.valid := retireHead.valid && retireHead.complete
-  io.retire.bits := 0.U.asTypeOf(new RobRetirement(xlen))
-  io.retire.bits.uop := retireHead.uop
-  io.retire.bits.resultValid := retireHead.resultValid
-  io.retire.bits.result := retireHead.result
-  io.retire.bits.exception := retireHead.exception
-  io.retire.bits.privileged := retireHead.privileged
-
-  val retireFire = io.retire.valid && io.retire.ready
-
   val completionIndex = io.completion.bits.robToken.index
   private val completionEntry = entries(completionIndex)
+  // ROB size is a power of two, so truncating the modular subtraction yields
+  // the architectural age of a live physical slot relative to head.
+  private val completionAge = (completionIndex - head)(IndexBits - 1, 0)
+  private val completionIsLive = completionAge < count
+
   val completionMatches = io.completion.valid &&
+    completionIsLive &&
     completionEntry.valid &&
     !completionEntry.complete &&
     completionEntry.uop.robToken.index === io.completion.bits.robToken.index &&
@@ -151,8 +148,10 @@ class TinyRob(val xlen: Int) extends Module {
     completionEntry.uop.valueRef.id === io.completion.bits.valueRef.id &&
     completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation
 
+  // P8.2 R1: a validated live Branch may recover at any ROB age. Branch issue
+  // remains head-only elsewhere until dependency rebuild is generalized, so
+  // this broadens recovery authority before changing scheduling policy.
   val recoveryMatches = completionMatches &&
-    completionIndex === head &&
     completionEntry.uop.executionClass === ExecutionClass.Branch &&
     completionEntry.uop.decoded.controlFlow.kind =/= ControlFlowKind.None &&
     io.completion.bits.branchValid &&
@@ -177,9 +176,21 @@ class TinyRob(val xlen: Int) extends Module {
   io.acceptedPrivilegedRecovery.valid := privilegedRecoveryMatches
   io.acceptedPrivilegedRecovery.bits := io.completion.bits
 
-  // Any validated head recovery wins over same-cycle speculative dispatch. The
-  // surviving head is incomplete at the start of the cycle, so it cannot also
-  // retire on this cycle.
+  // Recovery is an atomic ROB-boundary update. In particular, an older already
+  // complete head does not retire on the same cycle that a middle-aged branch
+  // changes tail/count. This spends one recovery cycle to keep ownership and
+  // survivor accounting deterministic.
+  io.retire.valid := retireHead.valid && retireHead.complete && !squashYounger
+  io.retire.bits := 0.U.asTypeOf(new RobRetirement(xlen))
+  io.retire.bits.uop := retireHead.uop
+  io.retire.bits.resultValid := retireHead.resultValid
+  io.retire.bits.result := retireHead.result
+  io.retire.bits.exception := retireHead.exception
+  io.retire.bits.privileged := retireHead.privileged
+
+  val retireFire = io.retire.valid && io.retire.ready
+
+  // Any validated recovery wins over same-cycle speculative dispatch.
   io.dispatch.ready := count =/= Entries.U && !squashYounger
   val allocFire = io.dispatch.valid && io.dispatch.ready
 
@@ -232,14 +243,28 @@ class TinyRob(val xlen: Int) extends Module {
     is("b01".U) { count := count - 1.U }
   }
 
-  when(squashYounger) {
+  when(recoveryMatches) {
     for (index <- 0 until Entries) {
-      when(index.U =/= head && entries(index).valid) {
+      val age = (index.U(IndexBits.W) - head)(IndexBits - 1, 0)
+      val live = age < count && entries(index).valid
+      when(live && age > completionAge) {
         entries(index).valid := false.B
         entries(index).complete := false.B
         // A killed slot gets a new lifetime immediately. Any future late
         // response carrying the old generation will fail completionMatches as
         // long as the producer obeys the bounded-response lifetime contract.
+        slotGenerations(index) := slotGenerations(index) + 1.U
+      }
+    }
+    tail := completionIndex + 1.U
+    count := completionAge +& 1.U
+  }.elsewhen(privilegedRecoveryMatches) {
+    // Precise traps/xRET remain head-owned: retain only the head boundary and
+    // kill every younger live slot exactly as the F5 contract requires.
+    for (index <- 0 until Entries) {
+      when(index.U =/= head && entries(index).valid) {
+        entries(index).valid := false.B
+        entries(index).complete := false.B
         slotGenerations(index) := slotGenerations(index) + 1.U
       }
     }
