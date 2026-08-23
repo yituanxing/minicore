@@ -20,20 +20,23 @@ class TinyComputeAvailability extends Bundle {
 /**
   * A8.3 oldest-ready single-issue selector over the read-only scheduling view.
   *
-  * This module owns policy and once-only issue state, but no uOp/dependency
-  * storage. It scans the four live ROB ages and may select only exception-free,
-  * normally ordered Integer or Mul/Div work whose operands and target resource
-  * are ready. Branch may be bypassed; Memory may be bypassed only after the
-  * exact head request has been accepted by the LSU. System, explicit
-  * serialization and known exception boundaries stop younger issue.
-  * Architectural Commit remains in order.
+  * ROB storage depth and selective scan depth are deliberately separate. The
+  * full read-only scheduling projection remains visible so order/lifetime state
+  * has one owner, while scanEntries bounds only the combinational oldest-ready
+  * policy. A smaller scan therefore never changes Commit, Branch, Memory or
+  * System ordering; younger compute simply waits until it ages into the scan.
   */
-class TinySelectiveComputeIssue(val xlen: Int) extends Module {
+class TinySelectiveComputeIssue(
+    val xlen: Int,
+    val scanEntries: Int = TinyRobGeometry.Entries
+) extends Module {
   require(xlen == 32 || xlen == 64, s"selective issue XLEN must be 32 or 64, got $xlen")
 
   private val Entries = TinyRobGeometry.Entries
   private val IdentityBits = TinyRobGeometry.IndexBits
   private val GenerationBits = TinyRobGeometry.GenerationBits
+  require(scanEntries > 0 && scanEntries <= Entries,
+    s"selective scan depth must be within 1..$Entries, got $scanEntries")
 
   val io = IO(new Bundle {
     val window = Input(Vec(Entries, new TinySchedulingEntry(xlen)))
@@ -46,6 +49,8 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val request = Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
   })
 
+  // Once-only issue ownership must still cover every physical ROB lifetime even
+  // when only the oldest subset participates in a given cycle's scan.
   private val issuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
   private val issuedToken = Reg(Vec(Entries, new RobToken(IdentityBits, GenerationBits)))
 
@@ -72,9 +77,9 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   // For age0, dependencies/operands must already be ready and production block
   // must have fallen after the LSU accepted the request. System, serialization
   // and known exceptions remain unconditional architectural barriers.
-  private val bypassOpen = Wire(Vec(Entries, Bool()))
+  private val bypassOpen = Wire(Vec(scanEntries, Bool()))
   bypassOpen(0) := true.B
-  for (age <- 1 until Entries) {
+  for (age <- 1 until scanEntries) {
     val older = io.window(age - 1)
     val olderIsMemory = older.valid &&
       older.uop.executionClass === ExecutionClass.Memory
@@ -92,8 +97,8 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     bypassOpen(age) := bypassOpen(age - 1) && !olderBlocksBypass
   }
 
-  private val eligible = Wire(Vec(Entries, Bool()))
-  for (age <- 0 until Entries) {
+  private val eligible = Wire(Vec(scanEntries, Bool()))
+  for (age <- 0 until scanEntries) {
     val entry = io.window(age)
     val token = entry.uop.robToken
     val alreadyIssued = issuedValid(token.index) && sameRobToken(issuedToken(token.index), token)
@@ -112,10 +117,9 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
       !alreadyIssued
   }
 
-  // Materialize operands from each static scheduling-view entry before choosing
-  // the oldest-ready request. This keeps the 3-bit OperandSourceKind local to a
-  // single entry instead of first muxing the enum across ROB ages; the latter
-  // produces width-expanded conditional expressions in Verilator.
+  // Materialize operands only for the bounded scan set. Keeping the ROB8 state
+  // window intact while limiting these data muxes is the main FPGA-timing point
+  // of the window4 experiment.
   private def materializeSource(entry: TinySchedulingEntry, kind: OperandSourceKind.Type): UInt = {
     val value = WireDefault(0.U(xlen.W))
     switch(kind) {
@@ -128,8 +132,8 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     value
   }
 
-  private val candidates = Wire(Vec(Entries, new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
-  for (age <- 0 until Entries) {
+  private val candidates = Wire(Vec(scanEntries, new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+  for (age <- 0 until scanEntries) {
     val entry = io.window(age)
     val candidate = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
     candidate.robToken := entry.uop.robToken
@@ -150,10 +154,10 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
 
   // Emit candidates youngest-to-oldest so Chisel's last-connect priority leaves
   // age0 as the winner whenever multiple entries are eligible. Only the fully
-  // materialized request is muxed across ages.
+  // materialized request is muxed across the bounded scan ages.
   private val selectedValid = WireDefault(false.B)
   private val selectedRequest = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
-  for (age <- (Entries - 1) to 0 by -1) {
+  for (age <- (scanEntries - 1) to 0 by -1) {
     when(eligible(age)) {
       selectedValid := true.B
       selectedRequest := candidates(age)
