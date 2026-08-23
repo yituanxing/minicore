@@ -10,10 +10,10 @@ import aethercore.config.{CoreConfig, CoreProfiles, PageTableGeometry}
 
 /** Test-only seam for forcing an already-executed arbitrary-age completion.
   *
-  * R4 has not yet enabled arbitrary-age Branch issue in production. R3 still
-  * needs an end-to-end proof that TinyMemoryBackend consumes the generalized
-  * recovery boundary correctly, so this wrapper injects only the completion
-  * that R4 will eventually produce and exposes no new production interface.
+  * R4 now enables arbitrary-age Branch issue in production. This R3-focused
+  * wrapper keeps its Branch dependency-blocked and injects the recovery
+  * completion deliberately so the test can isolate rebuild barriers and
+  * survivor memory-trace ownership without racing the real Branch FU.
   */
 private class P82RecoveryObservableMemoryBackend(
     coreConfig: CoreConfig,
@@ -40,7 +40,8 @@ private class P82RecoveryObservableMemoryBackend(
 
   observedRecoveryBusy := dependencyBackend.io.recoveryBusy
   observedSelectiveFire := selectiveIssue.io.request.fire
-  observedBranchFire := branchIssue.io.request.fire
+  observedBranchFire := selectiveIssue.io.request.fire &&
+    selectiveIssue.io.request.bits.executionClass === ExecutionClass.Branch
   observedLsuLaunchFire := lsu.io.request.fire
 }
 
@@ -253,6 +254,8 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
         dut,
         branchPc,
         ExecutionClass.Branch,
+        rs1 = 1,
+        usesRs1 = true,
         controlFlowKind = ControlFlowKind.DirectJump
       )
       allocate(
@@ -267,7 +270,9 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
       dut.io.occupancy.expect(4.U)
 
       // The head load is already owned by the LSU. Hold the physical request
-      // until the full survivor shape is resident in the ROB.
+      // until the full survivor shape is resident in the ROB. The Branch is
+      // dependency-blocked on x1 so R4 cannot execute it before this R3 probe
+      // deliberately injects its completion.
       var cycles = 0
       while (!dut.io.memoryRequest.valid.peek().litToBoolean && cycles < 24) {
         dut.clock.step()
@@ -293,6 +298,8 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
       // The completed head would normally retire now. Inject the age2 Branch
       // completion before that edge: recovery must atomically retain Load,
       // dependent Integer and Branch, while killing only the younger age3 work.
+      // acceptedRecovery itself blocks the newly-woken real Branch launch in
+      // this cycle, so the forced completion remains the sole recovery owner.
       dut.io.commit.valid.expect(true.B)
       forceTakenBranch(dut, branch, target)
       dut.io.branchRedirect.valid.expect(true.B)
@@ -309,9 +316,9 @@ class V2P82RecoveryIntegrationSpec extends AnyFlatSpec with Matchers with Chisel
       dut.io.commit.valid.expect(false.B)
 
       // survivorCount=3: age0 replayed on recovery, then age1 and age2 rebuild
-      // sequentially. The dependent Integer has become ready from the Load
-      // completion, so this explicitly proves recoveryBusy blocks a real
-      // otherwise-eligible selective launch.
+      // sequentially. The dependent Integer and Branch have become ready from
+      // the Load completion, so this explicitly proves recoveryBusy blocks real
+      // otherwise-eligible selective launches.
       var rebuildCycles = 0
       while (dut.observedRecoveryBusy.peek().litToBoolean && rebuildCycles < 4) {
         dut.io.commit.valid.expect(false.B)
