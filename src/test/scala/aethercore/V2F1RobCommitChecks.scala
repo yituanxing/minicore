@@ -182,6 +182,41 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     }
   }
 
+  it should "keep stale completions distinct past the former two-bit wrap window" in {
+    simulate(new TinyRobCommitBackend(64)) { dut =>
+      initializeF1(dut)
+
+      var old: Option[Identity] = None
+      for (index <- 0 until 16) {
+        val identity = allocate(dut, BigInt("81100000", 16) + index * 4, rd = (index % 31) + 1)
+        if (index == 0) old = Some(identity)
+        complete(dut, identity, value = index + 1)
+        dut.io.commit.valid.expect(true.B)
+        dut.clock.step()
+        dut.io.occupancy.expect(0.U)
+      }
+
+      // With the frozen F7 2-bit generation this allocation numerically aliases
+      // the first lifetime (same slot, generation wrapped after four reuses).
+      // A8 must retain a distinct lifetime across that old alias window.
+      val stale = old.get
+      val current = allocate(dut, BigInt("81100040", 16), rd = 30)
+      current.index shouldBe stale.index
+      current.generation should not be stale.generation
+      current.producerGeneration should not be stale.producerGeneration
+      current.valueGeneration should not be stale.valueGeneration
+
+      complete(dut, stale, value = BigInt("dead", 16))
+      dut.io.commit.valid.expect(false.B)
+      dut.io.occupancy.expect(1.U)
+
+      complete(dut, current, value = BigInt("1234", 16))
+      dut.io.commit.valid.expect(true.B)
+      dut.io.commit.rd.expect(30.U)
+      dut.io.commit.rdData.expect("h1234".U)
+    }
+  }
+
   it should "reject completion when dependency or value identity does not match" in {
     simulate(new TinyRobCommitBackend(64)) { dut =>
       initializeF1(dut)

@@ -375,26 +375,16 @@ class TinyMemoryBackend(
   io.memoryResponse.ready := lsu.io.memoryResponse.ready
   io.lsuBusy := lsu.io.busy
 
-  // Oldest-only composition means these sources are mutually exclusive by
-  // execution class/lifetime. Keep the assertion because a future scheduler
-  // must preserve explicit completion arbitration rather than silently adding
-  // a wide implicit CDB.
-  private val completionCount = PopCount(Cat(
-    system.io.completion.valid,
-    lsu.io.completion.valid,
-    execution.io.response.valid
-  ))
-  assert(completionCount <= 1.U,
-    "F6 oldest-only backend produced more than one completion in one cycle")
-
-  dependencyBackend.io.completion.valid :=
-    system.io.completion.valid || lsu.io.completion.valid || execution.io.response.valid
-  dependencyBackend.io.completion.bits := Mux(
-    system.io.completion.valid,
-    system.io.completion.bits,
-    Mux(lsu.io.completion.valid, lsu.io.completion.bits, execution.io.response.bits)
-  )
-  execution.io.response.ready := !system.io.completion.valid && !lsu.io.completion.valid
+  // A8 removes the oldest-only mutual-exclusion assumption from completion
+  // transport. System, LSU and ordinary execution may all remain pending; a
+  // fair narrow arbiter selects exactly one response for the ROB each cycle.
+  val completions = Module(new TinyCompletionArbiter(xlen, 3))
+  completions.io.in(0) <> system.io.completion
+  completions.io.in(1) <> lsu.io.completion
+  completions.io.in(2) <> execution.io.response
+  dependencyBackend.io.completion.valid := completions.io.out.valid
+  dependencyBackend.io.completion.bits := completions.io.out.bits
+  completions.io.out.ready := true.B
 
   io.branchRedirect.valid := dependencyBackend.io.acceptedRecovery.valid
   io.branchRedirect.bits := 0.U.asTypeOf(new RecoveryRedirect(xlen))

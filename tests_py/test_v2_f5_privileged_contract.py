@@ -59,8 +59,11 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
         self.assertNotIn("new MachineCsrFile", system_body)
         self.assertNotIn("csrFile.io.", system_body)
         self.assertNotIn("writeEnable :=", system_body)
-        self.assertIn("io.completion.bits.privileged.csrWriteValid", system_body)
-        self.assertIn("io.completion.bits.privileged.trapReturn", system_body)
+        self.assertIn("val completion = Decoupled(new ExecutionResponse", system_body)
+        self.assertIn("freshCompletion.bits.privileged.csrWriteValid", system_body)
+        self.assertIn("freshCompletion.bits.privileged.trapReturn", system_body)
+        self.assertIn("when(io.completion.fire)", system_body)
+        self.assertIn("heldValid", system_body)
 
     def test_redirects_are_retirement_owned_and_narrow(self):
         text = PRIVILEGED.read_text()
