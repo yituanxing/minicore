@@ -47,6 +47,38 @@ private class TinyDependencyEntry(
   val rs2 = new OperandState(xlen, identityBits, generationBits)
 }
 
+/** Read-only physical-slot projection of dependency readiness. */
+class TinyDependencySlotView(
+    val xlen: Int,
+    val identityBits: Int,
+    val generationBits: Int
+) extends Bundle {
+  val valid = Bool()
+  val robToken = new RobToken(identityBits, generationBits)
+  val rs1 = new OperandState(xlen, identityBits, generationBits)
+  val rs2 = new OperandState(xlen, identityBits, generationBits)
+}
+
+/**
+  * Read-only composition of ROB age/lifetime with dependency readiness.
+  *
+  * This bundle is the A8 scheduler seam. It contains no duplicated queue state:
+  * order/complete/uOp come from TinyRob, while operand readiness/value comes
+  * from TinyDependencyState after an exact RobToken match.
+  */
+class TinySchedulingEntry(val xlen: Int) extends Bundle {
+  private val IdentityBits = TinyRobGeometry.IndexBits
+  private val GenerationBits = TinyRobGeometry.GenerationBits
+
+  val valid = Bool()
+  val complete = Bool()
+  val uop = new BackendUop(xlen, IdentityBits, GenerationBits)
+  val dependenciesValid = Bool()
+  val rs1 = new OperandState(xlen, IdentityBits, GenerationBits)
+  val rs2 = new OperandState(xlen, IdentityBits, GenerationBits)
+  val operandsReady = Bool()
+}
+
 /**
   * Fixed dependency tracker.
   *
@@ -72,6 +104,10 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val retire = Flipped(Valid(new RobRetirement(xlen)))
     val head = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
 
+    val slotView = Output(Vec(
+      Entries,
+      new TinyDependencySlotView(xlen, IdentityBits, GenerationBits)
+    ))
     val headDependenciesValid = Output(Bool())
     val headRs1 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headRs2 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
@@ -153,6 +189,16 @@ class TinyDependencyState(val xlen: Int) extends Module {
     io.allocate.bits.decoded.usesRs2,
     io.committedRs2
   )
+
+  for (index <- 0 until Entries) {
+    io.slotView(index) := 0.U.asTypeOf(
+      new TinyDependencySlotView(xlen, IdentityBits, GenerationBits)
+    )
+    io.slotView(index).valid := dependencies(index).valid
+    io.slotView(index).robToken := dependencies(index).robToken
+    io.slotView(index).rs1 := dependencies(index).rs1
+    io.slotView(index).rs2 := dependencies(index).rs2
+  }
 
   private val headEntry = dependencies(io.head.bits.robToken.index)
   private val headMatches = io.head.valid &&
@@ -312,6 +358,7 @@ class TinyDependencyState(val xlen: Int) extends Module {
 class TinyDependencyBackend(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"v2 F2 backend XLEN must be 32 or 64, got $xlen")
 
+  private val Entries = TinyRobGeometry.Entries
   private val IdentityBits = TinyRobGeometry.IndexBits
   private val GenerationBits = TinyRobGeometry.GenerationBits
 
@@ -324,11 +371,12 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     val retiring = Valid(new RobRetirement(xlen))
     val commit = Output(new CommitTrace(xlen = xlen))
     val head = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
+    val schedulingWindow = Output(Vec(Entries, new TinySchedulingEntry(xlen)))
     val headDependenciesValid = Output(Bool())
     val headRs1 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headRs2 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headOperandsReady = Output(Bool())
-    val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
+    val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
   })
 
   val rob = Module(new TinyRob(xlen))
@@ -368,6 +416,30 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   dependencyState.io.retire.valid := rob.io.retire.valid && rob.io.retire.ready
   dependencyState.io.retire.bits := rob.io.retire.bits
   dependencyState.io.head := rob.io.headView
+
+  // Compose order and readiness only at this read-only seam. The dependency
+  // slot is accepted only when it names the exact ROB lifetime currently shown
+  // at that age; stale physical-slot state therefore cannot enter scheduling.
+  for (age <- 0 until Entries) {
+    val robEntry = rob.io.window(age)
+    val dependencyEntry = dependencyState.io.slotView(robEntry.uop.robToken.index)
+    val dependencyMatches = robEntry.valid &&
+      dependencyEntry.valid &&
+      dependencyEntry.robToken.index === robEntry.uop.robToken.index &&
+      dependencyEntry.robToken.generation === robEntry.uop.robToken.generation
+
+    io.schedulingWindow(age) := 0.U.asTypeOf(new TinySchedulingEntry(xlen))
+    io.schedulingWindow(age).valid := robEntry.valid
+    io.schedulingWindow(age).complete := robEntry.complete
+    io.schedulingWindow(age).uop := robEntry.uop
+    io.schedulingWindow(age).dependenciesValid := dependencyMatches
+    when(dependencyMatches) {
+      io.schedulingWindow(age).rs1 := dependencyEntry.rs1
+      io.schedulingWindow(age).rs2 := dependencyEntry.rs2
+    }
+    io.schedulingWindow(age).operandsReady := dependencyMatches &&
+      dependencyEntry.rs1.ready && dependencyEntry.rs2.ready
+  }
 
   io.headDependenciesValid := dependencyState.io.headDependenciesValid
   io.headRs1 := dependencyState.io.headRs1
