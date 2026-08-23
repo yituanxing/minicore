@@ -140,6 +140,8 @@ class TinyDependencyState(val xlen: Int) extends Module {
   private val rebuildBusy = RegInit(false.B)
   private val rebuildAge = RegInit(0.U(IdentityBits.W))
   private val rebuildCount = RegInit(0.U(CountBits.W))
+  private val rebuildRecoveryHasValue = RegInit(false.B)
+  private val rebuildRecoveryValue = RegInit(0.U(xlen.W))
   io.recoveryBusy := rebuildBusy
 
   private def sameProducer(a: ProducerTag, b: ProducerTag): Bool =
@@ -328,6 +330,8 @@ class TinyDependencyState(val xlen: Int) extends Module {
     rebuildBusy := false.B
     rebuildAge := 0.U
     rebuildCount := 0.U
+    rebuildRecoveryHasValue := false.B
+    rebuildRecoveryValue := 0.U
   }.elsewhen(io.recovery.valid) {
     assert(io.recoverySurvivorCount > 0.U,
       "normal recovery must retain at least the recovering Branch")
@@ -342,9 +346,9 @@ class TinyDependencyState(val xlen: Int) extends Module {
         assert(io.recoverySurvivorCount === (age + 1).U,
           "normal recovery survivor count must end at the recovering Branch")
         // The recovery response is the authoritative completion of the
-        // surviving Branch. Refresh its producer explicitly instead of relying
-        // on same-cycle generic wakeup ordering; older survivor producers remain
-        // untouched and younger producers are cleared below.
+        // surviving Branch. Refresh its producer immediately for the head-only
+        // case; middle-aged recovery also reasserts the payload on the final
+        // bounded rebuild replay below.
         when(createsProducer(entry.uop)) {
           producers(entry.uop.producerTag.id).valid := true.B
           producers(entry.uop.producerTag.id).producerTag := entry.uop.producerTag
@@ -377,16 +381,22 @@ class TinyDependencyState(val xlen: Int) extends Module {
     }
 
     rebuildCount := io.recoverySurvivorCount
+    rebuildRecoveryValue := io.recovery.bits.value
     when(io.recoverySurvivorCount > 1.U) {
       rebuildBusy := true.B
       rebuildAge := 1.U
+      rebuildRecoveryHasValue := io.recovery.bits.hasValue
     }.otherwise {
       rebuildBusy := false.B
       rebuildAge := 0.U
+      rebuildRecoveryHasValue := false.B
     }
   }.elsewhen(rebuildBusy) {
     val replay = io.recoveryWindow(rebuildAge)
     assert(replay.valid, "recovery rebuild age must remain a live ROB survivor")
+
+    val nextAge = rebuildAge +& 1.U
+    val finalReplay = nextAge >= rebuildCount
 
     when(createsProducer(replay.uop)) {
       val producer = producers(replay.uop.producerTag.id)
@@ -394,12 +404,23 @@ class TinyDependencyState(val xlen: Int) extends Module {
         "recovery rebuild must retain exact survivor producer state")
       rename(replay.uop.decoded.rd).valid := true.B
       rename(replay.uop.decoded.rd).producerTag := replay.uop.producerTag
+
+      // The recovering Branch is always the youngest survivor, therefore the
+      // final replay is the unique place to re-authorize its completion payload.
+      // This avoids depending on same-cycle recovery write ordering while still
+      // leaving every older survivor producer untouched.
+      when(finalReplay) {
+        assert(replay.uop.executionClass === ExecutionClass.Branch,
+          "final normal-recovery replay must be the recovering Branch")
+        producers(replay.uop.producerTag.id).ready := rebuildRecoveryHasValue
+        producers(replay.uop.producerTag.id).value := rebuildRecoveryValue
+      }
     }
 
-    val nextAge = rebuildAge +& 1.U
-    when(nextAge >= rebuildCount) {
+    when(finalReplay) {
       rebuildBusy := false.B
       rebuildAge := 0.U
+      rebuildRecoveryHasValue := false.B
     }.otherwise {
       rebuildAge := rebuildAge + 1.U
     }
