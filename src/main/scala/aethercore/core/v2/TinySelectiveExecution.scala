@@ -11,6 +11,13 @@ import aethercore.common.AluOp
   * fair response arbitration and a read-only view of actual functional-unit
   * request acceptance. P8.2 R4 includes Branch in that view after generalized
   * recovery made arbitrary-age Branch execution precise.
+  *
+  * P8.3 adds one elastic completion-egress slot per compute FU. The slot is
+  * flow-through when empty so an uncontended completion keeps the existing
+  * latency, while a blocked shared drain may capture the old result and release
+  * the leaf FU for later work. The ROB still accepts at most one completion per
+  * cycle; buffering changes transport overlap only, never architectural write
+  * ownership or recovery timing.
   */
 class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) extends Module {
   require(xlen == 32 || xlen == 64, s"selective execution cluster XLEN must be 32 or 64, got $xlen")
@@ -61,8 +68,43 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
     routeDivide -> divide.io.request.ready
   ))
 
+  // P8.3 completion egress: each compute FU owns one elastic slot before the
+  // shared round-robin drain. flow=true preserves the uncontended response
+  // latency; pipe=true lets a full slot drain and refill on the same cycle.
+  // This gives collision tolerance without widening the ROB completion port.
+  private val integerEgress = Module(new Queue(
+    new ExecutionResponse(xlen, IdentityBits, GenerationBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  private val branchEgress = Module(new Queue(
+    new ExecutionResponse(xlen, IdentityBits, GenerationBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  private val multiplyEgress = Module(new Queue(
+    new ExecutionResponse(xlen, IdentityBits, GenerationBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  private val divideEgress = Module(new Queue(
+    new ExecutionResponse(xlen, IdentityBits, GenerationBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+
+  integerEgress.io.enq <> integer.io.response
+  branchEgress.io.enq <> branch.io.response
+  multiplyEgress.io.enq <> multiply.io.response
+  divideEgress.io.enq <> divide.io.response
+
   // Availability is a read-only view of the real FU request acceptance state.
-  // It is not a scheduler-owned busy scoreboard.
+  // With P8.3 this naturally includes whether a completed result can transfer
+  // into its egress slot; it is still not a scheduler-owned busy scoreboard.
   io.computeAvailability.integer := integer.io.request.ready
   io.computeAvailability.branch := branch.io.request.ready
   io.computeAvailability.multiply := multiply.io.request.ready
@@ -72,9 +114,9 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
     new ExecutionResponse(xlen, IdentityBits, GenerationBits),
     4
   ))
-  responses.io.in(0) <> integer.io.response
-  responses.io.in(1) <> branch.io.response
-  responses.io.in(2) <> multiply.io.response
-  responses.io.in(3) <> divide.io.response
+  responses.io.in(0) <> integerEgress.io.deq
+  responses.io.in(1) <> branchEgress.io.deq
+  responses.io.in(2) <> multiplyEgress.io.deq
+  responses.io.in(3) <> divideEgress.io.deq
   io.response <> responses.io.out
 }
