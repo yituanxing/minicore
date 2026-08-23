@@ -26,8 +26,6 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   private val selectiveBits = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits)
   private val head = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(0))
 
-  private val branchValid = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.valid)
-  private val branchReady = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.ready)
   private val lsuRequestValid = BoringUtils.tapAndRead(core.backend.lsu.io.request.valid)
   private val lsuRequestReady = BoringUtils.tapAndRead(core.backend.lsu.io.request.ready)
 
@@ -42,7 +40,12 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   private val dispatchReady = BoringUtils.tapAndRead(core.backend.io.dispatch.ready)
 
   private val selectiveFire = selectiveValid && selectiveReady
-  private val branchFire = branchValid && branchReady
+  // P8.2 R4 removed the independent head-only Branch scheduler. Preserve the
+  // historical branchIssue counter by classifying accepted requests from the
+  // one unified selective owner rather than broadening its meaning to all
+  // speculative execution launches.
+  private val branchFire = selectiveFire &&
+    selectiveBits.executionClass === ExecutionClass.Branch
   private val lsuRequestFire = lsuRequestValid && lsuRequestReady
   private val systemCompletionFire = systemCompletionValid && systemCompletionReady
   private val operation = selectiveBits.aluOp
@@ -71,8 +74,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   private val headSchedulable = headLive && !head.uop.decoded.exception.valid &&
     head.operandsReady && (headIsCompute || headIsBranch || headIsMemory)
   private val headLaunchFire =
-    (headIsCompute && selectiveHeadFire) ||
-      (headIsBranch && branchFire) ||
+    ((headIsCompute || headIsBranch) && selectiveHeadFire) ||
       (headIsMemory && lsuRequestFire)
 
   private val completionValidCount = PopCount(Cat(
