@@ -341,6 +341,16 @@ class TinyDependencyState(val xlen: Int) extends Module {
         recoveryTokenSeen := true.B
         assert(io.recoverySurvivorCount === (age + 1).U,
           "normal recovery survivor count must end at the recovering Branch")
+        // The recovery response is the authoritative completion of the
+        // surviving Branch. Refresh its producer explicitly instead of relying
+        // on same-cycle generic wakeup ordering; older survivor producers remain
+        // untouched and younger producers are cleared below.
+        when(createsProducer(entry.uop)) {
+          producers(entry.uop.producerTag.id).valid := true.B
+          producers(entry.uop.producerTag.id).producerTag := entry.uop.producerTag
+          producers(entry.uop.producerTag.id).ready := io.recovery.bits.hasValue
+          producers(entry.uop.producerTag.id).value := io.recovery.bits.value
+        }
       }
     }
     assert(recoveryTokenSeen, "normal recovery must name a live entry in the ROB window")
