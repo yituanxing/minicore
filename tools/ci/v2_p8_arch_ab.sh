@@ -24,16 +24,56 @@ git cat-file -e "$BASELINE_SHA^{commit}"
 mkdir -p "$OUT_ROOT"
 FW_BIN="$(realpath "$FW_BIN")"
 sha256sum "$FW_BIN" | tee "$OUT_ROOT/workload.sha256"
-printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\n' \
+printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\nmeasurement_overlay=host-only-marker\n' \
   "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" \
   | tee "$OUT_ROOT/identity.txt"
 
 TMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/aethercore-v2-p8-arch-ab.XXXXXX")"
 BASE_SRC="$TMP_ROOT/baseline-src"
-trap 'git worktree remove --force "$BASE_SRC" >/dev/null 2>&1 || true; rm -rf "$TMP_ROOT"' EXIT
+TARGET_SRC="$TMP_ROOT/target-src"
+cleanup() {
+  git worktree remove --force "$BASE_SRC" >/dev/null 2>&1 || true
+  git worktree remove --force "$TARGET_SRC" >/dev/null 2>&1 || true
+  rm -rf "$TMP_ROOT"
+}
+trap cleanup EXIT
 
 git worktree add --detach "$BASE_SRC" "$BASELINE_SHA"
+git worktree add --detach "$TARGET_SRC" "$TARGET_SHA"
 [[ "$(git -C "$BASE_SRC" rev-parse HEAD)" == "$BASELINE_SHA" ]]
+[[ "$(git -C "$TARGET_SRC" rev-parse HEAD)" == "$TARGET_SHA" ]]
+
+# The P8 host hook normally snapshots at the full PID1 proof marker. This A/B
+# intentionally stops earlier at a bounded Linux milestone, so install the same
+# observation-only marker string into both detached source trees. No production
+# RTL or simulator memory ordering is changed, and the main checkout stays clean.
+install_marker_overlay() {
+  local src="$1"
+  local hook="$src/sim/v2_rv64_opensbi_shim/v2_perf_host_hook.h"
+  python3 - "$hook" "$MILESTONE" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+path = Path(sys.argv[1])
+marker = sys.argv[2]
+try:
+    marker.encode('ascii')
+except UnicodeEncodeError as exc:
+    raise SystemExit(f'performance marker must be ASCII: {marker!r}') from exc
+
+old = 'constexpr char kMarker[] = "RV64 USER UART IRQ OK";'
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit(f'expected exactly one qualified P8 host marker in {path}')
+new = 'constexpr char kMarker[] = ' + json.dumps(marker) + ';'
+path.write_text(text.replace(old, new))
+print(f'AETHERCORE_ARCH_AB_MARKER_OVERLAY path={path} marker={marker}')
+PY
+}
+
+install_marker_overlay "$BASE_SRC"
+install_marker_overlay "$TARGET_SRC"
 
 required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob2 rob3 rob4 issue_int issue_mul issue_div issue_branch issue_mem system_completion selective_candidate selective_bypass bypass_compute_head bypass_branch_head bypass_memory_head bypass_other_head lsu_compute_overlap head_not_ready head_ready_not_issued commit_idle_nonempty compute_head branch_head memory_head system_head interrupt_hold wfi_halted lsu_busy memory_launch_blocked mem_req mem_resp ptw_active completion_collision completion_backpressure'
 
@@ -105,7 +145,7 @@ run_variant() {
 }
 
 run_variant baseline "$BASE_SRC" "$BASELINE_SHA"
-run_variant target "$ROOT" "$TARGET_SHA"
+run_variant target "$TARGET_SRC" "$TARGET_SHA"
 
 python3 - "$OUT_ROOT/baseline.snapshot.txt" "$OUT_ROOT/target.snapshot.txt" "$OUT_ROOT/result.txt" <<'PY'
 from pathlib import Path
