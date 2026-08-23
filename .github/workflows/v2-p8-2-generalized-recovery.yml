@@ -1,0 +1,145 @@
+name: AetherCore V2 P8.2 Generalized Recovery
+
+on:
+  push:
+    branches:
+      - 'arch/aethercore-v2-p8-2-generalized-recovery'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: aethercore-v2-p8-2-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  announce:
+    name: Publish discoverable P8.2 run identity
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish pending commit status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/p82-pending.json
+          import json, os
+          print(json.dumps({
+              'state': 'pending',
+              'context': 'aethercore/v2-p8.2-recovery',
+              'description': 'P8.2 generalized recovery focused proof running',
+              'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl -fsS -L -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            --data-binary @/tmp/p82-pending.json
+
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  focused:
+    name: Prove generalized recovery ownership
+    needs: [announce, verilator-tool]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+
+    steps:
+      - name: Checkout exact architecture head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Verify exact P8.2 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          grep -q 'P8.2 R1: a validated live Branch may recover at any ROB age' src/main/scala/aethercore/core/v2/TinyRobCommit.scala
+          grep -q 'class V2P82GeneralizedRecoverySpec' src/test/scala/aethercore/V2P82GeneralizedRecoverySpec.scala
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Configure focused build directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-v2-p82"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Revalidate fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Compile complete Scala test surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.compile
+
+      - name: Run P8.2 and inherited recovery proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.core.v2.V2P82GeneralizedRecoverySpec \
+            aethercore.V2F4RecoverySpec \
+            aethercore.V2F5PrivilegedSpec
+
+      - name: Publish final P8.2 commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          [[ "$JOB_STATUS" == success ]] && state=success
+          export state
+          python3 - <<'PY' > /tmp/p82-status.json
+          import json, os
+          print(json.dumps({
+              'state': os.environ['state'],
+              'context': 'aethercore/v2-p8.2-recovery',
+              'description': f"{os.environ['JOB_STATUS']}: generalized recovery focused proof",
+              'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl -fsS -L -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            --data-binary @/tmp/p82-status.json
