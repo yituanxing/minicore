@@ -1,4 +1,4 @@
-name: AetherCore V2 Simulator Speed Micro A-B
+name: AetherCore V2 Simulator RAM Speed Micro A-B
 
 on:
   pull_request:
@@ -8,6 +8,7 @@ on:
       - '.github/workflows/v2-p8-sim-speed-micro.yml'
       - 'software/rv64_baremetal/v2_sim_speed_loop.S'
       - 'tools/ci/v2_p8_runtime_ab.sh'
+      - 'sim/l32_opensbi_runtime.h'
       - 'sim/v2_rv64_opensbi_shim/**'
       - 'src/main/scala/aethercore/**'
       - 'Makefile.l32-linux-boot'
@@ -18,12 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: aethercore-v2-sim-speed-micro-${{ github.event.pull_request.number || github.ref }}
+  group: aethercore-v2-sim-speed-ram-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   runtime-ab:
-    name: 12M-cycle bare-metal fixed vs adaptive settle
+    name: 12M-cycle adaptive vs fixed-width RAM
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -39,12 +40,14 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Verify exact micro speed contracts
+      - name: Verify exact RAM speed contracts
         shell: bash
         run: |
           set -euo pipefail
           [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
           grep -q 'AETHERCORE_SIM_ADAPTIVE_SETTLE' sim/v2_rv64_opensbi_shim/v2_perf_host_hook.h
+          grep -q 'AETHERCORE_SIM_FIXED_WIDTH_RAM' sim/l32_opensbi_runtime.h
+          grep -q 'adaptive_ram' tools/ci/v2_p8_runtime_ab.sh
           grep -q 'AETHERCORE_RUNTIME_AB_COUNTERS_MATCH' tools/ci/v2_p8_runtime_ab.sh
           grep -q '^_start:' software/rv64_baremetal/v2_sim_speed_loop.S
           bash -n tools/ci/v2_p8_runtime_ab.sh
@@ -116,7 +119,7 @@ jobs:
           [[ "$((entry))" -eq "$((0x80000000))" ]]
           sha256sum "$elf" "$bin" | tee build/v2-sim-speed-micro/sha256.txt
 
-      - name: Run short real-model micro A-B
+      - name: Run adaptive versus RAM real-model A-B
         shell: bash
         run: |
           set -euo pipefail
@@ -124,12 +127,12 @@ jobs:
           MAX_CYCLES=12000000 PROGRESS_INTERVAL_CYCLES=10000000 \
             bash tools/ci/v2_p8_runtime_ab.sh
 
-      - name: Upload micro speed evidence
+      - name: Upload RAM speed evidence
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: aethercore-v2-sim-speed-micro-${{ github.run_id }}-${{ github.run_attempt }}
+          name: aethercore-v2-sim-speed-ram-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: warn
           path: |
