@@ -9,6 +9,17 @@
 #include <cstdint>
 #include <iostream>
 
+// The representative Linux and bare-metal 12M A/B gates both proved that the
+// adaptive low-phase settle is counter-identical while improving hosted runtime
+// throughput by more than 10%. Make it the measured-v2 default, but retain an
+// explicit reference escape hatch for qualification and future differentials.
+#if defined(AETHERCORE_SIM_ADAPTIVE_SETTLE) && defined(AETHERCORE_SIM_REFERENCE_SETTLE)
+#error "adaptive and reference settle modes are mutually exclusive"
+#endif
+#ifndef AETHERCORE_SIM_REFERENCE_SETTLE
+#define AETHERCORE_SIM_ADAPTIVE_SETTLE 1
+#endif
+
 namespace aethercore::l32sim {
 namespace v2perf_detail {
 
