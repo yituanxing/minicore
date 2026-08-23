@@ -194,6 +194,8 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         )
         dut.io.acceptedRecovery.valid.expect(true.B)
         dut.io.acceptedRecoverySurvivorCount.expect(2.U)
+        dut.io.acceptedRecovery.bits.hasValue.expect(true.B)
+        dut.io.acceptedRecovery.bits.value.expect(link.U)
         dut.io.commit.valid.expect(false.B)
         dut.io.dispatch.ready.expect(false.B)
         dut.clock.step()

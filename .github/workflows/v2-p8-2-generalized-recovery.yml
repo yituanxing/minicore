@@ -109,13 +109,19 @@ jobs:
           set -euo pipefail
           ./mill aethercore.test.compile
 
-      - name: Run P8.2 and inherited recovery proofs
+      - name: Run bounded rebuild proof first
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.core.v2.V2P82RecoveryRebuildSpec
+
+      - name: Run inherited recovery proofs
         shell: bash
         run: |
           set -euo pipefail
           ./mill aethercore.test.testOnly \
             aethercore.core.v2.V2P82GeneralizedRecoverySpec \
-            aethercore.core.v2.V2P82RecoveryRebuildSpec \
             aethercore.V2F4RecoverySpec \
             aethercore.V2F5PrivilegedSpec
 
