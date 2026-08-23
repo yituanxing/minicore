@@ -540,8 +540,18 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     io.schedulingWindow(age).uop := robEntry.uop
     io.schedulingWindow(age).dependenciesValid := dependencyMatches
     when(dependencyMatches) {
-      io.schedulingWindow(age).rs1 := dependencyEntry.rs1
-      io.schedulingWindow(age).rs2 := dependencyEntry.rs2
+      // Keep the read-only scheduler seam explicit at leaf fields. The
+      // projection is latency-free, but avoiding nested aggregate override
+      // makes readiness/value observation deterministic across simulators and
+      // later scheduler composition.
+      io.schedulingWindow(age).rs1.ready := dependencyEntry.rs1.ready
+      io.schedulingWindow(age).rs1.value := dependencyEntry.rs1.value
+      io.schedulingWindow(age).rs1.producerTag.id := dependencyEntry.rs1.producerTag.id
+      io.schedulingWindow(age).rs1.producerTag.generation := dependencyEntry.rs1.producerTag.generation
+      io.schedulingWindow(age).rs2.ready := dependencyEntry.rs2.ready
+      io.schedulingWindow(age).rs2.value := dependencyEntry.rs2.value
+      io.schedulingWindow(age).rs2.producerTag.id := dependencyEntry.rs2.producerTag.id
+      io.schedulingWindow(age).rs2.producerTag.generation := dependencyEntry.rs2.producerTag.generation
     }
     io.schedulingWindow(age).operandsReady := dependencyMatches &&
       dependencyEntry.rs1.ready && dependencyEntry.rs2.ready
