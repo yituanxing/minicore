@@ -2,6 +2,7 @@ package aethercore.sim
 
 import chisel3._
 import chisel3.util._
+import chisel3.util.experimental.BoringUtils
 import aethercore.common.AluOp
 import aethercore.core.v2.ExecutionClass
 
@@ -132,21 +133,46 @@ class V2PerformanceCounterBank extends Module {
 /** Linux/OpenSBI simulation top with P8.0 observation attached around the
   * already-qualified #151 production core.
   *
-  * The inherited production core and platform wiring are untouched. This class
-  * only reads existing handshakes/state and accumulates them in a simulation-only
-  * counter bank. Keep the generated module name stable so existing Verilator
-  * runners continue to use the same top-level C++ type.
+  * The inherited production core and platform wiring are untouched. Cross-
+  * hierarchy state is read through Chisel read-only probes, so no performance
+  * ports are added to TinyPagedCore/TinyMemoryBackend and no observed value can
+  * feed back into issue, completion, LSU or Commit decisions. Keep the generated
+  * module name stable so existing Verilator runners use the same host API.
   */
 class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTop {
   override def desiredName: String = "AetherCoreV2OpenSbiRV64SimTop"
 
   private val perf = Module(new V2PerformanceCounterBank)
   private val events = WireInit(0.U.asTypeOf(new V2PerformanceEvents))
-  private val backend = core.backend
-  private val selective = backend.selectiveIssue.io.request
-  private val selectiveFire = selective.fire
-  private val operation = selective.bits.aluOp
-  private val head = backend.dependencyBackend.io.schedulingWindow(0)
+
+  // Chisel visibility intentionally forbids using grandchild IO directly in
+  // expressions at this module. tapAndRead creates read-only probe paths through
+  // the hierarchy without changing the production module interfaces.
+  private val selectiveValid = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.valid)
+  private val selectiveReady = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.ready)
+  private val selectiveBits = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits)
+  private val head = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(0))
+
+  private val branchValid = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.valid)
+  private val branchReady = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.ready)
+  private val lsuRequestValid = BoringUtils.tapAndRead(core.backend.lsu.io.request.valid)
+  private val lsuRequestReady = BoringUtils.tapAndRead(core.backend.lsu.io.request.ready)
+
+  private val systemCompletionValid = BoringUtils.tapAndRead(core.backend.system.io.completion.valid)
+  private val systemCompletionReady = BoringUtils.tapAndRead(core.backend.system.io.completion.ready)
+  private val lsuCompletionValid = BoringUtils.tapAndRead(core.backend.lsu.io.completion.valid)
+  private val lsuCompletionReady = BoringUtils.tapAndRead(core.backend.lsu.io.completion.ready)
+  private val executionCompletionValid = BoringUtils.tapAndRead(core.backend.execution.io.response.valid)
+  private val executionCompletionReady = BoringUtils.tapAndRead(core.backend.execution.io.response.ready)
+
+  private val dispatchValid = BoringUtils.tapAndRead(core.backend.io.dispatch.valid)
+  private val dispatchReady = BoringUtils.tapAndRead(core.backend.io.dispatch.ready)
+
+  private val selectiveFire = selectiveValid && selectiveReady
+  private val branchFire = branchValid && branchReady
+  private val lsuRequestFire = lsuRequestValid && lsuRequestReady
+  private val systemCompletionFire = systemCompletionValid && systemCompletionReady
+  private val operation = selectiveBits.aluOp
 
   private val multiplyOperation =
     operation === AluOp.Mul || operation === AluOp.Mulh ||
@@ -156,38 +182,38 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
       operation === AluOp.Rem || operation === AluOp.Remu
 
   private val selectedDiffersFromHead =
-    selective.bits.robToken.index =/= head.uop.robToken.index ||
-      selective.bits.robToken.generation =/= head.uop.robToken.generation
+    selectiveBits.robToken.index =/= head.uop.robToken.index ||
+      selectiveBits.robToken.generation =/= head.uop.robToken.generation
 
   private val completionValidCount = PopCount(Cat(
-    backend.system.io.completion.valid,
-    backend.lsu.io.completion.valid,
-    backend.execution.io.response.valid
+    systemCompletionValid,
+    lsuCompletionValid,
+    executionCompletionValid
   ))
   private val completionBackpressured =
-    (backend.system.io.completion.valid && !backend.system.io.completion.ready) ||
-      (backend.lsu.io.completion.valid && !backend.lsu.io.completion.ready) ||
-      (backend.execution.io.response.valid && !backend.execution.io.response.ready)
+    (systemCompletionValid && !systemCompletionReady) ||
+      (lsuCompletionValid && !lsuCompletionReady) ||
+      (executionCompletionValid && !executionCompletionReady)
 
   events.commit := core.io.commit.valid
-  events.dispatchAccepted := backend.io.dispatch.fire
-  events.dispatchBlocked := backend.io.dispatch.valid && !backend.io.dispatch.ready
+  events.dispatchAccepted := dispatchValid && dispatchReady
+  events.dispatchBlocked := dispatchValid && !dispatchReady
   events.robOccupancy := core.io.occupancy
 
-  events.selectiveCandidate := selective.valid
-  events.integerIssue := selectiveFire && selective.bits.executionClass === ExecutionClass.Integer
-  events.multiplyIssue := selectiveFire && selective.bits.executionClass === ExecutionClass.MulDiv && multiplyOperation
-  events.divideIssue := selectiveFire && selective.bits.executionClass === ExecutionClass.MulDiv && divideOperation
-  events.branchIssue := backend.branchIssue.io.request.fire
-  events.memoryIssue := backend.lsu.io.request.fire
-  events.systemCompletion := backend.system.io.completion.fire
+  events.selectiveCandidate := selectiveValid
+  events.integerIssue := selectiveFire && selectiveBits.executionClass === ExecutionClass.Integer
+  events.multiplyIssue := selectiveFire && selectiveBits.executionClass === ExecutionClass.MulDiv && multiplyOperation
+  events.divideIssue := selectiveFire && selectiveBits.executionClass === ExecutionClass.MulDiv && divideOperation
+  events.branchIssue := branchFire
+  events.memoryIssue := lsuRequestFire
+  events.systemCompletion := systemCompletionFire
   events.selectiveBypassIssue := selectiveFire && head.valid && selectedDiffersFromHead
 
   events.headNotReady := head.valid && !head.complete &&
     !head.uop.decoded.exception.valid && !head.operandsReady
   events.commitIdleRobNonEmpty := core.io.occupancy =/= 0.U && !core.io.commit.valid
   events.lsuBusy := core.io.lsuBusy
-  events.memoryLaunchBlocked := backend.lsu.io.request.valid && !backend.lsu.io.request.ready
+  events.memoryLaunchBlocked := lsuRequestValid && !lsuRequestReady
   events.memoryRequest := core.io.memoryRequest.fire
   events.memoryResponse := core.io.memoryResponse.fire
   events.ptwActive := io.ptwValid
