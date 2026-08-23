@@ -20,7 +20,11 @@ MILESTONE ?= Linux version 6.6.143
 MIN_INTERRUPTS ?= 0
 MIN_SEIP ?= 0
 MIN_STIP ?= 0
-MIN_POST_MILESTONE_COMMITS ?= 0
+# Measured P8 snapshots are emitted by a clocked Chisel printf. The host sees
+# the final UART marker byte after that edge, so keep at least one further edge
+# before returning. Two post-marker commits are sufficient for the PID1
+# sched_yield loop while preserving the historical zero-delay default elsewhere.
+MIN_POST_MILESTONE_COMMITS ?= $(if $(findstring -DAETHERCORE_V2_PERF,$(SIM_CXXFLAGS)),2,0)
 UART_TRIGGER ?=
 UART_COMMAND ?=
 UART_COMMAND_FILE ?=
