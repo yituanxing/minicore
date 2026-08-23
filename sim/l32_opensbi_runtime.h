@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -70,10 +71,47 @@ class Memory {
     if (size != 1 && size != 2 && size != 4 && size != 8)
       throw std::runtime_error("data transaction must be 1, 2, 4 or 8 bytes");
     const auto offset = checkedOffset(address, size);
+#ifdef AETHERCORE_SIM_FIXED_WIDTH_RAM
+    // Fixed-size memcpy lets GCC/Clang lower the common 2/4/8-byte simulator
+    // reads to native unaligned loads while preserving aliasing correctness.
+    // The byte-loop remains the default qualified path outside speed builds.
+    const auto* src = bytes_.data() + offset;
+    switch (size) {
+      case 1:
+        return src[0];
+      case 2: {
+        std::uint16_t value;
+        std::memcpy(&value, src, sizeof(value));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        value = __builtin_bswap16(value);
+#endif
+        return value;
+      }
+      case 4: {
+        std::uint32_t value;
+        std::memcpy(&value, src, sizeof(value));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        value = __builtin_bswap32(value);
+#endif
+        return value;
+      }
+      case 8: {
+        std::uint64_t value;
+        std::memcpy(&value, src, sizeof(value));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        value = __builtin_bswap64(value);
+#endif
+        return value;
+      }
+      default:
+        __builtin_unreachable();
+    }
+#else
     std::uint64_t value = 0;
     for (std::size_t i = 0; i < size; ++i)
       value |= std::uint64_t(bytes_[offset + i]) << (8 * i);
     return value;
+#endif
   }
 
   std::uint32_t read32(std::uint64_t address) const {
