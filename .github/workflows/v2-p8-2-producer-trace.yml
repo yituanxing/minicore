@@ -28,7 +28,7 @@ jobs:
           print(json.dumps({
               'state': 'pending',
               'context': 'aethercore/v2-p8.2-producer-trace',
-              'description': 'checkout-only consumer storage trace',
+              'description': 'checkout-only projection trace',
               'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
           }))
           PY
@@ -44,7 +44,7 @@ jobs:
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
   trace:
-    name: Trace consumer dependency storage
+    name: Trace dependency projection seam
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -60,7 +60,7 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Inject consumer-storage trace into checkout only
+      - name: Inject projection traces into checkout only
         shell: bash
         run: |
           set -euo pipefail
@@ -68,17 +68,32 @@ jobs:
           from pathlib import Path
           path = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
           text = path.read_text()
-          needle = '  for (index <- 0 until Entries) {\n    io.slotView(index) := 0.U.asTypeOf(\n'
-          trace_lines = [
+
+          state_anchor = '  private val headEntry = dependencies(io.head.bits.robToken.index)\n'
+          state_lines = [
               '  when(io.allocate.valid || io.retire.valid || io.recovery.valid || rebuildBusy) {',
-              '    printf(p"P82_STORE_TRACE rename5_valid=${rename(5).valid} rename5_id=${rename(5).producerTag.id} p1_ready=${producers(1).ready} p1_value=${producers(1).value} alloc_valid=${io.allocate.valid} alloc_rs1=${io.allocate.bits.decoded.rs1} alloc_ready=${allocateRs1.ready} alloc_value=${allocateRs1.value} d2_valid=${dependencies(2).valid} d2_token=${dependencies(2).robToken.index} d2_rs1_ready=${dependencies(2).rs1.ready} d2_rs1_id=${dependencies(2).rs1.producerTag.id} d2_rs1_value=${dependencies(2).rs1.value} comp_valid=${io.completion.valid} retire=${io.retire.valid} recovery=${io.recovery.valid} rebuild=${rebuildBusy}\\n")',
+              '    printf(p"P82_VIEW_TRACE d2_valid=${dependencies(2).valid} d2_ready=${dependencies(2).rs1.ready} d2_id=${dependencies(2).rs1.producerTag.id} d2_value=${dependencies(2).rs1.value} view2_valid=${io.slotView(2).valid} view2_ready=${io.slotView(2).rs1.ready} view2_id=${io.slotView(2).rs1.producerTag.id} view2_value=${io.slotView(2).rs1.value} alloc=${io.allocate.valid} retire=${io.retire.valid} rebuild=${rebuildBusy}\\n")',
               '  }',
               '',
           ]
-          trace = '\n'.join(trace_lines) + '\n'
-          if text.count(needle) != 1:
-              raise SystemExit('unexpected slotView anchor count')
-          path.write_text(text.replace(needle, trace + needle))
+          state_trace = '\n'.join(state_lines) + '\n'
+          if text.count(state_anchor) != 1:
+              raise SystemExit('unexpected headEntry anchor count')
+          text = text.replace(state_anchor, state_trace + state_anchor)
+
+          backend_anchor = '  io.headDependenciesValid := dependencyState.io.headDependenciesValid\n'
+          backend_lines = [
+              '  when(rob.io.allocated.valid || io.retiring.valid) {',
+              '    printf(p"P82_SCHED_TRACE slot2_valid=${dependencyState.io.slotView(2).valid} slot2_ready=${dependencyState.io.slotView(2).rs1.ready} slot2_id=${dependencyState.io.slotView(2).rs1.producerTag.id} slot2_value=${dependencyState.io.slotView(2).rs1.value} win1_valid=${io.schedulingWindow(1).valid} win1_dep=${io.schedulingWindow(1).dependenciesValid} win1_ready=${io.schedulingWindow(1).rs1.ready} win1_id=${io.schedulingWindow(1).rs1.producerTag.id} win1_value=${io.schedulingWindow(1).rs1.value} allocated=${rob.io.allocated.valid} retiring=${io.retiring.valid}\\n")',
+              '  }',
+              '',
+          ]
+          backend_trace = '\n'.join(backend_lines) + '\n'
+          if text.count(backend_anchor) != 1:
+              raise SystemExit('unexpected headDependencies anchor count')
+          text = text.replace(backend_anchor, backend_trace + backend_anchor)
+
+          path.write_text(text)
           PY
 
       - name: Restore Scala dependency cache
@@ -119,7 +134,7 @@ jobs:
           set -euo pipefail
           ./mill aethercore.test.compile
 
-      - name: Run backend release trace
+      - name: Run backend projection trace
         shell: bash
         run: |
           set -euo pipefail
