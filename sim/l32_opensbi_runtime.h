@@ -2,8 +2,10 @@
 
 #include "verilated.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -70,10 +72,24 @@ class Memory {
     if (size != 1 && size != 2 && size != 4 && size != 8)
       throw std::runtime_error("data transaction must be 1, 2, 4 or 8 bytes");
     const auto offset = checkedOffset(address, size);
+#ifdef AETHERCORE_SIM_FIXED_WIDTH_READS
+    // The architectural RAM is little-endian. Fixed-size memcpy lets the host
+    // compiler lower hot 2/4/8-byte accesses to one unaligned load on normal
+    // little-endian runners while preserving byte-exact semantics elsewhere.
+    const auto* ptr = bytes_.data() + offset;
+    switch (size) {
+      case 1: return ptr[0];
+      case 2: return loadLittleEndian<std::uint16_t>(ptr);
+      case 4: return loadLittleEndian<std::uint32_t>(ptr);
+      case 8: return loadLittleEndian<std::uint64_t>(ptr);
+      default: throw std::runtime_error("unreachable fixed-width read size");
+    }
+#else
     std::uint64_t value = 0;
     for (std::size_t i = 0; i < size; ++i)
       value |= std::uint64_t(bytes_[offset + i]) << (8 * i);
     return value;
+#endif
   }
 
   std::uint32_t read32(std::uint64_t address) const {
@@ -188,6 +204,20 @@ class Memory {
   }
 
  private:
+  template <typename T>
+  static T loadLittleEndian(const std::uint8_t* ptr) {
+    T value{};
+    std::memcpy(&value, ptr, sizeof(T));
+    if constexpr (std::endian::native == std::endian::little) {
+      return value;
+    } else {
+      T result{};
+      for (std::size_t i = 0; i < sizeof(T); ++i)
+        result |= static_cast<T>(ptr[i]) << (8 * i);
+      return result;
+    }
+  }
+
   std::size_t checkedOffset(std::uint64_t address, std::size_t size) const {
     if (!contains(address, size)) throw std::runtime_error("memory access outside RAM");
     return static_cast<std::size_t>(address - kRamBase);
