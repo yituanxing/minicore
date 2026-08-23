@@ -333,19 +333,23 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
           controlFlowKind = ControlFlowKind.DirectJump
         )
       }
-      dispatch(dut) {
-        pokeDispatch(dut, killedPc, ExecutionClass.Integer, rd = 3, immediate = 99)
-      }
 
-      var sawSelectiveBranch = false
+      // The single-issue scheduler launches age1 Branch in the same cycle that
+      // the still-younger age2 instruction enters the ROB. Observe the fire
+      // before advancing the clock; the Branch response/redirect appears on the
+      // following cycle. This proves the Branch was genuinely middle-aged while
+      // also ensuring recovery has younger work to squash.
+      pokeDispatch(dut, killedPc, ExecutionClass.Integer, rd = 3, immediate = 99)
+      dut.io.dispatch.ready.expect(true.B)
+      dut.observedSelectiveIssue.fire.expect(true.B)
+      dut.observedSelectiveIssue.robIndex.expect(1.U)
+      dut.observedSelectiveIssue.executionClass.expect(ExecutionClass.Branch)
+      dut.clock.step()
+      dut.io.dispatch.valid.poke(false.B)
+
       var sawRedirect = false
       var cycles = 0
-      while ((!sawSelectiveBranch || !sawRedirect) && cycles < 24) {
-        if (dut.observedSelectiveIssue.fire.peek().litToBoolean &&
-            dut.observedSelectiveIssue.robIndex.peek().litValue == 1) {
-          dut.observedSelectiveIssue.executionClass.expect(ExecutionClass.Branch)
-          sawSelectiveBranch = true
-        }
+      while (!sawRedirect && cycles < 24) {
         if (dut.io.branchRedirect.valid.peek().litToBoolean) {
           dut.io.branchRedirect.bits.robToken.index.expect(1.U)
           dut.io.branchRedirect.bits.target.expect(target.U)
@@ -353,9 +357,6 @@ trait V2A8ProductionSelectiveIssueChecks { this: AnyFlatSpec with Matchers with 
         }
         dut.clock.step()
         cycles += 1
-      }
-      withClue("middle-aged Branch never fired through production selective issue: ") {
-        sawSelectiveBranch shouldBe true
       }
       withClue("middle-aged Branch never produced generalized recovery redirect: ") {
         sawRedirect shouldBe true
