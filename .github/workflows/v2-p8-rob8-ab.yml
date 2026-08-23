@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: aethercore-v2-p8-rob8-ab-${{ github.ref }}
@@ -189,3 +190,37 @@ jobs:
             build/v2-p8-rob8-ab/target.occupancy.txt
             build/v2-p8-rob8-ab/baseline.run.log
             build/v2-p8-rob8-ab/target.run.log
+
+      - name: Publish discoverable ROB8 commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          [[ "$JOB_STATUS" == success ]] && state=success
+          description="${JOB_STATUS}: ROB8 A/B result unavailable"
+          if [[ -s build/v2-p8-rob8-ab/result.txt ]]; then
+            baseline_cycles="$(grep '^baseline_cycles=' build/v2-p8-rob8-ab/result.txt | cut -d= -f2)"
+            target_cycles="$(grep '^target_cycles=' build/v2-p8-rob8-ab/result.txt | cut -d= -f2)"
+            reduction="$(grep '^cycle_reduction_pct=' build/v2-p8-rob8-ab/result.txt | cut -d= -f2)"
+            description="${JOB_STATUS}: ${baseline_cycles}->${target_cycles} cycles, ${reduction}% reduction"
+          fi
+          export state description
+          python3 - <<'PY' > /tmp/rob8-status.json
+          import json, os
+          print(json.dumps({
+              'state': os.environ['state'],
+              'context': 'aethercore/v2-rob8-ab',
+              'description': os.environ['description'][:140],
+              'target_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl -fsS -L -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            --data-binary @/tmp/rob8-status.json
