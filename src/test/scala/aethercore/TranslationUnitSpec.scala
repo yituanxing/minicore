@@ -53,7 +53,7 @@ class TranslationUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.requestValid.poke(false.B)
   }
 
-  it should "compose a complete Sv39 walk, refill the TLB and hit the same page" in {
+  it should "compose a complete Sv39 walk, flow through a cached hit and invalidate it on flush" in {
     simulate(new TranslationUnit(PageTableGeometry.Sv39, tlbEntries = 4)) { dut =>
       initialize(dut)
       // Keep bit 38 clear so the positive Sv39 VA is canonical.
@@ -101,10 +101,43 @@ class TranslationUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.clock.step()
       dut.io.responseReady.poke(false.B)
 
-      request(dut, secondVa, root)
+      // A cached hit is flow-through: response is visible in the request cycle,
+      // while downstream backpressure prevents the request from being consumed.
+      dut.io.virtualAddress.poke(secondVa.U)
+      dut.io.satpRootPpn.poke(root.U)
+      dut.io.requestValid.poke(true.B)
+      dut.io.responseReady.poke(false.B)
       dut.io.pteValid.expect(false.B)
       dut.io.responseValid.expect(true.B)
+      dut.io.requestReady.expect(false.B)
       dut.io.physicalAddress.expect((pa + 0x100).U)
+
+      // Holding the request stable preserves the hit until the consumer accepts it.
+      dut.clock.step()
+      dut.io.pteValid.expect(false.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.requestReady.expect(false.B)
+      dut.io.physicalAddress.expect((pa + 0x100).U)
+
+      // Acceptance is a same-cycle request/response handshake; no tlbResponse
+      // register state or fixed extra hit bubble remains.
+      dut.io.responseReady.poke(true.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.requestReady.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+      dut.io.responseReady.poke(false.B)
+
+      // Flush suppresses the cached translation and forces the next access back
+      // through the normal miss/walker path.
+      dut.io.flush.poke(true.B)
+      dut.io.responseValid.expect(false.B)
+      dut.clock.step()
+      dut.io.flush.poke(false.B)
+      request(dut, secondVa, root)
+      dut.io.responseValid.expect(false.B)
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteAddress.expect(rootPte.U)
     }
   }
 
