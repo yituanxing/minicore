@@ -8,14 +8,13 @@ import aethercore.core.{MachineCsrBit, MachineCsrFile, PmpChecker, PmpConstants,
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
-  * F6 composition harness: F5 precise retirement plus the correctness-first
-  * one-outstanding LSU. F7 may opt into the clean-boundary asynchronous owner
-  * and A-extension transactions without changing the frozen F6 defaults.
+  * F6 composition harness matured after F7 with conservative selective compute.
   *
-  * The same ROB/dependency/execute/CSR leaf modules are composed here with one
-  * memory completion source. Ordering/lifetime remains owned by TinyRob; the
-  * LSU owns translation/PMP and one physical transaction; architectural memory
-  * trace becomes visible only when a generation-matching ROB head retires.
+  * Memory remains one-outstanding/head-issued, System remains head-owned, and
+  * Branch remains head-issued so the existing precise recovery contract stays
+  * unchanged. Only side-effect-free Integer/MulDiv work may issue oldest-ready
+  * from the read-only scheduling window. Commit, CSR/trap state, store
+  * visibility, translation and PMP ownership remain unchanged.
   */
 class TinyMemoryBackend(
     val config: CoreConfig,
@@ -109,8 +108,9 @@ class TinyMemoryBackend(
     lhs.index === rhs.index && lhs.generation === rhs.generation
 
   val dependencyBackend = Module(new TinyDependencyBackend(xlen))
-  val issue = Module(new TinyOldestIssue(xlen))
-  val execution = Module(new TinyExecutionCluster(xlen, isa.hasC))
+  val branchIssue = Module(new TinyOldestIssue(xlen))
+  val selectiveIssue = Module(new TinySelectiveComputeIssue(xlen))
+  val execution = Module(new TinySelectiveExecutionCluster(xlen, isa.hasC))
   val system = Module(new TinySystemCompletion(
     isa,
     allowSfenceVma = true,
@@ -238,19 +238,39 @@ class TinyMemoryBackend(
   io.allocated := dependencyBackend.io.allocated
   io.occupancy := dependencyBackend.io.occupancy
 
-  // F3 normal execution keeps its frozen supported-class policy. Memory gets a
-  // separate oldest-only issue path below; system/predecoded exceptions remain
-  // owned by TinySystemCompletion.
-  issue.io.head := dependencyBackend.io.head
-  issue.io.head.valid := dependencyBackend.io.head.valid &&
-    dependencyBackend.io.head.bits.executionClass =/= ExecutionClass.System &&
-    dependencyBackend.io.head.bits.executionClass =/= ExecutionClass.Memory &&
+  // Branch keeps the frozen head-only execution/recovery policy. Selective
+  // compute sees the whole read-only scheduling window but cannot select Branch,
+  // Memory or System by construction.
+  branchIssue.io.head := dependencyBackend.io.head
+  branchIssue.io.head.valid := dependencyBackend.io.head.valid &&
+    dependencyBackend.io.head.bits.executionClass === ExecutionClass.Branch &&
     !dependencyBackend.io.head.bits.decoded.exception.valid
-  issue.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
-  issue.io.headRs1 := dependencyBackend.io.headRs1
-  issue.io.headRs2 := dependencyBackend.io.headRs2
-  issue.io.headOperandsReady := dependencyBackend.io.headOperandsReady
-  execution.io.request <> issue.io.request
+  branchIssue.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
+  branchIssue.io.headRs1 := dependencyBackend.io.headRs1
+  branchIssue.io.headRs2 := dependencyBackend.io.headRs2
+  branchIssue.io.headOperandsReady := dependencyBackend.io.headOperandsReady
+
+  selectiveIssue.io.window := dependencyBackend.io.schedulingWindow
+  selectiveIssue.io.allocated := dependencyBackend.io.allocated
+  selectiveIssue.io.availability := execution.io.computeAvailability
+  // A just-validated recovery must not launch a younger lifetime that is being
+  // killed this cycle. A not-yet-issued head memory request also has launch
+  // priority so the first selective slice remains globally single-issue.
+  selectiveIssue.io.block :=
+    dependencyBackend.io.acceptedRecovery.valid ||
+      dependencyBackend.io.acceptedPrivilegedRecovery.valid ||
+      lsu.io.request.valid
+
+  // Branch wins the one execution launch slot when the exact head is ready;
+  // otherwise oldest-ready safe compute may use it. Once a branch has launched,
+  // its once-only latch lets younger compute overlap while the branch resolves.
+  private val executionRequests = Module(new Arbiter(
+    new ExecutionRequest(xlen, IdentityBits, GenerationBits),
+    2
+  ))
+  executionRequests.io.in(0) <> branchIssue.io.request
+  executionRequests.io.in(1) <> selectiveIssue.io.request
+  execution.io.request <> executionRequests.io.out
 
   system.io.head := dependencyBackend.io.head
   system.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
@@ -312,6 +332,15 @@ class TinyMemoryBackend(
     memoryIssuedValid := true.B
     memoryIssuedToken := head.bits.robToken
   }
+
+  // The first selective slice remains one-launch-per-cycle across Branch,
+  // Memory and compute. Memory gets priority through selectiveIssue.block;
+  // branch-vs-compute priority is owned by executionRequests above.
+  assert(PopCount(Cat(
+    branchIssue.io.request.fire,
+    selectiveIssue.io.request.fire,
+    lsu.io.request.fire
+  )) <= 1.U, "A8 selective backend must remain single-issue per cycle")
 
   // Ordinary stores and atomic writers may become externally visible only while
   // the exact lifetime is the ROB head. LR is read-only and does not need this
@@ -375,9 +404,8 @@ class TinyMemoryBackend(
   io.memoryResponse.ready := lsu.io.memoryResponse.ready
   io.lsuBusy := lsu.io.busy
 
-  // A8 removes the oldest-only mutual-exclusion assumption from completion
-  // transport. System, LSU and ordinary execution may all remain pending; a
-  // fair narrow arbiter selects exactly one response for the ROB each cycle.
+  // A8 completion transport permits independent execution/LSU/System progress
+  // while preserving one accepted ROB completion per cycle.
   val completions = Module(new TinyCompletionArbiter(xlen, 3))
   completions.io.in(0) <> system.io.completion
   completions.io.in(1) <> lsu.io.completion
@@ -487,9 +515,10 @@ class TinyMemoryBackend(
     pendingTraceValid(retiring.bits.uop.robToken.index) := false.B
   }
 
-  // Any recovery kills every younger lifetime. No younger memory uOp can have
-  // issued in the current oldest-only policy, but clearing the side table here
-  // preserves the ownership invariant when issue policy evolves later.
+  // Recovery kills every younger lifetime. Memory remains strict head-only, so
+  // no younger memory request can have externalized; speculative compute is
+  // side-effect free and is rejected later if an already-issued killed response
+  // returns with its stale lifetime identity.
   when(dependencyBackend.io.acceptedRecovery.valid ||
        dependencyBackend.io.acceptedPrivilegedRecovery.valid) {
     for (index <- 0 until Entries) {
