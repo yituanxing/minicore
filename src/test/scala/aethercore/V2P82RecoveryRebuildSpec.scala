@@ -229,10 +229,13 @@ class V2P82RecoveryRebuildSpec extends AnyFlatSpec with Matchers with ChiselSim 
         dut.io.schedulingWindow(0).uop.robToken.index.expect(branch.index.U)
         dut.io.schedulingWindow(1).uop.robToken.index.expect(consumer.index.U)
         dut.io.schedulingWindow(1).dependenciesValid.expect(true.B)
-        dut.io.schedulingWindow(1).rs1.ready.expect(true.B)
-        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
+        // Diagnose mapping ownership before value storage. If these fail, RAT
+        // rebuild did not restore the surviving Branch; if they pass but value
+        // fails, the mapping is correct and producer value retention is wrong.
         dut.io.schedulingWindow(1).rs1.producerTag.id.expect(branch.producerId.U)
         dut.io.schedulingWindow(1).rs1.producerTag.generation.expect(branch.producerGeneration.U)
+        dut.io.schedulingWindow(1).rs1.ready.expect(true.B)
+        dut.io.schedulingWindow(1).rs1.value.expect(link.U)
 
         // The killed WAW's late completion cannot wake or complete the reused
         // physical slot after generation advance.
