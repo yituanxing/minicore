@@ -7,7 +7,7 @@ import org.scalatest.matchers.should.Matchers
 import aethercore.common.{AluOp, BranchType}
 import aethercore.core.v2._
 
-/** Prove compute availability is owned by the real execution resources. */
+/** Prove selective availability is owned by the real execution resources. */
 trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private def pokeRequest(
       dut: TinySelectiveExecutionCluster,
@@ -37,16 +37,17 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
 
   behavior of "AetherCore v2 A8 selective execution availability"
 
-  it should "report each real compute resource independently without a shadow busy scoreboard" in {
+  it should "report each real speculative resource independently without a shadow busy scoreboard" in {
     simulate(new TinySelectiveExecutionCluster(32, hasCompressed = false)) { dut =>
       dut.io.request.valid.poke(false.B)
       dut.io.response.ready.poke(false.B)
 
       dut.io.computeAvailability.integer.expect(true.B)
+      dut.io.computeAvailability.branch.expect(true.B)
       dut.io.computeAvailability.multiply.expect(true.B)
       dut.io.computeAvailability.divide.expect(true.B)
 
-      // Occupy the iterative divider. Other compute resources remain available.
+      // Occupy the iterative divider. Other speculative resources remain available.
       pokeRequest(dut, ExecutionClass.MulDiv, AluOp.Divu, index = 3, lhs = 100, rhs = 7)
       dut.io.request.valid.poke(true.B)
       dut.io.request.ready.expect(true.B)
@@ -54,6 +55,7 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.request.valid.poke(false.B)
       dut.io.computeAvailability.divide.expect(false.B)
       dut.io.computeAvailability.integer.expect(true.B)
+      dut.io.computeAvailability.branch.expect(true.B)
       dut.io.computeAvailability.multiply.expect(true.B)
 
       // Let DIV finish while holding its completion. Its resource stays busy
@@ -72,6 +74,28 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.response.ready.poke(false.B)
       dut.io.computeAvailability.divide.expect(true.B)
 
+      // A held one-cycle Branch completion affects Branch only.
+      pokeRequest(dut, ExecutionClass.Branch, AluOp.Add, index = 2, lhs = 1, rhs = 1)
+      dut.io.request.bits.controlFlowKind.poke(ControlFlowKind.Conditional)
+      dut.io.request.bits.branchType.poke(BranchType.Eq)
+      dut.io.request.bits.pc.poke(0x1000.U)
+      dut.io.request.bits.immediate.poke(8.U)
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.robToken.index.expect(2.U)
+      dut.io.computeAvailability.branch.expect(false.B)
+      dut.io.computeAvailability.integer.expect(true.B)
+      dut.io.computeAvailability.multiply.expect(true.B)
+      dut.io.computeAvailability.divide.expect(true.B)
+
+      dut.io.response.ready.poke(true.B)
+      dut.clock.step()
+      dut.io.response.ready.poke(false.B)
+      dut.io.computeAvailability.branch.expect(true.B)
+
       // A held one-cycle integer completion similarly affects only Integer.
       pokeRequest(dut, ExecutionClass.Integer, AluOp.Add, index = 1, lhs = 4, rhs = 5)
       dut.io.request.valid.poke(true.B)
@@ -81,6 +105,7 @@ trait V2A8SelectiveExecutionChecks { this: AnyFlatSpec with Matchers with Chisel
       dut.io.response.valid.expect(true.B)
       dut.io.response.bits.robToken.index.expect(1.U)
       dut.io.computeAvailability.integer.expect(false.B)
+      dut.io.computeAvailability.branch.expect(true.B)
       dut.io.computeAvailability.multiply.expect(true.B)
       dut.io.computeAvailability.divide.expect(true.B)
     }
