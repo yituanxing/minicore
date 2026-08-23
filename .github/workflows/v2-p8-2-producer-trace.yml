@@ -1,0 +1,105 @@
+name: AetherCore V2 P8.2 Producer Trace Diagnostic
+
+on:
+  push:
+    branches:
+      - 'arch/aethercore-v2-p8-2-generalized-recovery'
+    paths:
+      - '.github/workflows/v2-p8-2-producer-trace.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  trace:
+    name: Trace recovering Branch producer
+    needs: [verilator-tool]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Inject producer trace into checkout only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/main/scala/aethercore/core/v2/TinyDependency.scala')
+          text = path.read_text()
+          needle = '  io.recoveryBusy := rebuildBusy\n'
+          overlay = '''  io.recoveryBusy := rebuildBusy
+
+  when(io.recovery.valid || rebuildBusy || io.retire.valid || io.allocate.valid) {
+    printf(p"P82_DEP_TRACE p1_valid=${producers(1).valid} p1_id=${producers(1).producerTag.id} p1_gen=${producers(1).producerTag.generation} p1_ready=${producers(1).ready} p1_value=${producers(1).value} saved=${rebuildRecoveryValue} recovery=${io.recovery.valid} rebuild=${rebuildBusy} retire=${io.retire.valid} allocate=${io.allocate.valid}\\n")
+  }
+'''
+          if text.count(needle) != 1:
+              raise SystemExit('unexpected recoveryBusy anchor count')
+          path.write_text(text.replace(needle, overlay))
+          PY
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Configure diagnostic build directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-v2-p82-trace"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Revalidate fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Compile diagnostic test surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.compile
+
+      - name: Run direct dependency-state trace
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.core.v2.V2P82DependencyStateReleaseSpec
+
+      - name: Run backend release trace
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.core.v2.V2P82RecoveryRebuildSpec
