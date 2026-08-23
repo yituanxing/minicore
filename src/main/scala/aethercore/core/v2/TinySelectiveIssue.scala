@@ -5,28 +5,31 @@ import chisel3.util._
 import aethercore.common.AluOp
 
 /**
-  * Resource-availability seam consumed by the first selective compute scheduler.
+  * Resource-availability seam consumed by the bounded selective scheduler.
   *
-  * It deliberately names only side-effect-free compute resources. Branch,
-  * memory and system ordering remain outside this contract and therefore cannot
-  * accidentally become selective merely because a functional unit exists.
+  * It names only execution resources that may accept speculative, side-effect-
+  * free work before Commit. Integer, Branch and Mul/Div all satisfy that rule
+  * after P8.2 generalized recovery. Memory and System ordering remain outside
+  * this contract and therefore cannot accidentally become selective merely
+  * because a functional unit exists.
   */
 class TinyComputeAvailability extends Bundle {
   val integer = Bool()
+  val branch = Bool()
   val multiply = Bool()
   val divide = Bool()
 }
 
 /**
-  * A8.3 oldest-ready single-issue selector over the read-only scheduling view.
+  * A8/P8 oldest-ready single-issue selector over the read-only scheduling view.
   *
   * This module owns policy and once-only issue state, but no uOp/dependency
   * storage. It scans the four live ROB ages and may select only exception-free,
-  * normally ordered Integer or Mul/Div work whose operands and target resource
-  * are ready. Branch may be bypassed; Memory may be bypassed only after the
-  * exact head request has been accepted by the LSU. System, explicit
-  * serialization and known exception boundaries stop younger issue.
-  * Architectural Commit remains in order.
+  * normally ordered Integer, Branch or Mul/Div work whose operands and target
+  * resource are ready. Memory may be bypassed only after the exact head request
+  * has been accepted by the LSU. System, explicit serialization and known
+  * exception boundaries stop younger issue. Architectural Commit remains in
+  * order; a taken arbitrary-age Branch is repaired by P8.2 younger-only recovery.
   */
 class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"selective issue XLEN must be 32 or 64, got $xlen")
@@ -39,8 +42,8 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val window = Input(Vec(Entries, new TinySchedulingEntry(xlen)))
     val allocated = Flipped(Valid(new BackendUop(xlen, IdentityBits, GenerationBits)))
     // Production asserts block while a not-yet-accepted head Memory request is
-    // valid, as well as during accepted recovery. Consequently, a ready age0
-    // Memory with block deasserted is already owned by the blocking LSU.
+    // valid, as well as during accepted/in-progress recovery. Consequently, a
+    // ready age0 Memory with block deasserted is already owned by the LSU.
     val block = Input(Bool())
     val availability = Input(new TinyComputeAvailability)
     val request = Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
@@ -62,16 +65,17 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val executionClass = entry.uop.executionClass
     val op = entry.uop.decoded.aluOp
     (executionClass === ExecutionClass.Integer && io.availability.integer) ||
+      (executionClass === ExecutionClass.Branch && io.availability.branch) ||
       (executionClass === ExecutionClass.MulDiv && isMultiply(op) && io.availability.multiply) ||
       (executionClass === ExecutionClass.MulDiv && isDivide(op) && io.availability.divide)
   }
 
-  // A candidate may bypass ordinary compute and Branch work. Memory is stricter:
-  // exact-head launch is the only ownership transfer into the LSU, so a Memory
-  // at age>0 is necessarily unlaunched and blocks younger selective compute.
-  // For age0, dependencies/operands must already be ready and production block
-  // must have fallen after the LSU accepted the request. System, serialization
-  // and known exceptions remain unconditional architectural barriers.
+  // A candidate may bypass ordinary Integer/MulDiv/Branch work. Memory is
+  // stricter: exact-head launch is the only ownership transfer into the LSU, so
+  // a Memory at age>0 is necessarily unlaunched and blocks younger selective
+  // execution. For age0, dependencies/operands must already be ready and
+  // production block must have fallen after the LSU accepted the request.
+  // System, serialization and known exceptions remain unconditional barriers.
   private val bypassOpen = Wire(Vec(Entries, Bool()))
   bypassOpen(0) := true.B
   for (age <- 1 until Entries) {
@@ -98,6 +102,7 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val token = entry.uop.robToken
     val alreadyIssued = issuedValid(token.index) && sameRobToken(issuedToken(token.index), token)
     val safeClass = entry.uop.executionClass === ExecutionClass.Integer ||
+      entry.uop.executionClass === ExecutionClass.Branch ||
       entry.uop.executionClass === ExecutionClass.MulDiv
 
     eligible(age) := bypassOpen(age) &&
