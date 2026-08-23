@@ -1,5 +1,6 @@
 name: AetherCore V2 P8.2 Producer Trace Diagnostic
 
+# Dedicated checkout-only diagnostic. Production RTL is not modified by this workflow.
 on:
   push:
     branches:
