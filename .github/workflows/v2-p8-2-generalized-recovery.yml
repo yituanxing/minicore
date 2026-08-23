@@ -49,7 +49,7 @@ jobs:
     name: Prove generalized recovery ownership
     needs: [announce, verilator-tool]
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    timeout-minutes: 22
     env:
       TARGET_SHA: ${{ github.sha }}
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
@@ -71,6 +71,7 @@ jobs:
           grep -q 'class V2P82GeneralizedRecoverySpec' src/test/scala/aethercore/V2P82GeneralizedRecoverySpec.scala
           grep -q 'class V2P82RecoveryRebuildSpec' src/test/scala/aethercore/V2P82RecoveryRebuildSpec.scala
           grep -q 'class V2P82DependencyStateReleaseSpec' src/test/scala/aethercore/V2P82DependencyStateReleaseSpec.scala
+          grep -q 'class V2P82RecoveryIntegrationSpec' src/test/scala/aethercore/V2P82RecoveryIntegrationSpec.scala
 
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
@@ -123,6 +124,13 @@ jobs:
           set -euo pipefail
           ./mill aethercore.test.testOnly \
             aethercore.core.v2.V2P82RecoveryRebuildSpec
+
+      - name: Run R3 redirect and late-response integration proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.V2P82RecoveryIntegrationSpec
 
       - name: Run inherited recovery proofs
         shell: bash
