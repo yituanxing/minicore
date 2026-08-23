@@ -5,13 +5,12 @@ import chisel3.util._
 import aethercore.common.AluOp
 
 /**
-  * A8 execution composition for selective compute issue.
+  * A8 execution composition for bounded selective issue.
   *
   * Leaf execution semantics are reused unchanged from F3. This composition adds
-  * only two maturation facts that the frozen F3 cluster did not need to expose:
-  * fair response arbitration and read-only per-compute-resource acceptance.
-  * Branch remains present for the conservative head-only branch path, but it is
-  * intentionally absent from TinyComputeAvailability.
+  * fair response arbitration and a read-only view of actual functional-unit
+  * request acceptance. P8.2 R4 includes Branch in that view after generalized
+  * recovery made arbitrary-age Branch execution precise.
   */
 class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) extends Module {
   require(xlen == 32 || xlen == 64, s"selective execution cluster XLEN must be 32 or 64, got $xlen")
@@ -65,6 +64,7 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
   // Availability is a read-only view of the real FU request acceptance state.
   // It is not a scheduler-owned busy scoreboard.
   io.computeAvailability.integer := integer.io.request.ready
+  io.computeAvailability.branch := branch.io.request.ready
   io.computeAvailability.multiply := multiply.io.request.ready
   io.computeAvailability.divide := divide.io.request.ready
 
