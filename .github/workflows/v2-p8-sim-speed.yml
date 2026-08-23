@@ -23,13 +23,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   runtime-ab:
     name: 12M-cycle fixed vs adaptive settle
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
