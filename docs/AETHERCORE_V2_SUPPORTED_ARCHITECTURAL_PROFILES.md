@@ -1,8 +1,9 @@
 # AetherCore v2 supported architectural profiles
 
-Status: A8 architecture-closure contract.
+Status: A8 architecture-closure contract; common-RVC implementation in qualification.
 
-Base reference for this closure branch: frozen #161 `ed3580ba59b8c8238f4123bd8f139054b53dde9c`.
+Base reference for the supported-profile closure: frozen #161 `ed3580ba59b8c8238f4123bd8f139054b53dde9c`.
+Common-RVC work is stacked on the exact #164 profile-matrix head `caee74a97da8d2cbd787c9b9b6a5f77b06be9696`.
 
 This document closes the post-F7 requirement to formalize a supported architectural-profile matrix. It deliberately separates:
 
@@ -33,28 +34,29 @@ Microarchitecture geometry is intentionally not part of this matrix. ROB depth, 
 | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
 | RV32 machine/RTOS | `rv32imcSoftware` | 32 | IMC + Zicsr | ILP32 | M | bare | none | yes | Real RV32IMC software/FreeRTOS line; compressed execution is qualified on RV32 |
 | RV32 application OS | `rv32imacsuSv32PmpSoftware` | 32 | IMAC + Zicsr + Zifencei | ILP32 | M/S/U | Sv32 | PMP16 | yes | Highest integrated RV32 application profile; includes current RV32 Sstc capability |
-| RV64 machine/software | `rv64imCurrent` | 64 | IM + Zicsr + Zifencei | LP64 | M | bare | none | no | RV64 machine/software bring-up profile |
-| RV64 application OS | `rv64imasuSv39PmpSoftware` | 64 | IMA + Zicsr | LP64 | M/S/U | Sv39 | PMP16 | no | Current Linux/OpenSBI-class RV64 application profile |
+| RV64 machine/software | `rv64imCurrent` | 64 | IM + Zicsr + Zifencei | LP64 | M | bare | none | no | RV64 machine/software bring-up profile; C remains absent until executable RV64C qualification closes |
+| RV64 application OS | `rv64imasuSv39PmpSoftware` | 64 | IMA + Zicsr | LP64 | M/S/U | Sv39 | PMP16 | no | Current Linux/OpenSBI-class RV64 application profile; C remains absent until executable RV64C qualification closes |
 
 These rows are representative named support points, not the only historical regression configurations. Intermediate `CoreProfiles` remain useful for focused qualification but do not imply an arbitrary supported cross-product.
 
 ## 3. Current architecture gaps / explicit non-claims
 
-### RV64C is not closed yet
+### RV64C implementation exists; qualification is still pending
 
-`CoreConfig` currently rejects `C` when `XLEN == 64`. This is deliberate fail-closed behavior, not a statement that the RISC-V C extension is RV32-only.
+The common-RVC architecture slice removes the former `CoreConfig` RV32-only C restriction and uses one XLEN-aware decompression/parcel contract for RV32 and RV64. It does **not** yet add C to either named RV64 qualified profile.
 
-A8 must replace the RV32-only decompression/frontend restriction with one common XLEN-aware RVC contract before AetherCore claims mature RV32/RV64 architectural symmetry.
+The implementation contract covers:
 
-The common-RVC closure must cover at least:
-
-- shared RV32C/RV64C encodings;
-- RV32-only `C.JAL` legality only at XLEN32;
-- RV64-only `C.ADDIW`, compressed LD/SD forms and other XLEN64 forms only at XLEN64;
+- shared RV32C/RV64C encodings through one decompressor;
+- the XLEN alias at quadrant-1/funct3=001: RV32 `C.JAL` versus RV64 `C.ADDIW`;
+- RV64-only `C.LD`, `C.SD`, `C.LDSP`, `C.SDSP`, `C.SUBW`, and `C.ADDW`;
+- RV64 six-bit compressed shift amounts while preserving the RV32 custom/reserved shamt[5] boundary;
 - canonical 32-bit semantic instruction delivery after decompression;
-- `instBytes = 2` lifetime/PC semantics;
-- cross-XLEN illegal/reserved encoding tests;
-- real compiler-produced RV64C executable evidence before the RV64 application profile gains C.
+- common 16-bit parcel lifetime with `instBytes = 2`, including precise PC+2 second-parcel faults;
+- cross-XLEN illegal/reserved encoding checks;
+- compatibility wrappers for the already-qualified RV32C source/test surface.
+
+The remaining qualification gate before a named RV64 profile gains C is **real compiler-produced RV64C executable evidence on the production core path**, followed by the normal exact-head regression gates. Until that evidence is frozen, RV64C is an implementation capability rather than a supported-profile claim.
 
 ### Floating point is not claimed
 
@@ -80,12 +82,12 @@ The post-F7 audit defined A8 before further aggressive optimization.
 | --- | --- |
 | post-F7 audit | complete |
 | lifetime generation/epoch safety | complete; widened RobToken generation and late-response identity handling are in the v2 line |
-| supported architectural-profile matrix | **this closure branch** |
-| common RV32C/RV64C decompression/alignment | **next architecture task** |
+| supported architectural-profile matrix | complete and exact-head qualified on #164 |
+| common RV32C/RV64C decompression/alignment | implementation complete in this slice; focused and executable qualification pending |
 | SchedulerWindow contract | complete |
 | completion contract/backpressure seam | complete for the current one-accepted-completion selective-OoO stage; wider bandwidth remains measurement-driven |
 
-Therefore the next architecture milestone after this matrix is **common RVC / RV64C closure**, not another local performance experiment and not yet P8.2 Branch OoO.
+The immediate architecture task is therefore to qualify the common-RVC implementation with focused regressions and a real compiler-produced RV64C workload. Only after that evidence is green should a named RV64 support profile gain C or the project proceed to P8.2 Branch OoO.
 
 ## 5. Sequencing after A8
 
