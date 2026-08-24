@@ -111,16 +111,16 @@ jobs:
               read_cmd+=" $sv"
             done
 
-            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $json; stat -top TinyPagedCore" \
+            # Keep the mapped design in the same Yosys process for ltp.  Yosys
+            # 0.33 cannot reliably read back synth_ecp5 JSON containing the
+            # technology primitive LUT4.INIT parameter schema.
+            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $json; stat -top TinyPagedCore; flatten; ltp -noff TinyPagedCore" \
               2>&1 | tee "$ylog"
 
-            # ltp is a technology-mapped combinational-logic depth proxy, not
-            # static timing analysis. Flatten is mandatory because ltp measures
-            # paths only within one module; -noff excludes sequential cells.
-            yosys -Q -p "read_json $json; hierarchy -check -top TinyPagedCore; flatten; ltp -noff TinyPagedCore" \
-              2>&1 | tee "$llog"
-
-            depth=$(sed -n 's/.*Longest topological path in TinyPagedCore (length=\([0-9][0-9]*\)).*/\1/p' "$llog" | tail -1)
+            # Preserve a compact ltp-specific evidence file while parsing the
+            # authoritative same-process synthesis log.
+            grep -E 'Longest topological path|Executing LTP|Warning.*loop' "$ylog" > "$llog" || true
+            depth=$(sed -n 's/.*Longest topological path in TinyPagedCore (length=\([0-9][0-9]*\)).*/\1/p' "$ylog" | tail -1)
             test -n "$depth"
             printf '%s\n' "$depth" > "$DEPTH_OUT/$label-depth"
 
@@ -159,7 +159,7 @@ jobs:
           summary = {
               'baseline_sha': os.environ['BASELINE_SHA'],
               'target_sha': os.environ['TARGET_SHA'],
-              'proxy': 'Yosys synth_ecp5 mapped netlist + flatten + ltp -noff',
+              'proxy': 'Yosys synth_ecp5 mapped netlist + flatten + ltp -noff (single process)',
               'base_logic_depth': base_depth,
               'target_logic_depth': target_depth,
               'logic_depth_delta': target_depth - base_depth,
