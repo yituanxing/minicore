@@ -78,6 +78,7 @@ class V2A8SelectiveIssueSpec
     with Matchers
     with ChiselSim
     with V2A8SelectiveIssueChecks
+    with V2P8PreHeadLoadSelectorChecks
 
 class V2A8SelectiveExecutionSpec
     extends AnyFlatSpec
