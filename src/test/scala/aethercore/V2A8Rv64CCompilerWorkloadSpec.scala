@@ -128,10 +128,12 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
               sawExpectedResult shouldBe true
               sawBreakpoint = true
             } else {
-              instBytes match {
-                case 2 => compressedRetires += 1
-                case 4 => wideRetires += 1
-                case other => fail(s"unexpected retired instruction length $other at pc=0x${commitPc.toString(16)}")
+              if (instBytes == BigInt(2)) {
+                compressedRetires += 1
+              } else if (instBytes == BigInt(4)) {
+                wideRetires += 1
+              } else {
+                fail(s"unexpected retired instruction length $instBytes at pc=0x${commitPc.toString(16)}")
               }
 
               if (dut.io.commit.rdWrite.peek().litToBoolean &&
