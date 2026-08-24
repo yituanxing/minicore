@@ -62,6 +62,8 @@ jobs:
           grep -q 'AetherCoreV2MeasuredOpenSbiRV64SimTop' src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala
           grep -q 'AETHERCORE_V2_PERF' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
           grep -q 'V2LinuxProofMarkerRecognizer' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
+          grep -q 'ready_younger_branch' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
+          grep -q 'branch_opportunity' src/main/scala/aethercore/sim/AetherCoreV2Performance.scala
           grep -q 'RV64 USER UART IRQ OK' software/rv64_userspace/minimal_init.S
           bash -n tools/ci/rv64_linux_early_build.sh
           bash -n tools/ci/rv64_minimal_initramfs_build.sh
@@ -97,6 +99,7 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
 
       - name: Restore Scala dependency cache
         uses: actions/cache/restore@v4
@@ -217,9 +220,13 @@ jobs:
               'bypass_other_head', 'lsu_compute_overlap', 'head_not_ready',
               'head_ready_not_issued', 'commit_idle_nonempty', 'compute_head',
               'branch_head', 'memory_head', 'system_head', 'interrupt_hold',
-              'wfi_halted', 'lsu_busy', 'memory_launch_blocked', 'mem_req',
-              'mem_resp', 'ptw_active', 'completion_collision',
-              'completion_backpressure',
+              'wfi_halted', 'ready_younger_branch', 'branch_age1', 'branch_age2',
+              'branch_age3', 'branch_opportunity', 'branch_opp_head_not_ready',
+              'branch_opp_compute_head', 'branch_opp_branch_head',
+              'branch_opp_memory_head', 'branch_opp_system_head',
+              'branch_opp_other_head', 'branch_opp_lsu_busy', 'lsu_busy',
+              'memory_launch_blocked', 'mem_req', 'mem_resp', 'ptw_active',
+              'completion_collision', 'completion_backpressure',
           }
           missing = sorted(required - values.keys())
           if missing:
@@ -232,6 +239,12 @@ jobs:
           bypass_reasons = (
               values['bypass_compute_head'] + values['bypass_branch_head'] +
               values['bypass_memory_head'] + values['bypass_other_head']
+          )
+          branch_age_sum = values['branch_age1'] + values['branch_age2'] + values['branch_age3']
+          branch_opportunity_classes = (
+              values['branch_opp_compute_head'] + values['branch_opp_branch_head'] +
+              values['branch_opp_memory_head'] + values['branch_opp_system_head'] +
+              values['branch_opp_other_head']
           )
 
           assert cycles > 0
@@ -246,10 +259,24 @@ jobs:
           assert values['mem_req'] >= values['mem_resp']
           assert values['mem_req'] - values['mem_resp'] <= 1
 
+          assert branch_age_sum == values['ready_younger_branch'], (
+              branch_age_sum, values['ready_younger_branch'])
+          assert values['branch_opportunity'] <= values['ready_younger_branch']
+          assert branch_opportunity_classes == values['branch_opportunity'], (
+              branch_opportunity_classes, values['branch_opportunity'])
+          assert values['branch_opp_other_head'] == 0, values['branch_opp_other_head']
+          assert values['branch_opp_head_not_ready'] <= values['branch_opportunity']
+          assert values['branch_opp_lsu_busy'] <= values['branch_opportunity']
+
           for key in (
               'head_not_ready', 'head_ready_not_issued', 'commit_idle_nonempty',
               'compute_head', 'branch_head', 'memory_head', 'system_head',
-              'interrupt_hold', 'wfi_halted', 'lsu_busy', 'memory_launch_blocked',
+              'interrupt_hold', 'wfi_halted', 'ready_younger_branch',
+              'branch_age1', 'branch_age2', 'branch_age3', 'branch_opportunity',
+              'branch_opp_head_not_ready', 'branch_opp_compute_head',
+              'branch_opp_branch_head', 'branch_opp_memory_head',
+              'branch_opp_system_head', 'branch_opp_other_head',
+              'branch_opp_lsu_busy', 'lsu_busy', 'memory_launch_blocked',
               'ptw_active', 'completion_collision', 'completion_backpressure',
           ):
               assert values[key] <= cycles, (key, values[key], cycles)
@@ -266,6 +293,11 @@ jobs:
               f'lsu_busy_pct={pct("lsu_busy"):.3f} '
               f'branch_head_pct={pct("branch_head"):.3f} '
               f'memory_head_pct={pct("memory_head"):.3f} '
+              f'ready_younger_branch_pct={pct("ready_younger_branch"):.3f} '
+              f'branch_opportunity_pct={pct("branch_opportunity"):.3f} '
+              f'branch_opp_memory_head_pct={pct("branch_opp_memory_head"):.3f} '
+              f'branch_opp_system_head_pct={pct("branch_opp_system_head"):.3f} '
+              f'branch_opp_lsu_busy_pct={pct("branch_opp_lsu_busy"):.3f} '
               f'interrupt_hold_pct={pct("interrupt_hold"):.3f} '
               f'selective_bypass={values["selective_bypass"]} '
               f'lsu_overlap={values["lsu_compute_overlap"]}'
