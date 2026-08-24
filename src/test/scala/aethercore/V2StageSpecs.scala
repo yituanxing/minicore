@@ -28,6 +28,7 @@ class V2F3ExecutionSpec
     with ChiselSim
     with V2F3ExecutionChecks
     with V2F3ExecutionSemanticChecks
+    with V2P8BranchResponseFlowThroughChecks
 
 class V2F4RecoverySpec
     extends AnyFlatSpec
