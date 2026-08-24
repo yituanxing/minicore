@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      BASELINE_SHA: 25e2899de149ac38cac57cf6718e1f781d32a022
+      BASELINE_SHA: 822e67a984398413ce6d342f0758a976b9695fb0
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
