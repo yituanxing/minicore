@@ -57,7 +57,10 @@ class V2PerformanceEvents extends Bundle {
   val commit = Bool()
   val dispatchAccepted = Bool()
   val dispatchBlocked = Bool()
-  val robOccupancy = UInt(3.W)
+  // ROB8 occupancy spans 0..8, so observation needs four bits. Keeping this
+  // wide enough is essential: truncating full occupancy 8 to zero would make
+  // the histogram lie about an empty ROB exactly when the window is saturated.
+  val robOccupancy = UInt(4.W)
 
   val selectiveCandidate = Bool()
   val integerIssue = Bool()
@@ -105,6 +108,10 @@ class V2PerformanceCounters extends Bundle {
   val robOccupancy2 = UInt(64.W)
   val robOccupancy3 = UInt(64.W)
   val robOccupancy4 = UInt(64.W)
+  val robOccupancy5 = UInt(64.W)
+  val robOccupancy6 = UInt(64.W)
+  val robOccupancy7 = UInt(64.W)
+  val robOccupancy8 = UInt(64.W)
 
   val selectiveCandidate = UInt(64.W)
   val integerIssue = UInt(64.W)
@@ -170,6 +177,10 @@ class V2PerformanceCounterBank extends Module {
   io.counters.robOccupancy2 := count(io.events.robOccupancy === 2.U)
   io.counters.robOccupancy3 := count(io.events.robOccupancy === 3.U)
   io.counters.robOccupancy4 := count(io.events.robOccupancy === 4.U)
+  io.counters.robOccupancy5 := count(io.events.robOccupancy === 5.U)
+  io.counters.robOccupancy6 := count(io.events.robOccupancy === 6.U)
+  io.counters.robOccupancy7 := count(io.events.robOccupancy === 7.U)
+  io.counters.robOccupancy8 := count(io.events.robOccupancy === 8.U)
 
   io.counters.selectiveCandidate := count(io.events.selectiveCandidate)
   io.counters.integerIssue := count(io.events.integerIssue)
@@ -342,7 +353,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   when(snapshotTrigger) {
     snapshotEmitted := true.B
     printf(p"AETHERCORE_V2_PERF cycles=${perf.io.counters.cycles} commits=${perf.io.counters.commits} dispatch_accepted=${perf.io.counters.dispatchAccepted} dispatch_blocked=${perf.io.counters.dispatchBlocked}\n")
-    printf(p"AETHERCORE_V2_PERF rob0=${perf.io.counters.robOccupancy0} rob1=${perf.io.counters.robOccupancy1} rob2=${perf.io.counters.robOccupancy2} rob3=${perf.io.counters.robOccupancy3} rob4=${perf.io.counters.robOccupancy4}\n")
+    printf(p"AETHERCORE_V2_PERF rob0=${perf.io.counters.robOccupancy0} rob1=${perf.io.counters.robOccupancy1} rob2=${perf.io.counters.robOccupancy2} rob3=${perf.io.counters.robOccupancy3} rob4=${perf.io.counters.robOccupancy4} rob5=${perf.io.counters.robOccupancy5} rob6=${perf.io.counters.robOccupancy6} rob7=${perf.io.counters.robOccupancy7} rob8=${perf.io.counters.robOccupancy8}\n")
     printf(p"AETHERCORE_V2_PERF issue_int=${perf.io.counters.integerIssue} issue_mul=${perf.io.counters.multiplyIssue} issue_div=${perf.io.counters.divideIssue} issue_branch=${perf.io.counters.branchIssue} issue_mem=${perf.io.counters.memoryIssue} system_completion=${perf.io.counters.systemCompletion}\n")
     printf(p"AETHERCORE_V2_PERF selective_candidate=${perf.io.counters.selectiveCandidate} selective_bypass=${perf.io.counters.selectiveBypassIssue} bypass_compute_head=${perf.io.counters.selectiveBypassComputeHead} bypass_branch_head=${perf.io.counters.selectiveBypassBranchHead} bypass_memory_head=${perf.io.counters.selectiveBypassMemoryHead} bypass_other_head=${perf.io.counters.selectiveBypassOtherHead} lsu_compute_overlap=${perf.io.counters.lsuComputeOverlapIssue}\n")
     printf(p"AETHERCORE_V2_PERF head_not_ready=${perf.io.counters.headNotReady} head_ready_not_issued=${perf.io.counters.headReadyNotIssued} commit_idle_nonempty=${perf.io.counters.commitIdleRobNonEmpty} compute_head=${perf.io.counters.computeHead} branch_head=${perf.io.counters.branchHead} memory_head=${perf.io.counters.memoryHead} system_head=${perf.io.counters.systemHead}\n")
