@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{InstructionFetchAdapter, PmpChecker, PmpConstants, PtwArbiter}
+import aethercore.core.{InstructionFetchAdapter, PmpChecker, PmpConstants, PtwArbiter, RvcParcelController}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -14,6 +14,11 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
   * privilege/CSR/PMP/SATP owner. This frontend consumes only read-only context,
   * shares the existing geometry-driven PTW arbiter, and converts fetch faults
   * into predecoded architectural exceptions before ROB allocation.
+  *
+  * Compressed profiles reuse the shared XLEN-aware parcel controller. Each
+  * 16-bit parcel is translated, PMP-checked and fetched independently, so a
+  * 32-bit instruction crossing a page/PMP boundary faults precisely at PC+2.
+  * Profiles without C retain the frozen one-request 32-bit frontend path.
   *
   * F7 may additionally opt into clean-boundary asynchronous interrupts/WFI.
   * A-extension profiles use the same semantic memory seam and enable Atomic
@@ -37,7 +42,6 @@ class TinyPagedCore(
   require(geometry.xlen == Xlen)
   require(isa.pageTableGeometries.contains(geometry))
   require(isa.hasPagedVirtualMemory, "TinyPagedCore requires a paged-VM profile")
-  require(!isa.hasC, "TinyPagedCore current F7 slice accepts only canonical 32-bit instructions")
   require(BusBits == Xlen, "TinyPagedCore current slice retains the F6 busDataBits == XLEN contract")
   require(!withMachineExternalInterrupt || enableAsyncInterrupts)
   require(!withSupervisorExternalInterrupt || enableAsyncInterrupts)
@@ -84,6 +88,7 @@ class TinyPagedCore(
   // TranslationUnit. Shared translation-path changes therefore require the same
   // exact-head Linux qualification as direct core/v2 RTL changes.
   val fetch = Module(new InstructionFetchAdapter(geometry, PhysicalBits, tlbEntries))
+  val parcel = if (isa.hasC) Some(Module(new RvcParcelController(Xlen))) else None
   val instructionPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
   val ptwArbiter = Module(new PtwArbiter(geometry, PhysicalBits))
   val ptwPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
@@ -112,6 +117,7 @@ class TinyPagedCore(
     )
   )
   private val frontendBlocked = serialized || interruptHold || wfiWaiting
+  private val frontendKill = redirect || interruptHold || wfiWaiting
   io.halted := wfiWaiting
   io.interruptHold := interruptHold
 
@@ -122,14 +128,23 @@ class TinyPagedCore(
   private val serializedRetires = serialized && backend.io.commit.valid &&
     backend.io.commit.pc === serializedPc
 
+  if (isa.hasC) {
+    val rvc = parcel.get
+    rvc.io.instructionPc := pc
+    // A translation fence is a frontend context boundary even though the
+    // InstructionFetchAdapter receives it through its dedicated flush input.
+    // Never retain the first half of a 32-bit instruction across that boundary.
+    rvc.io.kill := frontendKill || backend.io.translationFence
+  }
+
   fetch.io.requestValid := !redirect && !frontendBlocked
   // A newly qualified interrupt can arrive while an instruction translation is
   // in flight. Cancel that speculative fetch and restart from the same PC after
   // trap entry/return rather than carrying old-context instruction bits across
   // the architectural boundary.
-  fetch.io.kill := redirect || interruptHold || wfiWaiting
+  fetch.io.kill := frontendKill
   fetch.io.flush := backend.io.translationFence
-  fetch.io.virtualAddress := pc
+  fetch.io.virtualAddress := (if (isa.hasC) parcel.get.io.parcelRequestAddress else pc)
   fetch.io.privilege := backend.io.currentPrivilege
   fetch.io.satpTranslationEnabled := backend.io.frontendSatpTranslationEnabled
   fetch.io.satpRootPpn := backend.io.frontendSatpRootPpn
@@ -137,7 +152,7 @@ class TinyPagedCore(
 
   instructionPmp.io.privilege := backend.io.currentPrivilege
   instructionPmp.io.address := fetch.io.physicalAddress
-  instructionPmp.io.bytes := 4.U
+  instructionPmp.io.bytes := (if (isa.hasC) 2.U else 4.U)
   instructionPmp.io.write := false.B
   instructionPmp.io.execute := true.B
   instructionPmp.io.config := backend.io.frontendPmpConfig
@@ -151,28 +166,59 @@ class TinyPagedCore(
     !fetch.io.pageFault && !fetch.io.accessFault && !instructionPmpFault &&
     !redirect && !frontendBlocked
   io.imem.addr := fetch.io.physicalAddress
-  io.imem.bytes := 4.U
+  io.imem.bytes := (if (isa.hasC) 2.U else 4.U)
+
+  private val instructionBusFault = io.imem.valid && io.imem.fault
+  private val parcelAccessFault = fetch.io.accessFault || instructionPmpFault || instructionBusFault
+
+  if (isa.hasC) {
+    val rvc = parcel.get
+    rvc.io.parcelResponseValid := fetch.io.responseValid
+    rvc.io.parcelBits := io.imem.inst(15, 0)
+    rvc.io.parcelPageFault := fetch.io.pageFault
+    rvc.io.parcelAccessFault := parcelAccessFault
+    // For the first half of an ordinary 32-bit instruction this may consume a
+    // parcel without allocating a ROB entry. Backpressure is still inherited
+    // from the backend so a full ROB cannot open a new second-parcel lifetime.
+    rvc.io.advance := backend.io.dispatch.ready
+  }
 
   val fetchException = WireInit(0.U.asTypeOf(new TrapInfo(Xlen)))
-  when(fetch.io.pageFault) {
-    fetchException.valid := true.B
-    fetchException.cause := MachineExceptionCode.InstructionPageFault.U
-    fetchException.value := pc
-  }.elsewhen(fetch.io.accessFault || instructionPmpFault || (io.imem.valid && io.imem.fault)) {
-    fetchException.valid := true.B
-    fetchException.cause := MachineExceptionCode.InstructionAccessFault.U
-    fetchException.value := pc
+  if (isa.hasC) {
+    val rvc = parcel.get
+    when(rvc.io.pageFault) {
+      fetchException.valid := true.B
+      fetchException.cause := MachineExceptionCode.InstructionPageFault.U
+      fetchException.value := rvc.io.faultAddress
+    }.elsewhen(rvc.io.accessFault) {
+      fetchException.valid := true.B
+      fetchException.cause := MachineExceptionCode.InstructionAccessFault.U
+      fetchException.value := rvc.io.faultAddress
+    }
+  } else {
+    when(fetch.io.pageFault) {
+      fetchException.valid := true.B
+      fetchException.cause := MachineExceptionCode.InstructionPageFault.U
+      fetchException.value := pc
+    }.elsewhen(fetch.io.accessFault || instructionPmpFault || instructionBusFault) {
+      fetchException.valid := true.B
+      fetchException.cause := MachineExceptionCode.InstructionAccessFault.U
+      fetchException.value := pc
+    }
   }
 
   decode.io.pc := pc
-  decode.io.inst := io.imem.inst
-  decode.io.rawInst := io.imem.inst
-  decode.io.instBytes := 4.U
+  decode.io.inst := (if (isa.hasC) parcel.get.io.instruction else io.imem.inst)
+  decode.io.rawInst := (if (isa.hasC) parcel.get.io.rawInstruction else io.imem.inst)
+  decode.io.instBytes := (if (isa.hasC) parcel.get.io.instructionBytes else 4.U)
   decode.io.fetchException := fetchException
 
-  backend.io.dispatch.valid := fetch.io.responseValid && !redirect && !frontendBlocked
+  backend.io.dispatch.valid :=
+    (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
+      !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
-  fetch.io.responseReady := backend.io.dispatch.fire
+  fetch.io.responseReady :=
+    (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
 
   if (enableAsyncInterrupts) {
     backend.io.async.get.boundaryPc := pc
@@ -193,7 +239,7 @@ class TinyPagedCore(
       serialized := false.B
     }
     when(backend.io.dispatch.fire) {
-      pc := pc + 4.U
+      pc := pc + decode.io.dispatch.decoded.instBytes
       when(decode.io.dispatch.decoded.ordering =/= OrderingClass.Normal) {
         serialized := true.B
         serializedPc := pc

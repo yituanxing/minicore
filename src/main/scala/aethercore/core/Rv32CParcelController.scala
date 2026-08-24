@@ -3,17 +3,18 @@ package aethercore.core
 import chisel3._
 import chisel3.util.Cat
 
-/** Assemble one architectural RV32 instruction from 16-bit instruction parcels.
+/** Assemble one architectural instruction from 16-bit RISC-V instruction parcels.
   *
   * Translation, PMP and physical-memory access stay outside this module. The
   * caller presents the result of exactly one parcel request at a time. A
   * compressed instruction completes after the first parcel; a 32-bit
   * instruction latches the first parcel and requests PC+2 next. This keeps
   * second-parcel page/access faults precise without teaching the MMU about
-  * instruction length.
+  * instruction length. The same parcel lifetime contract is used at RV32 and
+  * RV64; only compressed semantic expansion is XLEN-dependent.
   */
-class Rv32CParcelController(val xlen: Int = 32) extends Module {
-  require(xlen == 32, s"the current compressed frontend is RV32-only, got XLEN=$xlen")
+class RvcParcelController(val xlen: Int = 32) extends Module {
+  require(Set(32, 64).contains(xlen), s"compressed parcel control requires XLEN 32 or 64, got $xlen")
 
   val io = IO(new Bundle {
     val instructionPc = Input(UInt(xlen.W))
@@ -40,7 +41,7 @@ class Rv32CParcelController(val xlen: Int = 32) extends Module {
   val secondParcelPending = RegInit(false.B)
   val firstParcel = RegInit(0.U(16.W))
 
-  val decompressor = Module(new Rv32CDecompressor)
+  val decompressor = Module(new RvcDecompressor(xlen))
   decompressor.io.raw := io.parcelBits
 
   val parcelFault = io.parcelPageFault || io.parcelAccessFault
@@ -86,3 +87,8 @@ class Rv32CParcelController(val xlen: Int = 32) extends Module {
     }
   }
 }
+
+/** Compatibility wrapper retaining the historical source name while all new
+  * architecture work targets the XLEN-aware RvcParcelController contract.
+  */
+class Rv32CParcelController(xlen: Int = 32) extends RvcParcelController(xlen)

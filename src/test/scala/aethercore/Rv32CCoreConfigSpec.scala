@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 import aethercore.config.{CoreConfig, CoreProfiles, IsaConfig}
 
 class Rv32CCoreConfigSpec extends AnyFlatSpec with Matchers {
-  behavior of "RV32C CoreConfig"
+  behavior of "RVC CoreConfig"
 
   it should "advertise the bounded RV32IMC software profile" in {
     val config = CoreProfiles.rv32imcSoftware
@@ -39,13 +39,24 @@ class Rv32CCoreConfigSpec extends AnyFlatSpec with Matchers {
     pmp.isa.hasPmp shouldBe true
   }
 
-  it should "keep compressed execution RV32-only" in {
+  it should "admit RV64C implementation configurations without promoting the qualified RV64 profiles" in {
     val rv64c = IsaConfig(
       xlen = 64,
       extensions = Set('I', 'M', 'C'),
-      privilegeModes = Set('M')
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
     )
-    an[IllegalArgumentException] should be thrownBy
-      CoreConfig("unsupported-rv64c", rv64c, CoreProfiles.rv64imCurrent.platform)
+    val implementation = CoreConfig(
+      "rv64imc-implementation",
+      rv64c,
+      CoreProfiles.rv64imCurrent.platform
+    )
+
+    implementation.isa.hasC shouldBe true
+    implementation.isa.march shouldBe "rv64imc_zicsr"
+    implementation.isa.mabi shouldBe "lp64"
+
+    CoreProfiles.rv64imCurrent.isa.hasC shouldBe false
+    CoreProfiles.rv64imasuSv39PmpSoftware.isa.hasC shouldBe false
   }
 }

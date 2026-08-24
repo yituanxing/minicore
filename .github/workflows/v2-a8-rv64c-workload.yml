@@ -1,0 +1,157 @@
+name: AetherCore V2 A8 RV64C Compiler Workload
+
+on:
+  pull_request:
+    paths:
+      - software/rv64/v2_rv64c_workload.c
+      - software/rv64/v2_rv64c_start.S
+      - software/rv64/v2_rv64c_workload.ld
+      - tools/ci/v2_rv64c_workload_build.sh
+      - tools/ensure_verilator_5_024.sh
+      - tools/ensure_riscv64_linux_gcc_13_3.sh
+      - src/main/scala/aethercore/config/**
+      - src/main/scala/aethercore/core/Rv32CDecompressor.scala
+      - src/main/scala/aethercore/core/Rv32CParcelController.scala
+      - src/main/scala/aethercore/core/v2/**
+      - src/test/scala/aethercore/V2A8Rv64CCompilerWorkloadSpec.scala
+      - .github/workflows/v2-a8-rv64c-workload.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-a8-rv64c-workload-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rv64c-workload:
+    name: Compile and execute RV64C workload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+      AETHERCORE_V2_RV64C_WORKLOAD_REQUIRED: "1"
+
+    steps:
+      - name: Checkout exact common-RVC head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        id: rv64-gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
+
+      - name: Install toolchain prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true' || steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            build-essential git curl xz-utils
+
+      - name: Validate or build exact Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision exact RV64 GCC 13.3 toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Save validated Verilator on cache miss
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Save validated RV64 GCC on cache miss
+        if: success() && steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Build and prove compiler-produced RV64C image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/v2_rv64c_workload_build.sh "$RUNNER_TEMP/aethercore-v2-rv64c"
+
+      - name: Execute compiler-produced image on production TinyPagedCore
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          ./mill aethercore.test.testOnly aethercore.V2A8Rv64CCompilerWorkloadSpec
+
+      - name: Upload RV64C workload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-rv64c-workload-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/aethercore-v2-rv64c
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Record exact RV64C workload identity
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore v2 A8 compiler-produced RV64C qualification'
+            echo
+            echo '- exact head: `${{ github.event.pull_request.head.sha || github.sha }}`'
+            echo '- compiler target: `rv64imc_zicsr / lp64`'
+            echo '- compiler: pinned Bootlin GCC `13.3.0`'
+            echo '- execution owner: production `TinyPagedCore`'
+            if [[ -f "$RUNNER_TEMP/aethercore-v2-rv64c/workload.meta" ]]; then
+              echo
+              echo '```text'
+              cat "$RUNNER_TEMP/aethercore-v2-rv64c/workload.meta"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

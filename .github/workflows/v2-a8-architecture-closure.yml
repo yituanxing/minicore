@@ -5,7 +5,12 @@ on:
     paths:
       - docs/AETHERCORE_V2_SUPPORTED_ARCHITECTURAL_PROFILES.md
       - src/main/scala/aethercore/config/**
+      - src/main/scala/aethercore/core/Rv32CDecompressor.scala
+      - src/main/scala/aethercore/core/Rv32CParcelController.scala
+      - src/main/scala/aethercore/core/v2/TinyPagedCore.scala
       - src/test/scala/aethercore/V2ArchitecturalProfileMatrixSpec.scala
+      - src/test/scala/aethercore/V2A8CommonRvcProductionSpec.scala
+      - tools/ensure_verilator_5_024.sh
       - .github/workflows/v2-a8-architecture-closure.yml
   workflow_dispatch:
 
@@ -18,11 +23,13 @@ concurrency:
 
 jobs:
   profile-matrix:
-    name: Execute supported architectural-profile contract
+    name: Execute architecture/common-RVC contract
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
       AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
 
     steps:
       - name: Checkout exact architecture head
@@ -41,22 +48,61 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-      - name: Execute A8 supported-profile matrix
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Validate or build exact Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Save exact validated Verilator on cache miss
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Execute A8 supported-profile and production common-RVC contracts
         shell: bash
         run: |
           set -euo pipefail
           chmod +x ./mill
-          ./mill aethercore.test.testOnly aethercore.V2ArchitecturalProfileMatrixSpec
+          ./mill aethercore.test.testOnly \
+            aethercore.V2ArchitecturalProfileMatrixSpec \
+            aethercore.V2A8CommonRvcProductionSpec
 
       - name: Record exact architecture closure identity
         if: always()
         shell: bash
         run: |
           {
-            echo '## AetherCore v2 A8 architecture closure'
+            echo '## AetherCore v2 A8 architecture/common-RVC closure'
             echo
-            echo "- exact head: `${{ github.event.pull_request.head.sha || github.sha }}`"
-            echo "- exact base: `${{ github.event.pull_request.base.sha || 'workflow-dispatch' }}`"
-            echo '- executed contract: `aethercore.V2ArchitecturalProfileMatrixSpec`'
-            echo '- RV64C remains intentionally fail-closed until the next common-RVC closure phase.'
+            echo '- exact head: `${{ github.event.pull_request.head.sha || github.sha }}`'
+            echo '- exact base: `${{ github.event.pull_request.base.sha || 'workflow-dispatch' }}`'
+            echo '- executed contracts: `V2ArchitecturalProfileMatrixSpec` + `V2A8CommonRvcProductionSpec`'
+            echo '- RV64C implementation capability is exercised on the production TinyPagedCore path.'
+            echo '- Named RV64 profiles remain C-free until compiler-produced RV64C workload qualification is green.'
           } >> "$GITHUB_STEP_SUMMARY"
