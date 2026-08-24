@@ -8,7 +8,7 @@ package aethercore
   * tests. Source contracts and wrap regressions keep these fixed values aligned.
   */
 private[aethercore] object TinyRobGeometry {
-  val Entries: Int = 4
-  val IndexBits: Int = 2
+  val Entries: Int = 8
+  val IndexBits: Int = 3
   val GenerationBits: Int = 8
 }
