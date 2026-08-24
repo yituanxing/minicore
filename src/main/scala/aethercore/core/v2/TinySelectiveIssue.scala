@@ -21,7 +21,7 @@ class TinyComputeAvailability extends Bundle {
   * A8.3 oldest-ready single-issue selector over the read-only scheduling view.
   *
   * This module owns policy and once-only issue state, but no uOp/dependency
-  * storage. It scans the four live ROB ages and may select only exception-free,
+  * storage. It scans the live ROB ages and may select only exception-free,
   * normally ordered Integer or Mul/Div work whose operands and target resource
   * are ready. Branch may be bypassed; Memory may be bypassed only after the
   * exact head request has been accepted by the LSU. System, explicit
