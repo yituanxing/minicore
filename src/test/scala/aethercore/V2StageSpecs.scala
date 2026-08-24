@@ -80,6 +80,7 @@ class V2A8SelectiveIssueSpec
     with V2A8SelectiveIssueChecks
     with V2P8PreHeadLoadSelectorChecks
     with V2P8PreHeadTranslationChecks
+    with V2P8PreHeadLoadLsuChecks
 
 class V2A8SelectiveExecutionSpec
     extends AnyFlatSpec
