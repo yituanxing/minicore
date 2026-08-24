@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-BASELINE_SHA="${BASELINE_SHA:-25e2899de149ac38cac57cf6718e1f781d32a022}"
+# ROB8 is evaluated on top of the fully qualified TLB-hit flow-through head,
+# not the older adaptive-settle baseline. Keeping this exact parent isolates the
+# capacity/window change from the already-proven translation bubble removal.
+BASELINE_SHA="${BASELINE_SHA:-822e67a984398413ce6d342f0758a976b9695fb0}"
 TARGET_SHA="${TARGET_SHA:-$(git rev-parse HEAD)}"
 FW_BIN="${FW_BIN:-$ROOT/build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin}"
 MILESTONE="${MILESTONE:-clocksource: riscv_clocksource}"
@@ -75,6 +78,9 @@ PY
 install_marker_overlay "$BASE_SRC"
 install_marker_overlay "$TARGET_SRC"
 
+# rob0..rob4 are the common schema shared by the ROB4 baseline and ROB8 target.
+# rob5..rob8 are collected opportunistically below and normalized to zero for
+# the ROB4 side, so the A/B can use one result schema without modifying baseline.
 required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob2 rob3 rob4 issue_int issue_mul issue_div issue_branch issue_mem system_completion selective_candidate selective_bypass bypass_compute_head bypass_branch_head bypass_memory_head bypass_other_head lsu_compute_overlap head_not_ready head_ready_not_issued commit_idle_nonempty compute_head branch_head memory_head system_head interrupt_hold wfi_halted lsu_busy memory_launch_blocked mem_req mem_resp ptw_active completion_collision completion_backpressure'
 
 extract_marker_snapshot() {
@@ -87,6 +93,7 @@ import re, sys
 log = Path(sys.argv[1])
 out = Path(sys.argv[2])
 required = sys.argv[3:]
+optional_rob = [f'rob{i}' for i in range(5, 9)]
 lines = log.read_text(errors='replace').splitlines()
 snapshots = []
 current = None
@@ -109,8 +116,11 @@ marker = [(r, s) for r, s in complete if r == 'marker']
 if not marker:
     raise SystemExit(f'no complete marker P8 snapshot: total={len(snapshots)} complete={len(complete)}')
 s = marker[-1][1]
-out.write_text('\n'.join(f'{k}={s[k]}' for k in required) + '\n')
-print(f'AETHERCORE_ARCH_AB_SNAPSHOT cycles={s["cycles"]} commits={s["commits"]}')
+for key in optional_rob:
+    s.setdefault(key, 0)
+fields = required + optional_rob
+out.write_text('\n'.join(f'{k}={s[k]}' for k in fields) + '\n')
+print(f'AETHERCORE_ARCH_AB_SNAPSHOT cycles={s["cycles"]} commits={s["commits"]} rob8={s["rob8"]}')
 PY
 }
 
@@ -180,9 +190,17 @@ lines = [
     f'cycle_reduction_pct={100.0 * cycle_reduction:.6f}',
     f'architectural_speedup={speedup:.6f}',
 ]
-for key in ('dispatch_blocked','rob4','ptw_active','lsu_busy','completion_collision','completion_backpressure'):
+for key in ('dispatch_blocked','ptw_active','lsu_busy','completion_collision','completion_backpressure'):
     lines.append(f'baseline_{key}_pct={100.0 * b[key] / bc:.6f}')
     lines.append(f'target_{key}_pct={100.0 * t[key] / tc:.6f}')
+
+# Full-window pressure is depth-relative: ROB4 full on the baseline versus ROB8
+# full on the target. Also expose how often the target actually uses the added
+# half of the window; this helps reject a wider structure that is rarely useful.
+lines.append(f'baseline_rob_full_pct={100.0 * b["rob4"] / bc:.6f}')
+lines.append(f'target_rob_full_pct={100.0 * t["rob8"] / tc:.6f}')
+lines.append(f'target_rob_ge5_pct={100.0 * sum(t[f"rob{i}"] for i in range(5, 9)) / tc:.6f}')
+
 out.write_text('\n'.join(lines) + '\n')
 print('AETHERCORE_ARCH_AB_RESULT ' + ' '.join(lines[:8]))
 if cycle_reduction >= 0.01:
