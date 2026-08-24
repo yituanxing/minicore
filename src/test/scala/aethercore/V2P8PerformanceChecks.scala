@@ -52,7 +52,7 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
 
   behavior of "AetherCore v2 P8.0 performance counters"
 
-  it should "count each observation predicate once per sampled cycle and keep a ROB4 histogram" in {
+  it should "count each observation predicate once per sampled cycle and keep a ROB8 histogram" in {
     simulate(new V2PerformanceCounterBank) { dut =>
       clearEvents(dut, occupancy = 0)
       dut.io.counters.cycles.expect(0.U)
@@ -107,7 +107,14 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.events.wfiHalted.poke(true.B)
       dut.clock.step()
 
-      dut.io.counters.cycles.expect(5.U)
+      // Cycles 6-9: exercise the newly observable half of the ROB8 occupancy
+      // domain without perturbing any other event-counter expectations.
+      for (occupancy <- 5 to 8) {
+        clearEvents(dut, occupancy)
+        dut.clock.step()
+      }
+
+      dut.io.counters.cycles.expect(9.U)
       dut.io.counters.commits.expect(1.U)
       dut.io.counters.dispatchAccepted.expect(1.U)
       dut.io.counters.dispatchBlocked.expect(1.U)
@@ -117,6 +124,10 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.counters.robOccupancy2.expect(1.U)
       dut.io.counters.robOccupancy3.expect(1.U)
       dut.io.counters.robOccupancy4.expect(1.U)
+      dut.io.counters.robOccupancy5.expect(1.U)
+      dut.io.counters.robOccupancy6.expect(1.U)
+      dut.io.counters.robOccupancy7.expect(1.U)
+      dut.io.counters.robOccupancy8.expect(1.U)
 
       dut.io.counters.selectiveCandidate.expect(2.U)
       dut.io.counters.integerIssue.expect(1.U)
