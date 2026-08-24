@@ -10,8 +10,8 @@ WIDTH_SPEC = ROOT / "src/test/scala/aethercore/DatapathWidthSpec.scala"
 class V2F1RobCommitContractTest(unittest.TestCase):
     def test_f1_uses_fixed_tiny_geometry_not_a_public_rob_generator(self) -> None:
         text = F1.read_text(encoding="utf-8")
-        self.assertIn("val Entries: Int = 4", text)
-        self.assertIn("val IndexBits: Int = 2", text)
+        self.assertIn("val Entries: Int = 8", text)
+        self.assertIn("val IndexBits: Int = 3", text)
         self.assertIn("val GenerationBits: Int = 8", text)
         self.assertIn("val GenerationReuseBudget: Int = 1 << GenerationBits", text)
         self.assertNotRegex(text, r"class TinyRob\([^)]*robEntries")
