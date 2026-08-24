@@ -92,41 +92,40 @@ class TinyPreHeadMemoryBackend(
     sameToken(currentHead.uop.robToken, workingToken)
   val speculative = workingPreHead && !headPermitMatches
 
+  val safetyGate = Module(new TinyPreHeadSafetyGate)
+  safetyGate.io.speculative := speculative
+  safetyGate.io.memoryValid := lsu.io.memoryRequest.valid
+  safetyGate.io.memoryOp := lsu.io.memoryRequest.bits.op
+  safetyGate.io.attributes := io.resolvedAttributes
+
   // Recompute the parent's PTW PMP predicate at the same public seam. A younger
   // TLB miss may occupy internal walker state, but no page-table memory request
   // is made visible until the load is the exact head. Once head matches, the
   // qualified parent walker resumes without a replay structure.
   val preHeadPtwPmpFault = lsu.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
-  io.pteValid := lsu.io.pteValid && !preHeadPtwPmpFault && !speculative
+  io.pteValid := lsu.io.pteValid && !preHeadPtwPmpFault && safetyGate.io.ptePermit
   io.pteAddress := lsu.io.pteAddress
-  lsu.io.pteReady := !speculative && Mux(preHeadPtwPmpFault, true.B, io.pteReady)
+  lsu.io.pteReady := safetyGate.io.ptePermit &&
+    Mux(preHeadPtwPmpFault, true.B, io.pteReady)
   lsu.io.pteData := io.pteData
-  lsu.io.pteFault := !speculative && (
+  lsu.io.pteFault := safetyGate.io.ptePermit && (
     preHeadPtwPmpFault || (io.pteValid && io.pteFault)
   )
 
   // PMA is supplied by the platform from the resolved physical address. A
   // younger read may externalize only if replaying the read would be harmless;
   // MMIO, ordered and side-effecting regions wait until exact-head permission.
-  val speculativeReadSafe =
-    io.resolvedAttributes.idempotent &&
-      !io.resolvedAttributes.sideEffecting &&
-      !io.resolvedAttributes.ordered
-  val speculativeMemoryPermit = !speculative || (
-    lsu.io.memoryRequest.bits.op === AetherMemOp.Read && speculativeReadSafe
-  )
-
-  io.memoryRequest.valid := lsu.io.memoryRequest.valid && speculativeMemoryPermit
+  io.memoryRequest.valid := lsu.io.memoryRequest.valid && safetyGate.io.memoryPermit
   io.memoryRequest.bits := lsu.io.memoryRequest.bits
-  lsu.io.memoryRequest.ready := io.memoryRequest.ready && speculativeMemoryPermit
+  lsu.io.memoryRequest.ready := io.memoryRequest.ready && safetyGate.io.memoryPermit
 
   when(speculative && lsu.io.memoryRequest.valid) {
     assert(lsu.io.memoryRequest.bits.op === AetherMemOp.Read,
       "only an ordinary read may reach the pre-head PMA gate")
   }
   when(io.memoryRequest.fire && speculative) {
-    assert(speculativeReadSafe,
-      "pre-head physical read must be idempotent, non-side-effecting and non-ordered")
+    assert(safetyGate.io.memoryPermit,
+      "pre-head physical read must satisfy the replay-safe PMA gate")
   }
   when(io.pteValid) {
     assert(!speculative, "pre-head lifetime must not externalize page-table traffic")
