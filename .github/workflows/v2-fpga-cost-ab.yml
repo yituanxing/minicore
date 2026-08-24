@@ -1,0 +1,224 @@
+name: AetherCore V2 FPGA Cost A/B
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
+      - '.github/workflows/v2-fpga-cost-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-fpga-cost-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fpga-cost-ab:
+    name: Exact-parent ECP5 synthesis/P&R proxy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASELINE_SHA: ${{ github.event.pull_request.base.sha || 'ed3580ba59b8c8238f4123bd8f139054b53dde9c' }}
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Verify exact comparison identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "baseline=$BASELINE_SHA"
+          echo "target=$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git cat-file -e "$BASELINE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASELINE_SHA" "$TARGET_SHA"
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install open FPGA toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y yosys nextpnr-ecp5 jq
+          yosys -V
+          nextpnr-ecp5 --version
+
+      - name: Create exact baseline worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/aethercore-v2-fpga-base"
+          rm -rf "$base"
+          git worktree add --detach "$base" "$BASELINE_SHA"
+          # The synthesis entry is measurement infrastructure, not part of the
+          # architectural A/B. Copy the exact target helper into an otherwise
+          # untouched baseline worktree so both revisions elaborate the same top.
+          cp src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala \
+             "$base/src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala"
+          chmod +x mill "$base/mill"
+          echo "BASE_DIR=$base" >> "$GITHUB_ENV"
+
+      - name: Elaborate exact baseline and target cores
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethercore-v2-fpga-cost"
+          rm -rf "$out"
+          mkdir -p "$out/base-rtl" "$out/target-rtl" "$out/base-mill" "$out/target-mill"
+          echo "FPGA_OUT=$out" >> "$GITHUB_ENV"
+
+          (
+            cd "$BASE_DIR"
+            MILL_OUTPUT_DIR="$out/base-mill" ./mill aethercore.runMain \
+              aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/base-rtl"
+          )
+          MILL_OUTPUT_DIR="$out/target-mill" ./mill aethercore.runMain \
+            aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/target-rtl"
+
+          find "$out/base-rtl" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          find "$out/target-rtl" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Synthesize and place-route both exact cores
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          synth_one() {
+            label="$1"
+            rtl="$FPGA_OUT/$label-rtl"
+            json="$FPGA_OUT/$label.json"
+            ylog="$FPGA_OUT/$label-yosys.log"
+            plog="$FPGA_OUT/$label-nextpnr.log"
+            cfg="$FPGA_OUT/$label.config"
+
+            mapfile -t svs < <(find "$rtl" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do
+              read_cmd+=" $sv"
+            done
+
+            # Yosys 0.33 inserts no ECP5 I/O pads unless -iopad is explicitly
+            # requested, so the default is already the desired core-only flow.
+            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $json; stat -top TinyPagedCore" \
+              2>&1 | tee "$ylog"
+
+            # ECP5-85K/CABGA756 is a stable open-tool physical proxy, not a claim
+            # about the eventual board. Same device, tools and seed make the A/B
+            # useful for detecting regressions in physical cost.
+            set +e
+            nextpnr-ecp5 --85k --package CABGA756 --json "$json" --textcfg "$cfg" \
+              --freq 50 --seed 1 2>&1 | tee "$plog"
+            pnr_status=${PIPESTATUS[0]}
+            set -e
+            echo "$pnr_status" > "$FPGA_OUT/$label-pnr-status"
+
+            jq '[.modules["TinyPagedCore"].cells[]] | length' "$json" > "$FPGA_OUT/$label-cells"
+            jq '[.modules["TinyPagedCore"].cells[] | select(.type == "LUT4")] | length' "$json" > "$FPGA_OUT/$label-lut4"
+            jq '[.modules["TinyPagedCore"].cells[] | select(.type == "TRELLIS_FF")] | length' "$json" > "$FPGA_OUT/$label-ff"
+            awk '/Max frequency for clock/ { for (i=1; i<=NF; i++) if ($i == "MHz") print $(i-1) }' "$plog" \
+              | tail -1 > "$FPGA_OUT/$label-fmax" || true
+          }
+
+          synth_one base
+          synth_one target
+
+      - name: Summarize exact physical-cost A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ['FPGA_OUT'])
+          def integer(name):
+              return int((root / name).read_text().strip())
+          def floating(name):
+              text = (root / name).read_text().strip()
+              try:
+                  return float(text)
+              except ValueError:
+                  return None
+
+          base_cells = integer('base-cells')
+          target_cells = integer('target-cells')
+          base_lut = integer('base-lut4')
+          target_lut = integer('target-lut4')
+          base_ff = integer('base-ff')
+          target_ff = integer('target-ff')
+          base_status = integer('base-pnr-status')
+          target_status = integer('target-pnr-status')
+          base_fmax = floating('base-fmax')
+          target_fmax = floating('target-fmax')
+
+          def pct(new, old):
+              return ((new / old) - 1.0) * 100.0 if old else None
+
+          summary = {
+              'baseline_sha': os.environ['BASELINE_SHA'],
+              'target_sha': os.environ['TARGET_SHA'],
+              'device_proxy': 'LFE5U-85F / CABGA756 / nextpnr-ecp5 seed=1',
+              'base_cells': base_cells,
+              'target_cells': target_cells,
+              'cells_delta_pct': pct(target_cells, base_cells),
+              'base_lut4': base_lut,
+              'target_lut4': target_lut,
+              'lut4_delta_pct': pct(target_lut, base_lut),
+              'base_ff': base_ff,
+              'target_ff': target_ff,
+              'ff_delta_pct': pct(target_ff, base_ff),
+              'base_pnr_status': base_status,
+              'target_pnr_status': target_status,
+              'base_fmax_mhz': base_fmax,
+              'target_fmax_mhz': target_fmax,
+              'fmax_delta_pct': pct(target_fmax, base_fmax) if base_fmax and target_fmax else None,
+              'architectural_speedup': 1.019417,
+              'fmax_break_even_ratio': 1 / 1.019417,
+          }
+          (root / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## AetherCore v2 FPGA cost A/B\n\n')
+              f.write(f"Baseline `{summary['baseline_sha']}` → target `{summary['target_sha']}`\n\n")
+              f.write(f"- cells: {base_cells} → {target_cells} ({summary['cells_delta_pct']:+.3f}%)\n")
+              f.write(f"- LUT4: {base_lut} → {target_lut} ({summary['lut4_delta_pct']:+.3f}%)\n")
+              f.write(f"- FF: {base_ff} → {target_ff} ({summary['ff_delta_pct']:+.3f}%)\n")
+              if base_fmax is not None and target_fmax is not None:
+                  f.write(f"- ECP5 proxy Fmax: {base_fmax:.3f} → {target_fmax:.3f} MHz ({summary['fmax_delta_pct']:+.3f}%)\n")
+              else:
+                  f.write(f"- ECP5 P&R unavailable: base_status={base_status}, target_status={target_status}\n")
+              f.write('- #163 architectural speedup: +1.9417%; break-even target Fmax is about 98.095% of baseline.\n')
+              f.write('- This is a physical-cost proxy, not final board timing sign-off.\n')
+          PY
+
+      - name: Upload synthesis/P&R evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-fpga-cost-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/aethercore-v2-fpga-cost/summary.json
+            ${{ runner.temp }}/aethercore-v2-fpga-cost/*-yosys.log
+            ${{ runner.temp }}/aethercore-v2-fpga-cost/*-nextpnr.log
+            ${{ runner.temp }}/aethercore-v2-fpga-cost/*-pnr-status
+          if-no-files-found: warn

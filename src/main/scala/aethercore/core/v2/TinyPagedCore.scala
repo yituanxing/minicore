@@ -15,6 +15,13 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
   * shares the existing geometry-driven PTW arbiter, and converts fetch faults
   * into predecoded architectural exceptions before ROB allocation.
   *
+  * This experimental branch instantiates TinyPreHeadMemoryBackend, a narrow
+  * subclass that retains the qualified backend ownership while allowing only
+  * conservative younger Normal Loads across ordinary compute. The experiment is
+  * intentionally localized here so every paged-core/F7/Linux qualification
+  * exercises the new policy; promotion will fold the winning seam back into the
+  * canonical backend rather than keep parallel production implementations.
+  *
   * F7 may additionally opt into clean-boundary asynchronous interrupts/WFI.
   * A-extension profiles use the same semantic memory seam and enable Atomic
   * AetherMem transactions; profiles without A retain the frozen fail-closed
@@ -69,7 +76,7 @@ class TinyPagedCore(
     val translationFence = Output(Bool())
   })
 
-  val backend = Module(new TinyMemoryBackend(
+  val backend = Module(new TinyPreHeadMemoryBackend(
     config,
     geometry,
     tlbEntries = tlbEntries,
