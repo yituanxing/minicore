@@ -22,11 +22,21 @@ class Rv32cParcelFetchContract(unittest.TestCase):
         self.assertEqual(core.count("ifId.rawInst := fetchedRawInst"), 2)
         self.assertEqual(core.count("ifId.fault := fetchInstructionAccessFault"), 2)
 
-    def test_c_is_bounded_to_rv32(self):
+    def test_c_frontend_is_cross_xlen_while_rv64_profiles_remain_unqualified(self):
         config = (ROOT / "src/main/scala/aethercore/config/CoreConfig.scala").read_text()
+        parcel = (ROOT / "src/main/scala/aethercore/core/Rv32CParcelController.scala").read_text()
+        matrix = (ROOT / "src/test/scala/aethercore/V2ArchitecturalProfileMatrixSpec.scala").read_text()
+
         self.assertIn("Set('I', 'M', 'A', 'C')", config)
-        self.assertIn("!isa.hasC || isa.xlen == 32", config)
+        self.assertNotIn("!isa.hasC || isa.xlen == 32", config)
+        self.assertIn("class RvcParcelController(val xlen: Int = 32) extends Module", parcel)
+        self.assertIn("require(Set(32, 64).contains(xlen)", parcel)
+        self.assertIn("val decompressor = Module(new RvcDecompressor(xlen))", parcel)
         self.assertIn("val rv32imcSoftware", config)
+
+        # CoreConfig/RTL capability is broader than the named qualification matrix.
+        self.assertIn("CoreProfiles.rv64imCurrent.isa.hasC shouldBe false", matrix)
+        self.assertIn("CoreProfiles.rv64imasuSv39PmpSoftware.isa.hasC shouldBe false", matrix)
 
 
 if __name__ == "__main__":
