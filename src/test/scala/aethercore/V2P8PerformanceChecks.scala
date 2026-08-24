@@ -6,7 +6,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.sim.{V2LinuxProofMarker, V2LinuxProofMarkerRecognizer, V2PerformanceCounterBank}
 
-/** Freeze the simulation-only P8.0 accumulator semantics independently from
+/** Freeze the simulation-only P8 accumulator semantics independently from
   * Linux/OpenSBI so measurement bugs cannot silently steer architecture work.
   */
 trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
@@ -39,6 +39,19 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     dut.io.events.interruptHold.poke(false.B)
     dut.io.events.wfiHalted.poke(false.B)
 
+    dut.io.events.readyYoungerBranch.poke(false.B)
+    dut.io.events.readyYoungerBranchAge1.poke(false.B)
+    dut.io.events.readyYoungerBranchAge2.poke(false.B)
+    dut.io.events.readyYoungerBranchAge3.poke(false.B)
+    dut.io.events.youngerBranchOpportunity.poke(false.B)
+    dut.io.events.youngerBranchOpportunityHeadNotReady.poke(false.B)
+    dut.io.events.youngerBranchOpportunityComputeHead.poke(false.B)
+    dut.io.events.youngerBranchOpportunityBranchHead.poke(false.B)
+    dut.io.events.youngerBranchOpportunityMemoryHead.poke(false.B)
+    dut.io.events.youngerBranchOpportunitySystemHead.poke(false.B)
+    dut.io.events.youngerBranchOpportunityOtherHead.poke(false.B)
+    dut.io.events.youngerBranchOpportunityLsuBusy.poke(false.B)
+
     dut.io.events.lsuBusy.poke(false.B)
     dut.io.events.memoryLaunchBlocked.poke(false.B)
     dut.io.events.memoryRequest.poke(false.B)
@@ -50,7 +63,7 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     dut.io.events.lsuComputeOverlapIssue.poke(false.B)
   }
 
-  behavior of "AetherCore v2 P8.0 performance counters"
+  behavior of "AetherCore v2 P8 performance counters"
 
   it should "count each observation predicate once per sampled cycle and keep a ROB4 histogram" in {
     simulate(new V2PerformanceCounterBank) { dut =>
@@ -107,16 +120,44 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.events.wfiHalted.poke(true.B)
       dut.clock.step()
 
-      dut.io.counters.cycles.expect(5.U)
+      // Cycle 6: conservative P8.2 Branch opportunity behind a blocked Memory head.
+      clearEvents(dut, occupancy = 2)
+      dut.io.events.readyYoungerBranch.poke(true.B)
+      dut.io.events.readyYoungerBranchAge1.poke(true.B)
+      dut.io.events.youngerBranchOpportunity.poke(true.B)
+      dut.io.events.youngerBranchOpportunityHeadNotReady.poke(true.B)
+      dut.io.events.youngerBranchOpportunityMemoryHead.poke(true.B)
+      dut.io.events.youngerBranchOpportunityLsuBusy.poke(true.B)
+      dut.io.events.headNotReady.poke(true.B)
+      dut.io.events.memoryHead.poke(true.B)
+      dut.io.events.lsuBusy.poke(true.B)
+      dut.clock.step()
+
+      // Cycle 7: raw age-2 Branch exposure can exist without a conservative idle-slot opportunity.
+      clearEvents(dut, occupancy = 3)
+      dut.io.events.readyYoungerBranch.poke(true.B)
+      dut.io.events.readyYoungerBranchAge2.poke(true.B)
+      dut.clock.step()
+
+      // Cycle 8: age-3 Branch opportunity behind a System head.
+      clearEvents(dut, occupancy = 4)
+      dut.io.events.readyYoungerBranch.poke(true.B)
+      dut.io.events.readyYoungerBranchAge3.poke(true.B)
+      dut.io.events.youngerBranchOpportunity.poke(true.B)
+      dut.io.events.youngerBranchOpportunitySystemHead.poke(true.B)
+      dut.io.events.systemHead.poke(true.B)
+      dut.clock.step()
+
+      dut.io.counters.cycles.expect(8.U)
       dut.io.counters.commits.expect(1.U)
       dut.io.counters.dispatchAccepted.expect(1.U)
       dut.io.counters.dispatchBlocked.expect(1.U)
 
       dut.io.counters.robOccupancy0.expect(1.U)
       dut.io.counters.robOccupancy1.expect(1.U)
-      dut.io.counters.robOccupancy2.expect(1.U)
-      dut.io.counters.robOccupancy3.expect(1.U)
-      dut.io.counters.robOccupancy4.expect(1.U)
+      dut.io.counters.robOccupancy2.expect(2.U)
+      dut.io.counters.robOccupancy3.expect(2.U)
+      dut.io.counters.robOccupancy4.expect(2.U)
 
       dut.io.counters.selectiveCandidate.expect(2.U)
       dut.io.counters.integerIssue.expect(1.U)
@@ -131,17 +172,30 @@ trait V2P8PerformanceChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.counters.selectiveBypassMemoryHead.expect(1.U)
       dut.io.counters.selectiveBypassOtherHead.expect(0.U)
 
-      dut.io.counters.headNotReady.expect(1.U)
+      dut.io.counters.headNotReady.expect(2.U)
       dut.io.counters.headReadyNotIssued.expect(1.U)
       dut.io.counters.commitIdleRobNonEmpty.expect(1.U)
       dut.io.counters.computeHead.expect(2.U)
       dut.io.counters.branchHead.expect(1.U)
-      dut.io.counters.memoryHead.expect(1.U)
-      dut.io.counters.systemHead.expect(1.U)
+      dut.io.counters.memoryHead.expect(2.U)
+      dut.io.counters.systemHead.expect(2.U)
       dut.io.counters.interruptHold.expect(1.U)
       dut.io.counters.wfiHalted.expect(1.U)
 
-      dut.io.counters.lsuBusy.expect(1.U)
+      dut.io.counters.readyYoungerBranch.expect(3.U)
+      dut.io.counters.readyYoungerBranchAge1.expect(1.U)
+      dut.io.counters.readyYoungerBranchAge2.expect(1.U)
+      dut.io.counters.readyYoungerBranchAge3.expect(1.U)
+      dut.io.counters.youngerBranchOpportunity.expect(2.U)
+      dut.io.counters.youngerBranchOpportunityHeadNotReady.expect(1.U)
+      dut.io.counters.youngerBranchOpportunityComputeHead.expect(0.U)
+      dut.io.counters.youngerBranchOpportunityBranchHead.expect(0.U)
+      dut.io.counters.youngerBranchOpportunityMemoryHead.expect(1.U)
+      dut.io.counters.youngerBranchOpportunitySystemHead.expect(1.U)
+      dut.io.counters.youngerBranchOpportunityOtherHead.expect(0.U)
+      dut.io.counters.youngerBranchOpportunityLsuBusy.expect(1.U)
+
+      dut.io.counters.lsuBusy.expect(2.U)
       dut.io.counters.memoryLaunchBlocked.expect(1.U)
       dut.io.counters.memoryRequest.expect(1.U)
       dut.io.counters.memoryResponse.expect(1.U)
