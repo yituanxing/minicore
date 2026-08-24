@@ -25,6 +25,9 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   private val selectiveReady = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.ready)
   private val selectiveBits = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits)
   private val head = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(0))
+  private val youngerAge1 = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(1))
+  private val youngerAge2 = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(2))
+  private val youngerAge3 = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(3))
 
   private val branchValid = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.valid)
   private val branchReady = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.ready)
@@ -62,6 +65,22 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   private val headIsMemory = headClass === ExecutionClass.Memory
   private val headIsSystem = headClass === ExecutionClass.System
 
+  private def readyBranchAtAge(entry: aethercore.core.v2.TinySchedulingEntry): Bool =
+    entry.valid && !entry.complete &&
+      !entry.uop.decoded.exception.valid &&
+      entry.dependenciesValid && entry.operandsReady &&
+      entry.uop.executionClass === ExecutionClass.Branch
+
+  private val youngerAge1ReadyBranch = readyBranchAtAge(youngerAge1)
+  private val youngerAge2ReadyBranch = readyBranchAtAge(youngerAge2)
+  private val youngerAge3ReadyBranch = readyBranchAtAge(youngerAge3)
+  private val readyYoungerBranch =
+    youngerAge1ReadyBranch || youngerAge2ReadyBranch || youngerAge3ReadyBranch
+  private val readyYoungerBranchAge1 = youngerAge1ReadyBranch
+  private val readyYoungerBranchAge2 = !youngerAge1ReadyBranch && youngerAge2ReadyBranch
+  private val readyYoungerBranchAge3 =
+    !youngerAge1ReadyBranch && !youngerAge2ReadyBranch && youngerAge3ReadyBranch
+
   private val selectedDiffersFromHead =
     selectiveBits.robToken.index =/= head.uop.robToken.index ||
       selectiveBits.robToken.generation =/= head.uop.robToken.generation
@@ -74,6 +93,11 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
     (headIsCompute && selectiveHeadFire) ||
       (headIsBranch && branchFire) ||
       (headIsMemory && lsuRequestFire)
+  private val anyLaunchFire = selectiveFire || branchFire || lsuRequestFire
+
+  private val youngerBranchOpportunity =
+    readyYoungerBranch && headLive && !head.uop.decoded.exception.valid &&
+      !anyLaunchFire && !core.io.interruptHold && !core.io.halted
 
   private val completionValidCount = PopCount(Cat(
     systemCompletionValid,
@@ -113,6 +137,21 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   events.systemHead := headLive && headIsSystem
   events.interruptHold := core.io.interruptHold
   events.wfiHalted := core.io.halted
+
+  events.readyYoungerBranch := readyYoungerBranch
+  events.readyYoungerBranchAge1 := readyYoungerBranchAge1
+  events.readyYoungerBranchAge2 := readyYoungerBranchAge2
+  events.readyYoungerBranchAge3 := readyYoungerBranchAge3
+  events.youngerBranchOpportunity := youngerBranchOpportunity
+  events.youngerBranchOpportunityHeadNotReady :=
+    youngerBranchOpportunity && !head.operandsReady
+  events.youngerBranchOpportunityComputeHead := youngerBranchOpportunity && headIsCompute
+  events.youngerBranchOpportunityBranchHead := youngerBranchOpportunity && headIsBranch
+  events.youngerBranchOpportunityMemoryHead := youngerBranchOpportunity && headIsMemory
+  events.youngerBranchOpportunitySystemHead := youngerBranchOpportunity && headIsSystem
+  events.youngerBranchOpportunityOtherHead := youngerBranchOpportunity &&
+    !(headIsCompute || headIsBranch || headIsMemory || headIsSystem)
+  events.youngerBranchOpportunityLsuBusy := youngerBranchOpportunity && core.io.lsuBusy
 
   events.lsuBusy := core.io.lsuBusy
   events.memoryLaunchBlocked := lsuRequestValid && !lsuRequestReady
@@ -159,6 +198,20 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   val ioPerfSystemHead = IO(Output(UInt(64.W)))
   val ioPerfInterruptHold = IO(Output(UInt(64.W)))
   val ioPerfWfiHalted = IO(Output(UInt(64.W)))
+
+  val ioPerfReadyYoungerBranch = IO(Output(UInt(64.W)))
+  val ioPerfBranchAge1 = IO(Output(UInt(64.W)))
+  val ioPerfBranchAge2 = IO(Output(UInt(64.W)))
+  val ioPerfBranchAge3 = IO(Output(UInt(64.W)))
+  val ioPerfBranchOpportunity = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppHeadNotReady = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppComputeHead = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppBranchHead = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppMemoryHead = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppSystemHead = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppOtherHead = IO(Output(UInt(64.W)))
+  val ioPerfBranchOppLsuBusy = IO(Output(UInt(64.W)))
+
   val ioPerfLsuBusy = IO(Output(UInt(64.W)))
   val ioPerfMemoryLaunchBlocked = IO(Output(UInt(64.W)))
   val ioPerfMemReq = IO(Output(UInt(64.W)))
@@ -198,6 +251,20 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisible extends AetherCoreV2OpenS
   ioPerfSystemHead := perf.io.counters.systemHead
   ioPerfInterruptHold := perf.io.counters.interruptHold
   ioPerfWfiHalted := perf.io.counters.wfiHalted
+
+  ioPerfReadyYoungerBranch := perf.io.counters.readyYoungerBranch
+  ioPerfBranchAge1 := perf.io.counters.readyYoungerBranchAge1
+  ioPerfBranchAge2 := perf.io.counters.readyYoungerBranchAge2
+  ioPerfBranchAge3 := perf.io.counters.readyYoungerBranchAge3
+  ioPerfBranchOpportunity := perf.io.counters.youngerBranchOpportunity
+  ioPerfBranchOppHeadNotReady := perf.io.counters.youngerBranchOpportunityHeadNotReady
+  ioPerfBranchOppComputeHead := perf.io.counters.youngerBranchOpportunityComputeHead
+  ioPerfBranchOppBranchHead := perf.io.counters.youngerBranchOpportunityBranchHead
+  ioPerfBranchOppMemoryHead := perf.io.counters.youngerBranchOpportunityMemoryHead
+  ioPerfBranchOppSystemHead := perf.io.counters.youngerBranchOpportunitySystemHead
+  ioPerfBranchOppOtherHead := perf.io.counters.youngerBranchOpportunityOtherHead
+  ioPerfBranchOppLsuBusy := perf.io.counters.youngerBranchOpportunityLsuBusy
+
   ioPerfLsuBusy := perf.io.counters.lsuBusy
   ioPerfMemoryLaunchBlocked := perf.io.counters.memoryLaunchBlocked
   ioPerfMemReq := perf.io.counters.memoryRequest
