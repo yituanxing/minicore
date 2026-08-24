@@ -357,24 +357,27 @@ trait V2F5PrivilegedChecks extends V2F5PrivilegedClosureChecks { this: AnyFlatSp
         )
       }
 
-      // Younger work is allocated while the one-cycle branch unit is active.
-      dispatch(dut) {
-        pokeDispatchBase(
-          dut,
-          pc + 4,
-          ExecutionClass.Integer,
-          rd = 7,
-          writesRd = true,
-          producesValue = true,
-          immediate = 77
-        )
-      }
-
-      // Misaligned taken target creates an exception. It must not produce the
-      // F4 normal redirect; the ROB instead squashes younger state and leaves
-      // the exceptional head for precise retirement.
+      // Present younger speculative work while the branch issues. The
+      // flow-through branch exception must win in this same cycle: no normal F4
+      // redirect is emitted and the younger dispatch is never allocated.
+      pokeDispatchBase(
+        dut,
+        pc + 4,
+        ExecutionClass.Integer,
+        rd = 7,
+        writesRd = true,
+        producesValue = true,
+        immediate = 77
+      )
       dut.io.branchRedirect.valid.expect(false.B)
+      dut.io.privilegedRedirect.valid.expect(false.B)
+      dut.io.dispatch.ready.expect(false.B)
+      dut.io.allocated.valid.expect(false.B)
       dut.clock.step()
+      dut.io.dispatch.valid.poke(false.B)
+
+      // The exceptional branch survives as the sole completed ROB head and now
+      // retires precisely through the privileged path.
       dut.io.occupancy.expect(1.U)
       dut.io.commit.valid.expect(true.B)
       dut.io.commit.exception.expect(true.B)

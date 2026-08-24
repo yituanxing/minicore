@@ -352,7 +352,15 @@ class V2IterativeDivider(val xlen: Int) extends Module {
   }
 }
 
-/** One-entry registered branch/jump unit with architecture-derived alignment. */
+/**
+  * One-entry branch/jump unit with P8 same-cycle response flow-through.
+  *
+  * A fresh branch result may leave in the same cycle as request acceptance. If
+  * the downstream completion fabric backpressures that cycle, the exact result
+  * is captured into a held register and remains stable until accepted. This
+  * removes the deterministic response register bubble without changing branch
+  * issue policy, ROB ownership, recovery validation or completion bandwidth.
+  */
 class V2BranchUnit(val xlen: Int, val hasCompressed: Boolean) extends Module {
   require(xlen == 32 || xlen == 64, s"branch unit XLEN must be 32 or 64, got $xlen")
 
@@ -364,11 +372,8 @@ class V2BranchUnit(val xlen: Int, val hasCompressed: Boolean) extends Module {
     val response = Decoupled(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
   })
 
-  private val responseValid = RegInit(false.B)
-  private val responseBits = Reg(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
-  io.request.ready := !responseValid || io.response.ready
-  io.response.valid := responseValid
-  io.response.bits := responseBits
+  private val heldValid = RegInit(false.B)
+  private val heldBits = Reg(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
 
   private val branchCondition = WireDefault(false.B)
   switch(io.request.bits.branchType) {
@@ -400,22 +405,45 @@ class V2BranchUnit(val xlen: Int, val hasCompressed: Boolean) extends Module {
     io.request.bits.controlFlowKind === ControlFlowKind.DirectJump ||
       io.request.bits.controlFlowKind === ControlFlowKind.IndirectJump
 
-  when(io.request.fire) {
-    responseValid := true.B
-    responseBits := 0.U.asTypeOf(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
-    responseBits.robToken := io.request.bits.robToken
-    responseBits.producerTag := io.request.bits.producerTag
-    responseBits.valueRef := io.request.bits.valueRef
-    responseBits.hasValue := producesLink
-    responseBits.value := io.request.bits.pc + io.request.bits.instBytes
-    responseBits.branchValid := branchValid
-    responseBits.branchTaken := taken
-    responseBits.branchTarget := target
-    responseBits.exception.valid := misaligned
-    responseBits.exception.cause := MachineExceptionCode.InstructionAddressMisaligned.U(xlen.W)
-    responseBits.exception.value := target
-  }.elsewhen(io.response.fire) {
-    responseValid := false.B
+  private val freshBits = Wire(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+  freshBits := 0.U.asTypeOf(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+  freshBits.robToken := io.request.bits.robToken
+  freshBits.producerTag := io.request.bits.producerTag
+  freshBits.valueRef := io.request.bits.valueRef
+  freshBits.hasValue := producesLink
+  freshBits.value := io.request.bits.pc + io.request.bits.instBytes
+  freshBits.branchValid := branchValid
+  freshBits.branchTaken := taken
+  freshBits.branchTarget := target
+  freshBits.exception.valid := misaligned
+  freshBits.exception.cause := MachineExceptionCode.InstructionAddressMisaligned.U(xlen.W)
+  freshBits.exception.value := target
+
+  // With no held result, the branch response is a pure function of request.valid
+  // and request.bits. request.ready deliberately does not feed response.valid,
+  // avoiding a ready/valid combinational loop through the response arbiters.
+  io.response.valid := heldValid || (!heldValid && io.request.valid)
+  io.response.bits := Mux(heldValid, heldBits, freshBits)
+
+  // A held response blocks a replacement request unless that response is being
+  // accepted on this cycle; in that case a new request may replace it in the
+  // one-entry hold register without dropping throughput.
+  io.request.ready := !heldValid || io.response.ready
+
+  when(heldValid) {
+    when(io.response.ready) {
+      when(io.request.fire) {
+        heldBits := freshBits
+        heldValid := true.B
+      }.otherwise {
+        heldValid := false.B
+      }
+    }
+  }.otherwise {
+    when(io.request.fire && !io.response.ready) {
+      heldBits := freshBits
+      heldValid := true.B
+    }
   }
 }
 

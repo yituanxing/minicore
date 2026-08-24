@@ -330,15 +330,17 @@ trait V2F3ExecutionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
         dut.io.request.bits.pc.poke(pc.U(32.W))
         dut.io.request.bits.instBytes.poke(instBytes.U)
         dut.io.request.bits.immediate.poke(immediate.U(32.W))
-        dut.clock.step()
-        dut.io.request.valid.poke(false.B)
 
+        dut.io.request.ready.expect(true.B)
         dut.io.response.valid.expect(true.B)
         dut.io.response.bits.branchTaken.expect(true.B)
         dut.io.response.bits.branchTarget.expect(expectedTarget.U(32.W))
         dut.io.response.bits.value.expect(expectedLink.U(32.W))
         dut.io.response.bits.exception.valid.expect(false.B)
+
         dut.clock.step()
+        dut.io.request.valid.poke(false.B)
+        dut.io.response.valid.expect(false.B)
       }
 
       run(ControlFlowKind.DirectJump, 0x1000, 0, 6, 2, 0x1006, 0x1002)
@@ -364,9 +366,8 @@ trait V2F3ExecutionChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.request.bits.pc.poke("h1000".U)
       dut.io.request.bits.instBytes.poke(4.U)
       dut.io.request.bits.immediate.poke(2.U)
-      dut.clock.step()
-      dut.io.request.valid.poke(false.B)
 
+      dut.io.request.ready.expect(true.B)
       dut.io.response.valid.expect(true.B)
       dut.io.response.bits.branchTarget.expect("h1002".U)
       dut.io.response.bits.exception.valid.expect(true.B)
