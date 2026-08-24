@@ -103,7 +103,7 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     CoreProfiles.rv64imasuSv39PmpSoftware.isa.pmpEntries shouldBe 16
   }
 
-  it should "fail closed on RV64C until the common XLEN-aware RVC frontend is qualified" in {
+  it should "separate RV64C implementation capability from qualified RV64 profile claims" in {
     val rv64c = IsaConfig(
       xlen = 64,
       extensions = Set('I', 'M', 'C'),
@@ -111,11 +111,19 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
       zExtensions = Set("Zicsr")
     )
 
-    rv64c.hasC shouldBe true
-    rv64c.march shouldBe "rv64imc_zicsr"
-    rv64c.mabi shouldBe "lp64"
+    val implementation = CoreConfig(
+      "rv64imc-implementation",
+      rv64c,
+      CoreProfiles.rv64imCurrent.platform
+    )
 
-    an[IllegalArgumentException] should be thrownBy
-      CoreConfig("rv64imc-unclosed", rv64c, CoreProfiles.rv64imCurrent.platform)
+    implementation.isa.hasC shouldBe true
+    implementation.isa.march shouldBe "rv64imc_zicsr"
+    implementation.isa.mabi shouldBe "lp64"
+
+    // Named support points stay conservative until real compiler-produced
+    // RV64C software is permanently qualified on the production core path.
+    CoreProfiles.rv64imCurrent.isa.hasC shouldBe false
+    CoreProfiles.rv64imasuSv39PmpSoftware.isa.hasC shouldBe false
   }
 }
