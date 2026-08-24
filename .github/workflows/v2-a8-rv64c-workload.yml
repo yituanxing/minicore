@@ -36,7 +36,7 @@ jobs:
       AETHERCORE_V2_RV64C_WORKLOAD_REQUIRED: "1"
 
     steps:
-      - name: Checkout exact common-RVC head
+      - name: Checkout exact RV64IMC profile head
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -121,7 +121,7 @@ jobs:
           set -euo pipefail
           bash tools/ci/v2_rv64c_workload_build.sh "$RUNNER_TEMP/aethercore-v2-rv64c"
 
-      - name: Execute compiler-produced image on production TinyPagedCore
+      - name: Execute published RV64IMC contract on production TinyPagedCore
         shell: bash
         run: |
           set -euo pipefail
@@ -145,9 +145,12 @@ jobs:
             echo '## AetherCore v2 A8 compiler-produced RV64C qualification'
             echo
             echo '- exact head: `${{ github.event.pull_request.head.sha || github.sha }}`'
+            echo '- published profile: `CoreProfiles.rv64imcSoftware`'
             echo '- compiler target: `rv64imc_zicsr / lp64`'
             echo '- compiler: pinned Bootlin GCC `13.3.0`'
             echo '- execution owner: production `TinyPagedCore`'
+            echo '- execution mode: Machine mode; S/U+Sv39 are construction-shell transport axes only.'
+            echo '- RV64 application profile remains C-free pending privileged/VM/PMP qualification.'
             if [[ -f "$RUNNER_TEMP/aethercore-v2-rv64c/workload.meta" ]]; then
               echo
               echo '```text'
