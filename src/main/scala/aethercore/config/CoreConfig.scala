@@ -138,7 +138,6 @@ final case class CoreConfig(
     isa.pageTableGeometries.size <= 1,
     "the current production translation datapath supports one active page-table geometry per core profile"
   )
-  require(!isa.hasC || isa.xlen == 32, "the current compressed frontend implements RV32C only")
   isa.pageTableGeometries.foreach { geometry =>
     require(
       platform.paddrBits >= geometry.architecturalPhysicalAddressBits,
