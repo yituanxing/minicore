@@ -11,13 +11,19 @@ import chisel3._
   * direction: an AMO read phase may require store permission while still
   * issuing a physical read before the write-back phase.
   *
+  * `withWalkControl` is opt-in so every existing user retains the historical
+  * always-allow-walk contract. The pre-head Load experiment enables the control
+  * only inside the blocking LSU, where a younger miss must wait for exact-head
+  * permission before creating page-table traffic.
+  *
   * 通用数据侧翻译适配器。翻译权限意图与物理总线读写方向分离，便于后续 RV64
   * 与原子扩展共用同一边界，而不复制 Sv32 专用状态机。
   */
 class DataPathAdapter(
     val geometry: PageTableGeometry,
     val paddrBits: Int = -1,
-    val tlbEntries: Int = 8
+    val tlbEntries: Int = 8,
+    val withWalkControl: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val PhysicalBits =
@@ -44,6 +50,7 @@ class DataPathAdapter(
     val satpRootPpn = Input(UInt(geometry.ppnBits.W))
     val sum = Input(Bool())
     val mxr = Input(Bool())
+    val allowTranslationWalk = if (withWalkControl) Some(Input(Bool())) else None
 
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PhysicalBits.W))
@@ -68,7 +75,11 @@ class DataPathAdapter(
     val accessFault = Output(Bool())
   })
 
-  val translation = Module(new TranslationUnit(geometry, tlbEntries))
+  val translation = Module(new TranslationUnit(
+    geometry,
+    tlbEntries,
+    withWalkControl = withWalkControl
+  ))
   translation.io.requestValid := io.requestValid
   translation.io.kill := false.B
   translation.io.flush := io.flush
@@ -80,6 +91,9 @@ class DataPathAdapter(
   translation.io.satpRootPpn := io.satpRootPpn
   translation.io.sum := io.sum
   translation.io.mxr := io.mxr
+  if (withWalkControl) {
+    translation.io.allowWalk.get := io.allowTranslationWalk.get
+  }
 
   translation.io.pteReady := io.pteReady
   translation.io.pteData := io.pteData
