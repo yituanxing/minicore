@@ -79,8 +79,9 @@ install_marker_overlay "$BASE_SRC"
 install_marker_overlay "$TARGET_SRC"
 
 # rob0..rob4 are the common schema shared by the ROB4 baseline and ROB8 target.
-# rob5..rob8 are collected opportunistically below and normalized to zero for
-# the ROB4 side, so the A/B can use one result schema without modifying baseline.
+# rob5..rob8 are target-only host-visible fields. The extractor keeps a common
+# result schema for the ROB4 side, but the final A/B validator requires the
+# baseline 0..4 histogram and target 0..8 histogram to each sum exactly to cycles.
 required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob2 rob3 rob4 issue_int issue_mul issue_div issue_branch issue_mem system_completion selective_candidate selective_bypass bypass_compute_head bypass_branch_head bypass_memory_head bypass_other_head lsu_compute_overlap head_not_ready head_ready_not_issued commit_idle_nonempty compute_head branch_head memory_head system_head interrupt_hold wfi_halted lsu_busy memory_launch_blocked mem_req mem_resp ptw_active completion_collision completion_backpressure'
 
 extract_marker_snapshot() {
@@ -176,6 +177,18 @@ out = Path(sys.argv[3])
 
 bc, tc = b['cycles'], t['cycles']
 bm, tm = b['commits'], t['commits']
+
+baseline_rob_sum = sum(b[f'rob{i}'] for i in range(5))
+target_rob_sum = sum(t[f'rob{i}'] for i in range(9))
+if baseline_rob_sum != bc:
+    raise SystemExit(
+        f'baseline ROB histogram incomplete: sum={baseline_rob_sum} cycles={bc}'
+    )
+if target_rob_sum != tc:
+    raise SystemExit(
+        f'target ROB histogram incomplete: sum={target_rob_sum} cycles={tc}'
+    )
+
 cycle_reduction = (bc - tc) / bc
 speedup = bc / tc
 bipc, tipc = bm / bc, tm / tc
@@ -202,6 +215,8 @@ lines.append(f'target_rob_full_pct={100.0 * t["rob8"] / tc:.6f}')
 lines.append(f'target_rob_ge5_pct={100.0 * sum(t[f"rob{i}"] for i in range(5, 9)) / tc:.6f}')
 
 out.write_text('\n'.join(lines) + '\n')
+print('AETHERCORE_ARCH_AB_HISTOGRAM_PASS '
+      f'baseline_sum={baseline_rob_sum} target_sum={target_rob_sum}')
 print('AETHERCORE_ARCH_AB_RESULT ' + ' '.join(lines[:8]))
 if cycle_reduction >= 0.01:
     print(f'AETHERCORE_ARCH_AB_PROMOTE_CANDIDATE cycle_reduction_pct={100.0 * cycle_reduction:.3f}')
