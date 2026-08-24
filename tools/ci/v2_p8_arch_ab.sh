@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-BASELINE_SHA="${BASELINE_SHA:-25e2899de149ac38cac57cf6718e1f781d32a022}"
+BASELINE_SHA="${BASELINE_SHA:-822e67a984398413ce6d342f0758a976b9695fb0}"
 TARGET_SHA="${TARGET_SHA:-$(git rev-parse HEAD)}"
 FW_BIN="${FW_BIN:-$ROOT/build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin}"
 MILESTONE="${MILESTONE:-clocksource: riscv_clocksource}"

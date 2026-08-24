@@ -58,6 +58,7 @@ class V2F6BlockingLsuSpec
     with V2A8SelectiveBarrierChecks
     with V2A8ProductionSelectiveIssueChecks
     with V2P8PerformanceChecks
+    with V2P8LsuIntakeFlowThroughChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec

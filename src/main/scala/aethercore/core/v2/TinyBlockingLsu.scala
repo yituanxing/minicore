@@ -159,31 +159,43 @@ class TinyBlockingLsu(
     physicalIssued := false.B
   }
 
-  val effectiveAddress = active.base + active.offset
-  val isLoad = active.kind === MemoryOperationKind.Load
-  val isStore = active.kind === MemoryOperationKind.Store
-  val isAtomic = active.kind === MemoryOperationKind.Atomic
-  val atomicLr = isAtomic && active.atomicOp === AtomicOp.Lr
-  val atomicSc = isAtomic && active.atomicOp === AtomicOp.Sc
-  val atomicRmw = isAtomic && active.atomicOp =/= AtomicOp.None && !atomicLr && !atomicSc
+  // P8 LSU intake flow-through: while idle, the request accepted on this cycle
+  // may drive the existing translation/PMP/PMA path immediately instead of
+  // waiting one cycle for `active` to become visible. `active` still captures
+  // the complete architectural lifetime for misses, physical response matching,
+  // held completions and traces; this does not add another outstanding request.
+  val workingRequest = Wire(new TinyMemoryRequest(Xlen, IdentityBits, GenerationBits))
+  workingRequest := active
+  when(!busy) {
+    workingRequest := io.request.bits
+  }
+  val workingValid = busy || io.request.fire
+
+  val effectiveAddress = workingRequest.base + workingRequest.offset
+  val isLoad = workingRequest.kind === MemoryOperationKind.Load
+  val isStore = workingRequest.kind === MemoryOperationKind.Store
+  val isAtomic = workingRequest.kind === MemoryOperationKind.Atomic
+  val atomicLr = isAtomic && workingRequest.atomicOp === AtomicOp.Lr
+  val atomicSc = isAtomic && workingRequest.atomicOp === AtomicOp.Sc
+  val atomicRmw = isAtomic && workingRequest.atomicOp =/= AtomicOp.None && !atomicLr && !atomicSc
   val atomicWriter = atomicSc || atomicRmw
   val accessIsLoad = isLoad || atomicLr
   val accessNeedsWritePermission = isStore || atomicWriter
 
   val ordinaryKind = isLoad || isStore
-  val atomicKindSupported = allowAtomics.B && isAtomic && active.atomicOp =/= AtomicOp.None
+  val atomicKindSupported = allowAtomics.B && isAtomic && workingRequest.atomicOp =/= AtomicOp.None
   val supportedKind = ordinaryKind || atomicKindSupported
-  val ordinarySizeSupported = if (Xlen == 32) active.size =/= MemSize.DWord else true.B
-  val atomicSizeSupported = active.size === MemSize.Word ||
-    (if (Xlen == 64) active.size === MemSize.DWord else false.B)
+  val ordinarySizeSupported = if (Xlen == 32) workingRequest.size =/= MemSize.DWord else true.B
+  val atomicSizeSupported = workingRequest.size === MemSize.Word ||
+    (if (Xlen == 64) workingRequest.size === MemSize.DWord else false.B)
   val sizeSupported = Mux(isAtomic, atomicSizeSupported, ordinarySizeSupported)
-  val ordinaryCarriesAtomicTag = ordinaryKind && active.atomicOp =/= AtomicOp.None
-  val unsupported = busy && (!supportedKind || !sizeSupported || ordinaryCarriesAtomicTag)
+  val ordinaryCarriesAtomicTag = ordinaryKind && workingRequest.atomicOp =/= AtomicOp.None
+  val unsupported = workingValid && (!supportedKind || !sizeSupported || ordinaryCarriesAtomicTag)
 
   val accessBytes = WireDefault(BusBytes.U(4.W))
   val alignmentMask = WireDefault((BusBytes - 1).U(Xlen.W))
   val storeMask = WireDefault(((BigInt(1) << BusBytes) - 1).U(BusBytes.W))
-  switch(active.size) {
+  switch(workingRequest.size) {
     is(MemSize.Byte) {
       accessBytes := 1.U
       alignmentMask := 0.U
@@ -206,20 +218,20 @@ class TinyBlockingLsu(
     }
   }
 
-  val misaligned = busy && supportedKind && sizeSupported &&
+  val misaligned = workingValid && supportedKind && sizeSupported &&
     ((effectiveAddress & alignmentMask) =/= 0.U)
   val localFault = unsupported || misaligned
 
   val adapter = Module(new DataPathAdapter(geometry, PhysicalBits, tlbEntries))
-  adapter.io.requestValid := busy && !localFault && !completionHeldValid
+  adapter.io.requestValid := workingValid && !localFault && !completionHeldValid
   adapter.io.flush := io.translationFlush
   adapter.io.virtualAddress := effectiveAddress
   adapter.io.privilege := io.effectivePrivilege
   adapter.io.translateWrite := accessNeedsWritePermission
   adapter.io.write := accessNeedsWritePermission
-  adapter.io.wdata := active.storeData
+  adapter.io.wdata := workingRequest.storeData
   adapter.io.wmask := storeMask
-  adapter.io.size := active.size
+  adapter.io.size := workingRequest.size
   adapter.io.satpTranslationEnabled := io.satpTranslationEnabled
   adapter.io.satpRootPpn := io.satpRootPpn
   adapter.io.sum := io.supervisorSum
@@ -242,10 +254,10 @@ class TinyBlockingLsu(
 
   val pmpDenied = adapter.io.dataValid && io.pmpEnabled && !pmp.io.allow
   val atomicPmaDenied = adapter.io.dataValid && isAtomic && !io.resolvedAttributes.supportsAtomic
-  val permitMatches = io.storePermit.valid && sameRobToken(io.storePermit.bits, active.robToken)
+  val permitMatches = io.storePermit.valid && sameRobToken(io.storePermit.bits, workingRequest.robToken)
   val writeMayExternalize = !accessNeedsWritePermission || permitMatches
   val localReservationMatches = if (allowAtomics) {
-    reservationValid.get && reservationSize.get === active.size &&
+    reservationValid.get && reservationSize.get === workingRequest.size &&
       reservationAddress.get === adapter.io.dataAddress
   } else false.B
   val localScFailure = adapter.io.dataValid && atomicSc && !localReservationMatches
@@ -262,10 +274,10 @@ class TinyBlockingLsu(
     Mux(isStore, AetherMemOp.Write, AetherMemOp.Read)
   )
   io.memoryRequest.bits.paddr := adapter.io.dataAddress
-  io.memoryRequest.bits.size := active.size
-  io.memoryRequest.bits.wdata := active.storeData
+  io.memoryRequest.bits.size := workingRequest.size
+  io.memoryRequest.bits.wdata := workingRequest.storeData
   io.memoryRequest.bits.wmask := Mux(accessNeedsWritePermission, storeMask, 0.U)
-  io.memoryRequest.bits.atomicOp := Mux(isAtomic, active.atomicOp, AtomicOp.None)
+  io.memoryRequest.bits.atomicOp := Mux(isAtomic, workingRequest.atomicOp, AtomicOp.None)
   io.memoryRequest.bits.attributes := io.resolvedAttributes
 
   when(io.memoryRequest.fire) {
@@ -385,6 +397,9 @@ class TinyBlockingLsu(
   freshCompletion.bits.producerTag := active.producerTag
   freshCompletion.bits.valueRef := active.valueRef
 
+  // Preserve the pre-P8 local-fault/completion timing: intake may start address
+  // processing immediately, but architectural completion still belongs to the
+  // registered active lifetime from the following cycle onward.
   val adapterDone = busy && !localFault && adapter.io.requestComplete && !completionHeldValid
   when(busy && localFault && !completionHeldValid) {
     freshCompletion.valid := true.B
