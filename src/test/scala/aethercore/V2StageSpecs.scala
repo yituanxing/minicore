@@ -60,6 +60,12 @@ class V2F6BlockingLsuSpec
     with V2A8ProductionSelectiveIssueChecks
     with V2P8PerformanceChecks
     with V2P8LsuIntakeFlowThroughChecks
+    // Fast Gate selects this aggregate for core/v2 memory changes. Keep the
+    // pre-head experiment's policy, safety and production timing proofs here so
+    // they are executed, not merely compiled, on every relevant exact head.
+    with V2P8PreHeadLoadSelectorChecks
+    with V2P8PreHeadSafetyGateChecks
+    with V2P8PreHeadBackendChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec
