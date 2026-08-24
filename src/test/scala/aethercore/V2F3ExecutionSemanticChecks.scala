@@ -237,15 +237,18 @@ trait V2F3ExecutionSemanticChecks { this: AnyFlatSpec with Matchers with ChiselS
         )
         dut.io.request.valid.poke(true.B)
         dut.io.request.ready.expect(true.B)
-        dut.clock.step()
-        dut.io.request.valid.poke(false.B)
 
+        // P8 branch response flow-through publishes the semantic result in the
+        // request-acceptance cycle. Check the full branch/trap contract before
+        // the ready response is consumed at the edge.
         dut.io.response.valid.expect(true.B)
         dut.io.response.bits.branchValid.expect(true.B)
         dut.io.response.bits.branchTaken.expect(expectedTaken.B)
         dut.io.response.bits.hasValue.expect(false.B)
         dut.io.response.bits.exception.valid.expect(expectedException.B)
         dut.clock.step()
+        dut.io.request.valid.poke(false.B)
+        dut.io.response.valid.expect(false.B)
       }
 
       run(lhs = 1, rhs = 2, immediate = 2, expectedTaken = false, expectedException = false)
