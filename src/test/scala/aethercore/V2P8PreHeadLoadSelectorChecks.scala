@@ -25,6 +25,8 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
       storeData: BigInt = 0
   ): Unit = {
     val entry = dut.io.window(age)
+    val isLoad = memoryKind == MemoryOperationKind.Load
+
     entry.valid.poke(valid.B)
     entry.complete.poke(complete.B)
     entry.dependenciesValid.poke(valid.B)
@@ -37,7 +39,7 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
     entry.uop.valueRef.id.poke(index.U)
     entry.uop.valueRef.generation.poke(0.U)
     entry.uop.executionClass.poke(executionClass)
-    entry.uop.producesValue.poke((memoryKind === MemoryOperationKind.Load).B)
+    entry.uop.producesValue.poke(isLoad.B)
 
     entry.uop.decoded.pc.poke((0x8000 + age * 4).U)
     entry.uop.decoded.inst.poke(0.U)
@@ -51,8 +53,8 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
     entry.uop.decoded.rs2.poke(2.U)
     entry.uop.decoded.rd.poke(3.U)
     entry.uop.decoded.usesRs1.poke(true.B)
-    entry.uop.decoded.usesRs2.poke(memoryKind =/= MemoryOperationKind.Load)
-    entry.uop.decoded.writesRd.poke((memoryKind === MemoryOperationKind.Load).B)
+    entry.uop.decoded.usesRs2.poke((!isLoad).B)
+    entry.uop.decoded.writesRd.poke(isLoad.B)
     entry.uop.decoded.immediate.poke(offset.U)
 
     entry.uop.decoded.controlFlow.kind.poke(ControlFlowKind.None)
