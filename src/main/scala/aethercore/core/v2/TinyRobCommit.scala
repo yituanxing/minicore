@@ -6,8 +6,8 @@ import aethercore.common.CommitTrace
 import aethercore.core.RegisterFile
 
 private[v2] object TinyRobGeometry {
-  val Entries: Int = 4
-  val IndexBits: Int = 2
+  val Entries: Int = 8
+  val IndexBits: Int = 3
 
   // A generation is a bounded lifetime discriminator, not a globally unique
   // instruction number. F7's two-bit field was sufficient for oldest-only
@@ -77,7 +77,7 @@ private class TinyRobEntry(val xlen: Int) extends Bundle {
 }
 
 /**
-  * Fixed four-entry ROB.
+  * Fixed eight-entry ROB.
   *
   * F4 added validated head-only normal branch recovery. F5 extends the same
   * lifetime authority to synchronous traps and xRET: a matching head
@@ -117,7 +117,7 @@ class TinyRob(val xlen: Int) extends Module {
   io.headView.bits := retireHead.uop
 
   // A8.3 exports the live ROB as an age-ordered read-only window. Dynamic
-  // indexing wraps naturally in the fixed two-bit slot domain; age<count is
+  // indexing wraps naturally in the fixed three-bit slot domain; age<count is
   // the authoritative live-range bound. No state is copied into this view.
   for (age <- 0 until Entries) {
     val slot = (head + age.U)(IndexBits - 1, 0)
