@@ -11,7 +11,7 @@ import aethercore.core.v2._
 import aethercore.memory.AetherMemOp
 
 /** P8 regression for the one-cycle blocking-LSU intake bubble. */
-class V2P8LsuIntakeFlowThroughSpec extends AnyFlatSpec with Matchers with ChiselSim {
+trait V2P8LsuIntakeFlowThroughChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private val geometry = PageTableGeometry.Sv39
 
   private def initialize(dut: TinyBlockingLsu): Unit = {
