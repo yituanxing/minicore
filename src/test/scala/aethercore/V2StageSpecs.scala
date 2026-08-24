@@ -93,6 +93,7 @@ class V2A8ProductionSelectiveIssueSpec
     with Matchers
     with ChiselSim
     with V2A8ProductionSelectiveIssueChecks
+    with V2P8PreHeadBackendChecks
 
 class V2P8PerformanceSpec
     extends AnyFlatSpec
