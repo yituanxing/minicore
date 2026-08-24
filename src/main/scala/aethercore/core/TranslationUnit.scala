@@ -16,13 +16,19 @@ import chisel3.util._
   * address boundary. Discarded high address bits therefore produce an access
   * fault instead of silently aliasing a narrower physical-address domain.
   *
+  * `withWalkControl` is deliberately opt-in. Existing instruction/data users
+  * retain the historical always-allow-walk behavior. The conservative pre-head
+  * Load experiment enables it only on the blocking LSU data path so a younger
+  * TLB miss can be held without starting a speculative page-table walk.
+  *
   * 共享地址翻译单元只负责组合状态机、bypass 与 TLB refill。页表模式差异由
   * PageTableGeometry 描述，walker/TLB 不复制。即使 bypass，也必须经过物理地址
   * 收窄边界；被丢弃的高位产生 access fault，禁止静默回绕。
   */
 class TranslationUnit(
     val geometry: PageTableGeometry,
-    val tlbEntries: Int = 8
+    val tlbEntries: Int = 8,
+    val withWalkControl: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
@@ -43,6 +49,10 @@ class TranslationUnit(
     val satpRootPpn = Input(UInt(PpnBits.W))
     val sum = Input(Bool())
     val mxr = Input(Bool())
+    // Optional policy input. When disabled, a TLB miss is neither accepted nor
+    // allowed to launch the walker; a cached hit and bare/M-mode bypass remain
+    // available. The request source therefore simply holds the request stable.
+    val allowWalk = if (withWalkControl) Some(Input(Bool())) else None
 
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PaddrBits.W))
@@ -80,6 +90,7 @@ class TranslationUnit(
   val translationRequired =
     io.satpTranslationEnabled && io.privilege =/= PrivilegeMode.Machine.U
   val lookupActive = state === idle && io.requestValid && translationRequired && !abort
+  val walkAllowed = if (withWalkControl) io.allowWalk.get else true.B
 
   tlb.io.lookupValid := lookupActive
   tlb.io.virtualAddress := io.virtualAddress
@@ -105,7 +116,7 @@ class TranslationUnit(
   tlb.io.refillLeafLevel := walker.io.leafLevel
   tlb.io.refillGlobal := walker.io.global
 
-  walker.io.requestValid := lookupActive && !tlb.io.hit
+  walker.io.requestValid := lookupActive && !tlb.io.hit && walkAllowed
   walker.io.kill := abort
   walker.io.virtualAddress := io.virtualAddress
   walker.io.rootPpn := io.satpRootPpn
@@ -124,9 +135,11 @@ class TranslationUnit(
   // A TLB hit is a combinational response. Without a response register the
   // request may only be accepted when the downstream response is accepted too;
   // backpressure therefore keeps the source request stable rather than losing it.
+  // A controlled miss is not accepted while walking is disabled, so enabling
+  // the walk later retries the exact same source lifetime without hidden state.
   io.requestReady := state === idle && !abort && Mux(
     translationRequired,
-    Mux(tlb.io.hit, io.responseReady, walker.io.requestReady),
+    Mux(tlb.io.hit, io.responseReady, walkAllowed && walker.io.requestReady),
     true.B
   )
 
