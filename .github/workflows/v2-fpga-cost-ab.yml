@@ -115,7 +115,9 @@ jobs:
               read_cmd+=" $sv"
             done
 
-            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -noiopad -json $json; stat -top TinyPagedCore" \
+            # Yosys 0.33 inserts no ECP5 I/O pads unless -iopad is explicitly
+            # requested, so the default is already the desired core-only flow.
+            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $json; stat -top TinyPagedCore" \
               2>&1 | tee "$ylog"
 
             # ECP5-85K/CABGA756 is a stable open-tool physical proxy, not a claim
