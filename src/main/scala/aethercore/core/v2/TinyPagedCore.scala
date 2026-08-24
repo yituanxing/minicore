@@ -80,6 +80,9 @@ class TinyPagedCore(
     allowAtomics = isa.hasA
   ))
   val decode = Module(new TinySemanticDecode(isa))
+  // The v2 frontend deliberately reuses the shared InstructionFetchAdapter and
+  // TranslationUnit. Shared translation-path changes therefore require the same
+  // exact-head Linux qualification as direct core/v2 RTL changes.
   val fetch = Module(new InstructionFetchAdapter(geometry, PhysicalBits, tlbEntries))
   val instructionPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
   val ptwArbiter = Module(new PtwArbiter(geometry, PhysicalBits))

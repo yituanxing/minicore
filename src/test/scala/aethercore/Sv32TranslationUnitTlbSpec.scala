@@ -87,12 +87,29 @@ class Sv32TranslationUnitTlbSpec extends AnyFlatSpec with Matchers with ChiselSi
       dut.clock.step() // consume response and refill TLB exactly once
       dut.io.responseReady.poke(false.B)
 
-      request(dut, secondVa, root)
+      // A cached hit is now a same-cycle response. Backpressure must hold the
+      // source request rather than accepting it into removed tlbResponse state.
+      dut.io.virtualAddress.poke(secondVa.U)
+      dut.io.satpRootPpn.poke(root.U)
+      dut.io.requestValid.poke(true.B)
+      dut.io.responseReady.poke(false.B)
       dut.io.pteValid.expect(false.B)
       dut.io.responseValid.expect(true.B)
+      dut.io.requestReady.expect(false.B)
       dut.io.physicalAddress.expect((pa + 0x100).U)
-      dut.io.responseReady.poke(true.B)
+
       dut.clock.step()
+      dut.io.pteValid.expect(false.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.requestReady.expect(false.B)
+      dut.io.physicalAddress.expect((pa + 0x100).U)
+
+      // The request and response are consumed together once downstream is ready.
+      dut.io.responseReady.poke(true.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.requestReady.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
       dut.io.responseReady.poke(false.B)
 
       dut.io.flush.poke(true.B)

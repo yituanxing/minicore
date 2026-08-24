@@ -59,13 +59,10 @@ class TranslationUnit(
     val global = Output(Bool())
   })
 
-  val idle :: walking :: bypassResponse :: tlbResponse :: Nil = Enum(4)
+  val idle :: walking :: bypassResponse :: Nil = Enum(3)
   val state = RegInit(idle)
   val bypassPhysicalAddress = RegInit(0.U(PaddrBits.W))
   val bypassAccessFault = RegInit(false.B)
-  val cachedPhysicalAddress = RegInit(0.U(PaddrBits.W))
-  val cachedLeafLevel = RegInit(0.U(LevelBits.W))
-  val cachedGlobal = RegInit(false.B)
 
   // Keep the accepted architectural context stable across a miss until the
   // walker response is consumed and refilled into the TLB.
@@ -124,9 +121,12 @@ class TranslationUnit(
 
   io.pteValid := walker.io.pteValid && !abort
   io.pteAddress := walker.io.pteAddress
+  // A TLB hit is a combinational response. Without a response register the
+  // request may only be accepted when the downstream response is accepted too;
+  // backpressure therefore keeps the source request stable rather than losing it.
   io.requestReady := state === idle && !abort && Mux(
     translationRequired,
-    Mux(tlb.io.hit, true.B, walker.io.requestReady),
+    Mux(tlb.io.hit, io.responseReady, walker.io.requestReady),
     true.B
   )
 
@@ -137,7 +137,14 @@ class TranslationUnit(
   io.leafLevel := 0.U
   io.global := false.B
 
-  when(state === walking) {
+  // Hot hit path: return the cached translation in the same cycle as lookup.
+  // Miss/walk/refill and bare-address behavior remain on their existing states.
+  when(lookupActive && tlb.io.hit) {
+    io.responseValid := true.B
+    io.physicalAddress := tlb.io.physicalAddress
+    io.leafLevel := tlb.io.leafLevel
+    io.global := tlb.io.global
+  }.elsewhen(state === walking) {
     io.responseValid := walker.io.responseValid && !abort
     io.physicalAddress := walker.io.physicalAddress
     io.pageFault := walker.io.pageFault
@@ -148,11 +155,6 @@ class TranslationUnit(
     io.responseValid := !abort
     io.physicalAddress := bypassPhysicalAddress
     io.accessFault := bypassAccessFault
-  }.elsewhen(state === tlbResponse) {
-    io.responseValid := !abort
-    io.physicalAddress := cachedPhysicalAddress
-    io.leafLevel := cachedLeafLevel
-    io.global := cachedGlobal
   }
 
   val (barePhysicalAddress, bareOutOfRange) =
@@ -162,17 +164,10 @@ class TranslationUnit(
     state := idle
     bypassPhysicalAddress := 0.U
     bypassAccessFault := false.B
-    cachedPhysicalAddress := 0.U
-    cachedLeafLevel := 0.U
-    cachedGlobal := false.B
   }.elsewhen(state === idle && io.requestValid && io.requestReady) {
     when(translationRequired) {
-      when(tlb.io.hit) {
-        cachedPhysicalAddress := tlb.io.physicalAddress
-        cachedLeafLevel := tlb.io.leafLevel
-        cachedGlobal := tlb.io.global
-        state := tlbResponse
-      }.otherwise {
+      // A hit is accepted and consumed entirely on this cycle; state remains idle.
+      when(!tlb.io.hit) {
         requestVirtualAddress := io.virtualAddress
         requestRootPpn := io.satpRootPpn
         requestPrivilege := io.privilege
@@ -190,8 +185,6 @@ class TranslationUnit(
   }.elsewhen(state === walking && walker.io.responseValid && io.responseReady) {
     state := idle
   }.elsewhen(state === bypassResponse && io.responseReady) {
-    state := idle
-  }.elsewhen(state === tlbResponse && io.responseReady) {
     state := idle
   }
 }
