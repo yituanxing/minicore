@@ -210,7 +210,7 @@ jobs:
 
           required = {
               'cycles', 'commits', 'dispatch_accepted', 'dispatch_blocked',
-              'rob0', 'rob1', 'rob2', 'rob3', 'rob4',
+              'rob0', 'rob1', 'rob2', 'rob3', 'rob4', 'rob5', 'rob6', 'rob7', 'rob8',
               'issue_int', 'issue_mul', 'issue_div', 'issue_branch', 'issue_mem',
               'system_completion', 'selective_candidate', 'selective_bypass',
               'bypass_compute_head', 'bypass_branch_head', 'bypass_memory_head',
@@ -227,7 +227,7 @@ jobs:
 
           cycles = values['cycles']
           commits = values['commits']
-          rob_sum = sum(values[f'rob{i}'] for i in range(5))
+          rob_sum = sum(values[f'rob{i}'] for i in range(9))
           selective_accepted = values['issue_int'] + values['issue_mul'] + values['issue_div']
           bypass_reasons = (
               values['bypass_compute_head'] + values['bypass_branch_head'] +
@@ -267,6 +267,7 @@ jobs:
               f'branch_head_pct={pct("branch_head"):.3f} '
               f'memory_head_pct={pct("memory_head"):.3f} '
               f'interrupt_hold_pct={pct("interrupt_hold"):.3f} '
+              f'rob8_full_pct={pct("rob8"):.3f} '
               f'selective_bypass={values["selective_bypass"]} '
               f'lsu_overlap={values["lsu_compute_overlap"]}'
           )
