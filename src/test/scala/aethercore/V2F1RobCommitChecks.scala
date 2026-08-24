@@ -118,20 +118,20 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
 
   behavior of "AetherCore v2 F1 Tiny ROB + Commit"
 
-  it should "backpressure at four entries and retire only a completed head" in {
+  it should "backpressure at the configured depth and retire only a completed head" in {
     simulate(new TinyRobCommitBackend(64)) { dut =>
       initializeF1(dut)
 
-      val ids = (0 until 4).map { index =>
-        allocate(dut, BigInt("80000000", 16) + index * 4, rd = index + 1)
+      val ids = (0 until TinyRobGeometry.Entries).map { index =>
+        allocate(dut, BigInt("80000000", 16) + index * 4, rd = (index % 31) + 1)
       }
 
-      dut.io.occupancy.expect(4.U)
+      dut.io.occupancy.expect(TinyRobGeometry.Entries.U)
       dut.io.dispatch.ready.expect(false.B)
 
-      complete(dut, ids(2), value = 33)
+      complete(dut, ids(TinyRobGeometry.Entries / 2), value = 33)
       dut.io.commit.valid.expect(false.B)
-      dut.io.occupancy.expect(4.U)
+      dut.io.occupancy.expect(TinyRobGeometry.Entries.U)
 
       complete(dut, ids(0), value = 11)
       dut.io.commit.valid.expect(true.B)
@@ -140,14 +140,18 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.commit.rdData.expect(11.U)
       dut.clock.step()
 
-      dut.io.occupancy.expect(3.U)
+      dut.io.occupancy.expect((TinyRobGeometry.Entries - 1).U)
       dut.io.dispatch.ready.expect(true.B)
       dut.io.commit.valid.expect(false.B)
 
-      val replacement = allocate(dut, BigInt("80000010", 16), rd = 5)
+      val replacement = allocate(
+        dut,
+        BigInt("80000000", 16) + TinyRobGeometry.Entries * 4,
+        rd = (TinyRobGeometry.Entries % 31) + 1
+      )
       replacement.index shouldBe ids(0).index
       replacement.generation should not be ids(0).generation
-      dut.io.occupancy.expect(4.U)
+      dut.io.occupancy.expect(TinyRobGeometry.Entries.U)
       dut.io.dispatch.ready.expect(false.B)
     }
   }
@@ -157,8 +161,8 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       initializeF1(dut)
 
       var firstIdentity: Option[Identity] = None
-      for (index <- 0 until 4) {
-        val identity = allocate(dut, BigInt("81000000", 16) + index * 4, rd = index + 1)
+      for (index <- 0 until TinyRobGeometry.Entries) {
+        val identity = allocate(dut, BigInt("81000000", 16) + index * 4, rd = (index % 31) + 1)
         if (index == 0) firstIdentity = Some(identity)
         complete(dut, identity, value = index + 10)
         dut.io.commit.valid.expect(true.B)
@@ -167,7 +171,11 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       }
 
       val old = firstIdentity.get
-      val current = allocate(dut, BigInt("81000010", 16), rd = 7)
+      val current = allocate(
+        dut,
+        BigInt("81000000", 16) + TinyRobGeometry.Entries * 4,
+        rd = 7
+      )
       current.index shouldBe old.index
       current.generation should not be old.generation
 
@@ -187,7 +195,8 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       initializeF1(dut)
 
       var old: Option[Identity] = None
-      for (index <- 0 until 16) {
+      val formerGenerationWrapLifetimes = TinyRobGeometry.Entries * 4
+      for (index <- 0 until formerGenerationWrapLifetimes) {
         val identity = allocate(dut, BigInt("81100000", 16) + index * 4, rd = (index % 31) + 1)
         if (index == 0) old = Some(identity)
         complete(dut, identity, value = index + 1)
@@ -200,7 +209,11 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       // the first lifetime (same slot, generation wrapped after four reuses).
       // A8 must retain a distinct lifetime across that old alias window.
       val stale = old.get
-      val current = allocate(dut, BigInt("81100040", 16), rd = 30)
+      val current = allocate(
+        dut,
+        BigInt("81100000", 16) + formerGenerationWrapLifetimes * 4,
+        rd = 30
+      )
       current.index shouldBe stale.index
       current.generation should not be stale.generation
       current.producerGeneration should not be stale.producerGeneration
@@ -221,12 +234,13 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     simulate(new TinyRobCommitBackend(64)) { dut =>
       initializeF1(dut)
       val identity = allocate(dut, BigInt("82000000", 16), rd = 8)
+      val indexMask = TinyRobGeometry.Entries - 1
 
       complete(
         dut,
         identity,
         value = 88,
-        producerIdOverride = Some((identity.producerId + 1) & 3)
+        producerIdOverride = Some((identity.producerId + 1) & indexMask)
       )
       dut.io.commit.valid.expect(false.B)
 
@@ -234,7 +248,7 @@ trait V2F1RobCommitChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
         dut,
         identity,
         value = 88,
-        valueIdOverride = Some((identity.valueId + 1) & 3)
+        valueIdOverride = Some((identity.valueId + 1) & indexMask)
       )
       dut.io.commit.valid.expect(false.B)
 
