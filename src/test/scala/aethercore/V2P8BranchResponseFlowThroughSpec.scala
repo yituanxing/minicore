@@ -10,11 +10,13 @@ import aethercore.core.v2._
 /**
   * P8 contract for removing the deterministic registered-response bubble from
   * the head-only branch unit without weakening Decoupled lifetime semantics.
+  *
+  * This is a reusable check trait so the existing Fast Gate F3 selection owns
+  * the proof whenever TinyExecution changes; it must not depend on an otherwise
+  * unselected standalone test class.
   */
-class V2P8BranchResponseFlowThroughSpec
-    extends AnyFlatSpec
-    with Matchers
-    with ChiselSim {
+trait V2P8BranchResponseFlowThroughChecks {
+  this: AnyFlatSpec with Matchers with ChiselSim =>
 
   private def driveRequest(
       dut: V2BranchUnit,
