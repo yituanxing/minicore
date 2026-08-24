@@ -253,24 +253,24 @@ class TinyMemoryBackend(
   selectiveIssue.io.window := dependencyBackend.io.schedulingWindow
   selectiveIssue.io.allocated := dependencyBackend.io.allocated
   selectiveIssue.io.availability := execution.io.computeAvailability
-  // A just-validated recovery must not launch a younger lifetime that is being
-  // killed this cycle. A not-yet-issued head memory request also has launch
-  // priority so the first selective slice remains globally single-issue.
+  // Branch owns the sole execution launch whenever the exact head request is
+  // live. This independent block is the combinational-cycle cut for branch
+  // response flow-through: selective compute cannot feed the branch request or
+  // recovery path, while an accepted recovery still blocks a killed younger
+  // lifetime in the same cycle. Memory retains the same launch priority.
   selectiveIssue.io.block :=
-    dependencyBackend.io.acceptedRecovery.valid ||
+    branchIssue.io.request.valid ||
+      dependencyBackend.io.acceptedRecovery.valid ||
       dependencyBackend.io.acceptedPrivilegedRecovery.valid ||
       lsu.io.request.valid
 
-  // Branch wins the one execution launch slot when the exact head is ready;
-  // otherwise oldest-ready safe compute may use it. Once a branch has launched,
-  // its once-only latch lets younger compute overlap while the branch resolves.
-  private val executionRequests = Module(new Arbiter(
-    new ExecutionRequest(xlen, IdentityBits, GenerationBits),
-    2
-  ))
-  executionRequests.io.in(0) <> branchIssue.io.request
-  executionRequests.io.in(1) <> selectiveIssue.io.request
-  execution.io.request <> executionRequests.io.out
+  // Branch is intentionally not routed through the selective-compute request
+  // mux. It remains exact-head-only, but its fresh response may now flow through
+  // the shared response arbiter without feeding back through scheduler
+  // availability. Global launch width remains one through the block above and
+  // the assertion below.
+  execution.io.branchRequest <> branchIssue.io.request
+  execution.io.computeRequest <> selectiveIssue.io.request
 
   system.io.head := dependencyBackend.io.head
   system.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
@@ -334,8 +334,7 @@ class TinyMemoryBackend(
   }
 
   // The first selective slice remains one-launch-per-cycle across Branch,
-  // Memory and compute. Memory gets priority through selectiveIssue.block;
-  // branch-vs-compute priority is owned by executionRequests above.
+  // Memory and compute. Memory and Branch get priority through selectiveIssue.block.
   assert(PopCount(Cat(
     branchIssue.io.request.fire,
     selectiveIssue.io.request.fire,
