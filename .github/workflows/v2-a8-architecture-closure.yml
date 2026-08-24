@@ -5,7 +5,11 @@ on:
     paths:
       - docs/AETHERCORE_V2_SUPPORTED_ARCHITECTURAL_PROFILES.md
       - src/main/scala/aethercore/config/**
+      - src/main/scala/aethercore/core/Rv32CDecompressor.scala
+      - src/main/scala/aethercore/core/Rv32CParcelController.scala
+      - src/main/scala/aethercore/core/v2/TinyPagedCore.scala
       - src/test/scala/aethercore/V2ArchitecturalProfileMatrixSpec.scala
+      - src/test/scala/aethercore/V2A8CommonRvcProductionSpec.scala
       - .github/workflows/v2-a8-architecture-closure.yml
   workflow_dispatch:
 
@@ -18,7 +22,7 @@ concurrency:
 
 jobs:
   profile-matrix:
-    name: Execute supported architectural-profile contract
+    name: Execute architecture/common-RVC contract
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
@@ -41,22 +45,25 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-      - name: Execute A8 supported-profile matrix
+      - name: Execute A8 supported-profile and production common-RVC contracts
         shell: bash
         run: |
           set -euo pipefail
           chmod +x ./mill
-          ./mill aethercore.test.testOnly aethercore.V2ArchitecturalProfileMatrixSpec
+          ./mill aethercore.test.testOnly \
+            aethercore.V2ArchitecturalProfileMatrixSpec \
+            aethercore.V2A8CommonRvcProductionSpec
 
       - name: Record exact architecture closure identity
         if: always()
         shell: bash
         run: |
           {
-            echo '## AetherCore v2 A8 architecture closure'
+            echo '## AetherCore v2 A8 architecture/common-RVC closure'
             echo
             echo "- exact head: `${{ github.event.pull_request.head.sha || github.sha }}`"
             echo "- exact base: `${{ github.event.pull_request.base.sha || 'workflow-dispatch' }}`"
-            echo '- executed contract: `aethercore.V2ArchitecturalProfileMatrixSpec`'
-            echo '- RV64C remains intentionally fail-closed until the next common-RVC closure phase.'
+            echo '- executed contracts: `V2ArchitecturalProfileMatrixSpec` + `V2A8CommonRvcProductionSpec`'
+            echo '- RV64C implementation capability is exercised on the production TinyPagedCore path.'
+            echo '- Named RV64 profiles remain C-free until compiler-produced RV64C workload qualification is green.'
           } >> "$GITHUB_STEP_SUMMARY"
