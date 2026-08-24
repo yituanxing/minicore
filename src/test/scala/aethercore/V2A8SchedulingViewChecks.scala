@@ -110,7 +110,7 @@ trait V2A8SchedulingViewChecks { this: AnyFlatSpec with Matchers with ChiselSim 
 
       dut.io.occupancy.expect(3.U)
       for (age <- 0 until 3) dut.io.schedulingWindow(age).valid.expect(true.B)
-      dut.io.schedulingWindow(3).valid.expect(false.B)
+      for (age <- 3 until TinyRobGeometry.Entries) dut.io.schedulingWindow(age).valid.expect(false.B)
       dut.io.schedulingWindow(0).uop.robToken.index.expect(0.U)
       dut.io.schedulingWindow(1).uop.robToken.index.expect(1.U)
       dut.io.schedulingWindow(2).uop.robToken.index.expect(2.U)
@@ -141,22 +141,33 @@ trait V2A8SchedulingViewChecks { this: AnyFlatSpec with Matchers with ChiselSim 
       dut.io.schedulingWindow(0).operandsReady.expect(true.B)
       dut.io.schedulingWindow(0).rs1.value.expect(99.U)
 
-      // Fill slot3 and then wrapped slot0. Slot0 must carry its incremented
-      // lifetime generation while appearing as the youngest age3 entry.
-      dispatch(dut, pc = 0x100c, rd = 4, immediate = 44)
-      dispatch(dut, pc = 0x1010, rd = 5, immediate = 55)
-      dut.io.occupancy.expect(4.U)
+      // Fill every remaining physical slot and finally wrap into reused slot0.
+      // The read-only view must remain in architectural age order across the
+      // wider ring, and reused slot0 must carry its incremented generation.
+      for (slot <- 3 until TinyRobGeometry.Entries) {
+        dispatch(
+          dut,
+          pc = BigInt(0x1000 + slot * 4),
+          rd = (slot % 31) + 1,
+          immediate = slot
+        )
+      }
+      dispatch(
+        dut,
+        pc = BigInt(0x1000 + TinyRobGeometry.Entries * 4),
+        rd = (TinyRobGeometry.Entries % 31) + 1,
+        immediate = TinyRobGeometry.Entries
+      )
+      dut.io.occupancy.expect(TinyRobGeometry.Entries.U)
 
-      val expectedIndices = Seq(1, 2, 3, 0)
+      val expectedIndices = (1 until TinyRobGeometry.Entries) :+ 0
       for ((index, age) <- expectedIndices.zipWithIndex) {
         dut.io.schedulingWindow(age).valid.expect(true.B)
         dut.io.schedulingWindow(age).uop.robToken.index.expect(index.U)
         dut.io.schedulingWindow(age).dependenciesValid.expect(true.B)
+        val expectedGeneration = if (index == 0) 1 else 0
+        dut.io.schedulingWindow(age).uop.robToken.generation.expect(expectedGeneration.U)
       }
-      dut.io.schedulingWindow(0).uop.robToken.generation.expect(0.U)
-      dut.io.schedulingWindow(1).uop.robToken.generation.expect(0.U)
-      dut.io.schedulingWindow(2).uop.robToken.generation.expect(0.U)
-      dut.io.schedulingWindow(3).uop.robToken.generation.expect(1.U)
     }
   }
 }
