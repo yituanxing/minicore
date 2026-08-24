@@ -8,8 +8,8 @@
 using VAetherCoreOpenSbiSimTop = VAetherCoreV2OpenSbiRV64SimTop;
 
 #ifdef AETHERCORE_V2_PERF
-// P8-only host observation hook. It wraps the already-qualified step() call
-// after including the shared runtime, so cycle and host-memory ordering remain
-// unchanged outside the performance build.
-#include "v2_perf_host_hook.h"
+// P8-only host observation hook. ROB8 adds a narrow overlay that appends the
+// four new occupancy buckets after the already-qualified base hook snapshots;
+// stepping and host-memory ordering remain owned by the base hook.
+#include "v2_rob8_perf_host_hook.h"
 #endif
