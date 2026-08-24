@@ -173,7 +173,9 @@ trait V2F4RecoveryChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
           controlFlowKind = ControlFlowKind.DirectJump
         )
 
-        // Allocate a younger WAW while the head branch issues.
+        // The head branch resolves in the same cycle that this younger WAW is
+        // presented. Validated recovery must win over speculative allocation,
+        // reject that dispatch, and emit exactly one redirect immediately.
         pokeRecoveryDispatch(
           dut,
           branchPc + 4,
@@ -185,23 +187,6 @@ trait V2F4RecoveryChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
           writesRd = true,
           producesValue = true,
           immediate = 99
-        )
-        dut.io.dispatch.ready.expect(true.B)
-        dut.clock.step()
-
-        // The registered branch response now reaches the ROB. Recovery must
-        // reject a simultaneous speculative dispatch and emit one typed redirect.
-        pokeRecoveryDispatch(
-          dut,
-          branchPc + 8,
-          ExecutionClass.Integer,
-          AluOp.Add,
-          OperandSourceKind.Zero,
-          OperandSourceKind.Immediate,
-          rd = 9,
-          writesRd = true,
-          producesValue = true,
-          immediate = 7
         )
         dut.io.redirect.valid.expect(true.B)
         dut.io.redirect.bits.target.expect(target.U)
@@ -286,9 +271,14 @@ trait V2F4RecoveryChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.clock.step()
       dut.io.dispatch.valid.poke(false.B)
 
+      // A not-taken branch produces no recovery, so the simultaneous younger
+      // allocation survives. The branch is already complete after this edge.
       dut.io.redirect.valid.expect(false.B)
-      dut.clock.step()
       dut.io.occupancy.expect(2.U)
+      dut.io.commit.valid.expect(true.B)
+      dut.clock.step()
+      // Only the completed branch retired; the younger instruction remains.
+      dut.io.occupancy.expect(1.U)
 
       var sawYounger = false
       var cycles = 0
