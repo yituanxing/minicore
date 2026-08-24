@@ -48,7 +48,7 @@ class V2LinuxProofMarkerRecognizer extends Module {
   }
 }
 
-/** One-cycle event sample for the P8.0 performance measurement contract.
+/** One-cycle event sample for the P8 performance measurement contract.
   *
   * These signals are observation only. No performance event is consumed by the
   * production core, scheduler, completion network, LSU or Commit path.
@@ -82,6 +82,25 @@ class V2PerformanceEvents extends Bundle {
   val interruptHold = Bool()
   val wfiHalted = Bool()
 
+  // P8.2 Branch exposure. The age buckets are mutually exclusive and describe
+  // the oldest ready younger Branch visible in the ROB4 scheduling window.
+  val readyYoungerBranch = Bool()
+  val readyYoungerBranchAge1 = Bool()
+  val readyYoungerBranchAge2 = Bool()
+  val readyYoungerBranchAge3 = Bool()
+
+  // Conservative opportunity excludes cycles already consuming the sole launch
+  // slot and architectural interrupt/WFI boundaries. Head-class buckets are
+  // mutually exclusive; readiness/LSU buckets intentionally overlap them.
+  val youngerBranchOpportunity = Bool()
+  val youngerBranchOpportunityHeadNotReady = Bool()
+  val youngerBranchOpportunityComputeHead = Bool()
+  val youngerBranchOpportunityBranchHead = Bool()
+  val youngerBranchOpportunityMemoryHead = Bool()
+  val youngerBranchOpportunitySystemHead = Bool()
+  val youngerBranchOpportunityOtherHead = Bool()
+  val youngerBranchOpportunityLsuBusy = Bool()
+
   val lsuBusy = Bool()
   val memoryLaunchBlocked = Bool()
   val memoryRequest = Bool()
@@ -93,7 +112,7 @@ class V2PerformanceEvents extends Bundle {
   val lsuComputeOverlapIssue = Bool()
 }
 
-/** Accumulated P8.0 counters. All counters live only in the simulation shell. */
+/** Accumulated P8 counters. All counters live only in the simulation shell. */
 class V2PerformanceCounters extends Bundle {
   val cycles = UInt(64.W)
   val commits = UInt(64.W)
@@ -128,6 +147,19 @@ class V2PerformanceCounters extends Bundle {
   val systemHead = UInt(64.W)
   val interruptHold = UInt(64.W)
   val wfiHalted = UInt(64.W)
+
+  val readyYoungerBranch = UInt(64.W)
+  val readyYoungerBranchAge1 = UInt(64.W)
+  val readyYoungerBranchAge2 = UInt(64.W)
+  val readyYoungerBranchAge3 = UInt(64.W)
+  val youngerBranchOpportunity = UInt(64.W)
+  val youngerBranchOpportunityHeadNotReady = UInt(64.W)
+  val youngerBranchOpportunityComputeHead = UInt(64.W)
+  val youngerBranchOpportunityBranchHead = UInt(64.W)
+  val youngerBranchOpportunityMemoryHead = UInt(64.W)
+  val youngerBranchOpportunitySystemHead = UInt(64.W)
+  val youngerBranchOpportunityOtherHead = UInt(64.W)
+  val youngerBranchOpportunityLsuBusy = UInt(64.W)
 
   val lsuBusy = UInt(64.W)
   val memoryLaunchBlocked = UInt(64.W)
@@ -194,6 +226,19 @@ class V2PerformanceCounterBank extends Module {
   io.counters.interruptHold := count(io.events.interruptHold)
   io.counters.wfiHalted := count(io.events.wfiHalted)
 
+  io.counters.readyYoungerBranch := count(io.events.readyYoungerBranch)
+  io.counters.readyYoungerBranchAge1 := count(io.events.readyYoungerBranchAge1)
+  io.counters.readyYoungerBranchAge2 := count(io.events.readyYoungerBranchAge2)
+  io.counters.readyYoungerBranchAge3 := count(io.events.readyYoungerBranchAge3)
+  io.counters.youngerBranchOpportunity := count(io.events.youngerBranchOpportunity)
+  io.counters.youngerBranchOpportunityHeadNotReady := count(io.events.youngerBranchOpportunityHeadNotReady)
+  io.counters.youngerBranchOpportunityComputeHead := count(io.events.youngerBranchOpportunityComputeHead)
+  io.counters.youngerBranchOpportunityBranchHead := count(io.events.youngerBranchOpportunityBranchHead)
+  io.counters.youngerBranchOpportunityMemoryHead := count(io.events.youngerBranchOpportunityMemoryHead)
+  io.counters.youngerBranchOpportunitySystemHead := count(io.events.youngerBranchOpportunitySystemHead)
+  io.counters.youngerBranchOpportunityOtherHead := count(io.events.youngerBranchOpportunityOtherHead)
+  io.counters.youngerBranchOpportunityLsuBusy := count(io.events.youngerBranchOpportunityLsuBusy)
+
   io.counters.lsuBusy := count(io.events.lsuBusy)
   io.counters.memoryLaunchBlocked := count(io.events.memoryLaunchBlocked)
   io.counters.memoryRequest := count(io.events.memoryRequest)
@@ -205,8 +250,8 @@ class V2PerformanceCounterBank extends Module {
   io.counters.lsuComputeOverlapIssue := count(io.events.lsuComputeOverlapIssue)
 }
 
-/** Linux/OpenSBI simulation top with P8.0 observation attached around the
-  * already-qualified #151 production core.
+/** Linux/OpenSBI simulation top with simulation-only P8 observation attached
+  * around the qualified production core.
   *
   * The inherited production core and platform wiring are untouched. Cross-
   * hierarchy state is read through Chisel read-only probes, so no performance
@@ -227,6 +272,9 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   private val selectiveReady = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.ready)
   private val selectiveBits = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits)
   private val head = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(0))
+  private val youngerAge1 = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(1))
+  private val youngerAge2 = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(2))
+  private val youngerAge3 = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(3))
 
   private val branchValid = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.valid)
   private val branchReady = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.ready)
@@ -264,6 +312,22 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   private val headIsMemory = headClass === ExecutionClass.Memory
   private val headIsSystem = headClass === ExecutionClass.System
 
+  private def readyBranchAtAge(entry: aethercore.core.v2.TinySchedulingEntry): Bool =
+    entry.valid && !entry.complete &&
+      !entry.uop.decoded.exception.valid &&
+      entry.dependenciesValid && entry.operandsReady &&
+      entry.uop.executionClass === ExecutionClass.Branch
+
+  private val youngerAge1ReadyBranch = readyBranchAtAge(youngerAge1)
+  private val youngerAge2ReadyBranch = readyBranchAtAge(youngerAge2)
+  private val youngerAge3ReadyBranch = readyBranchAtAge(youngerAge3)
+  private val readyYoungerBranch =
+    youngerAge1ReadyBranch || youngerAge2ReadyBranch || youngerAge3ReadyBranch
+  private val readyYoungerBranchAge1 = youngerAge1ReadyBranch
+  private val readyYoungerBranchAge2 = !youngerAge1ReadyBranch && youngerAge2ReadyBranch
+  private val readyYoungerBranchAge3 =
+    !youngerAge1ReadyBranch && !youngerAge2ReadyBranch && youngerAge3ReadyBranch
+
   private val selectedDiffersFromHead =
     selectiveBits.robToken.index =/= head.uop.robToken.index ||
       selectiveBits.robToken.generation =/= head.uop.robToken.generation
@@ -276,6 +340,17 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
     (headIsCompute && selectiveHeadFire) ||
       (headIsBranch && branchFire) ||
       (headIsMemory && lsuRequestFire)
+  private val anyLaunchFire = selectiveFire || branchFire || lsuRequestFire
+
+  // Conservative branch opportunity: a younger Branch is fully operand-ready,
+  // the older exact head still owns a live lifetime, no architectural exception
+  // is pending on that head, and the sole launch slot is otherwise unused. The
+  // interrupt/WFI exclusions prevent counting cycles where speculation should
+  // not cross an architectural boundary. This intentionally underestimates any
+  // design that would choose a younger Branch over another ready compute launch.
+  private val youngerBranchOpportunity =
+    readyYoungerBranch && headLive && !head.uop.decoded.exception.valid &&
+      !anyLaunchFire && !core.io.interruptHold && !core.io.halted
 
   private val completionValidCount = PopCount(Cat(
     systemCompletionValid,
@@ -316,6 +391,21 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   events.interruptHold := core.io.interruptHold
   events.wfiHalted := core.io.halted
 
+  events.readyYoungerBranch := readyYoungerBranch
+  events.readyYoungerBranchAge1 := readyYoungerBranchAge1
+  events.readyYoungerBranchAge2 := readyYoungerBranchAge2
+  events.readyYoungerBranchAge3 := readyYoungerBranchAge3
+  events.youngerBranchOpportunity := youngerBranchOpportunity
+  events.youngerBranchOpportunityHeadNotReady :=
+    youngerBranchOpportunity && !head.operandsReady
+  events.youngerBranchOpportunityComputeHead := youngerBranchOpportunity && headIsCompute
+  events.youngerBranchOpportunityBranchHead := youngerBranchOpportunity && headIsBranch
+  events.youngerBranchOpportunityMemoryHead := youngerBranchOpportunity && headIsMemory
+  events.youngerBranchOpportunitySystemHead := youngerBranchOpportunity && headIsSystem
+  events.youngerBranchOpportunityOtherHead := youngerBranchOpportunity &&
+    !(headIsCompute || headIsBranch || headIsMemory || headIsSystem)
+  events.youngerBranchOpportunityLsuBusy := youngerBranchOpportunity && core.io.lsuBusy
+
   events.lsuBusy := core.io.lsuBusy
   events.memoryLaunchBlocked := lsuRequestValid && !lsuRequestReady
   events.memoryRequest := core.io.memoryRequest.fire
@@ -346,6 +436,8 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
     printf(p"AETHERCORE_V2_PERF issue_int=${perf.io.counters.integerIssue} issue_mul=${perf.io.counters.multiplyIssue} issue_div=${perf.io.counters.divideIssue} issue_branch=${perf.io.counters.branchIssue} issue_mem=${perf.io.counters.memoryIssue} system_completion=${perf.io.counters.systemCompletion}\n")
     printf(p"AETHERCORE_V2_PERF selective_candidate=${perf.io.counters.selectiveCandidate} selective_bypass=${perf.io.counters.selectiveBypassIssue} bypass_compute_head=${perf.io.counters.selectiveBypassComputeHead} bypass_branch_head=${perf.io.counters.selectiveBypassBranchHead} bypass_memory_head=${perf.io.counters.selectiveBypassMemoryHead} bypass_other_head=${perf.io.counters.selectiveBypassOtherHead} lsu_compute_overlap=${perf.io.counters.lsuComputeOverlapIssue}\n")
     printf(p"AETHERCORE_V2_PERF head_not_ready=${perf.io.counters.headNotReady} head_ready_not_issued=${perf.io.counters.headReadyNotIssued} commit_idle_nonempty=${perf.io.counters.commitIdleRobNonEmpty} compute_head=${perf.io.counters.computeHead} branch_head=${perf.io.counters.branchHead} memory_head=${perf.io.counters.memoryHead} system_head=${perf.io.counters.systemHead}\n")
+    printf(p"AETHERCORE_V2_PERF ready_younger_branch=${perf.io.counters.readyYoungerBranch} branch_age1=${perf.io.counters.readyYoungerBranchAge1} branch_age2=${perf.io.counters.readyYoungerBranchAge2} branch_age3=${perf.io.counters.readyYoungerBranchAge3}\n")
+    printf(p"AETHERCORE_V2_PERF branch_opportunity=${perf.io.counters.youngerBranchOpportunity} branch_opp_head_not_ready=${perf.io.counters.youngerBranchOpportunityHeadNotReady} branch_opp_compute_head=${perf.io.counters.youngerBranchOpportunityComputeHead} branch_opp_branch_head=${perf.io.counters.youngerBranchOpportunityBranchHead} branch_opp_memory_head=${perf.io.counters.youngerBranchOpportunityMemoryHead} branch_opp_system_head=${perf.io.counters.youngerBranchOpportunitySystemHead} branch_opp_other_head=${perf.io.counters.youngerBranchOpportunityOtherHead} branch_opp_lsu_busy=${perf.io.counters.youngerBranchOpportunityLsuBusy}\n")
     printf(p"AETHERCORE_V2_PERF interrupt_hold=${perf.io.counters.interruptHold} wfi_halted=${perf.io.counters.wfiHalted} lsu_busy=${perf.io.counters.lsuBusy} memory_launch_blocked=${perf.io.counters.memoryLaunchBlocked} ptw_active=${perf.io.counters.ptwActive}\n")
     printf(p"AETHERCORE_V2_PERF mem_req=${perf.io.counters.memoryRequest} mem_resp=${perf.io.counters.memoryResponse} completion_collision=${perf.io.counters.completionCollision} completion_backpressure=${perf.io.counters.completionBackpressure}\n")
   }
