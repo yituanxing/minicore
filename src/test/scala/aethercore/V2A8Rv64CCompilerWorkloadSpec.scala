@@ -5,17 +5,23 @@ import chisel3.simulator.scalatest.ChiselSim
 import java.nio.file.{Files, Paths}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.common.MachineExceptionCode
-import aethercore.config.{CoreConfig, CoreProfiles, IsaConfig, PageTableGeometry}
+import aethercore.common.{MachineExceptionCode, PrivilegeMode}
+import aethercore.config.{CoreConfig, CoreProfiles, PageTableGeometry}
 import aethercore.core.v2.TinyPagedCore
 
 /**
-  * Software qualification for the common-RVC implementation boundary.
+  * Software qualification for the published RV64IMC machine/software profile.
   *
   * The executable is built by the owning CI workflow with the pinned RV64 GCC
   * toolchain. Ordinary repository-wide Scala test runs do not need that external
   * artifact, so this suite registers its executable test only when the workload
   * path is supplied (or the owning gate explicitly requires it).
+  *
+  * TinyPagedCore itself requires an S/U + paged-VM construction shell. The
+  * execution shell below therefore adds only those frontend transport axes to
+  * the exact ISA/ABI contract of CoreProfiles.rv64imcSoftware. The workload
+  * remains in M-mode with bare SATP throughout; this test does not publish or
+  * imply an RV64C S/U/Sv39/PMP profile.
   */
 class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "AetherCore v2 compiler-produced RV64C workload"
@@ -23,13 +29,11 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
   private val Required = sys.env.get("AETHERCORE_V2_RV64C_WORKLOAD_REQUIRED").contains("1")
   private val WorkloadPath = sys.env.get("AETHERCORE_V2_RV64C_WORKLOAD_BIN")
 
+  private val PublishedProfile = CoreProfiles.rv64imcSoftware
   private val Config = CoreConfig(
-    name = "rv64imc-sv39-compiler-workload",
-    isa = IsaConfig(
-      xlen = 64,
-      extensions = Set('I', 'M', 'C'),
+    name = "rv64imc-v2-execution-shell",
+    isa = PublishedProfile.isa.copy(
       privilegeModes = Set('M', 'S', 'U'),
-      zExtensions = Set("Zicsr"),
       virtualMemoryModes = Set("Sv39")
     ),
     platform = CoreProfiles.rv64imasuSv39PmpSoftware.platform
@@ -74,7 +78,21 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
   }
 
   if (Required || WorkloadPath.nonEmpty) {
-    it should "execute the pinned compiler-produced RV64C image on TinyPagedCore" in {
+    it should "execute the published RV64IMC software contract on production TinyPagedCore" in {
+      PublishedProfile.name shouldBe "rv64imc-software"
+      PublishedProfile.isa.march shouldBe "rv64imc_zicsr"
+      PublishedProfile.isa.mabi shouldBe "lp64"
+      PublishedProfile.isa.privilegeModes shouldBe Set('M')
+      PublishedProfile.isa.virtualMemoryModes shouldBe empty
+
+      // The production paged frontend shell adds transport-only privilege/VM
+      // construction axes. The actual instruction and ABI contract is exactly
+      // the published machine profile used by the compiler gate.
+      Config.isa.extensions shouldBe PublishedProfile.isa.extensions
+      Config.isa.zExtensions shouldBe PublishedProfile.isa.zExtensions
+      Config.isa.mabi shouldBe PublishedProfile.isa.mabi
+      Config.isa.hasC shouldBe true
+
       val path = WorkloadPath.getOrElse(fail(
         "AETHERCORE_V2_RV64C_WORKLOAD_BIN is required by the RV64C workload gate"
       ))
@@ -119,6 +137,10 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
             val commitPc = dut.io.commit.pc.peek().litValue
             val exception = dut.io.commit.exception.peek().litToBoolean
             val instBytes = dut.io.commit.instBytes.peek().litValue
+
+            // Qualification is specifically for the M-mode machine profile.
+            // Reaching S/U here would invalidate the publication boundary.
+            dut.io.currentPrivilege.expect(PrivilegeMode.Machine.U)
 
             if (exception) {
               val cause = dut.io.commit.exceptionCause.peek().litValue

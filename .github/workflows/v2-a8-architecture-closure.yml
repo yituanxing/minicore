@@ -104,5 +104,6 @@ jobs:
             echo '- exact base: `${{ github.event.pull_request.base.sha || 'workflow-dispatch' }}`'
             echo '- executed contracts: `V2ArchitecturalProfileMatrixSpec` + `V2A8CommonRvcProductionSpec`'
             echo '- RV64C implementation capability is exercised on the production TinyPagedCore path.'
-            echo '- Named RV64 profiles remain C-free until compiler-produced RV64C workload qualification is green.'
+            echo '- Published RV64 compressed machine profile: `CoreProfiles.rv64imcSoftware` (`rv64imc_zicsr / lp64`).'
+            echo '- RV64 application profile remains C-free pending privileged/VM/PMP cross-product qualification.'
           } >> "$GITHUB_STEP_SUMMARY"

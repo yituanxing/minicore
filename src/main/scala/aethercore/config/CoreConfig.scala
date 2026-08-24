@@ -326,6 +326,18 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  /** Qualified RV64 compressed machine/software profile. */
+  val rv64imcSoftware: CoreConfig = CoreConfig(
+    name = "rv64imc-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M', 'C'),
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv64Platform
+  )
+
   /** First bounded RV64 privileged software profile: bare M/S/U, no later system facilities. */
   val rv64imsuSoftware: CoreConfig = CoreConfig(
     name = "rv64imsu-software",

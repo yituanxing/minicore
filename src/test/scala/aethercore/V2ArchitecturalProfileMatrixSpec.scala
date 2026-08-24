@@ -2,7 +2,7 @@ package aethercore
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.config.{CoreConfig, CoreProfiles, IsaConfig}
+import aethercore.config.{CoreConfig, CoreProfiles}
 
 class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
   behavior of "AetherCore v2 supported architectural profiles"
@@ -50,6 +50,16 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
       compressed = false
     ),
     ExpectedProfile(
+      config = CoreProfiles.rv64imcSoftware,
+      xlen = 64,
+      march = "rv64imc_zicsr",
+      mabi = "lp64",
+      privilegeModes = Set('M'),
+      vmModes = Set.empty,
+      pmpEntries = 0,
+      compressed = true
+    ),
+    ExpectedProfile(
       config = CoreProfiles.rv64imasuSv39PmpSoftware,
       xlen = 64,
       march = "rv64ima_zicsr",
@@ -78,6 +88,7 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     CoreProfiles.rv32imcSoftware.isa.mabi shouldBe "ilp32"
     CoreProfiles.rv32imacsuSv32PmpSoftware.isa.mabi shouldBe "ilp32"
     CoreProfiles.rv64imCurrent.isa.mabi shouldBe "lp64"
+    CoreProfiles.rv64imcSoftware.isa.mabi shouldBe "lp64"
     CoreProfiles.rv64imasuSv39PmpSoftware.isa.mabi shouldBe "lp64"
 
     representativeProfiles.foreach { expected =>
@@ -103,26 +114,19 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     CoreProfiles.rv64imasuSv39PmpSoftware.isa.pmpEntries shouldBe 16
   }
 
-  it should "separate RV64C implementation capability from qualified RV64 profile claims" in {
-    val rv64c = IsaConfig(
-      xlen = 64,
-      extensions = Set('I', 'M', 'C'),
-      privilegeModes = Set('M'),
-      zExtensions = Set("Zicsr")
-    )
+  it should "publish RV64C only at the compiler-qualified machine profile boundary" in {
+    val rv64c = CoreProfiles.rv64imcSoftware
+    rv64c.name shouldBe "rv64imc-software"
+    rv64c.isa.hasC shouldBe true
+    rv64c.isa.march shouldBe "rv64imc_zicsr"
+    rv64c.isa.mabi shouldBe "lp64"
+    rv64c.isa.privilegeModes shouldBe Set('M')
+    rv64c.isa.virtualMemoryModes shouldBe empty
+    rv64c.isa.pmpEntries shouldBe 0
 
-    val implementation = CoreConfig(
-      "rv64imc-implementation",
-      rv64c,
-      CoreProfiles.rv64imCurrent.platform
-    )
-
-    implementation.isa.hasC shouldBe true
-    implementation.isa.march shouldBe "rv64imc_zicsr"
-    implementation.isa.mabi shouldBe "lp64"
-
-    // Named support points stay conservative until real compiler-produced
-    // RV64C software is permanently qualified on the production core path.
+    // Keep the older RV64 machine point and the Linux/OpenSBI-class profile
+    // conservative. C is not promoted across privilege/VM/PMP axes merely
+    // because the machine-mode compiler workload is now qualified.
     CoreProfiles.rv64imCurrent.isa.hasC shouldBe false
     CoreProfiles.rv64imasuSv39PmpSoftware.isa.hasC shouldBe false
   }
