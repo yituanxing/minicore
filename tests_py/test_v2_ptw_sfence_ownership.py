@@ -27,6 +27,7 @@ class V2PtwSfenceOwnershipSourceContract(unittest.TestCase):
         self.assertIn("io.ptw.valid := ptwArbiter.io.memoryValid && !fetchPtwPmpFault", source)
         self.assertIn("ptwArbiter.io.memoryReady := Mux(fetchPtwPmpFault, true.B, io.ptw.ready)", source)
         self.assertNotIn("ptwArbiter.io.memoryValid && !ptwArbiter.io.dataValid", source)
+        self.assertNotIn("private val selectedFetchPtw", source)
         self.assertNotIn("private val ptwPmpFault = ptwArbiter.io.memoryValid", source)
 
     def test_shared_arbiter_owns_selection_and_exports_routing_fact(self):
