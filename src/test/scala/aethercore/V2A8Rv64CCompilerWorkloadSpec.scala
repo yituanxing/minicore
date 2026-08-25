@@ -6,7 +6,7 @@ import java.nio.file.{Files, Paths}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.common.{MachineExceptionCode, PrivilegeMode}
-import aethercore.config.{CoreConfig, CoreProfiles, PageTableGeometry}
+import aethercore.config.{AbiProfiles, CoreConfig, CoreProfiles, PageTableGeometry, SoftwareTarget}
 import aethercore.core.v2.TinyPagedCore
 
 /**
@@ -30,6 +30,7 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
   private val WorkloadPath = sys.env.get("AETHERCORE_V2_RV64C_WORKLOAD_BIN")
 
   private val PublishedProfile = CoreProfiles.rv64imcSoftware
+  private val PublishedTarget = SoftwareTarget(PublishedProfile.isa, AbiProfiles.lp64)
   private val Config = CoreConfig(
     name = "rv64imc-v2-execution-shell",
     isa = PublishedProfile.isa.copy(
@@ -38,6 +39,7 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
     ),
     platform = CoreProfiles.rv64imasuSv39PmpSoftware.platform
   )
+  private val ConfigTarget = SoftwareTarget(Config.isa, AbiProfiles.lp64)
   private val Geometry = PageTableGeometry.Sv39
   private val Reset = Config.platform.resetVector
   private val NopParcel = BigInt("0001", 16) // C.NOP
@@ -80,8 +82,8 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
   if (Required || WorkloadPath.nonEmpty) {
     it should "execute the published RV64IMC software contract on production TinyPagedCore" in {
       PublishedProfile.name shouldBe "rv64imc-software"
-      PublishedProfile.isa.march shouldBe "rv64imc_zicsr"
-      PublishedProfile.isa.mabi shouldBe "lp64"
+      PublishedTarget.march shouldBe "rv64imc_zicsr"
+      PublishedTarget.mabi shouldBe "lp64"
       PublishedProfile.isa.privilegeModes shouldBe Set('M')
       PublishedProfile.isa.virtualMemoryModes shouldBe empty
 
@@ -90,7 +92,7 @@ class V2A8Rv64CCompilerWorkloadSpec extends AnyFlatSpec with Matchers with Chise
       // the published machine profile used by the compiler gate.
       Config.isa.extensions shouldBe PublishedProfile.isa.extensions
       Config.isa.zExtensions shouldBe PublishedProfile.isa.zExtensions
-      Config.isa.mabi shouldBe PublishedProfile.isa.mabi
+      ConfigTarget.mabi shouldBe PublishedTarget.mabi
       Config.isa.hasC shouldBe true
 
       val path = WorkloadPath.getOrElse(fail(
