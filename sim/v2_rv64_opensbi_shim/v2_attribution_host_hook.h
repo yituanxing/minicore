@@ -68,6 +68,23 @@ void emitSnapshot(const Top& top, const char* reason) {
       << " completion_atomic=" << static_cast<std::uint64_t>(top.ioMemoryCompletionAtomic)
       << " permit_store=" << static_cast<std::uint64_t>(top.ioMemoryPermitStore)
       << " permit_atomic=" << static_cast<std::uint64_t>(top.ioMemoryPermitAtomic)
+      << "\nAETHERCORE_V2_ATTR_V11 reason=" << reason
+      << " cycles=" << static_cast<std::uint64_t>(top.ioV11Cycles)
+      << " branch_resolved=" << static_cast<std::uint64_t>(top.ioV11BranchResolved)
+      << " branch_taken=" << static_cast<std::uint64_t>(top.ioV11BranchTaken)
+      << " branch_recovery=" << static_cast<std::uint64_t>(top.ioV11BranchRecovery)
+      << " branch_squashed_uops=" << static_cast<std::uint64_t>(top.ioV11BranchSquashedUops)
+      << " issue_launch=" << static_cast<std::uint64_t>(top.ioV11IssueLaunch)
+      << " issue_idle_launchable=" << static_cast<std::uint64_t>(top.ioV11IssueIdleLaunchable)
+      << " issue_idle_no_launchable=" << static_cast<std::uint64_t>(top.ioV11IssueIdleNoLaunchable)
+      << " issue_inactive=" << static_cast<std::uint64_t>(top.ioV11IssueInactive)
+      << " shadow_compute_ready=" << static_cast<std::uint64_t>(top.ioV11ShadowComputeReady)
+      << " dual_compute_candidate=" << static_cast<std::uint64_t>(top.ioV11DualComputeCandidate)
+      << " frontend_second_parcel=" << static_cast<std::uint64_t>(top.ioV11FrontendSecondParcel)
+      << " frontend_bound_second_parcel=" << static_cast<std::uint64_t>(top.ioV11FrontendBoundSecondParcel)
+      << " memory_terminal_valid=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalValid)
+      << " memory_terminal_fire=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalFire)
+      << " memory_terminal_hold=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalHold)
       << "\n";
 }
 
