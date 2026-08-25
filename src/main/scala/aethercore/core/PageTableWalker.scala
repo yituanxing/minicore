@@ -1,6 +1,5 @@
 package aethercore.core
 
-import aethercore.common.PrivilegeMode
 import aethercore.config.PageTableGeometry
 import chisel3._
 import chisel3.util._
@@ -9,18 +8,14 @@ import chisel3.util._
   * Correctness-first page-table walker driven by one architectural geometry.
   *
   * The walker owns the common Sv32/Sv39/Sv48 traversal algorithm: VPN indexing,
-  * pointer descent, leaf permission checks, superpage alignment, canonical
-  * virtual-address validation and final physical-address composition. It does
-  * not own satp activation, TLB policy, PMP/PMA checks, or hardware A/D updates.
+  * pointer descent, canonical virtual-address validation, inherited-global state
+  * and final physical-address composition. PTE format legality, leaf permission
+  * checks, Svade A/D policy and superpage alignment are delegated to the shared
+  * PageTableEntryChecker.
   *
-  * The current profile uses Svade-style A/D behavior: a clear A bit, or a clear
-  * D bit on a write, raises a page fault instead of modifying the PTE in memory.
-  * RV64 PTE bits above the architectural 44-bit PPN are treated as reserved until
-  * Svnapot/Svpbmt are explicitly implemented. Non-leaf U/A/D bits must remain
-  * zero, while a non-leaf G bit is inherited by every mapping below that entry.
-  *
-  * 基于 PageTableGeometry 的共享页表遍历器。Sv32/Sv39/Sv48 只提供页表层数、
-  * VPN/PTE/PPN 宽度等几何差异，遍历、权限、superpage 对齐和地址拼接逻辑共享。
+  * It does not own satp activation, TLB policy, PMP/PMA checks, or hardware A/D
+  * updates. Keeping traversal and permission policy separate makes the shared
+  * VM ownership explicit without changing response lifetime or fault priority.
   */
 class PageTableWalker(val geometry: PageTableGeometry) extends Module {
   private val Xlen = geometry.xlen
@@ -105,6 +100,15 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
     Mux(sign, upper.andR, !upper.orR)
   }
 
+  val entryChecker = Module(new PageTableEntryChecker(geometry))
+  entryChecker.io.pte := io.pteData
+  entryChecker.io.level := level
+  entryChecker.io.privilege := privilege
+  entryChecker.io.write := requestWrite
+  entryChecker.io.execute := requestExecute
+  entryChecker.io.sum := requestSum
+  entryChecker.io.mxr := requestMxr
+
   def finish(pageFault: Bool, accessFault: Bool): Unit = {
     resultPageFault := pageFault
     resultAccessFault := accessFault
@@ -147,45 +151,9 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
     when(io.pteFault) {
       finish(false.B, true.B)
     }.otherwise {
-      val pte = io.pteData
-      val valid = pte(0)
-      val readable = pte(1)
-      val writable = pte(2)
-      val executable = pte(3)
-      val user = pte(4)
-      val global = pte(5)
-      val accessed = pte(6)
-      val dirty = pte(7)
-      val ptePpn = pte(9 + PpnBits, 10)
-      val leaf = readable || executable
-
-      val reservedHigh = if (10 + PpnBits < geometry.pteBits) {
-        pte(geometry.pteBits - 1, 10 + PpnBits).orR
-      } else {
-        false.B
-      }
-      val nonLeafReserved = !leaf && (user || accessed || dirty)
-      val invalidEncoding = !valid || (!readable && writable) || reservedHigh || nonLeafReserved
-      val readAllowed = readable || (requestMxr && executable)
-      val accessAllowed = Mux(requestExecute, executable, Mux(requestWrite, writable, readAllowed))
-      val privilegeAllowed = Mux(
-        privilege === PrivilegeMode.User.U,
-        user,
-        Mux(
-          privilege === PrivilegeMode.Supervisor.U,
-          Mux(requestExecute, !user, !user || requestSum),
-          false.B
-        )
-      )
-      val adAllowed = accessed && (!requestWrite || dirty)
-
-      val misalignedSuperpage = WireDefault(false.B)
-      for (i <- 1 until geometry.levels) {
-        val lowerPpnBits = i * geometry.vpnBitsPerLevel
-        when(level === i.U) {
-          misalignedSuperpage := ptePpn(lowerPpnBits - 1, 0).orR
-        }
-      }
+      val ptePpn = entryChecker.io.ppn
+      val leaf = entryChecker.io.leaf
+      val global = entryChecker.io.global
 
       val translatedPpn = WireDefault(ptePpn)
       for (i <- 1 until geometry.levels) {
@@ -199,10 +167,10 @@ class PageTableWalker(val geometry: PageTableGeometry) extends Module {
         }
       }
 
-      when(invalidEncoding) {
+      when(entryChecker.io.invalidEncoding) {
         finish(true.B, false.B)
       }.elsewhen(leaf) {
-        when(!accessAllowed || !privilegeAllowed || !adAllowed || misalignedSuperpage) {
+        when(entryChecker.io.leafAccessFault) {
           finish(true.B, false.B)
         }.otherwise {
           resultPhysicalAddress := Cat(translatedPpn, virtualAddress(geometry.pageOffsetBits - 1, 0))
