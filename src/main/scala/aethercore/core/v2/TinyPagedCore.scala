@@ -264,7 +264,9 @@ class TinyPagedCore(
 
   // Every implicit PTE read has exactly one PMP owner. Data requests reaching
   // this arbiter have already passed TinyMemoryBackend's local Supervisor-mode
-  // PTW PMP guard. Only a selected fetch request is checked here. A denied fetch
+  // PTW PMP guard. Only a selected fetch request is checked here. The arbiter
+  // owns source selection and exports memoryIsFetch as routing metadata so this
+  // parent does not duplicate the data-priority selection policy. A denied fetch
   // walk is consumed locally in the same cycle and never reaches external PTW.
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
   ptwPmp.io.address := ptwArbiter.io.memoryAddress
@@ -273,9 +275,8 @@ class TinyPagedCore(
   ptwPmp.io.execute := false.B
   ptwPmp.io.config := backend.io.frontendPmpConfig
   ptwPmp.io.pmpAddress := backend.io.frontendPmpAddress
-  private val selectedFetchPtw =
-    ptwArbiter.io.memoryValid && !ptwArbiter.io.dataValid
-  private val fetchPtwPmpFault = selectedFetchPtw && isa.hasPmp.B && !ptwPmp.io.allow
+  private val fetchPtwPmpFault =
+    ptwArbiter.io.memoryIsFetch && isa.hasPmp.B && !ptwPmp.io.allow
 
   io.ptw.valid := ptwArbiter.io.memoryValid && !fetchPtwPmpFault
   io.ptw.addr := ptwArbiter.io.memoryAddress
