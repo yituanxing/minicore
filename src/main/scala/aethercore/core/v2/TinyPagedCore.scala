@@ -121,16 +121,27 @@ class TinyPagedCore(
   io.halted := wfiWaiting
   io.interruptHold := interruptHold
 
+  // A serializing architectural operation (CSR/SFENCE/xRET/fence/WFI today,
+  // plus aq/rl atomics) closes the speculative fetch window. This avoids
+  // carrying stale translated instruction bits across an architectural context
+  // boundary without adding a replay mechanism.
   private val serializedRetires = serialized && backend.io.commit.valid &&
     backend.io.commit.pc === serializedPc
 
   if (isa.hasC) {
     val rvc = parcel.get
     rvc.io.instructionPc := pc
+    // A translation fence is a frontend context boundary even though the
+    // InstructionFetchAdapter receives it through its dedicated flush input.
+    // Never retain the first half of a 32-bit instruction across that boundary.
     rvc.io.kill := frontendKill || backend.io.translationFence
   }
 
   fetch.io.requestValid := !redirect && !frontendBlocked
+  // A newly qualified interrupt can arrive while an instruction translation is
+  // in flight. Cancel that speculative fetch and restart from the same PC after
+  // trap entry/return rather than carrying old-context instruction bits across
+  // the architectural boundary.
   fetch.io.kill := frontendKill
   fetch.io.flush := backend.io.translationFence
   fetch.io.virtualAddress := (if (isa.hasC) parcel.get.io.parcelRequestAddress else pc)
@@ -166,6 +177,9 @@ class TinyPagedCore(
     rvc.io.parcelBits := io.imem.inst(15, 0)
     rvc.io.parcelPageFault := fetch.io.pageFault
     rvc.io.parcelAccessFault := parcelAccessFault
+    // For the first half of an ordinary 32-bit instruction this may consume a
+    // parcel without allocating a ROB entry. Backpressure is still inherited
+    // from the backend so a full ROB cannot open a new second-parcel lifetime.
     rvc.io.advance := backend.io.dispatch.ready
   }
 
@@ -233,6 +247,9 @@ class TinyPagedCore(
     }
   }
 
+  // Data translation owns PTW PMP before exporting a PTE request from the
+  // backend. Fetch translation has no mutable PMP owner of its own and joins
+  // the shared PTW here. Data keeps deterministic priority in the arbiter.
   ptwArbiter.io.dataValid := backend.io.pteValid
   ptwArbiter.io.dataAddress := backend.io.pteAddress
   backend.io.pteReady := ptwArbiter.io.dataReady
@@ -245,6 +262,12 @@ class TinyPagedCore(
   fetch.io.pteData := ptwArbiter.io.fetchRdata
   fetch.io.pteFault := ptwArbiter.io.fetchFault
 
+  // Every implicit PTE read has exactly one PMP owner. Data requests reaching
+  // this arbiter have already passed TinyMemoryBackend's local Supervisor-mode
+  // PTW PMP guard. Only a selected fetch request is checked here. The arbiter
+  // owns source selection and exports memoryIsFetch as routing metadata so this
+  // parent does not duplicate the data-priority selection policy. A denied fetch
+  // walk is consumed locally in the same cycle and never reaches external PTW.
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
   ptwPmp.io.address := ptwArbiter.io.memoryAddress
   ptwPmp.io.bytes := geometry.pteBytes.U
