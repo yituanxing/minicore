@@ -22,17 +22,19 @@ class V2PtwSfenceOwnershipSourceContract(unittest.TestCase):
 
     def test_fetch_ptw_is_the_only_parent_side_pmp_check(self):
         source = PAGED.read_text(encoding="utf-8")
-        self.assertIn("private val selectedFetchPtw =", source)
-        self.assertIn("ptwArbiter.io.memoryValid && !ptwArbiter.io.dataValid", source)
-        self.assertIn("private val fetchPtwPmpFault = selectedFetchPtw", source)
+        self.assertIn("ptwArbiter.io.memoryIsFetch && isa.hasPmp.B", source)
+        self.assertIn("private val fetchPtwPmpFault =", source)
         self.assertIn("io.ptw.valid := ptwArbiter.io.memoryValid && !fetchPtwPmpFault", source)
         self.assertIn("ptwArbiter.io.memoryReady := Mux(fetchPtwPmpFault, true.B, io.ptw.ready)", source)
+        self.assertNotIn("ptwArbiter.io.memoryValid && !ptwArbiter.io.dataValid", source)
         self.assertNotIn("private val ptwPmpFault = ptwArbiter.io.memoryValid", source)
 
-    def test_shared_arbiter_is_policy_free_and_data_priority(self):
+    def test_shared_arbiter_owns_selection_and_exports_routing_fact(self):
         source = ARBITER.read_text(encoding="utf-8")
         self.assertIn("val chooseData = io.dataValid", source)
         self.assertIn("val chooseFetch = !chooseData && io.fetchValid", source)
+        self.assertIn("val memoryIsFetch = Output(Bool())", source)
+        self.assertIn("io.memoryIsFetch := chooseFetch", source)
         self.assertNotIn("PmpChecker", source)
         self.assertNotIn("PrivilegeMode", source)
 
