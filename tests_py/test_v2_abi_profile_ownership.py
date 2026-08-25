@@ -5,7 +5,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CORE_CONFIG = ROOT / "src/main/scala/aethercore/config/CoreConfig.scala"
 ABI_CONFIG = ROOT / "src/main/scala/aethercore/config/AbiConfig.scala"
-MAIN_SCALA = ROOT / "src/main/scala"
+SCALA = ROOT / "src"
 
 
 class V2AbiProfileOwnershipContract(unittest.TestCase):
@@ -36,9 +36,9 @@ class V2AbiProfileOwnershipContract(unittest.TestCase):
         self.assertIn("val mabi: String = abi.name", source)
         self.assertIn("CoreConfig/AetherCoreCapabilities remain the separate production", source)
 
-    def test_production_scala_does_not_read_abi_from_isa(self):
+    def test_scala_does_not_read_abi_from_isa(self):
         offenders = []
-        for path in MAIN_SCALA.rglob("*.scala"):
+        for path in SCALA.rglob("*.scala"):
             text = path.read_text(encoding="utf-8")
             if ".isa.mabi" in text or "isa.mabi" in text:
                 offenders.append(str(path.relative_to(ROOT)))
