@@ -52,6 +52,8 @@ Whether fetch is selected is not PMP policy; it is a routing result of arbitrati
 - `TinyPagedCore` owns fetch-side PMP qualification of the selected request;
 - neither owner duplicates the other's decision rule.
 
+The executable contract therefore rejects both the old `memoryValid && !dataValid` reconstruction and any retained `selectedFetchPtw` alias that could hide the same duplicated policy behind a local name.
+
 ## SFENCE.VMA single-origin rule
 
 SFENCE.VMA invalidation originates only from precise retirement.
