@@ -10,8 +10,9 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
   * F7 first real instruction-flow composition.
   *
   * This shell deliberately owns only the bare physical PC/fetch sequence. The
-  * architectural Decoder is translated once by TinySemanticDecode and the
-  * resulting RobDispatch enters the already-qualified F6 backend. Branch
+  * architectural Decoder is translated once by TinySemanticDecode into the
+  * stable DecodedInstruction boundary; TinyDispatchClassify then adds the
+  * backend-only execution/value classification before ROB dispatch. Branch
   * recovery and precise trap/xRET retirement redirect the same PC owner.
   *
   * Instruction translation/PMP, compressed parcel assembly and asynchronous
@@ -62,6 +63,8 @@ class TinyBareCore(
     txnIdBits = txnIdBits
   ))
   val decode = Module(new TinySemanticDecode(isa))
+  val classify = Module(new TinyDispatchClassify(Xlen))
+  classify.io.decoded := decode.io.decoded
 
   private val pc = RegInit(config.platform.resetVector.U(Xlen.W))
   io.frontendPc := pc
@@ -104,7 +107,7 @@ class TinyBareCore(
   // Redirect wins over dispatch so a stale fall-through instruction cannot be
   // allocated in the same cycle that the backend invalidates younger work.
   backend.io.dispatch.valid := !redirect
-  backend.io.dispatch.bits := decode.io.dispatch
+  backend.io.dispatch.bits := classify.io.dispatch
 
   when(redirect) {
     pc := redirectTarget
