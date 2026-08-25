@@ -8,10 +8,11 @@ import chisel3.util._
   *
   * Age 0 preserves the historical exact-head Memory policy: any ready,
   * exception-free Memory uOp may launch. At younger ages, only an ordinary
-  * Normal Load may be selected, and only when every older live entry is an
-  * ordinary Normal Integer/MulDiv uOp with no known decoded exception. The
-  * selector therefore never crosses Branch, System, older Memory, explicit
-  * ordering/serialization, or a known exception boundary.
+  * Normal Load may be selected. A younger Load may cross ordinary compute and
+  * a completed ordinary Load that is itself still non-head; the latter proves
+  * that the older Load completed through the already-qualified replay-safe
+  * pre-head path. Head Memory, incomplete Memory, Branch, System, explicit
+  * ordering/serialization and known decoded exceptions remain hard barriers.
   *
   * This module owns policy and once-only issue state only. ROB order/lifetime,
   * dependency/value state and the memory transaction itself remain owned by the
@@ -42,22 +43,38 @@ class TinySelectiveLoadIssue(val xlen: Int) extends Module {
   private def sameRobToken(lhs: RobToken, rhs: RobToken): Bool =
     lhs.index === rhs.index && lhs.generation === rhs.generation
 
-  // A younger load may cross only side-effect-free ordinary compute. Do not
-  // treat completion itself as sufficient permission: a completed Branch,
-  // System or Memory remains an architectural boundary for this first policy.
-  private def olderIsPureCompute(entry: TinySchedulingEntry): Bool = {
+  /**
+    * A younger Load may cross ordinary compute immediately. It may also cross a
+    * completed ordinary Load only when that Load is itself non-head. Because a
+    * non-head Load can complete only through the replay-safe speculative path,
+    * this widens overlap without needing a second PMA/order scoreboard.
+    *
+    * Age 0 Memory intentionally remains a barrier even after completion: it may
+    * be MMIO/ordered and must reach the architectural retirement boundary before
+    * younger memory externalization is allowed to pass it.
+    */
+  private def olderAllowsSafeLoadBypass(entry: TinySchedulingEntry, age: Int): Bool = {
     val computeClass = entry.uop.executionClass === ExecutionClass.Integer ||
       entry.uop.executionClass === ExecutionClass.MulDiv
+    val completedPreHeadLoad = if (age == 0) {
+      false.B
+    } else {
+      entry.complete &&
+        entry.uop.executionClass === ExecutionClass.Memory &&
+        entry.uop.decoded.memory.kind === MemoryOperationKind.Load
+    }
+
     entry.valid &&
-      computeClass &&
       entry.uop.decoded.ordering === OrderingClass.Normal &&
-      !entry.uop.decoded.exception.valid
+      !entry.uop.decoded.exception.valid &&
+      (computeClass || completedPreHeadLoad)
   }
 
   private val bypassOpen = Wire(Vec(Entries, Bool()))
   bypassOpen(0) := true.B
   for (age <- 1 until Entries) {
-    bypassOpen(age) := bypassOpen(age - 1) && olderIsPureCompute(io.window(age - 1))
+    bypassOpen(age) := bypassOpen(age - 1) &&
+      olderAllowsSafeLoadBypass(io.window(age - 1), age - 1)
   }
 
   private val eligible = Wire(Vec(Entries, Bool()))
