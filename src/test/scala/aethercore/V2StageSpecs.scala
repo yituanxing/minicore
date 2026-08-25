@@ -61,6 +61,9 @@ class V2F6BlockingLsuSpec
     with V2P8PerformanceChecks
     with V2P8LsuIntakeFlowThroughChecks
     with V2P8MemoryLifetimeStatusChecks
+    with V2P8PreHeadLoadSelectorChecks
+    with V2P8PreHeadSafetyGateChecks
+    with V2P8PreHeadBackendChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec
@@ -100,6 +103,14 @@ class V2P8PerformanceSpec
     with V2P8PerformanceChecks
     with V2P8TopDownChecks
     with V2P8AttributionV11Checks
+
+class V2P8PreHeadLoadSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2P8PreHeadLoadSelectorChecks
+    with V2P8PreHeadSafetyGateChecks
+    with V2P8PreHeadBackendChecks
 
 class V2F7SemanticDecodeSpec
     extends AnyFlatSpec
