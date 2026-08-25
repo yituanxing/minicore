@@ -59,7 +59,6 @@ class RV64SupervisorModeSpec extends AnyFlatSpec with Matchers with ChiselSim {
     config.isa.hasZicsr shouldBe true
     config.isa.hasZifencei shouldBe false
     config.isa.march shouldBe "rv64im_zicsr"
-    config.isa.mabi shouldBe "lp64"
     config.platform.busDataBits shouldBe 64
     config.platform.paddrBits shouldBe 64
   }

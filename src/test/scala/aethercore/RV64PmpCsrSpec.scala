@@ -50,7 +50,6 @@ class RV64PmpCsrSpec extends AnyFlatSpec with Matchers with ChiselSim {
     isa.hasSv32 shouldBe false
     isa.hasSstc shouldBe false
     isa.march shouldBe "rv64im_zicsr"
-    isa.mabi shouldBe "lp64"
     config.platform.paddrBits shouldBe 56
     config.platform.busDataBits shouldBe 64
   }

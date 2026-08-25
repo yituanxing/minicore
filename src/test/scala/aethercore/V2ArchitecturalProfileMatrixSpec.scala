@@ -2,16 +2,16 @@ package aethercore
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.config.{CoreConfig, CoreProfiles}
+import aethercore.config.{AbiConfig, AbiProfiles, CoreConfig, CoreProfiles, SoftwareTarget}
 
 class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
   behavior of "AetherCore v2 supported architectural profiles"
 
   private final case class ExpectedProfile(
       config: CoreConfig,
+      abi: AbiConfig,
       xlen: Int,
       march: String,
-      mabi: String,
       privilegeModes: Set[Char],
       vmModes: Set[String],
       pmpEntries: Int,
@@ -21,9 +21,9 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
   private val representativeProfiles = Seq(
     ExpectedProfile(
       config = CoreProfiles.rv32imcSoftware,
+      abi = AbiProfiles.ilp32,
       xlen = 32,
       march = "rv32imc_zicsr",
-      mabi = "ilp32",
       privilegeModes = Set('M'),
       vmModes = Set.empty,
       pmpEntries = 0,
@@ -31,9 +31,9 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     ),
     ExpectedProfile(
       config = CoreProfiles.rv32imacsuSv32PmpSoftware,
+      abi = AbiProfiles.ilp32,
       xlen = 32,
       march = "rv32imac_zicsr_zifencei",
-      mabi = "ilp32",
       privilegeModes = Set('M', 'S', 'U'),
       vmModes = Set("Sv32"),
       pmpEntries = 16,
@@ -41,9 +41,9 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     ),
     ExpectedProfile(
       config = CoreProfiles.rv64imCurrent,
+      abi = AbiProfiles.lp64,
       xlen = 64,
       march = "rv64im_zicsr_zifencei",
-      mabi = "lp64",
       privilegeModes = Set('M'),
       vmModes = Set.empty,
       pmpEntries = 0,
@@ -51,9 +51,9 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     ),
     ExpectedProfile(
       config = CoreProfiles.rv64imcSoftware,
+      abi = AbiProfiles.lp64,
       xlen = 64,
       march = "rv64imc_zicsr",
-      mabi = "lp64",
       privilegeModes = Set('M'),
       vmModes = Set.empty,
       pmpEntries = 0,
@@ -61,9 +61,9 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
     ),
     ExpectedProfile(
       config = CoreProfiles.rv64imasuSv39PmpSoftware,
+      abi = AbiProfiles.lp64,
       xlen = 64,
       march = "rv64ima_zicsr",
-      mabi = "lp64",
       privilegeModes = Set('M', 'S', 'U'),
       vmModes = Set("Sv39"),
       pmpEntries = 16,
@@ -74,9 +74,10 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
   it should "freeze named RV32 and RV64 support points without implying an arbitrary cross-product" in {
     representativeProfiles.foreach { expected =>
       val isa = expected.config.isa
+      val software = SoftwareTarget(isa, expected.abi)
       isa.xlen shouldBe expected.xlen
-      isa.march shouldBe expected.march
-      isa.mabi shouldBe expected.mabi
+      software.march shouldBe expected.march
+      software.mabi shouldBe expected.abi.name
       isa.privilegeModes shouldBe expected.privilegeModes
       isa.virtualMemoryModes shouldBe expected.vmModes
       isa.pmpEntries shouldBe expected.pmpEntries
@@ -85,13 +86,9 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "keep current integer ABI ownership separate from the ISA extension set" in {
-    CoreProfiles.rv32imcSoftware.isa.mabi shouldBe "ilp32"
-    CoreProfiles.rv32imacsuSv32PmpSoftware.isa.mabi shouldBe "ilp32"
-    CoreProfiles.rv64imCurrent.isa.mabi shouldBe "lp64"
-    CoreProfiles.rv64imcSoftware.isa.mabi shouldBe "lp64"
-    CoreProfiles.rv64imasuSv39PmpSoftware.isa.mabi shouldBe "lp64"
-
     representativeProfiles.foreach { expected =>
+      val software = SoftwareTarget(expected.config.isa, expected.abi)
+      software.mabi shouldBe expected.abi.name
       expected.config.isa.extensions.contains('F') shouldBe false
       expected.config.isa.extensions.contains('D') shouldBe false
     }
@@ -116,10 +113,11 @@ class V2ArchitecturalProfileMatrixSpec extends AnyFlatSpec with Matchers {
 
   it should "publish RV64C only at the compiler-qualified machine profile boundary" in {
     val rv64c = CoreProfiles.rv64imcSoftware
+    val software = SoftwareTarget(rv64c.isa, AbiProfiles.lp64)
     rv64c.name shouldBe "rv64imc-software"
     rv64c.isa.hasC shouldBe true
-    rv64c.isa.march shouldBe "rv64imc_zicsr"
-    rv64c.isa.mabi shouldBe "lp64"
+    software.march shouldBe "rv64imc_zicsr"
+    software.mabi shouldBe "lp64"
     rv64c.isa.privilegeModes shouldBe Set('M')
     rv64c.isa.virtualMemoryModes shouldBe empty
     rv64c.isa.pmpEntries shouldBe 0

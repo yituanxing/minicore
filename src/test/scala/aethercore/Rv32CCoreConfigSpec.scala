@@ -54,7 +54,6 @@ class Rv32CCoreConfigSpec extends AnyFlatSpec with Matchers {
 
     implementation.isa.hasC shouldBe true
     implementation.isa.march shouldBe "rv64imc_zicsr"
-    implementation.isa.mabi shouldBe "lp64"
 
     CoreProfiles.rv64imCurrent.isa.hasC shouldBe false
     CoreProfiles.rv64imasuSv39PmpSoftware.isa.hasC shouldBe false

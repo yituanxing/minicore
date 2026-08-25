@@ -67,17 +67,13 @@ final case class IsaConfig(
   val orderedPageTableGeometries: Seq[PageTableGeometry] =
     pageTableGeometries.toSeq.sortBy(_.satpMode)
 
+  /** Compiler ISA identity. Software ABI selection lives in AbiConfig/SoftwareTarget. */
   val march: String = {
     val ordered = Seq('I', 'M', 'A', 'F', 'D', 'C')
     val baseSuffix = ordered.filter(extensions.contains).map(_.toLower).mkString
     val multiLetterSuffix = zExtensions.toSeq.sorted.map(_.toLowerCase).mkString("_")
     if (multiLetterSuffix.isEmpty) s"rv$xlen$baseSuffix"
     else s"rv$xlen${baseSuffix}_$multiLetterSuffix"
-  }
-
-  val mabi: String = xlen match {
-    case 32 => "ilp32"
-    case 64 => "lp64"
   }
 }
 
