@@ -21,11 +21,13 @@ class V2P83CompletionBandwidthSourceContract(unittest.TestCase):
 
     def test_backend_keeps_three_independent_completion_sources_on_one_port(self):
         source = BACKEND.read_text(encoding="utf-8")
-        self.assertIn("new TinyCompletionArbiter(Xlen, 3)", source)
-        self.assertIn("completionMerge.io.in(0) <> system.io.completion", source)
-        self.assertIn("completionMerge.io.in(1) <> lsu.io.completion", source)
-        self.assertIn("completionMerge.io.in(2) <> execution.io.response", source)
-        self.assertIn("dependency.io.complete <> completionMerge.io.out", source)
+        self.assertIn("new TinyCompletionArbiter(xlen, 3)", source)
+        self.assertIn("completions.io.in(0) <> system.io.completion", source)
+        self.assertIn("completions.io.in(1) <> lsu.io.completion", source)
+        self.assertIn("completions.io.in(2) <> execution.io.response", source)
+        self.assertIn("dependencyBackend.io.completion.valid := completions.io.out.valid", source)
+        self.assertIn("dependencyBackend.io.completion.bits := completions.io.out.bits", source)
+        self.assertIn("completions.io.out.ready := true.B", source)
 
     def test_execution_cluster_keeps_fair_response_arbitration(self):
         source = EXECUTION.read_text(encoding="utf-8")
