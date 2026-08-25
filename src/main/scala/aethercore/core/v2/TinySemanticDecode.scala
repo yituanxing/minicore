@@ -7,12 +7,13 @@ import aethercore.config.IsaConfig
 import aethercore.core.{Decoder, Immediate}
 
 /**
-  * F7 architectural decode bridge.
+  * Architectural semantic decode boundary.
   *
-  * The qualified v1 Decoder is reused as the ISA legality/field decoder, but
-  * its pipeline-oriented selectors terminate here. Nothing downstream of this
-  * module receives OpASel/OpBSel/WbSel/ImmSel or a fixed execution-port choice;
-  * it receives only architectural semantics in RobDispatch.
+  * The qualified Decoder owns ISA legality/field decoding. Its legacy
+  * pipeline-oriented selectors terminate here. The only output of this module
+  * is DecodedInstruction: architectural meaning with no ROB identity,
+  * execution class, issue-port choice, queue identity, predictor metadata or
+  * backend value-production policy.
   */
 class TinySemanticDecode(val isa: IsaConfig) extends Module {
   private val xlen = isa.xlen
@@ -22,11 +23,9 @@ class TinySemanticDecode(val isa: IsaConfig) extends Module {
     val inst = Input(UInt(32.W))
     val rawInst = Input(UInt(32.W))
     val instBytes = Input(UInt(3.W))
-    // Instruction-side VM/PMP/bus faults are architectural facts by the time
-    // they reach decode. F7 frontend integration will drive this input.
     val fetchException = Input(new TrapInfo(xlen))
 
-    val dispatch = Output(new RobDispatch(xlen))
+    val decoded = Output(new DecodedInstruction(xlen))
   })
 
   val decoder = Module(new Decoder(isa))
@@ -91,27 +90,6 @@ class TinySemanticDecode(val isa: IsaConfig) extends Module {
     controlFlowKind := ControlFlowKind.DirectJump
   }
 
-  private val mulDiv =
-    ctrl.aluOp === AluOp.Mul ||
-      ctrl.aluOp === AluOp.Mulh ||
-      ctrl.aluOp === AluOp.Mulhsu ||
-      ctrl.aluOp === AluOp.Mulhu ||
-      ctrl.aluOp === AluOp.Div ||
-      ctrl.aluOp === AluOp.Divu ||
-      ctrl.aluOp === AluOp.Rem ||
-      ctrl.aluOp === AluOp.Remu
-
-  private val executionClass = WireDefault(ExecutionClass.Integer)
-  when(systemKind =/= SystemOperationKind.None) {
-    executionClass := ExecutionClass.System
-  }.elsewhen(memoryKind =/= MemoryOperationKind.None) {
-    executionClass := ExecutionClass.Memory
-  }.elsewhen(controlFlowKind =/= ControlFlowKind.None) {
-    executionClass := ExecutionClass.Branch
-  }.elsewhen(mulDiv) {
-    executionClass := ExecutionClass.MulDiv
-  }
-
   private val decodedException = WireDefault(0.U.asTypeOf(new TrapInfo(xlen)))
   when(io.fetchException.valid) {
     decodedException := io.fetchException
@@ -149,47 +127,43 @@ class TinySemanticDecode(val isa: IsaConfig) extends Module {
   private val rhsSource =
     Mux(ctrl.opBSel === OpBSel.Imm, OperandSourceKind.Immediate, OperandSourceKind.Rs2)
 
-  // SFENCE.VMA is deliberately recognized above the legacy Decoder, so its
-  // architectural rs1/rs2 operands must also be restored here. The current F6
-  // implementation conservatively flushes all translations, but preserving
-  // these dependency facts keeps later address/ASID-selective invalidation from
-  // having to re-decode the raw opcode inside the backend.
+  // SFENCE.VMA is recognized above the legacy Decoder, so its architectural
+  // rs1/rs2 operands must be restored here. Preserve the dependency facts so
+  // later selective invalidation never has to re-decode raw opcode bits.
   private val semanticUsesRs1 = ctrl.usesRs1 || sfenceVma
   private val semanticUsesRs2 = ctrl.usesRs2 || sfenceVma
 
   private val hasDecodeException = decodedException.valid
-  io.dispatch := 0.U.asTypeOf(new RobDispatch(xlen))
-  io.dispatch.decoded.pc := io.pc
-  io.dispatch.decoded.inst := io.inst
-  io.dispatch.decoded.rawInst := io.rawInst
-  io.dispatch.decoded.instBytes := io.instBytes
-  io.dispatch.decoded.aluOp := ctrl.aluOp
-  io.dispatch.decoded.wordOp := ctrl.wordOp
-  io.dispatch.decoded.lhsSource := lhsSource
-  io.dispatch.decoded.rhsSource := rhsSource
-  io.dispatch.decoded.rs1 := decoder.io.rs1
-  io.dispatch.decoded.rs2 := decoder.io.rs2
-  io.dispatch.decoded.rd := decoder.io.rd
-  io.dispatch.decoded.usesRs1 := semanticUsesRs1 && !hasDecodeException
-  io.dispatch.decoded.usesRs2 := semanticUsesRs2 && !hasDecodeException
-  io.dispatch.decoded.writesRd := ctrl.regWrite && !hasDecodeException
-  io.dispatch.decoded.immediate := decodedImm
-  io.dispatch.decoded.controlFlow.kind := controlFlowKind
-  io.dispatch.decoded.controlFlow.branchType := ctrl.branch
-  io.dispatch.decoded.memory.kind := memoryKind
-  io.dispatch.decoded.memory.size := ctrl.memSize
-  io.dispatch.decoded.memory.unsigned := ctrl.memUnsigned
-  io.dispatch.decoded.memory.atomicOp := ctrl.atomicOp
-  io.dispatch.decoded.memory.acquire := acquire
-  io.dispatch.decoded.memory.release := release
-  io.dispatch.decoded.system.kind := systemKind
-  io.dispatch.decoded.system.csrOp := ctrl.csrOp
-  io.dispatch.decoded.system.csrAddress := io.inst(31, 20)
-  io.dispatch.decoded.system.csrUseImmediate := ctrl.csrUseImm
-  io.dispatch.decoded.system.csrImmediate := decoder.io.rs1
-  io.dispatch.decoded.system.xret := ctrl.xret
-  io.dispatch.decoded.ordering := ordering
-  io.dispatch.decoded.exception := decodedException
-  io.dispatch.executionClass := executionClass
-  io.dispatch.producesValue := ctrl.regWrite && decoder.io.rd =/= 0.U && !hasDecodeException
+  io.decoded := 0.U.asTypeOf(new DecodedInstruction(xlen))
+  io.decoded.pc := io.pc
+  io.decoded.inst := io.inst
+  io.decoded.rawInst := io.rawInst
+  io.decoded.instBytes := io.instBytes
+  io.decoded.aluOp := ctrl.aluOp
+  io.decoded.wordOp := ctrl.wordOp
+  io.decoded.lhsSource := lhsSource
+  io.decoded.rhsSource := rhsSource
+  io.decoded.rs1 := decoder.io.rs1
+  io.decoded.rs2 := decoder.io.rs2
+  io.decoded.rd := decoder.io.rd
+  io.decoded.usesRs1 := semanticUsesRs1 && !hasDecodeException
+  io.decoded.usesRs2 := semanticUsesRs2 && !hasDecodeException
+  io.decoded.writesRd := ctrl.regWrite && !hasDecodeException
+  io.decoded.immediate := decodedImm
+  io.decoded.controlFlow.kind := controlFlowKind
+  io.decoded.controlFlow.branchType := ctrl.branch
+  io.decoded.memory.kind := memoryKind
+  io.decoded.memory.size := ctrl.memSize
+  io.decoded.memory.unsigned := ctrl.memUnsigned
+  io.decoded.memory.atomicOp := ctrl.atomicOp
+  io.decoded.memory.acquire := acquire
+  io.decoded.memory.release := release
+  io.decoded.system.kind := systemKind
+  io.decoded.system.csrOp := ctrl.csrOp
+  io.decoded.system.csrAddress := io.inst(31, 20)
+  io.decoded.system.csrUseImmediate := ctrl.csrUseImm
+  io.decoded.system.csrImmediate := decoder.io.rs1
+  io.decoded.system.xret := ctrl.xret
+  io.decoded.ordering := ordering
+  io.decoded.exception := decodedException
 }
