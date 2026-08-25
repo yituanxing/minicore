@@ -129,6 +129,10 @@ class TinyBlockingLsu(
     val memoryRequest = Decoupled(new AetherMemRequest(PhysicalBits, Xlen, txnIdBits))
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(Xlen, txnIdBits)))
 
+    // P8.4-M1 observation only. No issue/bypass policy consumes this seam yet.
+    val lifetimeStatus = Output(
+      new TinyMemoryLifetimeStatus(Xlen, PhysicalBits, IdentityBits, GenerationBits)
+    )
     val busy = Output(Bool())
   })
 
@@ -435,6 +439,30 @@ class TinyBlockingLsu(
 
   io.completion.valid := completionHeldValid || freshCompletion.valid
   io.completion.bits := Mux(completionHeldValid, completionHeldBits, freshCompletion.bits)
+
+  // P8.4-M1 exports facts about the current LSU lifetime without changing any
+  // scheduling or visibility decision. workingValid preserves the existing
+  // intake flow-through: a request accepted while idle is observable this cycle.
+  io.lifetimeStatus := 0.U.asTypeOf(
+    new TinyMemoryLifetimeStatus(Xlen, PhysicalBits, IdentityBits, GenerationBits)
+  )
+  io.lifetimeStatus.drained := !workingValid
+  when(workingValid) {
+    io.lifetimeStatus.valid := true.B
+    io.lifetimeStatus.robToken := workingRequest.robToken
+    io.lifetimeStatus.kind := workingRequest.kind
+    io.lifetimeStatus.atomicOp := workingRequest.atomicOp
+    io.lifetimeStatus.size := workingRequest.size
+    io.lifetimeStatus.effectiveAddress := effectiveAddress
+    io.lifetimeStatus.writeLike := accessNeedsWritePermission
+    io.lifetimeStatus.physicalAddressValid := adapter.io.dataValid
+    io.lifetimeStatus.physicalAddress := adapter.io.dataAddress
+    io.lifetimeStatus.attributesValid := adapter.io.dataValid
+    io.lifetimeStatus.attributes := io.resolvedAttributes
+    io.lifetimeStatus.writePermitMatched := accessNeedsWritePermission && permitMatches
+    io.lifetimeStatus.physicalRequestIssued := physicalIssued || io.memoryRequest.fire
+    io.lifetimeStatus.completionPending := io.completion.valid
+  }
 
   // Backpressure converts the flow-through response into an owned held response.
   // Bits are captured exactly once, then remain stable until completion.fire.

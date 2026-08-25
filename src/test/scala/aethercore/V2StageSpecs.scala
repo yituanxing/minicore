@@ -60,6 +60,7 @@ class V2F6BlockingLsuSpec
     with V2A8ProductionSelectiveIssueChecks
     with V2P8PerformanceChecks
     with V2P8LsuIntakeFlowThroughChecks
+    with V2P8MemoryLifetimeStatusChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec
