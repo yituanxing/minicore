@@ -4,7 +4,15 @@ import chisel3._
 import chisel3.util._
 import aethercore.common._
 import aethercore.config.{CoreProfiles, IsaConfig}
+import aethercore.core.isa.{AExtensionDecode, BaseIDecode, MExtensionDecode, SystemDecode}
 
+/** Top-level ISA semantic decode composition.
+  *
+  * This module owns the stable Decoder IO and default control contract. The
+  * instruction semantics themselves are delegated to extension-specific
+  * decode owners under core/isa so RV32/RV64 and optional extensions do not
+  * accumulate in one monolithic opcode switch.
+  */
 class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Module {
   private val hasM = isa.hasM
   private val hasA = isa.hasA
@@ -26,11 +34,6 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   val funct6 = io.inst(31, 26)
   val funct5 = io.inst(31, 27)
 
-  val shiftLogicalImmediate =
-    if (isa.xlen == 64) funct6 === "b000000".U else funct7 === "b0000000".U
-  val shiftArithmeticImmediate =
-    if (isa.xlen == 64) funct6 === "b010000".U else funct7 === "b0100000".U
-
   io.rs1 := io.inst(19, 15)
   io.rs2 := io.inst(24, 20)
   io.rd := io.inst(11, 7)
@@ -49,261 +52,46 @@ class Decoder(val isa: IsaConfig = CoreProfiles.rv64imCurrent.isa) extends Modul
   c.illegal := true.B
 
   switch(opcode) {
-    is("b0110111".U) {
-      c.illegal := false.B; c.regWrite := true.B; c.opASel := OpASel.Zero; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.U
-    }
-    is("b0010111".U) {
-      c.illegal := false.B; c.regWrite := true.B; c.opASel := OpASel.Pc; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.U
-    }
-    is("b1101111".U) {
-      c.illegal := false.B; c.regWrite := true.B; c.jump := true.B; c.immSel := ImmSel.J; c.wbSel := WbSel.PcPlus4
-    }
-    is("b1100111".U) {
-      when(funct3 === 0.U) {
-        c.illegal := false.B; c.regWrite := true.B; c.jump := true.B; c.jalr := true.B; c.usesRs1 := true.B; c.immSel := ImmSel.I; c.wbSel := WbSel.PcPlus4
-      }
-    }
-    is("b1100011".U) {
-      c.usesRs1 := true.B; c.usesRs2 := true.B; c.immSel := ImmSel.B
-      switch(funct3) {
-        is("b000".U) { c.illegal := false.B; c.branch := BranchType.Eq }
-        is("b001".U) { c.illegal := false.B; c.branch := BranchType.Ne }
-        is("b100".U) { c.illegal := false.B; c.branch := BranchType.Lt }
-        is("b101".U) { c.illegal := false.B; c.branch := BranchType.Ge }
-        is("b110".U) { c.illegal := false.B; c.branch := BranchType.Ltu }
-        is("b111".U) { c.illegal := false.B; c.branch := BranchType.Geu }
-      }
-    }
-    is("b0000011".U) {
-      c.usesRs1 := true.B; c.regWrite := true.B; c.memRead := true.B; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.I; c.wbSel := WbSel.Memory
-      switch(funct3) {
-        is("b000".U) { c.illegal := false.B; c.memSize := MemSize.Byte }
-        is("b001".U) { c.illegal := false.B; c.memSize := MemSize.Half }
-        is("b010".U) { c.illegal := false.B; c.memSize := MemSize.Word }
-        is("b011".U) {
-          when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.DWord }
-        }
-        is("b100".U) { c.illegal := false.B; c.memSize := MemSize.Byte; c.memUnsigned := true.B }
-        is("b101".U) { c.illegal := false.B; c.memSize := MemSize.Half; c.memUnsigned := true.B }
-        is("b110".U) {
-          when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.Word; c.memUnsigned := true.B }
-        }
-      }
-    }
-    is("b0100011".U) {
-      c.usesRs1 := true.B; c.usesRs2 := true.B; c.memWrite := true.B; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.S
-      switch(funct3) {
-        is("b000".U) { c.illegal := false.B; c.memSize := MemSize.Byte }
-        is("b001".U) { c.illegal := false.B; c.memSize := MemSize.Half }
-        is("b010".U) { c.illegal := false.B; c.memSize := MemSize.Word }
-        is("b011".U) {
-          when(hasWordOps.B) { c.illegal := false.B; c.memSize := MemSize.DWord }
-        }
-      }
-    }
+    is("b0110111".U) { BaseIDecode.decodeLui(c) }
+    is("b0010111".U) { BaseIDecode.decodeAuipc(c) }
+    is("b1101111".U) { BaseIDecode.decodeJal(c) }
+    is("b1100111".U) { BaseIDecode.decodeJalr(c, funct3) }
+    is("b1100011".U) { BaseIDecode.decodeBranch(c, funct3) }
+    is("b0000011".U) { BaseIDecode.decodeLoad(c, funct3, hasWordOps) }
+    is("b0100011".U) { BaseIDecode.decodeStore(c, funct3, hasWordOps) }
+
     is("b0101111".U) {
-      // A-extension width is encoded by funct3: W is available on RV32/RV64,
-      // while D is RV64-only. aq/rl are ordering annotations; the current
-      // single-hart, in-order, uncached memory path is strongly ordered, so
-      // execution may treat them as no-ops while preserving the operation.
-      val atomicWidthLegal =
-        if (isa.xlen == 64) funct3 === "b010".U || funct3 === "b011".U
-        else funct3 === "b010".U
-      when(hasA.B && atomicWidthLegal) {
-        c.usesRs1 := true.B
-        c.regWrite := true.B
-        c.opBSel := OpBSel.Imm
-        c.wbSel := WbSel.Memory
-        if (isa.xlen == 64) {
-          c.memSize := Mux(funct3 === "b011".U, MemSize.DWord, MemSize.Word)
-        } else {
-          c.memSize := MemSize.Word
-        }
-        switch(funct5) {
-          is("b00010".U) {
-            when(io.rs2 === 0.U) {
-              c.illegal := false.B; c.memRead := true.B; c.atomicOp := AtomicOp.Lr
-            }
-          }
-          is("b00011".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Sc
-          }
-          is("b00001".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Swap
-          }
-          is("b00000".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Add
-          }
-          is("b00100".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Xor
-          }
-          is("b01100".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.And
-          }
-          is("b01000".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Or
-          }
-          is("b10000".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Min
-          }
-          is("b10100".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Max
-          }
-          is("b11000".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Minu
-          }
-          is("b11100".U) {
-            c.illegal := false.B; c.usesRs2 := true.B; c.memRead := true.B; c.memWrite := true.B; c.atomicOp := AtomicOp.Maxu
-          }
-        }
-      }
+      AExtensionDecode.decode(c, io.rs2, funct3, funct5, isa.xlen, hasA)
     }
+
     is("b0010011".U) {
-      c.usesRs1 := true.B; c.regWrite := true.B; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.I
-      switch(funct3) {
-        is("b000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
-        is("b010".U) { c.illegal := false.B; c.aluOp := AluOp.Slt }
-        is("b011".U) { c.illegal := false.B; c.aluOp := AluOp.Sltu }
-        is("b100".U) { c.illegal := false.B; c.aluOp := AluOp.Xor }
-        is("b110".U) { c.illegal := false.B; c.aluOp := AluOp.Or }
-        is("b111".U) { c.illegal := false.B; c.aluOp := AluOp.And }
-        is("b001".U) { when(shiftLogicalImmediate) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
-        is("b101".U) {
-          when(shiftLogicalImmediate) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-          when(shiftArithmeticImmediate) { c.illegal := false.B; c.aluOp := AluOp.Sra }
-        }
-      }
+      BaseIDecode.decodeOpImm(c, funct3, funct6, funct7, isa.xlen)
     }
+
     is("b0110011".U) {
-      c.usesRs1 := true.B; c.usesRs2 := true.B; c.regWrite := true.B
-      switch(funct3) {
-        is("b000".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
-          when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mul }
-        }
-        is("b001".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mulh }
-        }
-        is("b010".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Slt }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mulhsu }
-        }
-        is("b011".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sltu }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mulhu }
-        }
-        is("b100".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Xor }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Div }
-        }
-        is("b101".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-          when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Divu }
-        }
-        is("b110".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Or }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Rem }
-        }
-        is("b111".U) {
-          when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.And }
-          when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Remu }
-        }
-      }
+      // Base-I and M own disjoint funct7 patterns under the shared OP opcode.
+      BaseIDecode.decodeOp(c, funct3, funct7)
+      MExtensionDecode.decodeOp(c, funct3, funct7, hasM)
     }
+
     is("b0011011".U) {
-      if (hasWordOps) {
-        c.usesRs1 := true.B; c.regWrite := true.B; c.opBSel := OpBSel.Imm; c.immSel := ImmSel.I; c.wordOp := true.B
-        switch(funct3) {
-          is("b000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
-          is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
-          is("b101".U) {
-            when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-            when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
-          }
-        }
-      }
+      BaseIDecode.decodeOpImm32(c, funct3, funct7, hasWordOps)
     }
+
     is("b0111011".U) {
-      if (hasWordOps) {
-        c.usesRs1 := true.B; c.usesRs2 := true.B; c.regWrite := true.B; c.wordOp := true.B
-        switch(funct3) {
-          is("b000".U) {
-            when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Add }
-            when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sub }
-            when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Mul }
-          }
-          is("b001".U) { when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Sll } }
-          is("b100".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Div } }
-          is("b101".U) {
-            when(funct7 === "b0000000".U) { c.illegal := false.B; c.aluOp := AluOp.Srl }
-            when(funct7 === "b0100000".U) { c.illegal := false.B; c.aluOp := AluOp.Sra }
-            when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Divu }
-          }
-          is("b110".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Rem } }
-          is("b111".U) { when(funct7 === "b0000001".U && hasM.B) { c.illegal := false.B; c.aluOp := AluOp.Remu } }
-        }
-      }
+      // RV64 base word operations and M word operations likewise compose under
+      // one architectural opcode without sharing semantic ownership.
+      BaseIDecode.decodeOp32(c, funct3, funct7, hasWordOps)
+      MExtensionDecode.decodeOp32(c, funct3, funct7, hasM, hasWordOps)
     }
+
     is("b0001111".U) {
-      when(funct3 === 0.U || (funct3 === 1.U && hasZifencei.B)) { c.illegal := false.B }
+      BaseIDecode.decodeFence(c, funct3)
+      SystemDecode.decodeFenceI(c, funct3, hasZifencei)
     }
+
     is("b1110011".U) {
-      switch(funct3) {
-        is("b000".U) {
-          when(io.inst === "h00000073".U || io.inst === "h00100073".U) {
-            c.illegal := false.B
-            c.trap := true.B
-          }.elsewhen(io.inst === "h10500073".U && hasZicsr.B) {
-            c.illegal := false.B
-            c.wfi := true.B
-          }.elsewhen(io.inst === "h30200073".U && hasZicsr.B) {
-            c.illegal := false.B
-            c.xret := XRetOp.Machine
-          }.elsewhen(io.inst === "h10200073".U && hasZicsr.B && isa.hasS.B) {
-            c.illegal := false.B
-            c.xret := XRetOp.Supervisor
-          }
-        }
-        is("b001".U) {
-          when(hasZicsr.B) {
-            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
-            c.csrOp := CsrOp.Write; c.usesRs1 := true.B
-          }
-        }
-        is("b010".U) {
-          when(hasZicsr.B) {
-            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
-            c.csrOp := CsrOp.Set; c.usesRs1 := true.B
-          }
-        }
-        is("b011".U) {
-          when(hasZicsr.B) {
-            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
-            c.csrOp := CsrOp.Clear; c.usesRs1 := true.B
-          }
-        }
-        is("b101".U) {
-          when(hasZicsr.B) {
-            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
-            c.csrOp := CsrOp.Write; c.csrUseImm := true.B
-          }
-        }
-        is("b110".U) {
-          when(hasZicsr.B) {
-            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
-            c.csrOp := CsrOp.Set; c.csrUseImm := true.B
-          }
-        }
-        is("b111".U) {
-          when(hasZicsr.B) {
-            c.illegal := false.B; c.regWrite := true.B; c.wbSel := WbSel.Csr
-            c.csrOp := CsrOp.Clear; c.csrUseImm := true.B
-          }
-        }
-      }
+      SystemDecode.decodeSystem(c, io.inst, funct3, hasZicsr, isa.hasS)
     }
   }
 
