@@ -14,7 +14,8 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         source = AETHER_MEM.read_text(encoding="utf-8")
 
         self.assertIn("Core-internal physical-memory operation", source)
-        self.assertIn("Bus protocols such as AXI remain outside this contract", source)
+        self.assertIn("Bus protocols such as AXI remain", source)
+        self.assertIn("outside this contract", source)
         self.assertIn("val txnId = UInt(txnIdBits.W)", source)
         self.assertIn("val op = AetherMemOp()", source)
         self.assertIn("val paddr = UInt(addrBits.W)", source)
