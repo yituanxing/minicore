@@ -94,7 +94,7 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
     }
   }
 
-  behavior of "AetherCore v2 conservative pre-head load selector"
+  behavior of "AetherCore v2 bounded general safe-load selector"
 
   it should "preserve exact-head Store/Atomic eligibility without marking it pre-head" in {
     simulate(new TinySelectiveLoadIssue(32)) { dut =>
@@ -109,7 +109,7 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
     }
   }
 
-  it should "choose the oldest ready Normal Load behind only ordinary compute" in {
+  it should "choose the oldest ready Normal Load behind ordinary compute" in {
     simulate(new TinySelectiveLoadIssue(32)) { dut =>
       clear(dut)
       pokeEntry(dut, 0, valid = true, complete = false, ExecutionClass.MulDiv,
@@ -132,6 +132,28 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
     }
   }
 
+  it should "continue to the next Load after an older non-head Load completes" in {
+    simulate(new TinySelectiveLoadIssue(32)) { dut =>
+      clear(dut)
+      // Age0 keeps retirement blocked. Age1 is a Load that has already completed
+      // while still pre-head; age2 should now be allowed to consume the free LSU.
+      pokeEntry(dut, 0, valid = true, complete = false, ExecutionClass.MulDiv,
+        MemoryOperationKind.None, index = 0, operandsReady = false)
+      pokeEntry(dut, 1, valid = true, complete = true, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 1, operandsReady = true,
+        base = 0x3000)
+      pokeEntry(dut, 2, valid = true, complete = false, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 2, operandsReady = true,
+        base = 0x4000, offset = 8)
+
+      dut.io.request.valid.expect(true.B)
+      dut.io.preHead.expect(true.B)
+      dut.io.request.bits.robToken.index.expect(2.U)
+      dut.io.request.bits.base.expect(0x4000.U)
+      dut.io.request.bits.offset.expect(8.U)
+    }
+  }
+
   it should "reject younger Store and Atomic operations" in {
     simulate(new TinySelectiveLoadIssue(32)) { dut =>
       clear(dut)
@@ -146,7 +168,45 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
     }
   }
 
-  it should "fail closed across Branch, System, Memory, ordering, and exception boundaries" in {
+  it should "keep head, incomplete, and non-Load Memory as hard barriers" in {
+    simulate(new TinySelectiveLoadIssue(32)) { dut =>
+      // Even a completed head Load may be ordered/MMIO, so retirement remains the cut.
+      clear(dut)
+      pokeEntry(dut, 0, valid = true, complete = true, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 0, operandsReady = true)
+      pokeEntry(dut, 1, valid = true, complete = false, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 1, operandsReady = true)
+      dut.io.request.valid.expect(false.B)
+
+      // An incomplete older Load still owns/awaits the single LSU lifetime.
+      clear(dut)
+      pokeEntry(dut, 0, valid = true, complete = false, ExecutionClass.MulDiv,
+        MemoryOperationKind.None, index = 0, operandsReady = false)
+      pokeEntry(dut, 1, valid = true, complete = false, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 1, operandsReady = true)
+      pokeEntry(dut, 2, valid = true, complete = false, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 2, operandsReady = true)
+      dut.io.request.valid.expect(true.B)
+      dut.io.request.bits.robToken.index.expect(1.U)
+      dut.clock.step()
+      dut.io.request.valid.expect(false.B)
+
+      // A completed non-head Store/Atomic is never a bypass permission.
+      clear(dut)
+      pokeEntry(dut, 0, valid = true, complete = false, ExecutionClass.MulDiv,
+        MemoryOperationKind.None, index = 0, operandsReady = false)
+      pokeEntry(dut, 1, valid = true, complete = true, ExecutionClass.Memory,
+        MemoryOperationKind.Store, index = 1, operandsReady = true)
+      pokeEntry(dut, 2, valid = true, complete = false, ExecutionClass.Memory,
+        MemoryOperationKind.Load, index = 2, operandsReady = true)
+      dut.io.request.valid.expect(false.B)
+      pokeEntry(dut, 1, valid = true, complete = true, ExecutionClass.Memory,
+        MemoryOperationKind.Atomic, index = 1, operandsReady = true)
+      dut.io.request.valid.expect(false.B)
+    }
+  }
+
+  it should "fail closed across Branch, System, ordering, and decoded exception boundaries" in {
     simulate(new TinySelectiveLoadIssue(32)) { dut =>
       def candidateBehind(
           olderClass: ExecutionClass.Type,
@@ -155,15 +215,14 @@ trait V2P8PreHeadLoadSelectorChecks { this: AnyFlatSpec with Matchers with Chise
       ): Unit = {
         clear(dut)
         pokeEntry(dut, 0, valid = true, complete = true, olderClass,
-          if (olderClass == ExecutionClass.Memory) MemoryOperationKind.Load else MemoryOperationKind.None,
-          index = 0, operandsReady = true, ordering = olderOrdering, exception = olderException)
+          MemoryOperationKind.None, index = 0, operandsReady = true,
+          ordering = olderOrdering, exception = olderException)
         pokeEntry(dut, 1, valid = true, complete = false, ExecutionClass.Memory,
           MemoryOperationKind.Load, index = 1, operandsReady = true)
         dut.io.request.valid.expect(false.B)
       }
       candidateBehind(ExecutionClass.Branch)
       candidateBehind(ExecutionClass.System)
-      candidateBehind(ExecutionClass.Memory)
       candidateBehind(ExecutionClass.Integer, OrderingClass.SerializeBefore)
       candidateBehind(ExecutionClass.Integer, olderException = true)
     }
