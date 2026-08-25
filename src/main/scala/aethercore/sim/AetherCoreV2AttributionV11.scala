@@ -2,6 +2,7 @@ package aethercore.sim
 
 import chisel3._
 import chisel3.util._
+import chisel3.util.experimental.BoringUtils
 import aethercore.common.AluOp
 import aethercore.core.v2.{ExecutionClass, MemoryOperationKind, OrderingClass}
 
@@ -87,8 +88,8 @@ class V2AttributionV11CounterBank extends Module {
   // "Launchable" is intentionally stricter wording than "ready". A production
   // request is visible only after the real policy/resource gates. The shadow
   // count mirrors the compute selector's once-only scoreboard and candidate
-  // rules before the final global single-issue block. This prevents an already
-  // issued long-latency uOp from being counted as fresh opportunity.
+  // rules before the final global single-issue arbitration. This prevents an
+  // already issued long-latency uOp from being counted as fresh opportunity.
   private val issueLaunchable =
     io.events.issueRequestVisible || io.events.shadowComputeReadyCount =/= 0.U
   private val issueLaunch = io.events.issueLaunch
@@ -140,10 +141,10 @@ class V2AttributionV11CounterBank extends Module {
 /**
   * v1.1 host-visible attribution layered on top of the exact v1 implementation.
   *
-  * No production module gains an input or scheduling decision. The only state
-  * added here is a simulation-only mirror of TinySelectiveComputeIssue's issued
-  * generation scoreboard, used to avoid false "ready work" claims for uOps that
-  * have already launched and are merely waiting for completion.
+  * No production module gains an input or scheduling decision. All production
+  * internals are observed with BoringUtils taps, just like the v1 attribution
+  * seam. The only state added here is a simulation-only mirror of
+  * TinySelectiveComputeIssue's once-only issue scoreboard.
   */
 class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
     extends AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttribution {
@@ -152,10 +153,21 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   private val bank = Module(new V2AttributionV11CounterBank)
   private val events = WireInit(0.U.asTypeOf(new V2AttributionV11Events))
 
-  private val acceptedCompletion = core.backend.dependencyBackend.rob.io.acceptedCompletion
-  events.branchResolved := acceptedCompletion.valid && acceptedCompletion.bits.branchValid
-  events.branchTaken := events.branchResolved && acceptedCompletion.bits.branchTaken
-  events.branchRecovery := core.backend.dependencyBackend.io.acceptedRecovery.valid
+  // Chisel visibility intentionally forbids directly reaching into the nested
+  // ROB from this host wrapper. Use observation taps so instrumentation does not
+  // widen any production interface merely to expose a counter fact.
+  private val acceptedCompletionValid =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.rob.io.acceptedCompletion.valid)
+  private val acceptedCompletionBranchValid =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.rob.io.acceptedCompletion.bits.branchValid)
+  private val acceptedCompletionBranchTaken =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.rob.io.acceptedCompletion.bits.branchTaken)
+  private val acceptedRecoveryValid =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.io.acceptedRecovery.valid)
+
+  events.branchResolved := acceptedCompletionValid && acceptedCompletionBranchValid
+  events.branchTaken := events.branchResolved && acceptedCompletionBranchTaken
+  events.branchRecovery := acceptedRecoveryValid
   events.branchSquashedUops := Mux(
     events.branchRecovery,
     core.io.occupancy - 1.U,
@@ -165,27 +177,46 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
     assert(core.io.occupancy >= 1.U)
   }
 
-  private val branchRequest = core.backend.branchIssue.io.request
-  private val computeRequest = core.backend.selectiveIssue.io.request
-  private val lsuRequest = core.backend.lsu.io.request
+  private val branchRequestValid = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.valid)
+  private val branchRequestReady = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.ready)
+  private val computeRequestValid = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.valid)
+  private val computeRequestReady = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.ready)
+  private val computeRequestTokenIndex =
+    BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits.robToken.index)
+  private val computeRequestTokenGeneration =
+    BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits.robToken.generation)
+  private val lsuRequestValid = BoringUtils.tapAndRead(core.backend.lsu.io.request.valid)
+  private val lsuRequestReady = BoringUtils.tapAndRead(core.backend.lsu.io.request.ready)
+
+  private val branchFire = branchRequestValid && branchRequestReady
+  private val computeFire = computeRequestValid && computeRequestReady
+  private val lsuFire = lsuRequestValid && lsuRequestReady
+
   events.robNonEmpty := core.io.occupancy =/= 0.U
-  events.issueLaunch := branchRequest.fire || computeRequest.fire || lsuRequest.fire
-  events.issueRequestVisible := branchRequest.valid || computeRequest.valid || lsuRequest.valid
+  events.issueLaunch := branchFire || computeFire || lsuFire
+  events.issueRequestVisible := branchRequestValid || computeRequestValid || lsuRequestValid
 
   // Mirror only the production compute selector's once-only lifetime bit. The
   // ROB/dependency/uOp data themselves remain read-only views from production.
-  private val window = core.backend.dependencyBackend.io.schedulingWindow
-  private val Entries = window.length
+  private val Entries = core.backend.dependencyBackend.io.schedulingWindow.length
+  private val window = VecInit((0 until Entries).map { age =>
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(age))
+  })
+  private val allocatedValid =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.io.allocated.valid)
+  private val allocatedTokenIndex =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.io.allocated.bits.robToken.index)
+  private val selectiveBlock = BoringUtils.tapAndRead(core.backend.selectiveIssue.io.block)
   private val GenerationBits = window(0).uop.robToken.generation.getWidth
   private val shadowIssuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
   private val shadowIssuedGeneration = Reg(Vec(Entries, UInt(GenerationBits.W)))
 
-  when(core.backend.dependencyBackend.io.allocated.valid) {
-    shadowIssuedValid(core.backend.dependencyBackend.io.allocated.bits.robToken.index) := false.B
+  when(allocatedValid) {
+    shadowIssuedValid(allocatedTokenIndex) := false.B
   }
-  when(computeRequest.fire) {
-    shadowIssuedValid(computeRequest.bits.robToken.index) := true.B
-    shadowIssuedGeneration(computeRequest.bits.robToken.index) := computeRequest.bits.robToken.generation
+  when(computeFire) {
+    shadowIssuedValid(computeRequestTokenIndex) := true.B
+    shadowIssuedGeneration(computeRequestTokenIndex) := computeRequestTokenGeneration
   }
 
   private def isMultiply(op: AluOp.Type): Bool =
@@ -200,7 +231,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
     val older = window(age - 1)
     val olderIsMemory = older.valid && older.uop.executionClass === ExecutionClass.Memory
     val olderMemoryLaunched = if (age == 1) {
-      older.dependenciesValid && older.operandsReady && !core.backend.selectiveIssue.io.block
+      older.dependenciesValid && older.operandsReady && !selectiveBlock
     } else {
       false.B
     }
@@ -213,7 +244,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
     bypassOpen(age) := bypassOpen(age - 1) && !olderBlocksBypass
   }
 
-  private val availability = core.backend.execution.io.computeAvailability
+  private val availability = BoringUtils.tapAndRead(core.backend.execution.io.computeAvailability)
   private val shadowEligible = Wire(Vec(Entries, Bool()))
   for (age <- 0 until Entries) {
     val entry = window(age)
@@ -228,7 +259,9 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
       (entry.uop.executionClass === ExecutionClass.MulDiv && isMultiply(op) && availability.multiply) ||
       (entry.uop.executionClass === ExecutionClass.MulDiv && isDivide(op) && availability.divide)
 
-    shadowEligible(age) := bypassOpen(age) &&
+    // selectiveBlock is an architectural/resource barrier, not an issue-width
+    // opportunity. A wider issue machine would not reclaim a blocked cycle.
+    shadowEligible(age) := !selectiveBlock && bypassOpen(age) &&
       entry.valid &&
       !entry.complete &&
       entry.dependenciesValid &&
@@ -241,14 +274,20 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   }
   events.shadowComputeReadyCount := PopCount(shadowEligible)
 
-  private val secondParcel = core.fetch.io.requestValid &&
-    core.parcel.get.io.parcelRequestAddress === (core.io.frontendPc + 2.U)
+  private val fetchRequestValid = BoringUtils.tapAndRead(core.fetch.io.requestValid)
+  private val parcelRequestAddress = BoringUtils.tapAndRead(core.parcel.get.io.parcelRequestAddress)
+  private val secondParcel = fetchRequestValid &&
+    parcelRequestAddress === (core.io.frontendPc + 2.U)
   events.frontendSecondParcel := secondParcel
-  events.frontendBound := !core.backend.io.dispatch.valid && core.backend.io.dispatch.ready
 
-  private val terminal = core.backend.lsu.io.completion
-  events.memoryTerminalValid := terminal.valid
-  events.memoryTerminalReady := terminal.ready
+  private val dispatchValid = BoringUtils.tapAndRead(core.backend.io.dispatch.valid)
+  private val dispatchReady = BoringUtils.tapAndRead(core.backend.io.dispatch.ready)
+  events.frontendBound := !dispatchValid && dispatchReady
+
+  private val terminalValid = BoringUtils.tapAndRead(core.backend.lsu.io.completion.valid)
+  private val terminalReady = BoringUtils.tapAndRead(core.backend.lsu.io.completion.ready)
+  events.memoryTerminalValid := terminalValid
+  events.memoryTerminalReady := terminalReady
 
   bank.io.events := events
 
