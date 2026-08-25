@@ -101,6 +101,14 @@ class V2P8PerformanceSpec
     with V2P8TopDownChecks
     with V2P8AttributionV11Checks
 
+class V2P8PreHeadLoadSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2P8PreHeadLoadSelectorChecks
+    with V2P8PreHeadSafetyGateChecks
+    with V2P8PreHeadBackendChecks
+
 class V2F7SemanticDecodeSpec
     extends AnyFlatSpec
     with Matchers
