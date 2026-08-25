@@ -4,7 +4,7 @@
 
 This record closes the ownership seam between instruction translation, data translation, shared PTW arbitration, implicit page-table PMP protection, and SFENCE.VMA translation invalidation.
 
-The production RTL change is deliberately narrow: remove duplicate parent-side PMP qualification for data-side PTE reads. Translation algorithms, TLB contents, arbitration priority, external PTW protocol, fault class and SFENCE semantics remain unchanged.
+The production RTL change is deliberately narrow: remove duplicate parent-side PMP qualification for data-side PTE reads and make PTW source selection an explicit arbiter-owned routing fact. Translation algorithms, TLB contents, arbitration priority, external PTW protocol, fault class and SFENCE semantics remain unchanged.
 
 ## Translation owners
 
@@ -20,14 +20,16 @@ A denied data PTE access is consumed locally: it does not assert external `pteVa
 
 ## Shared PTW arbitration
 
-`PtwArbiter` owns only arbitration and response routing. Data translation has deterministic priority because it belongs to an older architectural memory operation; fetch translation is speculative and waits while data is present. The arbiter owns no PMP, SATP, PTE-permission or SFENCE policy.
+`PtwArbiter` owns arbitration and response routing. Data translation has deterministic priority because it belongs to an older architectural memory operation; fetch translation is speculative and waits while data is present. The arbiter owns no PMP, SATP, PTE-permission or SFENCE policy.
+
+Selection identity is part of routing ownership. `PtwArbiter.memoryIsFetch` explicitly reports that the current external-memory candidate was selected from the fetch side. Consumers may use this routing fact, but must not reconstruct the arbiter's deterministic data-priority rule from `dataValid`/`fetchValid` themselves. This keeps arbitration policy single-owned while allowing `TinyPagedCore` to apply fetch-only PMP policy after selection.
 
 ## Single-owner PMP rule
 
 Every implicit page-table physical read crosses exactly one Supervisor-mode PMP check before leaving the core.
 
 - Data PTE owner: `TinyMemoryBackend`, before `backend.io.pteValid` is exported.
-- Fetch PTE owner: `TinyPagedCore`, after the shared arbiter selects fetch.
+- Fetch PTE owner: `TinyPagedCore`, after the shared arbiter selects fetch and exposes that routing fact through `memoryIsFetch`.
 
 The qualified path is therefore:
 
@@ -41,6 +43,14 @@ A denied fetch PTE read is also consumed locally: external `io.ptw.valid` remain
 ## Why data PMP stays in the backend
 
 `TinyMemoryBackend` is a valid composition owner below `TinyPagedCore`. Moving all implicit-PTE PMP policy to the paged parent would weaken the backend contract or require a wider interface redesign. The structural closure instead removes only the duplicate second data check while retaining standalone safety.
+
+## Why source selection stays in the arbiter
+
+Whether fetch is selected is not PMP policy; it is a routing result of arbitration. Re-deriving that result in `TinyPagedCore` as `memoryValid && !dataValid` would make the parent depend on the arbiter's current data-priority algorithm and create a second structural owner for source selection. Exporting `memoryIsFetch` keeps the policy boundary narrow:
+
+- `PtwArbiter` owns which source wins and reports the selected source;
+- `TinyPagedCore` owns fetch-side PMP qualification of the selected request;
+- neither owner duplicates the other's decision rule.
 
 ## SFENCE.VMA single-origin rule
 
@@ -82,10 +92,11 @@ This closure does not add multiple outstanding walks, walk caches, separate I/D 
 
 - data-side PTW PMP before backend export;
 - fetch-only parent-side PTW PMP;
-- policy-free data-priority `PtwArbiter`;
+- data-priority source selection and selected-source routing fact owned by `PtwArbiter`;
+- no parent-side reconstruction of the arbiter's data-priority selection rule;
 - no PMP ownership in `TranslationUnit`/`InstructionFetchAdapter`;
 - retirement-only SFENCE origin and propagation to both I and D translation.
 
 ## Qualification
 
-Because `TinyPagedCore` production RTL changes, this head requires exact-head Fast/VM/cross-XLEN/Supervisor/FreeRTOS qualification plus RV64 Linux Minimal. Any performance workflow is only a correctness/identity guard; no performance gain is claimed.
+Because shared `PtwArbiter` and `TinyPagedCore` production RTL change, the final exact head requires Fast/source-contract + shared VM/cross-XLEN/privilege qualification, F7/paged-frontend qualification and RV64 Linux Minimal. Any performance workflow is only a correctness/identity guard; no performance gain is claimed.
