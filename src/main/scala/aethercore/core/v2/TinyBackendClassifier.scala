@@ -6,42 +6,45 @@ import aethercore.common.AluOp
 /**
   * First backend-owned classification boundary.
   *
-  * This module consumes only DecodedInstruction architectural semantics. It is
-  * intentionally forbidden from interpreting opcode/funct fields or using raw
-  * instruction bits to choose scheduler/execution behavior.
+  * The interface is intentionally narrower than DecodedInstruction: raw and
+  * canonical instruction bits, immediates and ISA/profile legality are not
+  * visible here. Backend classification therefore cannot re-decode opcode or
+  * funct fields by construction.
   */
-class TinyBackendClassifier(val xlen: Int) extends Module {
-  require(xlen == 32 || xlen == 64, s"backend-classifier XLEN must be 32 or 64, got $xlen")
-
+class TinyBackendClassifier extends Module {
   val io = IO(new Bundle {
-    val decoded = Input(new DecodedInstruction(xlen))
-    val dispatch = Output(new RobDispatch(xlen))
+    val aluOp = Input(AluOp())
+    val systemKind = Input(SystemOperationKind())
+    val memoryKind = Input(MemoryOperationKind())
+    val controlFlowKind = Input(ControlFlowKind())
+    val writesRd = Input(Bool())
+    val rd = Input(UInt(5.W))
+    val exceptionValid = Input(Bool())
+
+    val executionClass = Output(ExecutionClass())
+    val producesValue = Output(Bool())
   })
 
   private val mulDiv =
-    io.decoded.aluOp === AluOp.Mul ||
-      io.decoded.aluOp === AluOp.Mulh ||
-      io.decoded.aluOp === AluOp.Mulhsu ||
-      io.decoded.aluOp === AluOp.Mulhu ||
-      io.decoded.aluOp === AluOp.Div ||
-      io.decoded.aluOp === AluOp.Divu ||
-      io.decoded.aluOp === AluOp.Rem ||
-      io.decoded.aluOp === AluOp.Remu
+    io.aluOp === AluOp.Mul ||
+      io.aluOp === AluOp.Mulh ||
+      io.aluOp === AluOp.Mulhsu ||
+      io.aluOp === AluOp.Mulhu ||
+      io.aluOp === AluOp.Div ||
+      io.aluOp === AluOp.Divu ||
+      io.aluOp === AluOp.Rem ||
+      io.aluOp === AluOp.Remu
 
-  private val executionClass = WireDefault(ExecutionClass.Integer)
-  when(io.decoded.system.kind =/= SystemOperationKind.None) {
-    executionClass := ExecutionClass.System
-  }.elsewhen(io.decoded.memory.kind =/= MemoryOperationKind.None) {
-    executionClass := ExecutionClass.Memory
-  }.elsewhen(io.decoded.controlFlow.kind =/= ControlFlowKind.None) {
-    executionClass := ExecutionClass.Branch
+  io.executionClass := ExecutionClass.Integer
+  when(io.systemKind =/= SystemOperationKind.None) {
+    io.executionClass := ExecutionClass.System
+  }.elsewhen(io.memoryKind =/= MemoryOperationKind.None) {
+    io.executionClass := ExecutionClass.Memory
+  }.elsewhen(io.controlFlowKind =/= ControlFlowKind.None) {
+    io.executionClass := ExecutionClass.Branch
   }.elsewhen(mulDiv) {
-    executionClass := ExecutionClass.MulDiv
+    io.executionClass := ExecutionClass.MulDiv
   }
 
-  io.dispatch := 0.U.asTypeOf(new RobDispatch(xlen))
-  io.dispatch.decoded := io.decoded
-  io.dispatch.executionClass := executionClass
-  io.dispatch.producesValue :=
-    io.decoded.writesRd && io.decoded.rd =/= 0.U && !io.decoded.exception.valid
+  io.producesValue := io.writesRd && io.rd =/= 0.U && !io.exceptionValid
 }
