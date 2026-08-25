@@ -247,8 +247,9 @@ class TinyPagedCore(
     }
   }
 
-  // Data PTW requests already passed the F6 backend's local PTW-PMP check.
-  // Fetch PTW requests join them here; older data translation keeps priority.
+  // Data translation owns PTW PMP before exporting a PTE request from the
+  // backend. Fetch translation has no mutable PMP owner of its own and joins
+  // the shared PTW here. Data keeps deterministic priority in the arbiter.
   ptwArbiter.io.dataValid := backend.io.pteValid
   ptwArbiter.io.dataAddress := backend.io.pteAddress
   backend.io.pteReady := ptwArbiter.io.dataReady
@@ -261,9 +262,10 @@ class TinyPagedCore(
   fetch.io.pteData := ptwArbiter.io.fetchRdata
   fetch.io.pteFault := ptwArbiter.io.fetchFault
 
-  // Implicit page-table accesses execute with Supervisor PMP permissions, as in
-  // the qualified v1 composition. A denied walk is consumed locally and never
-  // leaks an external PTW transaction.
+  // Every implicit PTE read has exactly one PMP owner. Data requests reaching
+  // this arbiter have already passed TinyMemoryBackend's local Supervisor-mode
+  // PTW PMP guard. Only a selected fetch request is checked here. A denied fetch
+  // walk is consumed locally in the same cycle and never reaches external PTW.
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
   ptwPmp.io.address := ptwArbiter.io.memoryAddress
   ptwPmp.io.bytes := geometry.pteBytes.U
@@ -271,13 +273,15 @@ class TinyPagedCore(
   ptwPmp.io.execute := false.B
   ptwPmp.io.config := backend.io.frontendPmpConfig
   ptwPmp.io.pmpAddress := backend.io.frontendPmpAddress
-  private val ptwPmpFault = ptwArbiter.io.memoryValid && isa.hasPmp.B && !ptwPmp.io.allow
+  private val selectedFetchPtw =
+    ptwArbiter.io.memoryValid && !ptwArbiter.io.dataValid
+  private val fetchPtwPmpFault = selectedFetchPtw && isa.hasPmp.B && !ptwPmp.io.allow
 
-  io.ptw.valid := ptwArbiter.io.memoryValid && !ptwPmpFault
+  io.ptw.valid := ptwArbiter.io.memoryValid && !fetchPtwPmpFault
   io.ptw.addr := ptwArbiter.io.memoryAddress
-  ptwArbiter.io.memoryReady := Mux(ptwPmpFault, true.B, io.ptw.ready)
+  ptwArbiter.io.memoryReady := Mux(fetchPtwPmpFault, true.B, io.ptw.ready)
   ptwArbiter.io.memoryRdata := io.ptw.rdata
-  ptwArbiter.io.memoryFault := ptwPmpFault || (io.ptw.valid && io.ptw.fault)
+  ptwArbiter.io.memoryFault := fetchPtwPmpFault || (io.ptw.valid && io.ptw.fault)
 
   io.commit := backend.io.commit
   io.currentPrivilege := backend.io.currentPrivilege
