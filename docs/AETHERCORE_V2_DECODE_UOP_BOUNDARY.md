@@ -17,24 +17,28 @@ TinyArchitecturalSemanticDecode
         v
 DecodedInstruction          <- architectural semantics only
         |
+        | selected semantic facts only
         v
-TinyBackendClassifier
+TinyBackendClassifier       <- encoding-blind by interface
         |
         v
-RobDispatch                 <- first backend-owned classification
+ExecutionClass + producesValue
+        |
+        v
+TinySemanticDecode composition -> RobDispatch
         |
         v
 ROB allocation / dependency / scheduling / execution
 ```
 
-`DecodedInstruction` is the architectural semantic contract. It may retain canonical/raw instruction bits for commit trace and precise trap evidence, but downstream backend policy must not re-interpret opcode/funct fields to recover meaning that decode should have supplied.
+`DecodedInstruction` is the architectural semantic contract. It may retain canonical/raw instruction bits for commit trace and precise trap evidence, but downstream backend policy must not re-interpret encoding fields to recover meaning that decode should have supplied.
 
 `TinyBackendClassifier` is the first microarchitectural owner. It derives only:
 
 - `ExecutionClass`;
 - whether the instruction produces an architectural register value.
 
-The classifier consumes semantic fields (`system.kind`, `memory.kind`, `controlFlow.kind`, `aluOp`, destination/exception facts). It must not decide ISA legality or reconstruct operation semantics from instruction encoding bits.
+Its hardware interface is deliberately narrower than `DecodedInstruction`. It receives only `aluOp`, system/memory/control-flow semantic kind, destination-write facts and exception validity. It has no instruction/raw-instruction input and therefore cannot re-decode the encoding by construction.
 
 ## Ownership rules
 
@@ -59,17 +63,20 @@ The classifier consumes semantic fields (`system.kind`, `memory.kind`, `controlF
 
 ### Forbidden coupling
 
-Backend stages must not use opcode/funct/raw instruction bits to choose execution policy when an equivalent semantic field exists. Raw instruction evidence may still be carried for CommitTrace and architectural trap values.
+Backend classification must not receive instruction encoding merely to choose execution policy. Raw/canonical instruction evidence may remain inside `DecodedInstruction` for CommitTrace and precise architectural trap values, but is not part of the classifier interface.
+
+If a future extension needs new backend behavior, add an explicit architectural semantic field above this boundary and classify that field below it; do not re-open an encoding side channel.
 
 ## Compatibility
 
-`TinySemanticDecode` remains as a thin compatibility wrapper composing the two layers and preserving its existing `RobDispatch` output. Existing core integration therefore does not change in this closure PR.
+`TinySemanticDecode` remains as a thin compatibility composition wrapper. It wires architectural semantic facts into `TinyBackendClassifier`, then builds the existing `RobDispatch` output. Existing core integration therefore does not change in this closure PR.
 
 ## Qualification
 
-- existing `V2F7SemanticDecodeChecks` continue to validate RV32/RV64 I/M/A/control/memory/system/fence/exception behavior through the compatibility wrapper;
-- `V2DecodeUopBoundarySpec` directly freezes classifier priority and proves that changing canonical/raw instruction evidence cannot change backend class when semantic inputs are unchanged;
-- normal Fast and real-software gates remain required.
+- F7 `V2F7SemanticDecodeSpec` exercises the compatibility wrapper and checks RV32/RV64 I/M/A/control/memory/system/fence/exception semantics plus Integer/MulDiv/Branch/Memory/System classification;
+- `V2DecodeUopBoundarySpec` directly freezes classifier priority and value-production rules;
+- `tests_py/test_v2_decode_uop_boundary.py` is automatically executed by the Fast source-contract lane and freezes the encoding-blind hardware interface plus composition ownership;
+- normal Fast, F7 and real-software gates remain required.
 
 ## Future rule
 
