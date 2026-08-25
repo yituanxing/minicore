@@ -11,64 +11,55 @@ class V2DecodeUopBoundarySpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "AetherCore v2 decode to backend-uop boundary"
 
   private def neutral(dut: TinyBackendClassifier): Unit = {
-    dut.io.decoded.inst.poke(0.U)
-    dut.io.decoded.rawInst.poke(0.U)
-    dut.io.decoded.aluOp.poke(AluOp.Add)
-    dut.io.decoded.system.kind.poke(SystemOperationKind.None)
-    dut.io.decoded.memory.kind.poke(MemoryOperationKind.None)
-    dut.io.decoded.controlFlow.kind.poke(ControlFlowKind.None)
-    dut.io.decoded.writesRd.poke(false.B)
-    dut.io.decoded.rd.poke(0.U)
-    dut.io.decoded.exception.valid.poke(false.B)
+    dut.io.aluOp.poke(AluOp.Add)
+    dut.io.systemKind.poke(SystemOperationKind.None)
+    dut.io.memoryKind.poke(MemoryOperationKind.None)
+    dut.io.controlFlowKind.poke(ControlFlowKind.None)
+    dut.io.writesRd.poke(false.B)
+    dut.io.rd.poke(0.U)
+    dut.io.exceptionValid.poke(false.B)
   }
 
-  it should "classify only decoded architectural semantics with stable priority" in {
-    simulate(new TinyBackendClassifier(64)) { dut =>
+  it should "classify only architectural semantic facts with stable priority" in {
+    simulate(new TinyBackendClassifier) { dut =>
       neutral(dut)
       dut.clock.step()
-      dut.io.dispatch.executionClass.expect(ExecutionClass.Integer)
+      dut.io.executionClass.expect(ExecutionClass.Integer)
 
-      // Raw/canonical instruction evidence is deliberately irrelevant to
-      // backend classification once architectural decode has completed.
-      dut.io.decoded.inst.poke("hffffffff".U)
-      dut.io.decoded.rawInst.poke("hdeadbeef".U)
+      dut.io.aluOp.poke(AluOp.Mul)
       dut.clock.step()
-      dut.io.dispatch.executionClass.expect(ExecutionClass.Integer)
+      dut.io.executionClass.expect(ExecutionClass.MulDiv)
 
-      dut.io.decoded.aluOp.poke(AluOp.Mul)
+      dut.io.controlFlowKind.poke(ControlFlowKind.Conditional)
       dut.clock.step()
-      dut.io.dispatch.executionClass.expect(ExecutionClass.MulDiv)
+      dut.io.executionClass.expect(ExecutionClass.Branch)
 
-      dut.io.decoded.controlFlow.kind.poke(ControlFlowKind.Conditional)
+      dut.io.memoryKind.poke(MemoryOperationKind.Load)
       dut.clock.step()
-      dut.io.dispatch.executionClass.expect(ExecutionClass.Branch)
+      dut.io.executionClass.expect(ExecutionClass.Memory)
 
-      dut.io.decoded.memory.kind.poke(MemoryOperationKind.Load)
+      dut.io.systemKind.poke(SystemOperationKind.Csr)
       dut.clock.step()
-      dut.io.dispatch.executionClass.expect(ExecutionClass.Memory)
-
-      dut.io.decoded.system.kind.poke(SystemOperationKind.Csr)
-      dut.clock.step()
-      dut.io.dispatch.executionClass.expect(ExecutionClass.System)
+      dut.io.executionClass.expect(ExecutionClass.System)
     }
   }
 
   it should "derive value production from semantic destination facts only" in {
-    simulate(new TinyBackendClassifier(64)) { dut =>
+    simulate(new TinyBackendClassifier) { dut =>
       neutral(dut)
-      dut.io.decoded.writesRd.poke(true.B)
-      dut.io.decoded.rd.poke(5.U)
+      dut.io.writesRd.poke(true.B)
+      dut.io.rd.poke(5.U)
       dut.clock.step()
-      dut.io.dispatch.producesValue.expect(true.B)
+      dut.io.producesValue.expect(true.B)
 
-      dut.io.decoded.rd.poke(0.U)
+      dut.io.rd.poke(0.U)
       dut.clock.step()
-      dut.io.dispatch.producesValue.expect(false.B)
+      dut.io.producesValue.expect(false.B)
 
-      dut.io.decoded.rd.poke(5.U)
-      dut.io.decoded.exception.valid.poke(true.B)
+      dut.io.rd.poke(5.U)
+      dut.io.exceptionValid.poke(true.B)
       dut.clock.step()
-      dut.io.dispatch.producesValue.expect(false.B)
+      dut.io.producesValue.expect(false.B)
     }
   }
 }
