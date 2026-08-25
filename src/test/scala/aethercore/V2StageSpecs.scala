@@ -99,6 +99,7 @@ class V2P8PerformanceSpec
     with ChiselSim
     with V2P8PerformanceChecks
     with V2P8TopDownChecks
+    with V2P8AttributionV11Checks
 
 class V2F7SemanticDecodeSpec
     extends AnyFlatSpec
