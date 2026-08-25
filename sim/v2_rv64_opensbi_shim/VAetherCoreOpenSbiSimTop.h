@@ -12,4 +12,7 @@ using VAetherCoreOpenSbiSimTop = VAetherCoreV2OpenSbiRV64SimTop;
 // after including the shared runtime, so cycle and host-memory ordering remain
 // unchanged outside the performance build.
 #include "v2_perf_host_hook.h"
+// P8.4 attribution is layered after the frozen P8 hook. It reads only the new
+// host-visible causal counters and then delegates each cycle to v2PerfStep.
+#include "v2_attribution_host_hook.h"
 #endif
