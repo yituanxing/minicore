@@ -80,6 +80,15 @@ trait V2P8MemoryLifetimeStatusChecks { this: AnyFlatSpec with Matchers with Chis
     dut.io.request.ready.expect(true.B)
   }
 
+  private def stepUntil(dut: TinyBlockingLsu, maxCycles: Int = 12)(condition: => Boolean): Unit = {
+    var cycles = 0
+    while (!condition && cycles < maxCycles) {
+      dut.clock.step()
+      cycles += 1
+    }
+    condition shouldBe true
+  }
+
   behavior of "AetherCore v2 P8.4-M1 memory lifetime status"
 
   it should "classify write-like operations on the intake flow-through cycle" in {
@@ -126,18 +135,24 @@ trait V2P8MemoryLifetimeStatusChecks { this: AnyFlatSpec with Matchers with Chis
         generation = 1
       )
 
+      // Lifetime identity/classification is visible on intake. Resolved PA/PMA
+      // remain separately valid and follow the existing DataPathAdapter timing.
       dut.io.lifetimeStatus.robToken.index.expect(2.U)
       dut.io.lifetimeStatus.robToken.generation.expect(1.U)
       dut.io.lifetimeStatus.kind.expect(MemoryOperationKind.Store)
       dut.io.lifetimeStatus.size.expect(MemSize.Word)
       dut.io.lifetimeStatus.writeLike.expect(true.B)
-      dut.io.lifetimeStatus.physicalAddressValid.expect(true.B)
-      dut.io.lifetimeStatus.physicalAddress.expect(0x2000.U)
-      dut.io.lifetimeStatus.attributesValid.expect(true.B)
-      dut.io.lifetimeStatus.attributes.cacheable.expect(true.B)
       dut.io.lifetimeStatus.writePermitMatched.expect(false.B)
       dut.io.lifetimeStatus.physicalRequestIssued.expect(false.B)
       dut.io.memoryRequest.valid.expect(false.B)
+
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+      stepUntil(dut) { dut.io.lifetimeStatus.physicalAddressValid.peek().litValue == 1 }
+      dut.io.lifetimeStatus.valid.expect(true.B)
+      dut.io.lifetimeStatus.physicalAddress.expect(0x2000.U)
+      dut.io.lifetimeStatus.attributesValid.expect(true.B)
+      dut.io.lifetimeStatus.attributes.cacheable.expect(true.B)
 
       dut.io.storePermit.valid.poke(true.B)
       dut.io.storePermit.bits.index.poke(2.U)
@@ -150,11 +165,11 @@ trait V2P8MemoryLifetimeStatusChecks { this: AnyFlatSpec with Matchers with Chis
       dut.io.memoryRequest.valid.expect(true.B)
       val txn = dut.io.memoryRequest.bits.txnId.peek().litValue
 
-      // The status reflects the handshake in this cycle, not one register later.
+      // The externalization fact reflects the physical handshake in this cycle,
+      // not one register later.
       dut.io.memoryRequest.ready.poke(true.B)
       dut.io.lifetimeStatus.physicalRequestIssued.expect(true.B)
       dut.clock.step()
-      dut.io.request.valid.poke(false.B)
       dut.io.memoryRequest.ready.poke(false.B)
       dut.io.storePermit.valid.poke(false.B)
 
