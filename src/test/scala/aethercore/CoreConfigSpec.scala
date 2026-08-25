@@ -21,7 +21,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe true
     config.isa.march shouldBe "rv64im_zicsr_zifencei"
-    config.isa.mabi shouldBe "lp64"
     config.platform.resetVector shouldBe BigInt("80000000", 16)
     config.platform.busDataBits shouldBe 64
     config.platform.busBytes shouldBe 8
@@ -42,7 +41,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32i"
-    config.isa.mabi shouldBe "ilp32"
     config.platform.resetVector shouldBe BigInt("80000000", 16)
     config.platform.paddrBits shouldBe 32
     config.platform.busDataBits shouldBe 32
@@ -64,7 +62,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasSstc shouldBe false
     config.isa.hasWordOps shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
-    config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
@@ -82,7 +79,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasSv32 shouldBe false
     config.isa.hasSstc shouldBe false
     config.isa.march shouldBe "rv32im_zicsr"
-    config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
@@ -142,7 +138,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.hasSstc shouldBe false
     isa.virtualMemoryModes shouldBe Set("Sv32")
     isa.march shouldBe "rv32im_zicsr"
-    isa.mabi shouldBe "ilp32"
   }
 
   it should "keep the pre-atomic protected profile available for regressions" in {
@@ -171,7 +166,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasSstc shouldBe false
     config.isa.hasC shouldBe false
     config.isa.march shouldBe "rv32ima_zicsr_zifencei"
-    config.isa.mabi shouldBe "ilp32"
     config.platform shouldBe CoreProfiles.rv32iMinimal.platform
   }
 
@@ -191,7 +185,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasSv32 shouldBe false
     config.isa.hasSstc shouldBe false
     config.isa.march shouldBe "rv64im_zicsr"
-    config.isa.mabi shouldBe "lp64"
     config.platform.paddrBits shouldBe 56
     config.platform.busDataBits shouldBe 64
   }
@@ -213,12 +206,11 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     config.isa.hasC shouldBe false
     config.isa.hasSstc shouldBe false
     config.isa.march shouldBe "rv64ima_zicsr"
-    config.isa.mabi shouldBe "lp64"
     config.platform.paddrBits shouldBe 56
     config.platform.busDataBits shouldBe 64
   }
 
-  it should "derive an independent RV32I software contract" in {
+  it should "derive an independent RV32I ISA contract" in {
     val isa = IsaConfig(xlen = 32, extensions = Set('I'), privilegeModes = Set('M'))
     isa.xBytes shouldBe 4
     isa.shiftBits shouldBe 5
@@ -228,7 +220,6 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
     isa.hasSstc shouldBe false
     isa.hasWordOps shouldBe false
     isa.march shouldBe "rv32i"
-    isa.mabi shouldBe "ilp32"
   }
 
   it should "keep IsaConfig descriptive while CoreConfig rejects unrealizable AetherCore profiles" in {
