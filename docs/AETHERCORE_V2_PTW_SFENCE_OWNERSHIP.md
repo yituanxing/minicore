@@ -1,5 +1,9 @@
 # AetherCore v2 PTW and SFENCE ownership closure
 
+Status: final routing-ownership candidate; exact-head qualification required before freeze.
+
+Candidate exact head lineage includes the arbiter-owned `memoryIsFetch` routing fact. The prior `eaa5b53...` qualification proved the functional PTW/SFENCE change, but it predates this final shared-arbiter ownership cleanup and therefore is not the freeze evidence for the final candidate.
+
 ## Scope
 
 This record closes the ownership seam between instruction translation, data translation, shared PTW arbitration, implicit page-table PMP protection, and SFENCE.VMA translation invalidation.
