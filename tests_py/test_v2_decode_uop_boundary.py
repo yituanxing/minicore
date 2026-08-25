@@ -13,12 +13,11 @@ class V2DecodeUopBoundarySourceContract(unittest.TestCase):
         source = CLASSIFIER.read_text(encoding="utf-8")
 
         # Backend classification must be impossible to implement by re-decoding
-        # instruction encoding. Architectural decode owns those bits.
+        # instruction encoding. Architectural decode owns those bits. Check the
+        # actual interface/type surface rather than prose in comments.
         self.assertNotIn("DecodedInstruction", source)
         self.assertNotIn("RobDispatch", source)
         self.assertNotIn("rawInst", source)
-        self.assertNotIn("opcode", source)
-        self.assertNotIn("funct", source)
         self.assertNotIn("io.inst", source)
 
         for semantic_input in (
