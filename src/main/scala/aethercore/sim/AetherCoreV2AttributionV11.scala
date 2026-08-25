@@ -275,9 +275,17 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   events.shadowComputeReadyCount := PopCount(shadowEligible)
 
   private val fetchRequestValid = BoringUtils.tapAndRead(core.fetch.io.requestValid)
-  private val parcelRequestAddress = BoringUtils.tapAndRead(core.parcel.get.io.parcelRequestAddress)
-  private val secondParcel = fetchRequestValid &&
-    parcelRequestAddress === (core.io.frontendPc + 2.U)
+  private val secondParcel = core.parcel match {
+    case Some(parcelController) =>
+      val parcelRequestAddress =
+        BoringUtils.tapAndRead(parcelController.io.parcelRequestAddress)
+      fetchRequestValid && parcelRequestAddress === (core.io.frontendPc + 2.U)
+    case None =>
+      // The RV64 Linux P8 profile currently has no compressed parcel
+      // controller. Keep the counter explicit and configuration-safe rather
+      // than pretending every frontend has an RVC second-parcel path.
+      false.B
+  }
   events.frontendSecondParcel := secondParcel
 
   private val dispatchValid = BoringUtils.tapAndRead(core.backend.io.dispatch.valid)
