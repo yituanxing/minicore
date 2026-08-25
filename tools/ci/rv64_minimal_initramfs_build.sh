@@ -14,6 +14,7 @@ BUILD_DIR="${ROOT_DIR}/build/rv64-linux-initramfs"
 OBJ_DIR="${BUILD_DIR}/obj"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 INIT_BUILD_DIR="${BUILD_DIR}/minimal-init"
+INIT_OBJ="${INIT_BUILD_DIR}/minimal_init.o"
 INIT_ELF="${INIT_BUILD_DIR}/init"
 INIT_SPEC="${INIT_BUILD_DIR}/initramfs.list"
 JOBS="${RV64_LINUX_JOBS:-$(nproc)}"
@@ -52,12 +53,40 @@ printf 'Seeding RV64 initramfs object tree from qualified baseline: %s\n' "${BAS
 cp -a --reflink=auto "${BASELINE_OBJ}" "${OBJ_DIR}"
 mkdir -p "${EVIDENCE_DIR}" "${INIT_BUILD_DIR}"
 
+# Keep the PID1 ELF byte-reproducible. Invoking gcc as a compile+link driver in
+# one step lets GCC choose a random ccXXXXXX.o temporary object name; GNU ld on
+# this RISC-V toolchain retains that input name as a FILE symbol in .strtab.
+# The non-loadable bytes then enter the built-in initramfs and perturb the final
+# Linux Image/fw_payload hash even though executable sections are unchanged.
+# Compile to a fixed object path first, then link that exact object name.
+"${CROSS}gcc" \
+  -march=rv64ima_zicsr_zifencei -mabi=lp64 \
+  -c "${ROOT_DIR}/software/rv64_userspace/minimal_init.S" \
+  -o "${INIT_OBJ}"
 "${CROSS}gcc" \
   -march=rv64ima_zicsr_zifencei -mabi=lp64 \
   -nostdlib -static -no-pie \
   -Wl,--build-id=none -Wl,-e,_start -Wl,-Ttext=0x00010000 \
   -Wl,-z,max-page-size=4096 \
-  "${ROOT_DIR}/software/rv64_userspace/minimal_init.S" -o "${INIT_ELF}"
+  "${INIT_OBJ}" -o "${INIT_ELF}"
+
+# Rebuild the tiny PID1 once at the identical output paths and require a byte-
+# identical ELF. This costs only one assembly/link and prevents future driver
+# or toolchain changes from silently reintroducing workload identity drift.
+init_sha_first="$(sha256sum "${INIT_ELF}" | awk '{print $1}')"
+"${CROSS}gcc" \
+  -march=rv64ima_zicsr_zifencei -mabi=lp64 \
+  -c "${ROOT_DIR}/software/rv64_userspace/minimal_init.S" \
+  -o "${INIT_OBJ}"
+"${CROSS}gcc" \
+  -march=rv64ima_zicsr_zifencei -mabi=lp64 \
+  -nostdlib -static -no-pie \
+  -Wl,--build-id=none -Wl,-e,_start -Wl,-Ttext=0x00010000 \
+  -Wl,-z,max-page-size=4096 \
+  "${INIT_OBJ}" -o "${INIT_ELF}"
+init_sha_second="$(sha256sum "${INIT_ELF}" | awk '{print $1}')"
+[[ "${init_sha_first}" == "${init_sha_second}" ]] || \
+  fail "minimal init ELF is not byte-reproducible"
 
 "${CROSS}readelf" -h -l -A "${INIT_ELF}" | tee "${EVIDENCE_DIR}/init-readelf.txt"
 file "${INIT_ELF}" | tee "${EVIDENCE_DIR}/init-file.txt"
