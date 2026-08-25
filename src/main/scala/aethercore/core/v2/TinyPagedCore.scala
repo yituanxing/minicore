@@ -84,6 +84,8 @@ class TinyPagedCore(
     allowAtomics = isa.hasA
   ))
   val decode = Module(new TinySemanticDecode(isa))
+  val classify = Module(new TinyDispatchClassify(Xlen))
+  classify.io.decoded := decode.io.decoded
   // The v2 frontend deliberately reuses the shared InstructionFetchAdapter and
   // TranslationUnit. Shared translation-path changes therefore require the same
   // exact-head Linux qualification as direct core/v2 RTL changes.
@@ -216,7 +218,7 @@ class TinyPagedCore(
   backend.io.dispatch.valid :=
     (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
       !redirect && !frontendBlocked
-  backend.io.dispatch.bits := decode.io.dispatch
+  backend.io.dispatch.bits := classify.io.dispatch
   fetch.io.responseReady :=
     (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
 
@@ -239,8 +241,8 @@ class TinyPagedCore(
       serialized := false.B
     }
     when(backend.io.dispatch.fire) {
-      pc := pc + decode.io.dispatch.decoded.instBytes
-      when(decode.io.dispatch.decoded.ordering =/= OrderingClass.Normal) {
+      pc := pc + decode.io.decoded.instBytes
+      when(decode.io.decoded.ordering =/= OrderingClass.Normal) {
         serialized := true.B
         serializedPc := pc
       }
