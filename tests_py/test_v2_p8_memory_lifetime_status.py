@@ -68,12 +68,20 @@ class V2P84MemoryLifetimeStatusSourceContract(unittest.TestCase):
         source = BACKEND.read_text(encoding="utf-8")
         self.assertNotIn("lifetimeStatus", source)
         self.assertIn("lsu.io.request.valid := headIsMemory &&", source)
-        self.assertIn("headDependenciesValid &&", source)
-        self.assertIn("headOperandsReady &&", source)
+        self.assertIn("dependencyBackend.io.headDependenciesValid &&", source)
+        self.assertIn("dependencyBackend.io.headOperandsReady &&", source)
         self.assertIn("!memoryAlreadyIssued", source)
-        self.assertIn("lsu.io.storePermit.valid := headIsMemory &&", source)
-        self.assertIn("sameRobToken(retiring.bits.uop.robToken, head.robToken)", source)
-        self.assertIn("assert(PopCount(launches) <= 1.U)", source)
+        self.assertIn("sameRobToken(memoryIssuedToken, head.bits.robToken)", source)
+        self.assertIn("lsu.io.storePermit.valid := headIsMemory && (", source)
+        self.assertIn("lsu.io.storePermit.bits := head.bits.robToken", source)
+        self.assertIn("assert(PopCount(Cat(", source)
+        self.assertIn("branchIssue.io.request.fire", source)
+        self.assertIn("selectiveIssue.io.request.fire", source)
+        self.assertIn("lsu.io.request.fire", source)
+        self.assertIn(
+            ")) <= 1.U, \"A8 selective backend must remain single-issue per cycle\")",
+            source,
+        )
 
     def test_dynamic_status_checks_are_part_of_the_f6_stage_gate(self):
         source = STAGES.read_text(encoding="utf-8")
