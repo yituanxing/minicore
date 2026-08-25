@@ -40,6 +40,7 @@ class PtwArbiter(
 
     val memoryValid = Output(Bool())
     val memoryAddress = Output(UInt(PhysicalBits.W))
+    val memoryIsFetch = Output(Bool())
     val memoryReady = Input(Bool())
     val memoryRdata = Input(UInt(geometry.pteBits.W))
     val memoryFault = Input(Bool())
@@ -50,6 +51,7 @@ class PtwArbiter(
 
   io.memoryValid := chooseData || chooseFetch
   io.memoryAddress := Mux(chooseData, io.dataAddress, io.fetchAddress)
+  io.memoryIsFetch := chooseFetch
 
   io.dataReady := chooseData && io.memoryReady
   io.dataRdata := io.memoryRdata
