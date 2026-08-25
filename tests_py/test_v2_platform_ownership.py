@@ -17,7 +17,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("Bus protocols such as AXI remain outside this contract", source)
         self.assertIn("val txnId = UInt(txnIdBits.W)", source)
         self.assertIn("val op = AetherMemOp()", source)
-        self.assertIn("val paddr = UInt(paddrBits.W)", source)
+        self.assertIn("val paddr = UInt(addrBits.W)", source)
         self.assertIn("val attributes = new MemoryAttributes", source)
         self.assertIn("class AetherMemResponse", source)
 
