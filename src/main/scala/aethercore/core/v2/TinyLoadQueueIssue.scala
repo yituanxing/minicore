@@ -29,6 +29,12 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     val bypassable = Input(Vec(Slots, Valid(new RobToken(IdentityBits, GenerationBits))))
     val request = Decoupled(new TinyMemoryRequest(xlen, IdentityBits, GenerationBits))
     val preHead = Output(Bool())
+
+    // Observation-only P8 signals. They expose selector opportunity before the
+    // two-slot capacity gate without changing request eligibility or launch.
+    val candidateValid = Output(Bool())
+    val capacityBlocked = Output(Bool())
+    val capacityOnlyBlocked = Output(Bool())
   })
 
   private val issuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
@@ -107,6 +113,13 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
       selectedRequest := candidates(age)
     }
   }
+
+  // Keep the measurement seam strictly upstream of capacity and global issue
+  // blocking. A full LoadQ may therefore report a valid third-load opportunity
+  // while the architectural request remains correctly suppressed.
+  io.candidateValid := selectedValid
+  io.capacityBlocked := selectedValid && !io.available
+  io.capacityOnlyBlocked := selectedValid && !io.available && !io.block
 
   io.request.valid := selectedValid && io.available && !io.block
   io.request.bits := selectedRequest
