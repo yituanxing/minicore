@@ -1,0 +1,288 @@
+package aethercore.core.v2
+
+import chisel3._
+import chisel3.util._
+import aethercore.common.AtomicOp
+import aethercore.config.PageTableGeometry
+import aethercore.core.{PmpConstants, PmpGeometry}
+import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
+
+/**
+  * Two-slot ordinary-Load engine for the first genuinely non-blocking Path-C
+  * memory experiment.
+  *
+  * Each slot deliberately reuses one already-qualified TinyBlockingLsu. That
+  * keeps translation, PMP, fault construction, load extension and Decoupled
+  * completion semantics unchanged while allowing two read lifetimes to overlap.
+  * The wrapper owns only bounded slot allocation and arbitration:
+  *
+  *   - one new ordinary Load may enter per cycle;
+  *   - at most two ordinary Loads may be active;
+  *   - at most one physical request is launched per cycle, but two may remain
+  *     outstanding and responses may return in either order;
+  *   - external txnId 0/1 identifies the owning slot; each child's private
+  *     transaction ID is translated at the wrapper boundary;
+  *   - speculative PTW remains forbidden;
+  *   - a pre-head physical read externalizes only after PMA proves it is
+  *     idempotent, non-side-effecting and unordered.
+  *
+  * Store/SC/AMO ownership intentionally stays outside this unit. ROB age/order
+  * and precise retirement also stay outside this unit.
+  */
+class TinyDualReplaySafeLoadUnit(
+    val geometry: PageTableGeometry,
+    val paddrBits: Int = -1,
+    val tlbEntries: Int = 8,
+    val txnIdBits: Int = 2
+) extends Module {
+  private val Xlen = geometry.xlen
+  private val IdentityBits = TinyRobGeometry.IndexBits
+  private val GenerationBits = TinyRobGeometry.GenerationBits
+  private val PhysicalBits =
+    if (paddrBits > 0) paddrBits else geometry.architecturalPhysicalAddressBits
+  private val PmpAddressBits = PmpGeometry(Xlen, PhysicalBits).encodedAddressBits
+  private val Slots = 2
+
+  require(txnIdBits >= 1, "dual Load unit needs at least one external transaction-id bit")
+
+  val io = IO(new Bundle {
+    val request = Flipped(Decoupled(new TinyMemoryRequest(Xlen, IdentityBits, GenerationBits)))
+    val completion = Decoupled(new ExecutionResponse(Xlen, IdentityBits, GenerationBits))
+    val memoryTrace = Valid(new TinyMemoryTrace(Xlen, PhysicalBits, IdentityBits, GenerationBits))
+
+    // Exact architectural head token. A slot not matching this token is
+    // speculative and therefore may neither walk page tables nor touch unsafe
+    // PMA regions.
+    val head = Flipped(Valid(new RobToken(IdentityBits, GenerationBits)))
+
+    val effectivePrivilege = Input(UInt(2.W))
+    val satpTranslationEnabled = Input(Bool())
+    val satpRootPpn = Input(UInt(geometry.ppnBits.W))
+    val supervisorSum = Input(Bool())
+    val supervisorMxr = Input(Bool())
+    val translationFlush = Input(Bool())
+
+    val pmpEnabled = Input(Bool())
+    val pmpConfig = Input(Vec(PmpConstants.MaxEntries, UInt(8.W)))
+    val pmpAddress = Input(Vec(PmpConstants.MaxEntries, UInt(PmpAddressBits.W)))
+
+    // One shared PTW seam. Only the exact-head slot may use it.
+    val pteValid = Output(Bool())
+    val pteAddress = Output(UInt(PhysicalBits.W))
+    val pteReady = Input(Bool())
+    val pteData = Input(UInt(geometry.pteBits.W))
+    val pteFault = Input(Bool())
+
+    // One shared PMA lookup seam. Slots are time-multiplexed through it before
+    // physical launch; once launched they no longer consume this lookup port.
+    val resolvedPhysicalValid = Output(Bool())
+    val resolvedPhysicalAddress = Output(UInt(PhysicalBits.W))
+    val resolvedAttributes = Input(new MemoryAttributes)
+
+    val memoryRequest = Decoupled(new AetherMemRequest(PhysicalBits, Xlen, txnIdBits))
+    val memoryResponse = Flipped(Decoupled(new AetherMemResponse(Xlen, txnIdBits)))
+
+    // A token is bypassable only after its physical read has launched from a
+    // PMA region proven replay-safe. The selector may cross such an older Load
+    // to fill the second slot; an unresolved/unsafe older Load remains a barrier.
+    val bypassable = Output(Vec(Slots, Valid(new RobToken(IdentityBits, GenerationBits))))
+    val busy = Output(Bool())
+    val full = Output(Bool())
+  })
+
+  private def sameToken(lhs: RobToken, rhs: RobToken): Bool =
+    lhs.index === rhs.index && lhs.generation === rhs.generation
+
+  private val slots = Seq.fill(Slots)(Module(new TinyBlockingLsu(
+    geometry,
+    paddrBits = PhysicalBits,
+    tlbEntries = tlbEntries,
+    txnIdBits = txnIdBits,
+    allowAtomics = false
+  )))
+
+  for (slot <- slots) {
+    slot.io.storePermit.valid := false.B
+    slot.io.storePermit.bits := 0.U.asTypeOf(new RobToken(IdentityBits, GenerationBits))
+    slot.io.effectivePrivilege := io.effectivePrivilege
+    slot.io.satpTranslationEnabled := io.satpTranslationEnabled
+    slot.io.satpRootPpn := io.satpRootPpn
+    slot.io.supervisorSum := io.supervisorSum
+    slot.io.supervisorMxr := io.supervisorMxr
+    slot.io.translationFlush := io.translationFlush
+    slot.io.pmpEnabled := io.pmpEnabled
+    slot.io.pmpConfig := io.pmpConfig
+    slot.io.pmpAddress := io.pmpAddress
+    slot.io.resolvedAttributes := io.resolvedAttributes
+  }
+
+  // --------------------------------------------------------------------------
+  // Slot allocation
+  // --------------------------------------------------------------------------
+  val free = VecInit(slots.map(s => !s.io.busy))
+  val hasFree = free.asUInt.orR
+  val allocIndex = PriorityEncoder(free)
+
+  io.request.ready := hasFree && Mux1H(
+    UIntToOH(allocIndex, Slots),
+    slots.map(_.io.request.ready)
+  )
+
+  for ((slot, index) <- slots.zipWithIndex) {
+    slot.io.request.valid := io.request.valid && hasFree && allocIndex === index.U
+    slot.io.request.bits := io.request.bits
+  }
+
+  when(io.request.fire) {
+    assert(io.request.bits.kind === MemoryOperationKind.Load,
+      "dual Load unit accepts ordinary Loads only")
+    assert(io.request.bits.atomicOp === AtomicOp.None,
+      "dual Load unit must not accept LR/SC/AMO")
+  }
+
+  io.busy := slots.map(_.io.busy).reduce(_ || _)
+  io.full := slots.map(_.io.busy).reduce(_ && _)
+
+  // --------------------------------------------------------------------------
+  // Exact-head ownership and speculative PTW gate
+  // --------------------------------------------------------------------------
+  val slotHead = Wire(Vec(Slots, Bool()))
+  for ((slot, index) <- slots.zipWithIndex) {
+    val status = slot.io.lifetimeStatus
+    slotHead(index) := status.valid && io.head.valid && sameToken(status.robToken, io.head.bits)
+  }
+
+  val pteCandidates = VecInit(slots.zipWithIndex.map { case (slot, index) =>
+    slot.io.pteValid && slotHead(index)
+  })
+  val pteSelectValid = pteCandidates.asUInt.orR
+  val pteSelect = PriorityEncoder(pteCandidates)
+
+  io.pteValid := pteSelectValid
+  io.pteAddress := Mux1H(
+    UIntToOH(pteSelect, Slots),
+    slots.map(_.io.pteAddress)
+  )
+
+  for ((slot, index) <- slots.zipWithIndex) {
+    val selected = pteSelectValid && pteSelect === index.U
+    slot.io.pteReady := selected && io.pteReady
+    slot.io.pteData := io.pteData
+    slot.io.pteFault := selected && io.pteFault
+    when(slot.io.pteValid && !slotHead(index)) {
+      assert(!slot.io.pteReady, "speculative dual-Load slot must not externalize PTW traffic")
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Shared PMA lookup + physical request launch
+  // --------------------------------------------------------------------------
+  val needsPma = VecInit(slots.map { slot =>
+    slot.io.resolvedPhysicalValid &&
+      slot.io.lifetimeStatus.valid &&
+      !slot.io.lifetimeStatus.physicalRequestIssued
+  })
+  val pmaSelectValid = needsPma.asUInt.orR
+  val pmaSelect = PriorityEncoder(needsPma)
+
+  io.resolvedPhysicalValid := pmaSelectValid
+  io.resolvedPhysicalAddress := Mux1H(
+    UIntToOH(pmaSelect, Slots),
+    slots.map(_.io.resolvedPhysicalAddress)
+  )
+
+  val replaySafe =
+    io.resolvedAttributes.idempotent &&
+      !io.resolvedAttributes.sideEffecting &&
+      !io.resolvedAttributes.ordered
+
+  val selectedMemoryValid = Mux1H(
+    UIntToOH(pmaSelect, Slots),
+    slots.map(_.io.memoryRequest.valid)
+  )
+  val selectedMemoryBits = Mux1H(
+    UIntToOH(pmaSelect, Slots),
+    slots.map(_.io.memoryRequest.bits)
+  )
+  val selectedIsHead = Mux1H(UIntToOH(pmaSelect, Slots), slotHead)
+  val selectedPermit = pmaSelectValid && selectedMemoryValid && (selectedIsHead || replaySafe)
+
+  io.memoryRequest.valid := selectedPermit
+  io.memoryRequest.bits := selectedMemoryBits
+  // External txnId is the fixed slot identity. Each child keeps its private
+  // rolling txnId behind this wrapper.
+  io.memoryRequest.bits.txnId := pmaSelect
+
+  val childTxn = Reg(Vec(Slots, UInt(txnIdBits.W)))
+  val bypassableValid = RegInit(VecInit(Seq.fill(Slots)(false.B)))
+  val bypassableToken = Reg(Vec(Slots, new RobToken(IdentityBits, GenerationBits)))
+
+  for ((slot, index) <- slots.zipWithIndex) {
+    val selected = pmaSelectValid && pmaSelect === index.U
+    slot.io.memoryRequest.ready := selected && selectedPermit && io.memoryRequest.ready
+
+    when(slot.io.memoryRequest.fire) {
+      childTxn(index) := slot.io.memoryRequest.bits.txnId
+      bypassableValid(index) := replaySafe
+      bypassableToken(index) := slot.io.lifetimeStatus.robToken
+    }
+    when(slot.io.completion.fire) {
+      bypassableValid(index) := false.B
+    }
+
+    io.bypassable(index).valid := bypassableValid(index)
+    io.bypassable(index).bits := bypassableToken(index)
+  }
+
+  when(io.memoryRequest.fire && !selectedIsHead) {
+    assert(replaySafe, "pre-head dual-Load physical request must be replay-safe")
+    assert(io.memoryRequest.bits.op === AetherMemOp.Read,
+      "pre-head dual-Load unit may externalize reads only")
+  }
+
+  // --------------------------------------------------------------------------
+  // Response demultiplexing by fixed external slot transaction ID
+  // --------------------------------------------------------------------------
+  val responseSlot = io.memoryResponse.bits.txnId(0)
+  val responseOwnerValid = io.memoryResponse.bits.txnId < Slots.U
+
+  for ((slot, index) <- slots.zipWithIndex) {
+    val selected = io.memoryResponse.valid && responseOwnerValid && responseSlot === index.U
+    slot.io.memoryResponse.valid := selected
+    slot.io.memoryResponse.bits := io.memoryResponse.bits
+    slot.io.memoryResponse.bits.txnId := childTxn(index)
+  }
+
+  io.memoryResponse.ready := responseOwnerValid && Mux(
+    responseSlot === 0.U,
+    slots(0).io.memoryResponse.ready,
+    slots(1).io.memoryResponse.ready
+  )
+
+  when(io.memoryResponse.fire) {
+    assert(responseOwnerValid, "dual Load response txnId must identify slot 0 or 1")
+  }
+
+  // --------------------------------------------------------------------------
+  // Completion and retirement-trace merge
+  // --------------------------------------------------------------------------
+  val completionArb = Module(new Arbiter(
+    new ExecutionResponse(Xlen, IdentityBits, GenerationBits),
+    Slots
+  ))
+  for ((slot, index) <- slots.zipWithIndex) {
+    completionArb.io.in(index) <> slot.io.completion
+  }
+  io.completion <> completionArb.io.out
+
+  // The external physical response channel is one-wide, hence at most one load
+  // trace can become valid in a cycle even though two reads may be outstanding.
+  io.memoryTrace.valid := slots.map(_.io.memoryTrace.valid).reduce(_ || _)
+  io.memoryTrace.bits := Mux(
+    slots(0).io.memoryTrace.valid,
+    slots(0).io.memoryTrace.bits,
+    slots(1).io.memoryTrace.bits
+  )
+  assert(PopCount(VecInit(slots.map(_.io.memoryTrace.valid))) <= 1.U,
+    "one-wide response link must produce at most one dual-Load trace per cycle")
+}
