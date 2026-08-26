@@ -177,10 +177,12 @@ class TinyDualReplaySafeLoadUnit(
   // --------------------------------------------------------------------------
   // Shared PMA lookup + physical request launch
   // --------------------------------------------------------------------------
+  // Arbitration must be based on the child's registered physical-issued state,
+  // not lifetimeStatus.physicalRequestIssued. The latter intentionally includes
+  // same-cycle memoryRequest.fire for observability, so feeding it back into
+  // ready/selection would create a combinational cycle.
   val needsPma = VecInit(slots.map { slot =>
-    slot.io.resolvedPhysicalValid &&
-      slot.io.lifetimeStatus.valid &&
-      !slot.io.lifetimeStatus.physicalRequestIssued
+    slot.io.resolvedPhysicalValid && slot.io.memoryRequest.valid
   })
   val pmaSelectValid = needsPma.asUInt.orR
   val pmaSelect = PriorityEncoder(needsPma)
