@@ -213,10 +213,24 @@ class TinyPagedCore(
   decode.io.instBytes := (if (isa.hasC) parcel.get.io.instructionBytes else 4.U)
   decode.io.fetchException := fetchException
 
+  private val decoded = decode.io.dispatch.decoded
+  private val sequentialNextPc = pc + decoded.instBytes
+  // First control-flow prediction slice: direct JAL/J only. Its target is fully
+  // known at decode and the instruction is architecturally always taken, so this
+  // removes correct-path recovery without adding a predictor table or a
+  // predicted-taken/actual-not-taken recovery case yet.
+  private val predictDirectJump =
+    decode.io.dispatch.executionClass === ExecutionClass.Branch &&
+      decoded.controlFlow.kind === ControlFlowKind.DirectJump &&
+      !decoded.exception.valid
+  private val predictedDirectTarget = pc + decoded.immediate
+
   backend.io.dispatch.valid :=
     (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
       !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
+  backend.io.dispatch.bits.predictionValid := predictDirectJump
+  backend.io.dispatch.bits.predictedNextPc := predictedDirectTarget
   fetch.io.responseReady :=
     (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
 
@@ -239,8 +253,8 @@ class TinyPagedCore(
       serialized := false.B
     }
     when(backend.io.dispatch.fire) {
-      pc := pc + decode.io.dispatch.decoded.instBytes
-      when(decode.io.dispatch.decoded.ordering =/= OrderingClass.Normal) {
+      pc := Mux(predictDirectJump, predictedDirectTarget, sequentialNextPc)
+      when(decoded.ordering =/= OrderingClass.Normal) {
         serialized := true.B
         serializedPc := pc
       }
