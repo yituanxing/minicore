@@ -215,22 +215,27 @@ class TinyPagedCore(
 
   private val decoded = decode.io.dispatch.decoded
   private val sequentialNextPc = pc + decoded.instBytes
-  // First control-flow prediction slice: direct JAL/J only. Its target is fully
-  // known at decode and the instruction is architecturally always taken, so this
-  // removes correct-path recovery without adding a predictor table or a
-  // predicted-taken/actual-not-taken recovery case yet.
-  private val predictDirectJump =
-    decode.io.dispatch.executionClass === ExecutionClass.Branch &&
-      decoded.controlFlow.kind === ControlFlowKind.DirectJump &&
-      !decoded.exception.valid
-  private val predictedDirectTarget = pc + decoded.immediate
+  // Final bounded static-control-flow experiment. Direct JAL/J remains always
+  // taken. Conditional branches use the classic BTFNT rule: only a negative
+  // (backward) PC-relative offset is predicted taken; forward branches retain
+  // the legacy sequential/not-taken path. This adds no predictor table, BTB,
+  // BHT, RAS or checkpoint state.
+  private val predictableBranch =
+    decode.io.dispatch.executionClass === ExecutionClass.Branch && !decoded.exception.valid
+  private val predictedTarget = pc + decoded.immediate
+  private val predictDirectJumpTaken =
+    predictableBranch && decoded.controlFlow.kind === ControlFlowKind.DirectJump
+  private val predictBackwardConditionalTaken =
+    predictableBranch && decoded.controlFlow.kind === ControlFlowKind.Conditional &&
+      decoded.immediate(Xlen - 1)
+  private val predictTaken = predictDirectJumpTaken || predictBackwardConditionalTaken
 
   backend.io.dispatch.valid :=
     (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
       !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
-  backend.io.dispatch.bits.predictionValid := predictDirectJump
-  backend.io.dispatch.bits.predictedNextPc := predictedDirectTarget
+  backend.io.dispatch.bits.predictionValid := predictTaken
+  backend.io.dispatch.bits.predictedNextPc := predictedTarget
   fetch.io.responseReady :=
     (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
 
@@ -253,7 +258,7 @@ class TinyPagedCore(
       serialized := false.B
     }
     when(backend.io.dispatch.fire) {
-      pc := Mux(predictDirectJump, predictedDirectTarget, sequentialNextPc)
+      pc := Mux(predictTaken, predictedTarget, sequentialNextPc)
       when(decoded.ordering =/= OrderingClass.Normal) {
         serialized := true.B
         serializedPc := pc
