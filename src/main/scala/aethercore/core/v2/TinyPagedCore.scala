@@ -73,7 +73,7 @@ class TinyPagedCore(
     val translationFence = Output(Bool())
   })
 
-  val backend = Module(new TinyPreHeadMemoryBackend(
+  val backend = Module(new TinyLoadQueueMemoryBackend(
     config,
     geometry,
     tlbEntries = tlbEntries,
