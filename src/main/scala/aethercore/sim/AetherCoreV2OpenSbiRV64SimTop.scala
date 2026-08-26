@@ -129,15 +129,24 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
   core.io.resolvedAttributes.supportsAtomic := resolvedRam
   core.io.resolvedAttributes.supportsPartial := true.B
 
-  // One-entry transport register. The LSU allocates transaction identity; this
-  // shell merely retains it until RAM/MMIO returns exactly one final response.
-  val pendingValid = RegInit(false.B)
-  val pending = RegInit(0.U.asTypeOf(new AetherMemRequest(paddrBits, busDataBits, txnIdBits)))
-  core.io.memoryRequest.ready := !pendingValid
-  when(core.io.memoryRequest.fire) {
-    pending := core.io.memoryRequest.bits
-    pendingValid := true.B
-  }
+  // P8 LoadQ2 experiment: retain up to two AetherMem requests so the platform
+  // boundary does not collapse the core's two transaction identities back into
+  // a one-outstanding transport. External RAM/MMIO service remains one-wide and
+  // in order; the FIFO only permits one request to be serviced while a second
+  // replay-safe read is already accepted and waiting. The parent #187 core can
+  // generate only one active memory lifetime, so this queue alone does not
+  // create additional parent concurrency.
+  val pendingQueue = Module(new Queue(
+    new AetherMemRequest(paddrBits, busDataBits, txnIdBits),
+    entries = 2,
+    pipe = true
+  ))
+  pendingQueue.io.enq.valid := core.io.memoryRequest.valid
+  pendingQueue.io.enq.bits := core.io.memoryRequest.bits
+  core.io.memoryRequest.ready := pendingQueue.io.enq.ready
+
+  val pendingValid = pendingQueue.io.deq.valid
+  val pending = pendingQueue.io.deq.bits
 
   val pendingWrite = pending.op === AetherMemOp.Write
   val pendingAtomic = pending.op === AetherMemOp.Atomic
@@ -233,6 +242,7 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
   core.io.memoryResponse.bits.fault := responseFault
   core.io.memoryResponse.bits.last := true.B
   val responseFire = core.io.memoryResponse.fire
+  pendingQueue.io.deq.ready := responseFire
 
   // Apply MMIO state only when the exact AetherMem response is accepted.
   val uartRxPop = responseFire && pendingUart && !pendingWrite &&
@@ -293,10 +303,6 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
   io.timerInterrupt := timerInterrupt
   io.commit := core.io.commit
   io.halted := core.io.halted
-
-  when(responseFire) {
-    pendingValid := false.B
-  }
 
   assert(!(pendingMmio && pendingAtomic),
     "F7 PMA must reject atomic MMIO before it reaches the OpenSBI platform adapter")
