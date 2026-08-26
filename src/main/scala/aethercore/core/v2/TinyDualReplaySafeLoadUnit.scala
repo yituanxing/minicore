@@ -177,12 +177,19 @@ class TinyDualReplaySafeLoadUnit(
   // --------------------------------------------------------------------------
   // Shared PMA lookup + physical request launch
   // --------------------------------------------------------------------------
-  // Arbitration must be based on the child's registered physical-issued state,
-  // not lifetimeStatus.physicalRequestIssued. The latter intentionally includes
-  // same-cycle memoryRequest.fire for observability, so feeding it back into
-  // ready/selection would create a combinational cycle.
-  val needsPma = VecInit(slots.map { slot =>
-    slot.io.resolvedPhysicalValid && slot.io.memoryRequest.valid
+  // PMA address selection must be independent of both memoryRequest.ready and
+  // resolvedAttributes. The simulation/platform PMA contract is combinational
+  // address -> attributes, while a child's memoryRequest.valid may consume those
+  // attributes. Feeding memoryRequest.valid back into address arbitration would
+  // therefore create address -> attributes -> valid -> address.
+  //
+  // Keep an explicit wrapper-owned launched bit per slot. It is transaction
+  // lifetime state, not a policy inference: a resolved slot requests PMA until
+  // its external physical request handshakes, then relinquishes the shared PMA
+  // seam until the completion releases the slot.
+  val physicalLaunched = RegInit(VecInit(Seq.fill(Slots)(false.B)))
+  val needsPma = VecInit(slots.zipWithIndex.map { case (slot, index) =>
+    slot.io.resolvedPhysicalValid && !physicalLaunched(index)
   })
   val pmaSelectValid = needsPma.asUInt.orR
   val pmaSelect = PriorityEncoder(needsPma)
@@ -223,12 +230,19 @@ class TinyDualReplaySafeLoadUnit(
     val selected = pmaSelectValid && pmaSelect === index.U
     slot.io.memoryRequest.ready := selected && selectedPermit && io.memoryRequest.ready
 
+    // A newly allocated child lifetime must never inherit launch state from an
+    // older token that previously occupied this fixed slot.
+    when(slot.io.request.fire) {
+      physicalLaunched(index) := false.B
+    }
     when(slot.io.memoryRequest.fire) {
+      physicalLaunched(index) := true.B
       childTxn(index) := slot.io.memoryRequest.bits.txnId
       bypassableValid(index) := replaySafe
       bypassableToken(index) := slot.io.lifetimeStatus.robToken
     }
     when(slot.io.completion.fire) {
+      physicalLaunched(index) := false.B
       bypassableValid(index) := false.B
     }
 
