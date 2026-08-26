@@ -128,7 +128,7 @@ trait V2P8DirectJumpPredictionChecks { this: AnyFlatSpec with Matchers with Chis
     dut.io.completion.bits.privileged.trapReturnSupervisor.poke(false.B)
   }
 
-  behavior of "AetherCore v2 direct-jump prediction"
+  behavior of "AetherCore v2 static control-flow prediction"
 
   it should "keep younger work when a predicted direct jump resolves to the predicted target" in {
     simulate(new TinyRob(64)) { dut =>
@@ -187,6 +187,38 @@ trait V2P8DirectJumpPredictionChecks { this: AnyFlatSpec with Matchers with Chis
       dut.clock.step()
       dut.io.completion.valid.poke(false.B)
 
+      dut.io.occupancy.expect(1.U)
+    }
+  }
+
+  it should "recover a predicted-taken conditional to fallthrough when it is actually not taken" in {
+    simulate(new TinyRob(64)) { dut =>
+      dut.io.dispatch.valid.poke(false.B)
+      dut.io.completion.valid.poke(false.B)
+      dut.io.retire.ready.poke(false.B)
+
+      val pc = BigInt("80220000", 16)
+      val predictedTarget = pc - 0x20
+      val fallthrough = pc + 4
+      val branch = allocate(
+        dut,
+        pc,
+        ExecutionClass.Branch,
+        controlFlowKind = ControlFlowKind.Conditional,
+        predictionValid = true,
+        predictedNextPc = predictedTarget
+      )
+      allocate(dut, predictedTarget, ExecutionClass.Integer)
+      dut.io.occupancy.expect(2.U)
+
+      pokeBranchCompletion(dut, branch, taken = false, target = predictedTarget)
+      dut.io.acceptedCompletion.valid.expect(true.B)
+      dut.io.acceptedRecovery.valid.expect(true.B)
+      dut.io.acceptedRecovery.bits.branchTarget.expect(fallthrough.U)
+      dut.clock.step()
+      dut.io.completion.valid.poke(false.B)
+
+      // Wrong-path predicted-target work is squashed; the frontend restarts at fallthrough.
       dut.io.occupancy.expect(1.U)
     }
   }
