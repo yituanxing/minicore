@@ -30,6 +30,12 @@ class RobDispatch(val xlen: Int) extends Bundle {
   val decoded = new DecodedInstruction(xlen)
   val executionClass = ExecutionClass()
   val producesValue = Bool()
+
+  // Frontend-owned prediction metadata. Architectural decode remains free of
+  // predictor state; the ROB merely remembers the predicted next PC so a
+  // validated head Branch completion can decide whether recovery is necessary.
+  val predictionValid = Bool()
+  val predictedNextPc = UInt(xlen.W)
 }
 
 /** Internal retirement record between the ROB and the architectural Commit owner. */
@@ -70,6 +76,8 @@ private class TinyRobEntry(val xlen: Int) extends Bundle {
     TinyRobGeometry.IndexBits,
     TinyRobGeometry.GenerationBits
   )
+  val predictionValid = Bool()
+  val predictedNextPc = UInt(xlen.W)
   val resultValid = Bool()
   val result = UInt(xlen.W)
   val exception = new aethercore.common.TrapInfo(xlen)
@@ -151,12 +159,22 @@ class TinyRob(val xlen: Int) extends Module {
     completionEntry.uop.valueRef.id === io.completion.bits.valueRef.id &&
     completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation
 
+  private val branchFallthrough =
+    completionEntry.uop.decoded.pc + completionEntry.uop.decoded.instBytes
+  private val branchActualNextPc =
+    Mux(io.completion.bits.branchTaken, io.completion.bits.branchTarget, branchFallthrough)
+  private val branchNeedsRecovery = Mux(
+    completionEntry.predictionValid,
+    branchActualNextPc =/= completionEntry.predictedNextPc,
+    io.completion.bits.branchTaken
+  )
+
   val recoveryMatches = completionMatches &&
     completionIndex === head &&
     completionEntry.uop.executionClass === ExecutionClass.Branch &&
     completionEntry.uop.decoded.controlFlow.kind =/= ControlFlowKind.None &&
     io.completion.bits.branchValid &&
-    io.completion.bits.branchTaken &&
+    branchNeedsRecovery &&
     !completionEntry.exception.valid &&
     !io.completion.bits.exception.valid
 
@@ -174,6 +192,10 @@ class TinyRob(val xlen: Int) extends Module {
   io.acceptedCompletion.bits := io.completion.bits
   io.acceptedRecovery.valid := recoveryMatches
   io.acceptedRecovery.bits := io.completion.bits
+  // A future predictor may recover from a predicted-taken / actual-not-taken
+  // branch. Always expose the actual architectural next PC on the redirect seam
+  // rather than assuming the branch target is the recovery target.
+  io.acceptedRecovery.bits.branchTarget := branchActualNextPc
   io.acceptedPrivilegedRecovery.valid := privilegedRecoveryMatches
   io.acceptedPrivilegedRecovery.bits := io.completion.bits
 
@@ -220,6 +242,8 @@ class TinyRob(val xlen: Int) extends Module {
     entries(tail).valid := true.B
     entries(tail).complete := false.B
     entries(tail).uop := io.allocated.bits
+    entries(tail).predictionValid := io.dispatch.bits.predictionValid
+    entries(tail).predictedNextPc := io.dispatch.bits.predictedNextPc
     entries(tail).resultValid := false.B
     entries(tail).result := 0.U
     entries(tail).exception := io.dispatch.bits.decoded.exception

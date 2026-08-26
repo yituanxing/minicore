@@ -35,6 +35,7 @@ class V2F4RecoverySpec
     with Matchers
     with ChiselSim
     with V2F4RecoveryChecks
+    with V2P8DirectJumpPredictionChecks
 
 class V2F5PrivilegedSpec
     extends AnyFlatSpec

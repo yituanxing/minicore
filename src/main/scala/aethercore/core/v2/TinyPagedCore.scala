@@ -213,10 +213,29 @@ class TinyPagedCore(
   decode.io.instBytes := (if (isa.hasC) parcel.get.io.instructionBytes else 4.U)
   decode.io.fetchException := fetchException
 
+  private val decoded = decode.io.dispatch.decoded
+  private val sequentialNextPc = pc + decoded.instBytes
+  // Final bounded static-control-flow experiment. Direct JAL/J remains always
+  // taken. Conditional branches use the classic BTFNT rule: only a negative
+  // (backward) PC-relative offset is predicted taken; forward branches retain
+  // the legacy sequential/not-taken path. This adds no predictor table, BTB,
+  // BHT, RAS or checkpoint state.
+  private val predictableBranch =
+    decode.io.dispatch.executionClass === ExecutionClass.Branch && !decoded.exception.valid
+  private val predictedTarget = pc + decoded.immediate
+  private val predictDirectJumpTaken =
+    predictableBranch && decoded.controlFlow.kind === ControlFlowKind.DirectJump
+  private val predictBackwardConditionalTaken =
+    predictableBranch && decoded.controlFlow.kind === ControlFlowKind.Conditional &&
+      decoded.immediate(Xlen - 1)
+  private val predictTaken = predictDirectJumpTaken || predictBackwardConditionalTaken
+
   backend.io.dispatch.valid :=
     (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
       !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
+  backend.io.dispatch.bits.predictionValid := predictTaken
+  backend.io.dispatch.bits.predictedNextPc := predictedTarget
   fetch.io.responseReady :=
     (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
 
@@ -239,8 +258,8 @@ class TinyPagedCore(
       serialized := false.B
     }
     when(backend.io.dispatch.fire) {
-      pc := pc + decode.io.dispatch.decoded.instBytes
-      when(decode.io.dispatch.decoded.ordering =/= OrderingClass.Normal) {
+      pc := Mux(predictTaken, predictedTarget, sequentialNextPc)
+      when(decoded.ordering =/= OrderingClass.Normal) {
         serialized := true.B
         serializedPc := pc
       }
