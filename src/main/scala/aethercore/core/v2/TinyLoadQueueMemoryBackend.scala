@@ -168,9 +168,14 @@ class TinyLoadQueueMemoryBackend(
   // Shared PMA lookup. Exact-head Store/Atomic gets priority; otherwise the
   // dual Load unit time-multiplexes its two resolved addresses through the one
   // existing attribute seam.
+  //
+  // Deliberately do not derive PMA ownership from the current physical-request
+  // handshake. physicalRequestIssued contains io.memoryRequest.fire, whose
+  // ready path returns through this arbiter and creates a combinational cycle.
+  // A live resolved parent Store/Atomic conservatively owns PMA until its
+  // lifetime drains; younger Loads must not bypass that older memory anyway.
   // --------------------------------------------------------------------------
-  private val parentNeedsPma = lsu.io.resolvedPhysicalValid &&
-    !lsu.io.lifetimeStatus.physicalRequestIssued
+  private val parentNeedsPma = lsu.io.resolvedPhysicalValid
   private val loadNeedsPma = loadUnit.io.resolvedPhysicalValid
   private val selectParentPma = parentNeedsPma
 
