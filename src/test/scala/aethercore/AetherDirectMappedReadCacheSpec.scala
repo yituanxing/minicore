@@ -132,7 +132,7 @@ class AetherDirectMappedReadCacheSpec extends AnyFlatSpec with Matchers with Chi
         dut.clock.step()
         dut.io.upstreamRequest.valid.poke(false.B)
         returnDownstream(dut, 2, 0x5a)
-        dut.io.bypassCount.peek().litValue should be >= 2L
+        dut.io.bypassCount.peek().litValue should be >= BigInt(2)
       }
     }
   }
