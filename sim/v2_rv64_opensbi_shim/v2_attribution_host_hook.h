@@ -84,8 +84,32 @@ void emitSnapshot(const Top& top, const char* reason) {
       << " frontend_bound_second_parcel=" << static_cast<std::uint64_t>(top.ioV11FrontendBoundSecondParcel)
       << " memory_terminal_valid=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalValid)
       << " memory_terminal_fire=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalFire)
-      << " memory_terminal_hold=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalHold)
-      << "\n";
+      << " memory_terminal_hold=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalHold);
+
+  if constexpr (requires {
+      top.ioV13Cycles;
+      top.ioV13ConditionalResolved;
+      top.ioV13ConditionalRecovery;
+      top.ioV13DirectResolved;
+      top.ioV13DirectRecovery;
+      top.ioV13IndirectResolved;
+      top.ioV13IndirectRecovery;
+      top.ioV13CompletedStoreBarrier;
+      top.ioV13IncompleteStoreBarrier;
+  }) {
+    std::cerr
+        << "\nAETHERCORE_V2_ATTR_V13 reason=" << reason
+        << " cycles=" << static_cast<std::uint64_t>(top.ioV13Cycles)
+        << " conditional_resolved=" << static_cast<std::uint64_t>(top.ioV13ConditionalResolved)
+        << " conditional_recovery=" << static_cast<std::uint64_t>(top.ioV13ConditionalRecovery)
+        << " direct_resolved=" << static_cast<std::uint64_t>(top.ioV13DirectResolved)
+        << " direct_recovery=" << static_cast<std::uint64_t>(top.ioV13DirectRecovery)
+        << " indirect_resolved=" << static_cast<std::uint64_t>(top.ioV13IndirectResolved)
+        << " indirect_recovery=" << static_cast<std::uint64_t>(top.ioV13IndirectRecovery)
+        << " completed_store_barrier=" << static_cast<std::uint64_t>(top.ioV13CompletedStoreBarrier)
+        << " incomplete_store_barrier=" << static_cast<std::uint64_t>(top.ioV13IncompleteStoreBarrier);
+  }
+  std::cerr << "\n";
 }
 
 template <typename Top>
