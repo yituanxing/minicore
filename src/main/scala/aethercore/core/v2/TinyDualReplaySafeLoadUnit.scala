@@ -287,7 +287,27 @@ class TinyDualReplaySafeLoadUnit(
     Slots
   ))
   for ((slot, index) <- slots.zipWithIndex) {
-    completionArb.io.in(index) <> slot.io.completion
+    // Successful replay-safe Loads may complete before reaching the ROB head;
+    // that is the latency-hiding contract qualified by #187/#189. Synchronous
+    // exceptions are different: TinyRob's privileged recovery is accepted only
+    // when the faulting completion names the exact architectural head. If a
+    // pre-head fault escaped here, the ROB entry could become complete+faulted
+    // before head ownership and later retire without the completion-time younger
+    // squash. Keep the child LSU's existing held-completion state as the owner
+    // until this exact token reaches head, then release the same exception.
+    val exceptionMayEscape =
+      !slot.io.completion.bits.exception.valid || slotHead(index)
+
+    completionArb.io.in(index).valid :=
+      slot.io.completion.valid && exceptionMayEscape
+    completionArb.io.in(index).bits := slot.io.completion.bits
+    slot.io.completion.ready :=
+      completionArb.io.in(index).ready && exceptionMayEscape
+
+    when(slot.io.completion.fire && slot.io.completion.bits.exception.valid) {
+      assert(slotHead(index),
+        "dual Load synchronous exception must complete only at exact ROB head")
+    }
   }
   io.completion <> completionArb.io.out
 

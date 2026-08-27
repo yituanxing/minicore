@@ -180,6 +180,17 @@ class TinyRob(val xlen: Int) extends Module {
 
   val systemTrapReturn = completionEntry.uop.executionClass === ExecutionClass.System &&
     io.completion.bits.privileged.trapReturn
+  // Precise synchronous exceptions are a head-owned architectural event.
+  // Selective producers may complete ordinary side-effect-free work pre-head,
+  // but an exception-bearing completion must be held by its producer until the
+  // exact RobToken reaches head. Otherwise the entry can become complete+faulted
+  // before completion-time privileged recovery has authority to squash younger
+  // lifetimes.
+  when(completionMatches && io.completion.bits.exception.valid) {
+    assert(completionIndex === head,
+      "synchronous exception completion must arrive only from exact ROB head")
+  }
+
   val privilegedRecoveryMatches = completionMatches &&
     completionIndex === head &&
     (completionEntry.exception.valid ||
