@@ -65,6 +65,7 @@ class V2F6BlockingLsuSpec
     with V2P8PreHeadLoadSelectorChecks
     with V2P8PreHeadSafetyGateChecks
     with V2P8PreHeadBackendChecks
+    with V2P8PreHeadLoadExceptionChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec
@@ -112,6 +113,7 @@ class V2P8PreHeadLoadSpec
     with V2P8PreHeadLoadSelectorChecks
     with V2P8PreHeadSafetyGateChecks
     with V2P8PreHeadBackendChecks
+    with V2P8PreHeadLoadExceptionChecks
 
 class V2F7SemanticDecodeSpec
     extends AnyFlatSpec
