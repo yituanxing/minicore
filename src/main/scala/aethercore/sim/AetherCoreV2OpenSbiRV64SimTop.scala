@@ -6,7 +6,7 @@ import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
 import aethercore.core.v2.TinyPagedCore
-import aethercore.memory.{AetherMemOp, AetherMemRequest}
+import aethercore.memory.{AetherDirectMappedReadCache, AetherMemOp, AetherMemRequest}
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
@@ -129,21 +129,29 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
   core.io.resolvedAttributes.supportsAtomic := resolvedRam
   core.io.resolvedAttributes.supportsPartial := true.B
 
-  // P8 LoadQ2 experiment: retain up to two AetherMem requests so the platform
-  // boundary does not collapse the core's two transaction identities back into
-  // a one-outstanding transport. External RAM/MMIO service remains one-wide and
-  // in order; the FIFO only permits one request to be serviced while a second
-  // replay-safe read is already accepted and waiting. The parent #187 core can
-  // generate only one active memory lifetime, so this queue alone does not
-  // create additional parent concurrency.
+  // Stage-1 core-complex D-cache. Only ordinary cacheable RAM Reads allocate;
+  // writes remain write-through, atomics/MMIO bypass, and every AetherMem txnId
+  // is preserved. The cache therefore sits entirely outside TinyPagedCore's
+  // architectural/lifetime ownership.
+  val dcache = Module(new AetherDirectMappedReadCache(
+    paddrBits,
+    busDataBits,
+    txnIdBits,
+    entries = 64
+  ))
+  dcache.io.upstreamRequest <> core.io.memoryRequest
+  core.io.memoryResponse <> dcache.io.upstreamResponse
+
+  // Retain up to two downstream AetherMem requests so a cache miss does not
+  // collapse the core's qualified LoadQ2 transaction concurrency.
   val pendingQueue = Module(new Queue(
     new AetherMemRequest(paddrBits, busDataBits, txnIdBits),
     entries = 2,
     pipe = true
   ))
-  pendingQueue.io.enq.valid := core.io.memoryRequest.valid
-  pendingQueue.io.enq.bits := core.io.memoryRequest.bits
-  core.io.memoryRequest.ready := pendingQueue.io.enq.ready
+  pendingQueue.io.enq.valid := dcache.io.downstreamRequest.valid
+  pendingQueue.io.enq.bits := dcache.io.downstreamRequest.bits
+  dcache.io.downstreamRequest.ready := pendingQueue.io.enq.ready
 
   val pendingValid = pendingQueue.io.deq.valid
   val pending = pendingQueue.io.deq.bits
@@ -236,12 +244,12 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
     Mux(pendingMmio, false.B, io.memFault)
   )
 
-  core.io.memoryResponse.valid := pendingValid && responseReady
-  core.io.memoryResponse.bits.txnId := pending.txnId
-  core.io.memoryResponse.bits.rdata := responseData
-  core.io.memoryResponse.bits.fault := responseFault
-  core.io.memoryResponse.bits.last := true.B
-  val responseFire = core.io.memoryResponse.fire
+  dcache.io.downstreamResponse.valid := pendingValid && responseReady
+  dcache.io.downstreamResponse.bits.txnId := pending.txnId
+  dcache.io.downstreamResponse.bits.rdata := responseData
+  dcache.io.downstreamResponse.bits.fault := responseFault
+  dcache.io.downstreamResponse.bits.last := true.B
+  val responseFire = dcache.io.downstreamResponse.fire
   pendingQueue.io.deq.ready := responseFire
 
   // Apply MMIO state only when the exact AetherMem response is accepted.
