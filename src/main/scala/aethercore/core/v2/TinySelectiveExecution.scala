@@ -27,11 +27,14 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
   val io = IO(new Bundle {
     val branchRequest = Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
     val computeRequest = Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+    val secondaryIntegerRequest = Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
     val response = Decoupled(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
     val computeAvailability = Output(new TinyComputeAvailability)
+    val secondaryIntegerAvailable = Output(Bool())
   })
 
   private val integer = Module(new V2IntegerUnit(xlen))
+  private val secondaryInteger = Module(new V2IntegerUnit(xlen))
   private val branch = Module(new V2BranchUnit(xlen, hasCompressed))
   private val multiply = Module(new V2MulUnit(xlen))
   private val divide = Module(new V2IterativeDivider(xlen))
@@ -64,6 +67,13 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
     routeDivide -> divide.io.request.ready
   ))
 
+  secondaryInteger.io.request <> io.secondaryIntegerRequest
+  io.secondaryIntegerAvailable := secondaryInteger.io.request.ready
+  when(io.secondaryIntegerRequest.valid) {
+    assert(io.secondaryIntegerRequest.bits.executionClass === ExecutionClass.Integer,
+      "secondary compute lane must carry only Integer execution")
+  }
+
   branch.io.request <> io.branchRequest
 
   when(io.branchRequest.valid) {
@@ -85,11 +95,12 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
 
   private val responses = Module(new RRArbiter(
     new ExecutionResponse(xlen, IdentityBits, GenerationBits),
-    4
+    5
   ))
   responses.io.in(0) <> integer.io.response
-  responses.io.in(1) <> branch.io.response
-  responses.io.in(2) <> multiply.io.response
-  responses.io.in(3) <> divide.io.response
+  responses.io.in(1) <> secondaryInteger.io.response
+  responses.io.in(2) <> branch.io.response
+  responses.io.in(3) <> multiply.io.response
+  responses.io.in(4) <> divide.io.response
   io.response <> responses.io.out
 }
