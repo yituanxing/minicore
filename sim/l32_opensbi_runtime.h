@@ -2,8 +2,11 @@
 
 #include "verilated.h"
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -29,6 +32,30 @@ constexpr std::uint32_t kAtomicMin = 8;
 constexpr std::uint32_t kAtomicMax = 9;
 constexpr std::uint32_t kAtomicMinu = 10;
 constexpr std::uint32_t kAtomicMaxu = 11;
+
+inline std::uint32_t dataMemoryWaitCycles() {
+  static const std::uint32_t value = [] {
+    const char* raw = std::getenv("AETHERCORE_DATA_MEM_WAIT_CYCLES");
+    if (raw == nullptr || *raw == '\0') return std::uint32_t{0};
+
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(raw, &end, 10);
+    if (errno != 0 || end == raw || *end != '\0' ||
+        parsed > static_cast<unsigned long>(std::numeric_limits<std::uint32_t>::max())) {
+      throw std::runtime_error(
+          std::string("invalid AETHERCORE_DATA_MEM_WAIT_CYCLES=") + raw);
+    }
+    return static_cast<std::uint32_t>(parsed);
+  }();
+  return value;
+}
+
+struct DataMemoryWaitState {
+  bool active = false;
+  std::uint32_t remaining = 0;
+};
+
 
 /**
  * Shared byte-addressed RAM for the OpenSBI/Linux simulation boundary.
@@ -212,7 +239,7 @@ inline std::size_t dataBytesFromMemSize(std::uint32_t encoded) {
 
 /** Drive the shared RV32/RV64 physical-memory boundary for one low phase. */
 template <typename Top>
-void driveMemory(Top& top, const Memory& memory) {
+void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
@@ -228,7 +255,7 @@ void driveMemory(Top& top, const Memory& memory) {
   const auto dbytes = dataBytesFromMemSize(
       static_cast<std::uint32_t>(top.io_memSize));
   const bool dfault = dvalid && !memory.contains(daddr, dbytes);
-  top.io_memReady = true;
+  top.io_memReady = dataReady;
   top.io_memFault = dfault;
 
   bool atomic = false;
@@ -264,17 +291,42 @@ void driveMemory(Top& top, const Memory& memory) {
 template <typename Top>
 bool step(Top& top, VerilatedContext& context, Memory& memory,
           bool rxValid, std::uint8_t rxByte) {
+  static DataMemoryWaitState dataWait;
+  const std::uint32_t configuredWait = dataMemoryWaitCycles();
+
+  if (top.reset) {
+    dataWait = {};
+  }
+
+  auto dataReadyThisLowPhase = [&]() {
+    if (configuredWait == 0) return true;
+    if (!top.io_memValid) return true;
+    if (!dataWait.active) {
+      dataWait.active = true;
+      dataWait.remaining = configuredWait;
+    }
+    return dataWait.remaining == 0;
+  };
+
   top.clock = 0;
   top.io_rxValid = rxValid;
   top.io_rxByte = rxValid ? rxByte : 0;
-  driveMemory(top, memory);
+  driveMemory(top, memory, dataReadyThisLowPhase());
   top.eval();
-  driveMemory(top, memory);
+  driveMemory(top, memory, dataReadyThisLowPhase());
   top.eval();
   const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
   const bool acceptedMemory = !top.reset && top.io_memValid && top.io_memReady &&
       !top.io_memFault;
+
+  if (configuredWait != 0 && dataWait.active) {
+    if (acceptedMemory) {
+      dataWait = {};
+    } else if (dataWait.remaining != 0) {
+      --dataWait.remaining;
+    }
+  }
   bool atomic = false;
   std::uint32_t atomicOp = kAtomicNone;
   if constexpr (requires { top.io_memAtomic; top.io_memAtomicOp; }) {

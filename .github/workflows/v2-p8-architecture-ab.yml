@@ -34,8 +34,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      BASELINE_SHA: ${{ github.event.pull_request.base.sha || inputs.baseline_sha }}
+      # Freeze the no-D-cache #210 boundary as the architectural baseline.
+      BASELINE_SHA: ec73c0ceeccbf25e9e1618a703964b6d10ececdf
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      DATA_MEM_WAIT_CYCLES: '10'
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
