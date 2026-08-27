@@ -245,7 +245,29 @@ class TinyPagedCore(
   private val predictConditionalTaken =
     predictableBranch && decoded.controlFlow.kind === ControlFlowKind.Conditional &&
       bhtPredictTaken
-  private val predictTaken = predictDirectJumpTaken || predictConditionalTaken
+
+  // RAS4 experiment: predict only the standard RISC-V return form
+  // JALR x0, x1/x5, 0. Calls are learned only when their exact-head Branch
+  // response is accepted, so the stack never needs speculative checkpoints or
+  // recovery repair.
+  private val RasDepth = 4
+  private val RasIndexBits = log2Ceil(RasDepth)
+  private val rasStack = Reg(Vec(RasDepth, UInt(Xlen.W)))
+  private val rasSp = RegInit(0.U(RasIndexBits.W))
+  private val rasCount = RegInit(0.U(log2Ceil(RasDepth + 1).W))
+  private val rasTopIndex = (rasSp - 1.U)(RasIndexBits - 1, 0)
+  private val rasTop = rasStack(rasTopIndex)
+
+  private val decodedReturn =
+    predictableBranch &&
+      decoded.controlFlow.kind === ControlFlowKind.IndirectJump &&
+      decoded.rd === 0.U &&
+      (decoded.rs1 === 1.U || decoded.rs1 === 5.U) &&
+      decoded.immediate === 0.U
+  private val predictReturnTaken = decodedReturn && rasCount =/= 0.U
+  private val predictedNextPc = Mux(predictReturnTaken, rasTop, predictedTarget)
+  private val predictTaken =
+    predictDirectJumpTaken || predictConditionalTaken || predictReturnTaken
 
   private val train = backend.io.branchResolution
   private val trainConditional =
@@ -269,12 +291,36 @@ class TinyPagedCore(
     }
   }
 
+  private val trainLinkRd = train.bits.rd === 1.U || train.bits.rd === 5.U
+  private val trainLinkRs1 = train.bits.rs1 === 1.U || train.bits.rs1 === 5.U
+  private val trainReturn =
+    train.valid &&
+      train.bits.kind === ControlFlowKind.IndirectJump &&
+      train.bits.rd === 0.U &&
+      trainLinkRs1 &&
+      train.bits.immediate === 0.U
+  private val trainCall =
+    train.valid && train.bits.taken && trainLinkRd &&
+      (train.bits.kind === ControlFlowKind.DirectJump ||
+        train.bits.kind === ControlFlowKind.IndirectJump)
+
+  when(trainCall && !trainReturn) {
+    rasStack(rasSp) := train.bits.pc + train.bits.instBytes
+    rasSp := rasSp + 1.U
+    when(rasCount =/= RasDepth.U) {
+      rasCount := rasCount + 1.U
+    }
+  }.elsewhen(trainReturn && rasCount =/= 0.U) {
+    rasSp := rasSp - 1.U
+    rasCount := rasCount - 1.U
+  }
+
   backend.io.dispatch.valid :=
     (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
       !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
   backend.io.dispatch.bits.predictionValid := predictTaken
-  backend.io.dispatch.bits.predictedNextPc := predictedTarget
+  backend.io.dispatch.bits.predictedNextPc := predictedNextPc
   fetch.io.responseReady :=
     (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
 
@@ -297,7 +343,7 @@ class TinyPagedCore(
       serialized := false.B
     }
     when(backend.io.dispatch.fire) {
-      pc := Mux(predictTaken, predictedTarget, sequentialNextPc)
+      pc := Mux(predictTaken, predictedNextPc, sequentialNextPc)
       when(decoded.ordering =/= OrderingClass.Normal) {
         serialized := true.B
         serializedPc := pc
