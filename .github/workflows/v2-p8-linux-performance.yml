@@ -31,13 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   measure:
     name: Unchanged Linux PID1 plus exact P8 snapshot on v2 RV64
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
