@@ -10,8 +10,11 @@ import chisel3.util._
   * an older ordinary Load may be crossed only after the dual Load unit has
   * already externalized that exact lifetime from a replay-safe PMA region (or
   * after the older Load has completed). An unresolved/unsafe Load therefore
-  * remains a hard barrier, as do Store/Atomic, Branch, System, ordering and
-  * known-exception boundaries.
+  * remains a hard barrier. A completed Normal Branch may be crossed because
+  * branch issue is exact-head-only and any misprediction or runtime exception
+  * squashes younger ROB state in the completion cycle. Unresolved Branch,
+  * Store/Atomic, System, ordering and known-exception boundaries remain hard
+  * barriers.
   */
 class TinyLoadQueueIssue(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64)
@@ -57,7 +60,17 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     val safeOlderLoad = ordinaryNormalLoad(entry) &&
       (entry.complete || tokenBypassable(entry.uop.robToken))
 
-    pureCompute || safeOlderLoad
+    // Branch execution is exact-head-only. A branch that survives into the
+    // scheduling window as complete has already passed the ROB's same-cycle
+    // normal/privileged recovery decision; any wrong-path younger entries were
+    // squashed in that completion cycle. Keep unresolved branches as barriers.
+    val safeCompletedBranch = entry.valid &&
+      entry.complete &&
+      entry.uop.executionClass === ExecutionClass.Branch &&
+      entry.uop.decoded.ordering === OrderingClass.Normal &&
+      !entry.uop.decoded.exception.valid
+
+    pureCompute || safeOlderLoad || safeCompletedBranch
   }
 
   private val bypassOpen = Wire(Vec(Entries, Bool()))
