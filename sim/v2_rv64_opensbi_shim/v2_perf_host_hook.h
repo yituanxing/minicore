@@ -86,6 +86,19 @@ void emitSnapshot(const Top& top, const char* reason) {
       << " completion_collision=" << static_cast<std::uint64_t>(top.ioPerfCompletionCollision)
       << " completion_backpressure=" << static_cast<std::uint64_t>(top.ioPerfCompletionBackpressure)
       << "\n";
+
+  if constexpr (requires {
+      top.io_dcacheHitCount;
+      top.io_dcacheMissCount;
+      top.io_dcacheBypassCount;
+    }) {
+    std::cerr
+        << "AETHERCORE_V2_DCACHE reason=" << reason
+        << " hit=" << static_cast<std::uint64_t>(top.io_dcacheHitCount)
+        << " miss=" << static_cast<std::uint64_t>(top.io_dcacheMissCount)
+        << " bypass=" << static_cast<std::uint64_t>(top.io_dcacheBypassCount)
+        << "\n";
+  }
 }
 
 template <typename Top>

@@ -5,9 +5,11 @@ on:
     paths:
       - 'src/main/scala/aethercore/core/v2/**'
       - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
+      - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
       - 'src/test/scala/aethercore/V2F7*.scala'
       - 'src/test/scala/aethercore/V2StageSpecs.scala'
+      - 'src/test/scala/aethercore/AetherDirectMappedReadCacheSpec.scala'
       - '.github/workflows/v2-f7-frontier.yml'
 
 permissions:
@@ -106,7 +108,8 @@ jobs:
             aethercore.V2F7PagedCoreSpec \
             aethercore.V2F7AsyncInterruptSpec \
             aethercore.V2F7AtomicLsuSpec \
-            aethercore.V2F7AtomicCoreSpec
+            aethercore.V2F7AtomicCoreSpec \
+            aethercore.AetherDirectMappedReadCacheSpec
 
       - name: Elaborate F7 RV64 OpenSBI platform smoke
         shell: bash
