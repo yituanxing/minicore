@@ -57,7 +57,18 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     val safeOlderLoad = ordinaryNormalLoad(entry) &&
       (entry.complete || tokenBypassable(entry.uop.robToken))
 
-    pureCompute || safeOlderLoad
+    // A completed normal Branch may be crossed by a younger replay-safe Load.
+    // TinyRob squashes younger entries in the completion cycle whenever that
+    // head Branch requires recovery. A completed Branch that remains ahead of
+    // a live younger Load on the following cycle is therefore already on the
+    // validated correct path; retirement stays precise and in order.
+    val completedNormalBranch = entry.valid &&
+      entry.complete &&
+      entry.uop.executionClass === ExecutionClass.Branch &&
+      entry.uop.decoded.ordering === OrderingClass.Normal &&
+      !entry.uop.decoded.exception.valid
+
+    pureCompute || safeOlderLoad || completedNormalBranch
   }
 
   private val bypassOpen = Wire(Vec(Entries, Bool()))
