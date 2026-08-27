@@ -37,7 +37,9 @@ class AetherDirectMappedReadCache(
   private val IndexBits = log2Ceil(entries)
   private val TagBits = addrBits - OffsetBits - IndexBits
   private val TxnCount = 1 << txnIdBits
-  private val AccessBytesBits = log2Ceil(BeatBytes + 1)
+  // Four bits retain the architectural DWord=8B value even for a 32-bit beat;
+  // such an access will fail reqFitsLine rather than being width-truncated.
+  private val AccessBytesBits = 4
 
   require(TagBits > 0,
     s"cache tag width must stay positive: addr=$addrBits entries=$entries beatBytes=$BeatBytes")
