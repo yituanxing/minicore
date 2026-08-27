@@ -133,7 +133,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./mill
-          ./mill aethercore.test.testOnly aethercore.V2P8PerformanceSpec
+          ./mill aethercore.test.testOnly \
+            aethercore.V2F6BlockingLsuSpec \
+            aethercore.V2P8PerformanceSpec
 
       - name: Reuse or build unchanged Linux 6.6.143 baseline
         shell: bash
