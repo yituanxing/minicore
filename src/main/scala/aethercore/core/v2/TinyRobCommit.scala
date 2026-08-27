@@ -61,6 +61,10 @@ class RobRetirement(val xlen: Int) extends Bundle {
 class TinyRobWindowEntry(val xlen: Int) extends Bundle {
   val valid = Bool()
   val complete = Bool()
+  // Registered proof that an accepted exact-head Branch completion has no
+  // exception/order hazard and is therefore safe for a younger replay-safe
+  // Load to cross on a later cycle.
+  val completedBranchSafe = Bool()
   val uop = new BackendUop(
     xlen,
     TinyRobGeometry.IndexBits,
@@ -71,6 +75,7 @@ class TinyRobWindowEntry(val xlen: Int) extends Bundle {
 private class TinyRobEntry(val xlen: Int) extends Bundle {
   val valid = Bool()
   val complete = Bool()
+  val completedBranchSafe = Bool()
   val uop = new BackendUop(
     xlen,
     TinyRobGeometry.IndexBits,
@@ -134,6 +139,7 @@ class TinyRob(val xlen: Int) extends Module {
     io.window(age) := 0.U.asTypeOf(new TinyRobWindowEntry(xlen))
     io.window(age).valid := live
     io.window(age).complete := live && entry.complete
+    io.window(age).completedBranchSafe := live && entry.completedBranchSafe
     io.window(age).uop := entry.uop
   }
 
@@ -228,8 +234,17 @@ class TinyRob(val xlen: Int) extends Module {
   io.allocated.bits.valueRef.generation := slotGenerations(tail)
   io.allocated.bits.producesValue := io.dispatch.bits.producesValue
 
+  private val completionMakesBranchSafe =
+    completionMatches &&
+      completionEntry.uop.executionClass === ExecutionClass.Branch &&
+      completionEntry.uop.decoded.ordering === OrderingClass.Normal &&
+      io.completion.bits.branchValid &&
+      !completionEntry.exception.valid &&
+      !io.completion.bits.exception.valid
+
   when(completionMatches) {
     entries(completionIndex).complete := true.B
+    entries(completionIndex).completedBranchSafe := completionMakesBranchSafe
     entries(completionIndex).resultValid := io.completion.bits.hasValue
     entries(completionIndex).result := io.completion.bits.value
     entries(completionIndex).privileged := Mux(
@@ -245,6 +260,7 @@ class TinyRob(val xlen: Int) extends Module {
   when(retireFire) {
     entries(head).valid := false.B
     entries(head).complete := false.B
+    entries(head).completedBranchSafe := false.B
     slotGenerations(head) := slotGenerations(head) + 1.U
     head := head + 1.U
   }
@@ -252,6 +268,7 @@ class TinyRob(val xlen: Int) extends Module {
   when(allocFire) {
     entries(tail).valid := true.B
     entries(tail).complete := false.B
+    entries(tail).completedBranchSafe := false.B
     entries(tail).uop := io.allocated.bits
     entries(tail).predictionValid := io.dispatch.bits.predictionValid
     entries(tail).predictedNextPc := io.dispatch.bits.predictedNextPc
@@ -272,6 +289,7 @@ class TinyRob(val xlen: Int) extends Module {
       when(index.U =/= head && entries(index).valid) {
         entries(index).valid := false.B
         entries(index).complete := false.B
+        entries(index).completedBranchSafe := false.B
         // A killed slot gets a new lifetime immediately. Any future late
         // response carrying the old generation will fail completionMatches as
         // long as the producer obeys the bounded-response lifetime contract.
