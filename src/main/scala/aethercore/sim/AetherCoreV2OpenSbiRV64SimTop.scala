@@ -85,6 +85,10 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
     val mtimecmp = Output(UInt(64.W))
     val timerInterrupt = Output(Bool())
 
+    val dcacheHitCount = Output(UInt(64.W))
+    val dcacheMissCount = Output(UInt(64.W))
+    val dcacheBypassCount = Output(UInt(64.W))
+
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -309,6 +313,9 @@ class AetherCoreV2OpenSbiRV64SimTop extends Module {
   io.mtime := mtime
   io.mtimecmp := mtimecmp
   io.timerInterrupt := timerInterrupt
+  io.dcacheHitCount := dcache.io.hitCount
+  io.dcacheMissCount := dcache.io.missCount
+  io.dcacheBypassCount := dcache.io.bypassCount
   io.commit := core.io.commit
   io.halted := core.io.halted
 
