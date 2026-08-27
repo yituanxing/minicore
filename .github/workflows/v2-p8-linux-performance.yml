@@ -31,13 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   measure:
     name: Unchanged Linux PID1 plus exact P8 snapshot on v2 RV64
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -138,7 +133,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./mill
-          ./mill aethercore.test.testOnly aethercore.V2P8PerformanceSpec
+          ./mill aethercore.test.testOnly \
+            aethercore.V2F6BlockingLsuSpec \
+            aethercore.V2P8PerformanceSpec
 
       - name: Reuse or build unchanged Linux 6.6.143 baseline
         shell: bash
