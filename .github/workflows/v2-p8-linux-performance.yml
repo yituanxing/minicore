@@ -31,13 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   measure:
     name: Unchanged Linux PID1 plus exact P8 snapshot on v2 RV64
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -269,6 +264,85 @@ jobs:
               f'interrupt_hold_pct={pct("interrupt_hold"):.3f} '
               f'selective_bypass={values["selective_bypass"]} '
               f'lsu_overlap={values["lsu_compute_overlap"]}'
+          )
+          PY
+
+      - name: Validate V13 next-bottleneck attribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          log = Path('build/v2-p8-linux-perf/execute.log')
+          text = log.read_text(errors='replace')
+
+          def marker(prefix):
+              lines = [
+                  line for line in text.splitlines()
+                  if prefix in line and 'reason=marker' in line
+              ]
+              if not lines:
+                  raise SystemExit(f'missing marker snapshot: {prefix}')
+              values = {
+                  key: int(raw)
+                  for key, raw in re.findall(r'([a-z0-9_]+)=\s*([0-9]+)', lines[-1])
+              }
+              return values
+
+          v11 = marker('AETHERCORE_V2_ATTR_V11')
+          v13 = marker('AETHERCORE_V2_ATTR_V13')
+
+          required = {
+              'cycles',
+              'conditional_resolved', 'conditional_recovery',
+              'direct_resolved', 'direct_recovery',
+              'indirect_resolved', 'indirect_recovery',
+              'completed_store_barrier', 'incomplete_store_barrier',
+          }
+          missing = sorted(required - v13.keys())
+          if missing:
+              raise SystemExit(f'incomplete V13 marker snapshot: {missing}')
+
+          assert v13['cycles'] > 0
+          assert (
+              v13['conditional_resolved'] +
+              v13['direct_resolved'] +
+              v13['indirect_resolved']
+          ) == v11['branch_resolved']
+          assert (
+              v13['conditional_recovery'] +
+              v13['direct_recovery'] +
+              v13['indirect_recovery']
+          ) == v11['branch_recovery']
+
+          for kind in ('conditional', 'direct', 'indirect'):
+              assert v13[f'{kind}_recovery'] <= v13[f'{kind}_resolved']
+
+          assert v13['completed_store_barrier'] <= v13['cycles']
+          assert v13['incomplete_store_barrier'] <= v13['cycles']
+          assert (
+              v13['completed_store_barrier'] +
+              v13['incomplete_store_barrier']
+          ) <= v13['cycles']
+
+          out = Path('build/v2-p8-linux-perf/v13-snapshot.txt')
+          out.write_text(
+              '\n'.join(f'{key}={v13[key]}' for key in sorted(required)) + '\n'
+          )
+
+          pct = lambda key: 100.0 * v13[key] / v13['cycles']
+          print(
+              'AETHERCORE_V2_ATTR_V13_SANITY_PASS '
+              f'conditional_recovery={v13["conditional_recovery"]}/'
+              f'{v13["conditional_resolved"]} '
+              f'direct_recovery={v13["direct_recovery"]}/'
+              f'{v13["direct_resolved"]} '
+              f'indirect_recovery={v13["indirect_recovery"]}/'
+              f'{v13["indirect_resolved"]} '
+              f'completed_store_barrier_pct={pct("completed_store_barrier"):.3f} '
+              f'incomplete_store_barrier_pct={pct("incomplete_store_barrier"):.3f}'
           )
           PY
 
