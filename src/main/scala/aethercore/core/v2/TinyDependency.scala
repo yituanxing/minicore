@@ -72,6 +72,7 @@ class TinySchedulingEntry(val xlen: Int) extends Bundle {
 
   val valid = Bool()
   val complete = Bool()
+  val completedBranchSafe = Bool()
   val uop = new BackendUop(xlen, IdentityBits, GenerationBits)
   val dependenciesValid = Bool()
   val rs1 = new OperandState(xlen, IdentityBits, GenerationBits)
@@ -431,6 +432,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     io.schedulingWindow(age) := 0.U.asTypeOf(new TinySchedulingEntry(xlen))
     io.schedulingWindow(age).valid := robEntry.valid
     io.schedulingWindow(age).complete := robEntry.complete
+    io.schedulingWindow(age).completedBranchSafe := robEntry.completedBranchSafe
     io.schedulingWindow(age).uop := robEntry.uop
     io.schedulingWindow(age).dependenciesValid := dependencyMatches
     when(dependencyMatches) {
