@@ -267,6 +267,7 @@ class TinyMemoryBackend(
   selectiveIssue.io.window := dependencyBackend.io.schedulingWindow
   selectiveIssue.io.allocated := dependencyBackend.io.allocated
   selectiveIssue.io.availability := execution.io.computeAvailability
+  selectiveIssue.io.secondaryIntegerAvailable := execution.io.secondaryIntegerAvailable
   // Branch owns the sole execution launch whenever the exact head request is
   // live. This independent block is the combinational-cycle cut for branch
   // response flow-through: selective compute cannot feed the branch request or
@@ -285,6 +286,7 @@ class TinyMemoryBackend(
   // the assertion below.
   execution.io.branchRequest <> branchIssue.io.request
   execution.io.computeRequest <> selectiveIssue.io.request
+  execution.io.secondaryIntegerRequest <> selectiveIssue.io.secondaryIntegerRequest
 
   system.io.head := dependencyBackend.io.head
   system.io.headDependenciesValid := dependencyBackend.io.headDependenciesValid
@@ -347,13 +349,19 @@ class TinyMemoryBackend(
     memoryIssuedToken := head.bits.robToken
   }
 
-  // The first selective slice remains one-launch-per-cycle across Branch,
-  // Memory and compute. Memory and Branch get priority through selectiveIssue.block.
+  // Bounded dual-compute experiment: Branch and Memory still exclude all
+  // compute launches through selectiveIssue.block. Only the two compute lanes
+  // may fire together; the second lane is Integer-only by construction.
+  assert(!(branchIssue.io.request.fire && selectiveIssue.io.secondaryIntegerRequest.fire),
+    "head Branch must exclude secondary Integer launch")
+  assert(!(lsu.io.request.fire && selectiveIssue.io.secondaryIntegerRequest.fire),
+    "head Memory must exclude secondary Integer launch")
   assert(PopCount(Cat(
     branchIssue.io.request.fire,
     selectiveIssue.io.request.fire,
+    selectiveIssue.io.secondaryIntegerRequest.fire,
     lsu.io.request.fire
-  )) <= 1.U, "A8 selective backend must remain single-issue per cycle")
+  )) <= 2.U, "bounded dual-compute backend may launch at most two uOps per cycle")
 
   // Ordinary stores and atomic writers may become externally visible only while
   // the exact lifetime is the ROB head. LR is read-only and does not need this
