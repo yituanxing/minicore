@@ -29,13 +29,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   measure:
     name: Baseline vs exact-head Linux clocksource boundary
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
