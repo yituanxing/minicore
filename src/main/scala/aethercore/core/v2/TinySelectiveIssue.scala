@@ -43,7 +43,9 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     // Memory with block deasserted is already owned by the blocking LSU.
     val block = Input(Bool())
     val availability = Input(new TinyComputeAvailability)
+    val secondaryIntegerAvailable = Input(Bool())
     val request = Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
+    val secondaryIntegerRequest = Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
   })
 
   private val issuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
@@ -152,16 +154,53 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   // age0 as the winner whenever multiple entries are eligible. Only the fully
   // materialized request is muxed across ages.
   private val selectedValid = WireDefault(false.B)
+  private val selectedAge = WireDefault(0.U(log2Ceil(Entries).W))
   private val selectedRequest = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
   for (age <- (Entries - 1) to 0 by -1) {
     when(eligible(age)) {
       selectedValid := true.B
+      selectedAge := age.U
       selectedRequest := candidates(age)
     }
   }
 
   io.request.valid := selectedValid && !io.block
   io.request.bits := selectedRequest
+
+  // Bounded second lane: only a second ready Integer may launch, and only in
+  // a cycle where the primary selective lane also launches. This is not a
+  // second general issue queue: it reuses the same ROB/dependency window and
+  // once-only scoreboard, leaves MUL/DIV single-lane, and never crosses a
+  // barrier the primary selector could not cross.
+  private val secondaryEligible = Wire(Vec(Entries, Bool()))
+  for (age <- 0 until Entries) {
+    val entry = io.window(age)
+    val token = entry.uop.robToken
+    val alreadyIssued = issuedValid(token.index) && sameRobToken(issuedToken(token.index), token)
+    secondaryEligible(age) := bypassOpen(age) &&
+      entry.valid &&
+      !entry.complete &&
+      entry.dependenciesValid &&
+      entry.operandsReady &&
+      !entry.uop.decoded.exception.valid &&
+      entry.uop.decoded.ordering === OrderingClass.Normal &&
+      entry.uop.executionClass === ExecutionClass.Integer &&
+      !alreadyIssued &&
+      age.U =/= selectedAge
+  }
+
+  private val secondaryValid = WireDefault(false.B)
+  private val secondaryRequest = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+  for (age <- (Entries - 1) to 0 by -1) {
+    when(secondaryEligible(age)) {
+      secondaryValid := true.B
+      secondaryRequest := candidates(age)
+    }
+  }
+
+  io.secondaryIntegerRequest.valid :=
+    secondaryValid && selectedValid && !io.block && io.secondaryIntegerAvailable
+  io.secondaryIntegerRequest.bits := secondaryRequest
 
   // Allocation starts a fresh physical-slot issue lifetime even if the bounded
   // generation space eventually wraps. No uOp is copied into this scoreboard.
@@ -171,6 +210,14 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
 
   when(io.request.fire) {
     val token = io.request.bits.robToken
+    issuedValid(token.index) := true.B
+    issuedToken(token.index) := token
+  }
+
+  when(io.secondaryIntegerRequest.fire) {
+    val token = io.secondaryIntegerRequest.bits.robToken
+    assert(!sameRobToken(token, io.request.bits.robToken),
+      "dual-compute lanes must never issue the same ROB lifetime")
     issuedValid(token.index) := true.B
     issuedToken(token.index) := token
   }
