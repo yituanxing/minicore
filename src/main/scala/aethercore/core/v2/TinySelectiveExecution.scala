@@ -27,11 +27,15 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
   val io = IO(new Bundle {
     val branchRequest = Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
     val computeRequest = Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+    val secondaryIntegerRequest =
+      Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
     val response = Decoupled(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
     val computeAvailability = Output(new TinyComputeAvailability)
+    val secondaryIntegerAvailable = Output(Bool())
   })
 
   private val integer = Module(new V2IntegerUnit(xlen))
+  private val secondaryInteger = Module(new V2IntegerUnit(xlen))
   private val branch = Module(new V2BranchUnit(xlen, hasCompressed))
   private val multiply = Module(new V2MulUnit(xlen))
   private val divide = Module(new V2IterativeDivider(xlen))
@@ -53,6 +57,7 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
 
   integer.io.request.valid := io.computeRequest.valid && routeInteger
   integer.io.request.bits := io.computeRequest.bits
+  secondaryInteger.io.request <> io.secondaryIntegerRequest
   multiply.io.request.valid := io.computeRequest.valid && routeMultiply
   multiply.io.request.bits := io.computeRequest.bits
   divide.io.request.valid := io.computeRequest.valid && routeDivide
@@ -74,6 +79,10 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
     assert(io.computeRequest.bits.executionClass =/= ExecutionClass.Branch,
       "selective compute seam must never carry Branch execution")
   }
+  when(io.secondaryIntegerRequest.valid) {
+    assert(io.secondaryIntegerRequest.bits.executionClass === ExecutionClass.Integer,
+      "secondary compute seam must remain Integer-only")
+  }
 
   // Availability stays owned by the real compute FU request acceptance state.
   // In particular, this preserves same-cycle consume-and-replace behavior for a
@@ -82,14 +91,16 @@ class TinySelectiveExecutionCluster(val xlen: Int, val hasCompressed: Boolean) e
   io.computeAvailability.integer := integer.io.request.ready
   io.computeAvailability.multiply := multiply.io.request.ready
   io.computeAvailability.divide := divide.io.request.ready
+  io.secondaryIntegerAvailable := secondaryInteger.io.request.ready
 
   private val responses = Module(new RRArbiter(
     new ExecutionResponse(xlen, IdentityBits, GenerationBits),
-    4
+    5
   ))
   responses.io.in(0) <> integer.io.response
-  responses.io.in(1) <> branch.io.response
-  responses.io.in(2) <> multiply.io.response
-  responses.io.in(3) <> divide.io.response
+  responses.io.in(1) <> secondaryInteger.io.response
+  responses.io.in(2) <> branch.io.response
+  responses.io.in(3) <> multiply.io.response
+  responses.io.in(4) <> divide.io.response
   io.response <> responses.io.out
 }
