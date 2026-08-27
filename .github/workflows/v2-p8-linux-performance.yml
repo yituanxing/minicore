@@ -31,13 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   measure:
     name: Unchanged Linux PID1 plus exact P8 snapshot on v2 RV64
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -220,6 +215,8 @@ jobs:
               'wfi_halted', 'lsu_busy', 'memory_launch_blocked', 'mem_req',
               'mem_resp', 'ptw_active', 'completion_collision',
               'completion_backpressure',
+              'loadq_capacity_blocked', 'completed_branch_barrier',
+              'completed_store_barrier',
           }
           missing = sorted(required - values.keys())
           if missing:
@@ -251,6 +248,8 @@ jobs:
               'compute_head', 'branch_head', 'memory_head', 'system_head',
               'interrupt_hold', 'wfi_halted', 'lsu_busy', 'memory_launch_blocked',
               'ptw_active', 'completion_collision', 'completion_backpressure',
+              'loadq_capacity_blocked', 'completed_branch_barrier',
+              'completed_store_barrier',
           ):
               assert values[key] <= cycles, (key, values[key], cycles)
 
