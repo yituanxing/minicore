@@ -7,6 +7,11 @@ on:
       - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
       - '.github/workflows/v2-yosys-depth-ab.yml'
   workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Exact baseline commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,29 +21,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  yosys-depth-ab:
-    name: Exact #189 -> #191 Yosys structural-cost proxy
+  measure-base:
+    name: Measure exact PR base
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
-      # Frozen #189 LoadQ2 baseline.  Keep this pinned: #191 is a gray-zone
-      # throughput decision against this exact architectural baseline.
-      BASELINE_SHA: d7127542d94e6677834c092fb047b45e0452ec8f
+      BASELINE_SHA: ${{ github.event.pull_request.base.sha || inputs.baseline_sha }}
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Checkout exact target
+      - name: Checkout target with baseline history
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
           clean: true
 
-      - name: Verify exact comparison identity
+      - name: Verify exact baseline identity
         shell: bash
         run: |
           set -euo pipefail
-          echo "baseline=$BASELINE_SHA"
-          echo "target=$TARGET_SHA"
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           git cat-file -e "$BASELINE_SHA^{commit}"
           git merge-base --is-ancestor "$BASELINE_SHA" "$TARGET_SHA"
@@ -62,76 +63,148 @@ jobs:
           yosys -V
           yosys -Q -p 'help ltp' | grep -q -- '-noff'
 
-      - name: Create exact frozen #189 worktree
+      - name: Elaborate and measure exact baseline
         shell: bash
         run: |
           set -euo pipefail
-          base="$RUNNER_TEMP/aethercore-v2-depth-base"
-          rm -rf "$base"
-          git worktree add --detach "$base" "$BASELINE_SHA"
-          # Measurement infrastructure is intentionally copied into the otherwise
-          # untouched frozen baseline so both revisions elaborate the same top.
-          cp src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala \
-             "$base/src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala"
-          chmod +x mill "$base/mill"
-          echo "BASE_DIR=$base" >> "$GITHUB_ENV"
+          work="$RUNNER_TEMP/aethercore-v2-depth-base"
+          out="$GITHUB_WORKSPACE/build/v2-yosys-depth/base"
+          rm -rf "$work" "$out"
+          mkdir -p "$out/rtl" "$out/mill"
 
-      - name: Elaborate exact #189 and #191 cores
-        shell: bash
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/aethercore-v2-yosys-depth"
-          rm -rf "$out"
-          mkdir -p "$out/base-rtl" "$out/target-rtl" "$out/base-mill" "$out/target-mill"
-          echo "DEPTH_OUT=$out" >> "$GITHUB_ENV"
+          git worktree add --detach "$work" "$BASELINE_SHA"
+          cp src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala              "$work/src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala"
+          chmod +x "$work/mill"
 
           (
-            cd "$BASE_DIR"
-            MILL_OUTPUT_DIR="$out/base-mill" ./mill aethercore.runMain \
-              aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/base-rtl"
+            cd "$work"
+            MILL_OUTPUT_DIR="$out/mill" ./mill aethercore.runMain               aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/rtl"
           )
-          MILL_OUTPUT_DIR="$out/target-mill" ./mill aethercore.runMain \
-            aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/target-rtl"
 
-          find "$out/base-rtl" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
-          find "$out/target-rtl" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          mapfile -t svs < <(find "$out/rtl" -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
 
-      - name: Synthesize and measure mapped combinational depth
+          yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $out/netlist.json; stat -top TinyPagedCore; flatten; ltp -noff TinyPagedCore"             2>&1 | tee "$out/yosys.log"
+
+          grep -E 'Longest topological path|Executing LTP|Warning.*loop' "$out/yosys.log" > "$out/ltp.log" || true
+          depth=$(sed -n 's/.*Longest topological path in TinyPagedCore (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
+          test -n "$depth"
+          printf '%s\n' "$depth" > "$out/depth"
+          jq '[.modules["TinyPagedCore"].cells[]] | length' "$out/netlist.json" > "$out/cells"
+          jq '[.modules["TinyPagedCore"].cells[] | select(.type == "LUT4")] | length' "$out/netlist.json" > "$out/lut4"
+          jq '[.modules["TinyPagedCore"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/netlist.json" > "$out/ff"
+
+      - name: Upload exact baseline structural evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-yosys-base-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/v2-yosys-depth/base/depth
+            build/v2-yosys-depth/base/cells
+            build/v2-yosys-depth/base/lut4
+            build/v2-yosys-depth/base/ff
+            build/v2-yosys-depth/base/yosys.log
+            build/v2-yosys-depth/base/ltp.log
+          if-no-files-found: error
+
+  measure-target:
+    name: Measure exact target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Verify exact target identity
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
 
-          measure_one() {
-            label="$1"
-            rtl="$DEPTH_OUT/$label-rtl"
-            json="$DEPTH_OUT/$label.json"
-            ylog="$DEPTH_OUT/$label-yosys.log"
-            llog="$DEPTH_OUT/$label-ltp.log"
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-            mapfile -t svs < <(find "$rtl" -maxdepth 1 -name '*.sv' -print | sort)
-            test "${#svs[@]}" -gt 0
-            read_cmd="read_verilog -sv -DSYNTHESIS"
-            for sv in "${svs[@]}"; do
-              read_cmd+=" $sv"
-            done
+      - name: Install synthesis tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
 
-            # Keep mapping and ltp in the same Yosys process.  This is the
-            # qualified #163-era proxy: structural evidence, not a claimed Fmax.
-            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $json; stat -top TinyPagedCore; flatten; ltp -noff TinyPagedCore" \
-              2>&1 | tee "$ylog"
+      - name: Elaborate and measure exact target
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/build/v2-yosys-depth/target"
+          rm -rf "$out"
+          mkdir -p "$out/rtl" "$out/mill"
+          chmod +x ./mill
 
-            grep -E 'Longest topological path|Executing LTP|Warning.*loop' "$ylog" > "$llog" || true
-            depth=$(sed -n 's/.*Longest topological path in TinyPagedCore (length=\([0-9][0-9]*\)).*/\1/p' "$ylog" | tail -1)
-            test -n "$depth"
-            printf '%s\n' "$depth" > "$DEPTH_OUT/$label-depth"
+          MILL_OUTPUT_DIR="$out/mill" ./mill aethercore.runMain             aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/rtl"
 
-            jq '[.modules["TinyPagedCore"].cells[]] | length' "$json" > "$DEPTH_OUT/$label-cells"
-            jq '[.modules["TinyPagedCore"].cells[] | select(.type == "LUT4")] | length' "$json" > "$DEPTH_OUT/$label-lut4"
-            jq '[.modules["TinyPagedCore"].cells[] | select(.type == "TRELLIS_FF")] | length' "$json" > "$DEPTH_OUT/$label-ff"
-          }
+          mapfile -t svs < <(find "$out/rtl" -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
 
-          measure_one base
-          measure_one target
+          yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $out/netlist.json; stat -top TinyPagedCore; flatten; ltp -noff TinyPagedCore"             2>&1 | tee "$out/yosys.log"
+
+          grep -E 'Longest topological path|Executing LTP|Warning.*loop' "$out/yosys.log" > "$out/ltp.log" || true
+          depth=$(sed -n 's/.*Longest topological path in TinyPagedCore (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
+          test -n "$depth"
+          printf '%s\n' "$depth" > "$out/depth"
+          jq '[.modules["TinyPagedCore"].cells[]] | length' "$out/netlist.json" > "$out/cells"
+          jq '[.modules["TinyPagedCore"].cells[] | select(.type == "LUT4")] | length' "$out/netlist.json" > "$out/lut4"
+          jq '[.modules["TinyPagedCore"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/netlist.json" > "$out/ff"
+
+      - name: Upload exact target structural evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-yosys-target-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/v2-yosys-depth/target/depth
+            build/v2-yosys-depth/target/cells
+            build/v2-yosys-depth/target/lut4
+            build/v2-yosys-depth/target/ff
+            build/v2-yosys-depth/target/yosys.log
+            build/v2-yosys-depth/target/ltp.log
+          if-no-files-found: error
+
+  aggregate:
+    name: Aggregate exact structural-cost A/B
+    needs: [measure-base, measure-target]
+    runs-on: ubuntu-24.04
+    env:
+      BASELINE_SHA: ${{ github.event.pull_request.base.sha || inputs.baseline_sha }}
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Download baseline evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: aethercore-v2-yosys-base-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/v2-yosys-depth/base
+
+      - name: Download target evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: aethercore-v2-yosys-target-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/v2-yosys-depth/target
 
       - name: Summarize exact structural-cost A/B
         shell: bash
@@ -142,28 +215,25 @@ jobs:
           import os
           from pathlib import Path
 
-          root = Path(os.environ['DEPTH_OUT'])
-          def integer(name):
-              return int((root / name).read_text().strip())
+          root = Path('build/v2-yosys-depth')
+          def integer(side, name):
+              return int((root / side / name).read_text().strip())
           def pct(new, old):
               return ((new / old) - 1.0) * 100.0 if old else None
 
-          base_depth = integer('base-depth')
-          target_depth = integer('target-depth')
-          base_cells = integer('base-cells')
-          target_cells = integer('target-cells')
-          base_lut = integer('base-lut4')
-          target_lut = integer('target-lut4')
-          base_ff = integer('base-ff')
-          target_ff = integer('target-ff')
-
-          architectural_speedup = 1.019793
-          break_even_frequency_ratio = 1.0 / architectural_speedup
+          base_depth = integer('base', 'depth')
+          target_depth = integer('target', 'depth')
+          base_cells = integer('base', 'cells')
+          target_cells = integer('target', 'cells')
+          base_lut = integer('base', 'lut4')
+          target_lut = integer('target', 'lut4')
+          base_ff = integer('base', 'ff')
+          target_ff = integer('target', 'ff')
 
           summary = {
               'baseline_sha': os.environ['BASELINE_SHA'],
               'target_sha': os.environ['TARGET_SHA'],
-              'proxy': 'Yosys synth_ecp5 mapped netlist + flatten + ltp -noff (single process)',
+              'proxy': 'Yosys synth_ecp5 mapped netlist + flatten + ltp -noff',
               'base_logic_depth': base_depth,
               'target_logic_depth': target_depth,
               'logic_depth_delta': target_depth - base_depth,
@@ -177,38 +247,33 @@ jobs:
               'base_ff': base_ff,
               'target_ff': target_ff,
               'ff_delta_pct': pct(target_ff, base_ff),
-              'architectural_cycle_reduction_pct': 1.940860,
-              'architectural_speedup': architectural_speedup,
-              'break_even_frequency_ratio': break_even_frequency_ratio,
-              'break_even_frequency_loss_pct': (1.0 - break_even_frequency_ratio) * 100.0,
               'note': (
-                  'Logic-depth count is a structural timing proxy and must not be converted directly into Fmax percentage. '
-                  'Full-core ECP5-85K PnR is intentionally not used here because the core exceeds that proxy device capacity.'
-              )
+                  'Structural-cost evidence only. Performance speedup and break-even '
+                  'frequency must come from the matching Architecture A/B result.'
+              ),
           }
           (root / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
           print(json.dumps(summary, indent=2))
 
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-              f.write('## AetherCore v2 #189 -> #191 structural-cost A/B\n\n')
-              f.write(f"Frozen #189 `{summary['baseline_sha']}` -> #191 `{summary['target_sha']}`\n\n")
+              f.write('## AetherCore v2 exact PR-base -> target structural-cost A/B\n\n')
+              f.write(f"Baseline \`{summary['baseline_sha']}\` -> target \`{summary['target_sha']}\`\n\n")
               f.write(f"- mapped combinational depth: {base_depth} -> {target_depth} ({target_depth-base_depth:+d} levels, {summary['logic_depth_delta_pct']:+.3f}%)\n")
               f.write(f"- cells: {base_cells} -> {target_cells} ({summary['cells_delta_pct']:+.3f}%)\n")
               f.write(f"- LUT4: {base_lut} -> {target_lut} ({summary['lut4_delta_pct']:+.3f}%)\n")
               f.write(f"- FF: {base_ff} -> {target_ff} ({summary['ff_delta_pct']:+.3f}%)\n")
-              f.write('- #191 exact architectural speedup: +1.9793% (gray zone, below the predeclared 2% material threshold).\n')
-              f.write(f"- break-even frequency loss: {summary['break_even_frequency_loss_pct']:.3f}% (frequency ratio {break_even_frequency_ratio:.6f}).\n")
-              f.write('- Logic depth is a structural proxy, not a direct Fmax percentage.\n')
-              f.write('- Full-core ECP5-85K PnR is omitted because the core exceeds that proxy device capacity; a failed placement would not be valid timing evidence.\n')
+              f.write('- Structural proxy only; do not convert logic-depth delta directly into Fmax.\n')
+              f.write('- Combine this result with the matching Architecture A/B speedup when making GO/NO-GO decisions.\n')
           PY
 
-      - name: Upload Yosys structural-cost evidence
-        if: always()
+      - name: Upload aggregate structural-cost evidence
         uses: actions/upload-artifact@v4
         with:
           name: aethercore-v2-yosys-depth-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/aethercore-v2-yosys-depth/summary.json
-            ${{ runner.temp }}/aethercore-v2-yosys-depth/*-yosys.log
-            ${{ runner.temp }}/aethercore-v2-yosys-depth/*-ltp.log
-          if-no-files-found: warn
+            build/v2-yosys-depth/summary.json
+            build/v2-yosys-depth/base/yosys.log
+            build/v2-yosys-depth/base/ltp.log
+            build/v2-yosys-depth/target/yosys.log
+            build/v2-yosys-depth/target/ltp.log
+          if-no-files-found: error
