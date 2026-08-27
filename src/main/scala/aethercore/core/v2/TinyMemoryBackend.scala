@@ -113,9 +113,11 @@ class TinyMemoryBackend(
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(xlen, txnIdBits)))
     val lsuBusy = Output(Bool())
 
-    // Retirement-time system consequence for a future frontend/fetch TLB owner.
-    // The current F6 backend also consumes this pulse for its data translation TLB.
+    // Retirement-time system consequences for frontend/memory hierarchy owners.
+    // SFENCE.VMA flushes translation state; FENCE.I invalidates instruction-side
+    // cached/fetched instruction state without conflating the two operations.
     val translationFence = Output(Bool())
+    val instructionFence = Output(Bool())
   })
 
   private def sameRobToken(lhs: RobToken, rhs: RobToken): Bool =
@@ -155,6 +157,9 @@ class TinyMemoryBackend(
   private val sfenceAtRetire = retiringSystem &&
     !retiring.bits.exception.valid &&
     retiring.bits.uop.decoded.system.kind === SystemOperationKind.SfenceVma
+  private val fenceIAtRetire = retiringSystem &&
+    !retiring.bits.exception.valid &&
+    retiring.bits.uop.decoded.system.kind === SystemOperationKind.FenceI
   private val wfiAtRetire = enableAsyncInterrupts.B && retiringSystem &&
     !retiring.bits.exception.valid &&
     retiring.bits.uop.decoded.system.kind === SystemOperationKind.Wfi
@@ -376,6 +381,7 @@ class TinyMemoryBackend(
   // is generated only from a legal, exception-free retirement below.
   lsu.io.translationFlush := sfenceAtRetire
   io.translationFence := sfenceAtRetire
+  io.instructionFence := fenceIAtRetire
   lsu.io.pmpEnabled := isa.hasPmp.B
   lsu.io.pmpConfig := csrFile.io.pmpConfig
   lsu.io.pmpAddress := csrFile.io.pmpAddress
