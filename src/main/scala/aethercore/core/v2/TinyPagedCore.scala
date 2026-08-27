@@ -265,9 +265,38 @@ class TinyPagedCore(
       (decoded.rs1 === 1.U || decoded.rs1 === 5.U) &&
       decoded.immediate === 0.U
   private val predictReturnTaken = decodedReturn && rasCount =/= 0.U
-  private val predictedNextPc = Mux(predictReturnTaken, rasTop, predictedTarget)
+
+  // BTB16 experiment for the remaining non-return JALR population. Keep it
+  // deliberately tiny: 16 direct-mapped entries, a 10-bit partial PC tag and
+  // only the low 32 target bits. The upper target bits come from the current
+  // PC region; a cross-region or alias miss is harmless because the existing
+  // exact-head recovery contract repairs the next PC.
+  private val BtbEntries = 16
+  private val BtbIndexBits = log2Ceil(BtbEntries)
+  private val BtbTagBits = 10
+  private val btbValid = RegInit(VecInit(Seq.fill(BtbEntries)(false.B)))
+  private val btbTag = Reg(Vec(BtbEntries, UInt(BtbTagBits.W)))
+  private val btbTargetLow = Reg(Vec(BtbEntries, UInt(32.W)))
+  private val btbIndex = pc(BtbIndexBits, 1)
+  private val btbLookupTag = pc(BtbIndexBits + BtbTagBits, BtbIndexBits + 1)
+  private val btbHit = btbValid(btbIndex) && btbTag(btbIndex) === btbLookupTag
+  private val btbTarget =
+    if (Xlen == 64) Cat(pc(Xlen - 1, 32), btbTargetLow(btbIndex))
+    else btbTargetLow(btbIndex)
+  private val predictIndirectTaken =
+    predictableBranch &&
+      decoded.controlFlow.kind === ControlFlowKind.IndirectJump &&
+      !decodedReturn &&
+      btbHit
+
+  private val predictedNextPc = Mux(
+    predictReturnTaken,
+    rasTop,
+    Mux(predictIndirectTaken, btbTarget, predictedTarget)
+  )
   private val predictTaken =
-    predictDirectJumpTaken || predictConditionalTaken || predictReturnTaken
+    predictDirectJumpTaken || predictConditionalTaken ||
+      predictReturnTaken || predictIndirectTaken
 
   private val train = backend.io.branchResolution
   private val trainConditional =
@@ -303,6 +332,19 @@ class TinyPagedCore(
     train.valid && train.bits.taken && trainLinkRd &&
       (train.bits.kind === ControlFlowKind.DirectJump ||
         train.bits.kind === ControlFlowKind.IndirectJump)
+
+  private val trainIndirect =
+    train.valid && train.bits.taken &&
+      train.bits.kind === ControlFlowKind.IndirectJump &&
+      !trainReturn
+  private val trainBtbIndex = train.bits.pc(BtbIndexBits, 1)
+  private val trainBtbTag =
+    train.bits.pc(BtbIndexBits + BtbTagBits, BtbIndexBits + 1)
+  when(trainIndirect) {
+    btbValid(trainBtbIndex) := true.B
+    btbTag(trainBtbIndex) := trainBtbTag
+    btbTargetLow(trainBtbIndex) := train.bits.target(31, 0)
+  }
 
   when(trainCall && !trainReturn) {
     rasStack(rasSp) := train.bits.pc + train.bits.instBytes
