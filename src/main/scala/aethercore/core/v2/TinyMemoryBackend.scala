@@ -65,6 +65,10 @@ class TinyMemoryBackend(
     val branchResolution = Valid(new Bundle {
       val pc = UInt(xlen.W)
       val kind = ControlFlowKind()
+      val rd = UInt(5.W)
+      val rs1 = UInt(5.W)
+      val immediate = UInt(xlen.W)
+      val instBytes = UInt(3.W)
       val taken = Bool()
       val target = UInt(xlen.W)
     })
@@ -431,6 +435,10 @@ class TinyMemoryBackend(
     execution.io.response.bits.branchValid
   io.branchResolution.bits.pc := dependencyBackend.io.head.bits.decoded.pc
   io.branchResolution.bits.kind := dependencyBackend.io.head.bits.decoded.controlFlow.kind
+  io.branchResolution.bits.rd := dependencyBackend.io.head.bits.decoded.rd
+  io.branchResolution.bits.rs1 := dependencyBackend.io.head.bits.decoded.rs1
+  io.branchResolution.bits.immediate := dependencyBackend.io.head.bits.decoded.immediate
+  io.branchResolution.bits.instBytes := dependencyBackend.io.head.bits.decoded.instBytes
   io.branchResolution.bits.taken := execution.io.response.bits.branchTaken
   io.branchResolution.bits.target := execution.io.response.bits.branchTarget
   when(io.branchResolution.valid) {
