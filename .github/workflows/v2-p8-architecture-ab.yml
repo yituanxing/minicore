@@ -15,6 +15,11 @@ on:
       - 'Makefile.l32-linux-boot'
       - 'build.mill'
   workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Exact baseline commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -34,7 +39,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      BASELINE_SHA: 040cb17de319a0c5ab8d4b34ed5e957b158d9673
+      BASELINE_SHA: ${{ github.event.pull_request.base.sha || inputs.baseline_sha }}
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
