@@ -65,6 +65,7 @@ class V2F6BlockingLsuSpec
     with V2P8PreHeadLoadSelectorChecks
     with V2P8PreHeadSafetyGateChecks
     with V2P8PreHeadBackendChecks
+    with V2P8LoadQueueIssueChecks
 
 class V2A8CompletionSpec
     extends AnyFlatSpec
@@ -104,6 +105,12 @@ class V2P8PerformanceSpec
     with V2P8PerformanceChecks
     with V2P8TopDownChecks
     with V2P8AttributionV11Checks
+
+class V2P8LoadQueueIssueSpec
+    extends AnyFlatSpec
+    with Matchers
+    with ChiselSim
+    with V2P8LoadQueueIssueChecks
 
 class V2P8PreHeadLoadSpec
     extends AnyFlatSpec
