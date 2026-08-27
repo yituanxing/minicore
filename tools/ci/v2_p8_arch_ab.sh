@@ -10,6 +10,7 @@ FW_BIN="${FW_BIN:-$ROOT/build/rv64-minimal-init-boot/opensbi/platform/generic/fi
 MILESTONE="${MILESTONE:-clocksource: riscv_clocksource}"
 MAX_CYCLES="${MAX_CYCLES:-120000000}"
 PROGRESS_INTERVAL_CYCLES="${PROGRESS_INTERVAL_CYCLES:-10000000}"
+DATA_MEM_WAIT_CYCLES="${DATA_MEM_WAIT_CYCLES:-0}"
 OUT_ROOT="${OUT_ROOT:-$ROOT/build/v2-p8-arch-ab}"
 TOP="${TOP:-AetherCoreV2OpenSbiRV64SimTop}"
 ELABORATE_MAIN="${ELABORATE_MAIN:-aethercore.ElaborateV2OpenSbiRV64}"
@@ -75,6 +76,13 @@ PY
 install_marker_overlay "$BASE_SRC"
 install_marker_overlay "$TARGET_SRC"
 
+if [[ "$DATA_MEM_WAIT_CYCLES" != "0" ]]; then
+  # Measurement-only host overlay: both detached source trees must use the
+  # identical latency model so the A/B changes only target RTL/cache semantics.
+  cp "$TARGET_SRC/sim/l32_opensbi_runtime.h" "$BASE_SRC/sim/l32_opensbi_runtime.h"
+  echo "AETHERCORE_ARCH_AB_MEMORY_OVERLAY wait_cycles=$DATA_MEM_WAIT_CYCLES"
+fi
+
 required_fields='cycles commits dispatch_accepted dispatch_blocked rob0 rob1 rob2 rob3 rob4 issue_int issue_mul issue_div issue_branch issue_mem system_completion selective_candidate selective_bypass bypass_compute_head bypass_branch_head bypass_memory_head bypass_other_head lsu_compute_overlap head_not_ready head_ready_not_issued commit_idle_nonempty compute_head branch_head memory_head system_head interrupt_hold wfi_halted lsu_busy memory_launch_blocked mem_req mem_resp ptw_active completion_collision completion_backpressure'
 
 extract_marker_snapshot() {
@@ -134,6 +142,7 @@ run_variant() {
     MAX_CYCLES="$MAX_CYCLES" \
     MILESTONE="$MILESTONE" \
     PROGRESS_INTERVAL_CYCLES="$PROGRESS_INTERVAL_CYCLES" \
+    AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES" \
     VERILATOR='verilator -LDFLAGS -ldl' \
     SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
     run-local 2>&1 | tee "$run_log"
