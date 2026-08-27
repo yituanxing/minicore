@@ -7,6 +7,11 @@ on:
       - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
       - '.github/workflows/v2-yosys-depth-ab.yml'
   workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Exact baseline commit SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,13 +22,11 @@ concurrency:
 
 jobs:
   yosys-depth-ab:
-    name: Exact #189 -> #191 Yosys structural-cost proxy
+    name: Exact PR-base -> target Yosys structural-cost proxy
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      # Frozen #189 LoadQ2 baseline.  Keep this pinned: #191 is a gray-zone
-      # throughput decision against this exact architectural baseline.
-      BASELINE_SHA: d7127542d94e6677834c092fb047b45e0452ec8f
+      BASELINE_SHA: ${{ github.event.pull_request.base.sha || inputs.baseline_sha }}
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact target
@@ -62,7 +65,7 @@ jobs:
           yosys -V
           yosys -Q -p 'help ltp' | grep -q -- '-noff'
 
-      - name: Create exact frozen #189 worktree
+      - name: Create exact baseline worktree
         shell: bash
         run: |
           set -euo pipefail
@@ -76,7 +79,7 @@ jobs:
           chmod +x mill "$base/mill"
           echo "BASE_DIR=$base" >> "$GITHUB_ENV"
 
-      - name: Elaborate exact #189 and #191 cores
+      - name: Elaborate exact baseline and target cores
         shell: bash
         run: |
           set -euo pipefail
