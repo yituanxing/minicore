@@ -133,6 +133,7 @@ class V2F7PagedCoreSpec
     with Matchers
     with ChiselSim
     with V2F7PagedCoreChecks
+    with V2CacheBoundaryChecks
 
 class V2F7AsyncInterruptSpec
     extends AnyFlatSpec

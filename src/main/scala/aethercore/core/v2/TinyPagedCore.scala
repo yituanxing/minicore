@@ -32,7 +32,8 @@ class TinyPagedCore(
     val txnIdBits: Int = 2,
     val enableAsyncInterrupts: Boolean = false,
     val withMachineExternalInterrupt: Boolean = false,
-    val withSupervisorExternalInterrupt: Boolean = false
+    val withSupervisorExternalInterrupt: Boolean = false,
+    val enableInstructionBackpressure: Boolean = false
 ) extends Module {
   private val isa = config.isa
   private val Xlen = isa.xlen
@@ -48,6 +49,11 @@ class TinyPagedCore(
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(PhysicalBits)
+    // Compatibility-preserving cache seam. Existing direct-memory integrations
+    // omit this port and retain the historical zero-wait instruction response.
+    // A future I-cache/AXI wrapper opts in and may hold a translated fetch until
+    // instruction data is actually available.
+    val imemReady = if (enableInstructionBackpressure) Some(Input(Bool())) else None
     val ptw = new PageTableReadBusIO(PhysicalBits, geometry.pteBits)
 
     val commit = Output(new CommitTrace(Xlen, PhysicalBits, BusBits))
@@ -71,6 +77,7 @@ class TinyPagedCore(
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(Xlen, txnIdBits)))
     val lsuBusy = Output(Bool())
     val translationFence = Output(Bool())
+    val instructionFence = Output(Bool())
   })
 
   val backend = Module(new TinyLoadQueueMemoryBackend(
@@ -118,6 +125,8 @@ class TinyPagedCore(
   )
   private val frontendBlocked = serialized || interruptHold || wfiWaiting
   private val frontendKill = redirect || interruptHold || wfiWaiting
+  private val instructionMemoryReady =
+    if (enableInstructionBackpressure) io.imemReady.get else true.B
   io.halted := wfiWaiting
   io.interruptHold := interruptHold
 
@@ -133,8 +142,9 @@ class TinyPagedCore(
     rvc.io.instructionPc := pc
     // A translation fence is a frontend context boundary even though the
     // InstructionFetchAdapter receives it through its dedicated flush input.
-    // Never retain the first half of a 32-bit instruction across that boundary.
-    rvc.io.kill := frontendKill || backend.io.translationFence
+    // Never retain the first half of a 32-bit instruction across either a
+    // translation-context boundary or a retiring FENCE.I cache boundary.
+    rvc.io.kill := frontendKill || backend.io.translationFence || backend.io.instructionFence
   }
 
   fetch.io.requestValid := !redirect && !frontendBlocked
@@ -142,7 +152,7 @@ class TinyPagedCore(
   // in flight. Cancel that speculative fetch and restart from the same PC after
   // trap entry/return rather than carrying old-context instruction bits across
   // the architectural boundary.
-  fetch.io.kill := frontendKill
+  fetch.io.kill := frontendKill || backend.io.instructionFence
   fetch.io.flush := backend.io.translationFence
   fetch.io.virtualAddress := (if (isa.hasC) parcel.get.io.parcelRequestAddress else pc)
   fetch.io.privilege := backend.io.currentPrivilege
@@ -168,12 +178,18 @@ class TinyPagedCore(
   io.imem.addr := fetch.io.physicalAddress
   io.imem.bytes := (if (isa.hasC) 2.U else 4.U)
 
-  private val instructionBusFault = io.imem.valid && io.imem.fault
+  // When the optional cache-facing backpressure seam is enabled, hold the
+  // translation response and do not expose instruction data/fault downstream
+  // until the memory owner says the current address has a terminal response.
+  // With the seam disabled this folds to true and preserves today's flow-through.
+  private val instructionResponseCanAdvance = !io.imem.valid || instructionMemoryReady
+  private val instructionBusFault =
+    io.imem.valid && instructionMemoryReady && io.imem.fault
   private val parcelAccessFault = fetch.io.accessFault || instructionPmpFault || instructionBusFault
 
   if (isa.hasC) {
     val rvc = parcel.get
-    rvc.io.parcelResponseValid := fetch.io.responseValid
+    rvc.io.parcelResponseValid := fetch.io.responseValid && instructionResponseCanAdvance
     rvc.io.parcelBits := io.imem.inst(15, 0)
     rvc.io.parcelPageFault := fetch.io.pageFault
     rvc.io.parcelAccessFault := parcelAccessFault
@@ -316,13 +332,15 @@ class TinyPagedCore(
   }
 
   backend.io.dispatch.valid :=
-    (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
+    (if (isa.hasC) parcel.get.io.instructionValid
+     else fetch.io.responseValid && instructionResponseCanAdvance) &&
       !redirect && !frontendBlocked
   backend.io.dispatch.bits := decode.io.dispatch
   backend.io.dispatch.bits.predictionValid := predictTaken
   backend.io.dispatch.bits.predictedNextPc := predictedNextPc
   fetch.io.responseReady :=
-    (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire)
+    (if (isa.hasC) parcel.get.io.parcelResponseReady else backend.io.dispatch.fire) &&
+      instructionResponseCanAdvance
 
   if (enableAsyncInterrupts) {
     backend.io.async.get.boundaryPc := pc
@@ -406,6 +424,7 @@ class TinyPagedCore(
   io.memoryResponse.ready := backend.io.memoryResponse.ready
   io.lsuBusy := backend.io.lsuBusy
   io.translationFence := backend.io.translationFence
+  io.instructionFence := backend.io.instructionFence
 
   assert(PopCount(Cat(asyncInterruptRedirect, privilegedRedirect, branchRedirect)) <= 1.U,
     "oldest-only F7 frontend received more than one architectural redirect in one cycle")
