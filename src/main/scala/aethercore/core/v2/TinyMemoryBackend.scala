@@ -58,6 +58,16 @@ class TinyMemoryBackend(
     val allocated = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
     val commit = Output(new CommitTrace(xlen = xlen, paddrBits = PhysicalBits, busDataBits = BusBits))
     val branchRedirect = Valid(new RecoveryRedirect(xlen))
+    // Read-only training seam for a tiny frontend direction predictor. This is
+    // observation of an already-accepted exact-head Branch response; it does
+    // not participate in ROB recovery, redirect ownership, or architectural
+    // state.
+    val branchResolution = Valid(new Bundle {
+      val pc = UInt(xlen.W)
+      val kind = ControlFlowKind()
+      val taken = Bool()
+      val target = UInt(xlen.W)
+    })
     val privilegedRedirect = Valid(new PrivilegedRedirect(xlen))
     val currentPrivilege = Output(UInt(2.W))
     // Read-only architectural context exported for the F7 instruction-side
@@ -412,6 +422,27 @@ class TinyMemoryBackend(
   dependencyBackend.io.completion.valid := completions.io.out.valid
   dependencyBackend.io.completion.bits := completions.io.out.bits
   completions.io.out.ready := true.B
+
+  // Export every accepted Branch outcome, including correctly predicted
+  // branches, so the frontend BHT can train on the complete outcome stream.
+  // Branch remains exact-head-only, therefore the scheduling-window head is the
+  // architectural owner of any branchValid execution response accepted here.
+  io.branchResolution.valid := execution.io.response.fire &&
+    execution.io.response.bits.branchValid
+  io.branchResolution.bits.pc := dependencyBackend.io.head.bits.decoded.pc
+  io.branchResolution.bits.kind := dependencyBackend.io.head.bits.decoded.controlFlow.kind
+  io.branchResolution.bits.taken := execution.io.response.bits.branchTaken
+  io.branchResolution.bits.target := execution.io.response.bits.branchTarget
+  when(io.branchResolution.valid) {
+    assert(dependencyBackend.io.head.valid,
+      "branch predictor training requires an exact live ROB head")
+    assert(dependencyBackend.io.head.bits.executionClass === ExecutionClass.Branch,
+      "branch predictor training must originate from Branch execution")
+    assert(sameRobToken(
+      execution.io.response.bits.robToken,
+      dependencyBackend.io.head.bits.robToken
+    ), "branch predictor training response must match exact ROB head lifetime")
+  }
 
   io.branchRedirect.valid := dependencyBackend.io.acceptedRecovery.valid
   io.branchRedirect.bits := 0.U.asTypeOf(new RecoveryRedirect(xlen))
