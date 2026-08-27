@@ -13,6 +13,8 @@ import aethercore.common.AluOp
   */
 class TinyComputeAvailability extends Bundle {
   val integer = Bool()
+  // Experimental second Integer lane. No second MUL/DIV/Branch/Memory resource.
+  val integerShadow = Bool()
   val multiply = Bool()
   val divide = Bool()
 }
@@ -44,6 +46,8 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val block = Input(Bool())
     val availability = Input(new TinyComputeAvailability)
     val request = Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
+    val shadowIntegerRequest =
+      Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
   })
 
   private val issuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
@@ -92,6 +96,7 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     bypassOpen(age) := bypassOpen(age - 1) && !olderBlocksBypass
   }
 
+  private val issueSafe = Wire(Vec(Entries, Bool()))
   private val eligible = Wire(Vec(Entries, Bool()))
   for (age <- 0 until Entries) {
     val entry = io.window(age)
@@ -100,7 +105,7 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
     val safeClass = entry.uop.executionClass === ExecutionClass.Integer ||
       entry.uop.executionClass === ExecutionClass.MulDiv
 
-    eligible(age) := bypassOpen(age) &&
+    issueSafe(age) := bypassOpen(age) &&
       entry.valid &&
       !entry.complete &&
       entry.dependenciesValid &&
@@ -108,8 +113,9 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
       !entry.uop.decoded.exception.valid &&
       entry.uop.decoded.ordering === OrderingClass.Normal &&
       safeClass &&
-      resourceReady(entry) &&
       !alreadyIssued
+
+    eligible(age) := issueSafe(age) && resourceReady(entry)
   }
 
   // Materialize operands from each static scheduling-view entry before choosing
@@ -152,16 +158,50 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
   // age0 as the winner whenever multiple entries are eligible. Only the fully
   // materialized request is muxed across ages.
   private val selectedValid = WireDefault(false.B)
+  private val selectedAge = WireDefault(0.U(log2Ceil(Entries).W))
   private val selectedRequest = WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
   for (age <- (Entries - 1) to 0 by -1) {
     when(eligible(age)) {
       selectedValid := true.B
+      selectedAge := age.U
       selectedRequest := candidates(age)
+    }
+  }
+
+  // Minimal dual-compute experiment: choose one additional independent Integer
+  // from the same already-safe window. The shadow lane never carries MUL/DIV,
+  // Branch, Memory or System, and it may fire only when the primary compute
+  // request is accepted in the same cycle.
+  private val shadowEligible = Wire(Vec(Entries, Bool()))
+  for (age <- 0 until Entries) {
+    shadowEligible(age) := issueSafe(age) &&
+      io.window(age).uop.executionClass === ExecutionClass.Integer &&
+      io.availability.integerShadow &&
+      (!selectedValid || selectedAge =/= age.U)
+  }
+
+  private val shadowSelectedValid = WireDefault(false.B)
+  private val shadowSelectedRequest =
+    WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
+  for (age <- (Entries - 1) to 0 by -1) {
+    when(shadowEligible(age)) {
+      shadowSelectedValid := true.B
+      shadowSelectedRequest := candidates(age)
     }
   }
 
   io.request.valid := selectedValid && !io.block
   io.request.bits := selectedRequest
+  io.shadowIntegerRequest.valid :=
+    shadowSelectedValid && !io.block && io.request.valid && io.request.ready
+  io.shadowIntegerRequest.bits := shadowSelectedRequest
+
+  when(io.shadowIntegerRequest.valid) {
+    assert(io.shadowIntegerRequest.bits.executionClass === ExecutionClass.Integer,
+      "shadow compute lane must remain Integer-only")
+    assert(!sameRobToken(io.shadowIntegerRequest.bits.robToken, io.request.bits.robToken),
+      "dual-compute lanes must never issue the same ROB lifetime")
+  }
 
   // Allocation starts a fresh physical-slot issue lifetime even if the bounded
   // generation space eventually wraps. No uOp is copied into this scoreboard.
@@ -171,6 +211,12 @@ class TinySelectiveComputeIssue(val xlen: Int) extends Module {
 
   when(io.request.fire) {
     val token = io.request.bits.robToken
+    issuedValid(token.index) := true.B
+    issuedToken(token.index) := token
+  }
+
+  when(io.shadowIntegerRequest.fire) {
+    val token = io.shadowIntegerRequest.bits.robToken
     issuedValid(token.index) := true.B
     issuedToken(token.index) := token
   }
