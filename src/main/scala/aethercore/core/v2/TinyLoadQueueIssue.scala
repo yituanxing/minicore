@@ -62,11 +62,11 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     // head Branch requires recovery. A completed Branch that remains ahead of
     // a live younger Load on the following cycle is therefore already on the
     // validated correct path; retirement stays precise and in order.
-    val completedNormalBranch = entry.valid &&
-      entry.complete &&
-      entry.uop.executionClass === ExecutionClass.Branch &&
-      entry.uop.decoded.ordering === OrderingClass.Normal &&
-      !entry.uop.decoded.exception.valid
+    // Hot-path cut: the ROB registers the exact completion-time proof.
+    // Selector no longer re-decodes execution class / ordering / exception
+    // fields for every older entry on every cycle.
+    val completedNormalBranch =
+      entry.valid && entry.complete && entry.completedBranchSafe
 
     pureCompute || safeOlderLoad || completedNormalBranch
   }
