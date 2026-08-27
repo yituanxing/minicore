@@ -225,10 +225,49 @@ class TinyPagedCore(
   private val predictedTarget = pc + decoded.immediate
   private val predictDirectJumpTaken =
     predictableBranch && decoded.controlFlow.kind === ControlFlowKind.DirectJump
-  private val predictBackwardConditionalTaken =
+
+  // BHT64 experiment: retain BTFNT as the cold/alias-reset fallback, then let a
+  // tiny direct-mapped 2-bit counter table learn only Conditional direction.
+  // With C enabled, bit 0 is always zero, so PC[6:1] gives 64 useful indices.
+  // No BTB, RAS, global history, checkpoints, or speculative table updates are
+  // introduced.
+  private val BhtEntries = 64
+  private val BhtIndexBits = log2Ceil(BhtEntries)
+  private val bhtValid = RegInit(VecInit(Seq.fill(BhtEntries)(false.B)))
+  private val bhtCounter = Reg(Vec(BhtEntries, UInt(2.W)))
+  private val bhtIndex = pc(BhtIndexBits, 1)
+  private val bhtColdTaken = decoded.immediate(Xlen - 1)
+  private val bhtPredictTaken = Mux(
+    bhtValid(bhtIndex),
+    bhtCounter(bhtIndex)(1),
+    bhtColdTaken
+  )
+  private val predictConditionalTaken =
     predictableBranch && decoded.controlFlow.kind === ControlFlowKind.Conditional &&
-      decoded.immediate(Xlen - 1)
-  private val predictTaken = predictDirectJumpTaken || predictBackwardConditionalTaken
+      bhtPredictTaken
+  private val predictTaken = predictDirectJumpTaken || predictConditionalTaken
+
+  private val train = backend.io.branchResolution
+  private val trainConditional =
+    train.valid && train.bits.kind === ControlFlowKind.Conditional
+  private val trainIndex = train.bits.pc(BhtIndexBits, 1)
+  when(trainConditional) {
+    when(!bhtValid(trainIndex)) {
+      bhtValid(trainIndex) := true.B
+      // First real outcome establishes a weak state in its own direction.
+      bhtCounter(trainIndex) := Mux(train.bits.taken, 2.U, 1.U)
+    }.otherwise {
+      when(train.bits.taken) {
+        when(bhtCounter(trainIndex) =/= 3.U) {
+          bhtCounter(trainIndex) := bhtCounter(trainIndex) + 1.U
+        }
+      }.otherwise {
+        when(bhtCounter(trainIndex) =/= 0.U) {
+          bhtCounter(trainIndex) := bhtCounter(trainIndex) - 1.U
+        }
+      }
+    }
+  }
 
   backend.io.dispatch.valid :=
     (if (isa.hasC) parcel.get.io.instructionValid else fetch.io.responseValid) &&
