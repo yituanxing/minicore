@@ -85,6 +85,10 @@ void emitSnapshot(const Top& top, const char* reason) {
       << " ptw_active=" << static_cast<std::uint64_t>(top.ioPerfPtwActive)
       << " completion_collision=" << static_cast<std::uint64_t>(top.ioPerfCompletionCollision)
       << " completion_backpressure=" << static_cast<std::uint64_t>(top.ioPerfCompletionBackpressure)
+      << "\nAETHERCORE_V2_PERF"
+      << " loadq_capacity_blocked=" << static_cast<std::uint64_t>(top.ioV12LoadqCapacityBlocked)
+      << " completed_branch_barrier=" << static_cast<std::uint64_t>(top.ioV12CompletedBranchBarrier)
+      << " completed_store_barrier=" << static_cast<std::uint64_t>(top.ioV12CompletedStoreBarrier)
       << "\n";
 }
 
