@@ -29,6 +29,10 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     val bypassable = Input(Vec(Slots, Valid(new RobToken(IdentityBits, GenerationBits))))
     val request = Decoupled(new TinyMemoryRequest(xlen, IdentityBits, GenerationBits))
     val preHead = Output(Bool())
+
+    // Observation-only counterfactual seams. They never feed request policy.
+    val completedStoreBarrierOpportunity = Output(Bool())
+    val incompleteStoreBarrierOpportunity = Output(Bool())
   })
 
   private val issuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
@@ -71,26 +75,51 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     pureCompute || safeOlderLoad || completedNormalBranch
   }
 
+  private def ordinaryNormalStore(entry: TinySchedulingEntry): Bool =
+    entry.valid &&
+      entry.uop.executionClass === ExecutionClass.Memory &&
+      entry.uop.decoded.memory.kind === MemoryOperationKind.Store &&
+      entry.uop.decoded.ordering === OrderingClass.Normal &&
+      !entry.uop.decoded.exception.valid
+
   private val bypassOpen = Wire(Vec(Entries, Bool()))
+  private val completedStoreRelaxedBypassOpen = Wire(Vec(Entries, Bool()))
+  private val anyStoreRelaxedBypassOpen = Wire(Vec(Entries, Bool()))
   bypassOpen(0) := true.B
+  completedStoreRelaxedBypassOpen(0) := true.B
+  anyStoreRelaxedBypassOpen(0) := true.B
   for (age <- 1 until Entries) {
-    bypassOpen(age) := bypassOpen(age - 1) && olderMayBeCrossed(io.window(age - 1))
+    val older = io.window(age - 1)
+    bypassOpen(age) := bypassOpen(age - 1) && olderMayBeCrossed(older)
+    completedStoreRelaxedBypassOpen(age) :=
+      completedStoreRelaxedBypassOpen(age - 1) &&
+        (olderMayBeCrossed(older) || (ordinaryNormalStore(older) && older.complete))
+    anyStoreRelaxedBypassOpen(age) :=
+      anyStoreRelaxedBypassOpen(age - 1) &&
+        (olderMayBeCrossed(older) || ordinaryNormalStore(older))
   }
 
   private val eligible = Wire(Vec(Entries, Bool()))
+  private val completedStoreRelaxedEligible = Wire(Vec(Entries, Bool()))
+  private val anyStoreRelaxedEligible = Wire(Vec(Entries, Bool()))
   private val candidates = Wire(Vec(Entries, new TinyMemoryRequest(xlen, IdentityBits, GenerationBits)))
 
   for (age <- 0 until Entries) {
     val entry = io.window(age)
     val token = entry.uop.robToken
     val alreadyIssued = issuedValid(token.index) && sameToken(issuedToken(token.index), token)
-
-    eligible(age) := bypassOpen(age) &&
+    val candidateReady =
       ordinaryNormalLoad(entry) &&
       !entry.complete &&
       entry.dependenciesValid &&
       entry.operandsReady &&
       !alreadyIssued
+
+    eligible(age) := bypassOpen(age) && candidateReady
+    completedStoreRelaxedEligible(age) :=
+      completedStoreRelaxedBypassOpen(age) && candidateReady
+    anyStoreRelaxedEligible(age) :=
+      anyStoreRelaxedBypassOpen(age) && candidateReady
 
     val candidate = WireDefault(0.U.asTypeOf(new TinyMemoryRequest(xlen, IdentityBits, GenerationBits)))
     candidate.robToken := token
@@ -119,9 +148,27 @@ class TinyLoadQueueIssue(val xlen: Int) extends Module {
     }
   }
 
+  private val completedStoreRelaxedSelectedValid =
+    completedStoreRelaxedEligible.asUInt.orR
+  private val anyStoreRelaxedSelectedValid =
+    anyStoreRelaxedEligible.asUInt.orR
+
   io.request.valid := selectedValid && io.available && !io.block
   io.request.bits := selectedRequest
   io.preHead := io.request.valid && selectedAge =/= 0.U
+
+  val completedStoreBarrier =
+    !selectedValid && completedStoreRelaxedSelectedValid &&
+      io.available && !io.block
+  val anyStoreBarrier =
+    !selectedValid && anyStoreRelaxedSelectedValid &&
+      io.available && !io.block
+
+  io.completedStoreBarrierOpportunity := completedStoreBarrier
+  // Partition Store-only opportunity: cycles that require relaxing at least
+  // one still-incomplete Store, after completed-Store-only opportunity is
+  // removed. This is an upper bound for a real StoreQ/disambiguation design.
+  io.incompleteStoreBarrierOpportunity := anyStoreBarrier && !completedStoreBarrier
 
   when(io.allocated.valid) {
     issuedValid(io.allocated.bits.robToken.index) := false.B
