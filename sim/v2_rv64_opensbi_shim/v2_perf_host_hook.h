@@ -238,7 +238,13 @@ template <typename Top>
 bool v2PerfStep(Top& top, VerilatedContext& context, Memory& memory,
                 bool rxValid, std::uint8_t rxByte) {
 #ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
-  const bool accepted = v2perf_detail::adaptiveStep(top, context, memory, rxValid, rxByte);
+  // The adaptive zero-wait fast path owns an optimized settle sequence that
+  // intentionally bypasses the shared step(). Any configured memory latency
+  // must instead use the qualified shared transport so memReady backpressure,
+  // exact wait counting and store/atomic acceptance remain single-owned.
+  const bool accepted = dataMemoryWaitCycles() == 0
+      ? v2perf_detail::adaptiveStep(top, context, memory, rxValid, rxByte)
+      : step(top, context, memory, rxValid, rxByte);
 #else
   const bool accepted = step(top, context, memory, rxValid, rxByte);
 #endif

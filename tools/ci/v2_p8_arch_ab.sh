@@ -11,6 +11,10 @@ MILESTONE="${MILESTONE:-clocksource: riscv_clocksource}"
 MAX_CYCLES="${MAX_CYCLES:-120000000}"
 PROGRESS_INTERVAL_CYCLES="${PROGRESS_INTERVAL_CYCLES:-10000000}"
 DATA_MEM_WAIT_CYCLES="${DATA_MEM_WAIT_CYCLES:-0}"
+LATENCY_SIM_CXXFLAGS=""
+if [[ "$DATA_MEM_WAIT_CYCLES" != "0" ]]; then
+  LATENCY_SIM_CXXFLAGS="-DAETHERCORE_SIM_REFERENCE_SETTLE"
+fi
 OUT_ROOT="${OUT_ROOT:-$ROOT/build/v2-p8-arch-ab}"
 TOP="${TOP:-AetherCoreV2OpenSbiRV64SimTop}"
 ELABORATE_MAIN="${ELABORATE_MAIN:-aethercore.ElaborateV2OpenSbiRV64}"
@@ -25,8 +29,8 @@ git cat-file -e "$BASELINE_SHA^{commit}"
 mkdir -p "$OUT_ROOT"
 FW_BIN="$(realpath "$FW_BIN")"
 sha256sum "$FW_BIN" | tee "$OUT_ROOT/workload.sha256"
-printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\ndata_mem_wait_cycles=%s\nmeasurement_overlay=host-only-marker+data-memory-wait\n' \
-  "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" "$DATA_MEM_WAIT_CYCLES" \
+printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\ndata_mem_wait_cycles=%s\nlatency_sim_cxxflags=%s\nmeasurement_overlay=host-only-marker+data-memory-wait\n' \
+  "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" "$DATA_MEM_WAIT_CYCLES" "$LATENCY_SIM_CXXFLAGS" \
   | tee "$OUT_ROOT/identity.txt"
 
 TMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/aethercore-v2-p8-arch-ab.XXXXXX")"
@@ -76,10 +80,36 @@ PY
 install_marker_overlay "$BASE_SRC"
 install_marker_overlay "$TARGET_SRC"
 
+install_memory_wait_overlay() {
+  local src="$1"
+  local makefile="$src/Makefile.l32-linux-boot"
+  local wait_cycles="$2"
+  python3 - "$makefile" "$wait_cycles" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+wait = sys.argv[2]
+if not re.fullmatch(r"[0-9]+", wait):
+    raise SystemExit(f"invalid data-memory wait: {wait!r}")
+
+text = path.read_text()
+old = "\t\t$(OBJ_DIR)/V$(TOP) \""
+new = f"\t\tenv AETHERCORE_DATA_MEM_WAIT_CYCLES={wait} $(OBJ_DIR)/V$(TOP) \""
+if text.count(old) != 1:
+    raise SystemExit(f"expected one cold-run simulator launch in {path}, found {text.count(old)}")
+path.write_text(text.replace(old, new, 1))
+print(f"AETHERCORE_ARCH_AB_MEMORY_EXEC_OVERLAY path={path} wait_cycles={wait}")
+PY
+}
+
 if [[ "$DATA_MEM_WAIT_CYCLES" != "0" ]]; then
   # Measurement-only host overlay: both detached source trees must use the
   # identical latency model so the A/B changes only target RTL/cache semantics.
   cp "$TARGET_SRC/sim/l32_opensbi_runtime.h" "$BASE_SRC/sim/l32_opensbi_runtime.h"
+  install_memory_wait_overlay "$BASE_SRC" "$DATA_MEM_WAIT_CYCLES"
+  install_memory_wait_overlay "$TARGET_SRC" "$DATA_MEM_WAIT_CYCLES"
   echo "AETHERCORE_ARCH_AB_MEMORY_OVERLAY wait_cycles=$DATA_MEM_WAIT_CYCLES"
 fi
 
@@ -133,11 +163,6 @@ run_variant() {
   mkdir -p "$build"
   echo "AETHERCORE_ARCH_AB_BEGIN variant=$variant sha=$sha"
 
-  # Export explicitly rather than relying on GNU make's command-line-variable
-  # propagation. The detached baseline uses its historical Makefile, so the
-  # host latency model must enter through the process environment.
-  export AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"
-
   make -C "$src" -f Makefile.l32-linux-boot \
     BUILD_DIR="$build" \
     TOP="$TOP" \
@@ -148,7 +173,7 @@ run_variant() {
     MILESTONE="$MILESTONE" \
     PROGRESS_INTERVAL_CYCLES="$PROGRESS_INTERVAL_CYCLES" \
     VERILATOR='verilator -LDFLAGS -ldl' \
-    SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
+    SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF $LATENCY_SIM_CXXFLAGS -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
     run-local 2>&1 | tee "$run_log"
 
   grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$run_log"
