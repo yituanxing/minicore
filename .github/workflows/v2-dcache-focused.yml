@@ -1,0 +1,42 @@
+name: AetherCore V2 D-cache Focused
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
+      - 'src/test/scala/aethercore/AetherDirectMappedReadCacheSpec.scala'
+      - '.github/workflows/v2-dcache-focused.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-dcache-focused-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    name: D-cache focused semantics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Run exact D-cache semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherDirectMappedReadCacheSpec
