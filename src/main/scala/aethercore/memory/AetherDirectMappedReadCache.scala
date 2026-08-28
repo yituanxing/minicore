@@ -68,10 +68,14 @@ class AetherDirectMappedReadCache(
     })
 
   private val lineValid = RegInit(VecInit(Seq.fill(entries)(false.B)))
-  private val lineTag = Reg(Vec(entries, UInt(TagBits.W)))
-  private val lineData = Reg(Vec(entries, UInt(dataBits.W)))
-  private val lineByteValid =
-    RegInit(VecInit(Seq.fill(entries)(0.U(BeatBytes.W))))
+  // Keep the large cache payload/tag/byte-valid arrays in asynchronous Mem
+  // form so FPGA synthesis can infer LUTRAM/BRAM-friendly storage instead of
+  // expanding every entry into flip-flops plus wide dynamic-index muxes.
+  // lineValid remains resettable register state; when it is false, the
+  // uninitialized contents of these memories are architecturally irrelevant.
+  private val lineTag = Mem(entries, UInt(TagBits.W))
+  private val lineData = Mem(entries, UInt(dataBits.W))
+  private val lineByteValid = Mem(entries, UInt(BeatBytes.W))
   // Incremented by write/atomic traffic to conservatively suppress an older
   // read fill from being installed after a later writer touched this index.
   private val lineEpoch =
@@ -215,7 +219,7 @@ class AetherDirectMappedReadCache(
       lineEpoch(reqIndex) := lineEpoch(reqIndex) + 1.U
       when(lineValid(reqIndex) && lineTag(reqIndex) === reqTag) {
         lineValid(reqIndex) := false.B
-        lineByteValid(reqIndex) := 0.U
+        lineByteValid.write(reqIndex, 0.U)
       }
     }
   }
@@ -245,9 +249,9 @@ class AetherDirectMappedReadCache(
         )
 
       lineValid(index) := true.B
-      lineTag(index) := tag
-      lineData(index) := mergeBytes(oldData, shifted, fillMask(responseTxn))
-      lineByteValid(index) := oldMask | fillMask(responseTxn)
+      lineTag.write(index, tag)
+      lineData.write(index, mergeBytes(oldData, shifted, fillMask(responseTxn)))
+      lineByteValid.write(index, oldMask | fillMask(responseTxn))
     }
     fillValid(responseTxn) := false.B
   }
