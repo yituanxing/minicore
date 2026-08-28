@@ -82,6 +82,9 @@ class AetherSoCUnifiedHostMemoryAdapter(
     )
   )
 
+  private val incomingInstructionFire =
+    io.request.fire && incomingSource === InstructionSource.U
+
   when(io.request.fire) {
     switch(incomingSource) {
       is(DataSource.U) {
@@ -104,12 +107,26 @@ class AetherSoCUnifiedHostMemoryAdapter(
       "unified host adapter received an invalid AetherMem source tag")
   }
 
-  io.imemValid := instructionActive
-  io.imemAddr := instructionRequest.paddr
+  // Historical instruction RAM is combinational. When a fresh instruction
+  // request is accepted and the response arbiter is free, expose that request
+  // directly to the host and return it in the same cycle. If arbitration blocks
+  // the response, instructionRequest/instructionActive preserve the old held
+  // transaction semantics.
+  private val instructionVisible =
+    instructionActive || incomingInstructionFire
+  private val visibleInstructionAddr =
+    Mux(instructionActive, instructionRequest.paddr, io.request.bits.paddr)
+  private val visibleInstructionSize =
+    Mux(instructionActive, instructionRequest.size, io.request.bits.size)
+  private val visibleInstructionTxnId =
+    Mux(instructionActive, instructionRequest.txnId, io.request.bits.txnId)
+
+  io.imemValid := instructionVisible
+  io.imemAddr := visibleInstructionAddr
   io.imemBytes := Mux(
-    instructionRequest.size === MemSize.Half,
+    visibleInstructionSize === MemSize.Half,
     2.U,
-    Mux(instructionRequest.size === MemSize.Word, 4.U, 0.U)
+    Mux(visibleInstructionSize === MemSize.Word, 4.U, 0.U)
   )
 
   io.ptwValid := ptwActive
@@ -141,11 +158,11 @@ class AetherSoCUnifiedHostMemoryAdapter(
   responses.io.in(PtwSource).bits.fault := io.ptwFault
   responses.io.in(PtwSource).bits.last := true.B
 
-  // Historical instruction memory is combinational/zero-wait. Once an
-  // instruction request has been captured, its host response is available for
-  // the response arbiter without a separate ready input.
-  responses.io.in(InstructionSource).valid := instructionActive
-  responses.io.in(InstructionSource).bits.txnId := instructionRequest.txnId
+  // Zero-wait instruction RAM may complete either a held request or the fresh
+  // request accepted this cycle. RR arbitration still owns response bandwidth;
+  // a fresh request that loses arbitration remains captured in instructionActive.
+  responses.io.in(InstructionSource).valid := instructionVisible
+  responses.io.in(InstructionSource).bits.txnId := visibleInstructionTxnId
   responses.io.in(InstructionSource).bits.rdata := io.imemInst.pad(dataBits)
   responses.io.in(InstructionSource).bits.fault := io.imemFault
   responses.io.in(InstructionSource).bits.last := true.B
@@ -162,10 +179,10 @@ class AetherSoCUnifiedHostMemoryAdapter(
     instructionActive := false.B
   }
 
-  when(instructionActive) {
+  when(instructionVisible) {
     assert(
-      instructionRequest.size === MemSize.Half ||
-        instructionRequest.size === MemSize.Word,
+      visibleInstructionSize === MemSize.Half ||
+        visibleInstructionSize === MemSize.Word,
       "unified host instruction request must be 2 or 4 bytes"
     )
   }
