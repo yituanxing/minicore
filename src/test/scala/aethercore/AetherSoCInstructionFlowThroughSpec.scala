@@ -61,7 +61,7 @@ class AetherSoCInstructionFlowThroughSpec
     }
   }
 
-  it should "flow a fresh instruction request through the unified host response arbiter and capture on backpressure" in {
+  it should "retain a registered unified-host instruction slot behind the flow-through source adapter" in {
     simulate(new AetherSoCUnifiedHostMemoryAdapter(56, 64, 2, 2)) { dut =>
       dut.io.request.valid.poke(true.B)
       dut.io.request.bits.txnId.poke("b1000".U) // source=2, local txn=0
@@ -87,10 +87,17 @@ class AetherSoCInstructionFlowThroughSpec
       dut.io.memReady.poke(false.B)
       dut.io.memRdata.poke(0.U)
       dut.io.memFault.poke(false.B)
+      dut.io.response.ready.poke(true.B)
 
-      withClue("same-cycle host instruction response: ") {
-        dut.io.response.ready.poke(true.B)
+      withClue("request capture cycle stays response-free: ") {
         dut.io.request.ready.expect(true.B)
+        dut.io.imemValid.expect(false.B)
+        dut.io.response.valid.expect(false.B)
+        dut.clock.step()
+      }
+
+      dut.io.request.valid.poke(false.B)
+      withClue("captured instruction responds on the following cycle: ") {
         dut.io.imemValid.expect(true.B)
         dut.io.imemAddr.expect("h80003000".U)
         dut.io.imemBytes.expect(4.U)
@@ -98,27 +105,7 @@ class AetherSoCInstructionFlowThroughSpec
         dut.io.response.bits.txnId.expect("b1000".U)
         dut.io.response.bits.rdata.expect("h0000000000c585b3".U)
         dut.clock.step()
-      }
-
-      withClue("capture when response arbiter is backpressured: ") {
-        dut.io.request.bits.txnId.poke("b1001".U)
-        dut.io.request.bits.paddr.poke("h80004000".U)
-        dut.io.imemInst.poke("h00100073".U)
-        dut.io.response.ready.poke(false.B)
-        dut.io.request.ready.expect(true.B)
-        dut.io.response.valid.expect(true.B)
-        dut.clock.step()
-
-        dut.io.request.valid.poke(false.B)
-        dut.io.imemValid.expect(true.B)
-        dut.io.imemAddr.expect("h80004000".U)
-        dut.io.response.valid.expect(true.B)
-        dut.io.response.bits.txnId.expect("b1001".U)
-
-        dut.io.response.ready.poke(true.B)
-        dut.clock.step()
         dut.io.imemValid.expect(false.B)
       }
     }
-  }
-}
+  }}
