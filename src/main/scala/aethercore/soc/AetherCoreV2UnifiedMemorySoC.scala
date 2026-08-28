@@ -112,6 +112,7 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   instructionCache.io.frontendValid := platform.io.imemValid
   instructionCache.io.frontendAddr := platform.io.imemAddr
   instructionCache.io.frontendBytes := platform.io.imemBytes
+  instructionCache.io.frontendLineFillAllowed := platform.io.imemLineFillAllowed
   instructionCache.io.invalidateAll := platform.io.instructionFence
   platform.io.imemReady.get := instructionCache.io.frontendReady
   platform.io.imemInst := instructionCache.io.frontendInst
