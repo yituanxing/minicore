@@ -51,6 +51,8 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
+    val icacheHitCount = Output(UInt(64.W))
+    val icacheMissCount = Output(UInt(64.W))
 
     val commit = Output(new CommitTrace(xlen, paddrBits, dataBits))
     val halted = Output(Bool())
@@ -72,10 +74,11 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
     pteBits = 64,
     txnIdBits = clientTxnIdBits
   ))
-  val instructionAdapter = Module(new AetherSoCInstructionReadAdapter(
+  val instructionCache = Module(new AetherSoCInstructionCache(
     addrBits = paddrBits,
     dataBits = dataBits,
-    txnIdBits = clientTxnIdBits
+    txnIdBits = clientTxnIdBits,
+    entries = 64
   ))
   val hub = Module(new AetherSoCMemoryHub(
     addrBits = paddrBits,
@@ -104,15 +107,15 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   platform.io.ptwRdata := ptwAdapter.io.legacyRdata
   platform.io.ptwFault := ptwAdapter.io.legacyFault
 
-  // Instruction fetch uses the already-qualified optional frontend
-  // backpressure seam so variable-latency unified memory cannot advance the PC
-  // before the exact physical fetch response is available.
-  instructionAdapter.io.legacyValid := platform.io.imemValid
-  instructionAdapter.io.legacyAddr := platform.io.imemAddr
-  instructionAdapter.io.legacyBytes := platform.io.imemBytes
-  platform.io.imemReady.get := instructionAdapter.io.legacyReady
-  platform.io.imemInst := instructionAdapter.io.legacyInst
-  platform.io.imemFault := instructionAdapter.io.legacyFault
+  // I-cache hits satisfy the optional frontend backpressure seam in the same
+  // cycle. Misses remain registered AetherMem lifetimes through MemoryHub.
+  instructionCache.io.frontendValid := platform.io.imemValid
+  instructionCache.io.frontendAddr := platform.io.imemAddr
+  instructionCache.io.frontendBytes := platform.io.imemBytes
+  instructionCache.io.invalidateAll := platform.io.instructionFence
+  platform.io.imemReady.get := instructionCache.io.frontendReady
+  platform.io.imemInst := instructionCache.io.frontendInst
+  platform.io.imemFault := instructionCache.io.frontendFault
 
   hub.io.clients(0).request <> dataAdapter.io.request
   dataAdapter.io.response <> hub.io.clients(0).response
@@ -120,8 +123,8 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   hub.io.clients(1).request <> ptwAdapter.io.request
   ptwAdapter.io.response <> hub.io.clients(1).response
 
-  hub.io.clients(2).request <> instructionAdapter.io.request
-  instructionAdapter.io.response <> hub.io.clients(2).response
+  hub.io.clients(2).request <> instructionCache.io.request
+  instructionCache.io.response <> hub.io.clients(2).response
 
   // Export exactly one semantic memory master.
   io.memoryRequest.valid := hub.io.downstreamRequest.valid
@@ -153,6 +156,8 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   io.dcacheHitCount := platform.io.dcacheHitCount
   io.dcacheMissCount := platform.io.dcacheMissCount
   io.dcacheBypassCount := platform.io.dcacheBypassCount
+  io.icacheHitCount := instructionCache.io.hitCount
+  io.icacheMissCount := instructionCache.io.missCount
   io.commit := platform.io.commit
   io.halted := platform.io.halted
 }
