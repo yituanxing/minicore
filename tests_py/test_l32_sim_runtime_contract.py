@@ -7,6 +7,7 @@ COLD = ROOT / "sim/opensbi_boot_main.cpp"
 FORKSERVER = ROOT / "sim/opensbi_forkserver_main.cpp"
 MAKEFILE = ROOT / "Makefile.l32-linux-boot"
 ARCH_AB = ROOT / "tools/ci/v2_p8_arch_ab.sh"
+V2_PERF_HOOK = ROOT / "sim/v2_rv64_opensbi_shim/v2_perf_host_hook.h"
 
 
 class L32SimRuntimeContractTest(unittest.TestCase):
@@ -123,6 +124,12 @@ class L32SimRuntimeContractTest(unittest.TestCase):
         self.assertIn("observed_stall_cycles=$DATA_MEM_WAIT_CYCLES", text)
         self.assertIn("AETHERCORE_ARCH_AB_MEMORY_QUALIFIED", text)
         self.assertIn("exit 15", text)
+
+    def test_v2_perf_latency_uses_shared_qualified_step(self):
+        text = V2_PERF_HOOK.read_text()
+        self.assertIn("dataMemoryWaitCycles() == 0", text)
+        self.assertIn("? v2perf_detail::adaptiveStep", text)
+        self.assertIn(": step(top, context, memory, rxValid, rxByte);", text)
 
     def test_arch_ab_persists_qualified_linux_software_cache(self):
         workflow = (ROOT / ".github/workflows/v2-p8-architecture-ab.yml").read_text()
