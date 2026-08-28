@@ -6,7 +6,7 @@ import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
 import aethercore.core.v2.TinyPagedCore
-import aethercore.memory.{AetherDirectMappedReadCache, AetherMemOp, AetherMemRequest}
+import aethercore.memory.{AetherDirectMappedReadCache, AetherMemOp, AetherMemRequest, MemoryAttributes}
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
@@ -20,7 +20,10 @@ import aethercore.memory.{AetherDirectMappedReadCache, AetherMemOp, AetherMemReq
   * qualified OpenSBI host runner can be reused. memAtomic/memAtomicOp are the
   * only additions required to retain LR/SC/AMO semantics at the memory owner.
   */
-class AetherCoreV2LinuxSoC extends Module {
+class AetherCoreV2LinuxSoC(
+    val enableInstructionBackpressure: Boolean = false,
+    val exposeExternalMemoryAttributes: Boolean = false
+) extends Module {
   private val config = CoreProfiles.rv64imasuSv39PmpSoftware.copy(
     name = "rv64imasu-sv39-pmp-opensbi-v2",
     isa = CoreProfiles.rv64imasuSv39PmpSoftware.isa.copy(
@@ -50,6 +53,8 @@ class AetherCoreV2LinuxSoC extends Module {
     val imemBytes = Output(UInt(3.W))
     val imemInst = Input(UInt(32.W))
     val imemFault = Input(Bool())
+    val imemReady =
+      if (enableInstructionBackpressure) Some(Input(Bool())) else None
 
     val memValid = Output(Bool())
     val memWrite = Output(Bool())
@@ -63,6 +68,8 @@ class AetherCoreV2LinuxSoC extends Module {
     val memReady = Input(Bool())
     val memRdata = Input(UInt(busDataBits.W))
     val memFault = Input(Bool())
+    val memAttributes =
+      if (exposeExternalMemoryAttributes) Some(Output(new MemoryAttributes)) else None
 
     val ptwValid = Output(Bool())
     val ptwAddr = Output(UInt(paddrBits.W))
@@ -104,6 +111,7 @@ class AetherCoreV2LinuxSoC extends Module {
     config,
     geometry,
     txnIdBits = txnIdBits,
+    enableInstructionBackpressure = enableInstructionBackpressure,
     enableAsyncInterrupts = true,
     withSupervisorExternalInterrupt = true
   ))
@@ -114,6 +122,9 @@ class AetherCoreV2LinuxSoC extends Module {
   io.imemBytes := core.io.imem.bytes
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
+  if (enableInstructionBackpressure) {
+    core.io.imemReady.get := io.imemReady.get
+  }
 
   io.ptwValid := core.io.ptw.valid
   io.ptwAddr := core.io.ptw.addr
@@ -302,6 +313,9 @@ class AetherCoreV2LinuxSoC extends Module {
   io.memWdata := pending.wdata
   io.memWmask := pending.wmask
   io.memSize := pending.size
+  if (exposeExternalMemoryAttributes) {
+    io.memAttributes.get := pending.attributes
+  }
 
   val isUartTx = responseFire && pendingUart && pendingWrite &&
     uartOffset(2, 0) === 0.U && !uartDlab
