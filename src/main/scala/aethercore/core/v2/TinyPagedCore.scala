@@ -78,6 +78,10 @@ class TinyPagedCore(
     val lsuBusy = Output(Bool())
     val translationFence = Output(Bool())
     val instructionFence = Output(Bool())
+    // Read-only qualification for an FPGA-oriented 8-byte instruction-cache
+    // line fill. The ordinary 2B/4B instruction access remains independently
+    // PMP-checked below; this signal only permits an optional wider cache fill.
+    val instructionLineFillAllowed = Output(Bool())
   })
 
   val backend = Module(new TinyLoadQueueMemoryBackend(
@@ -97,6 +101,7 @@ class TinyPagedCore(
   val fetch = Module(new InstructionFetchAdapter(geometry, PhysicalBits, tlbEntries))
   val parcel = if (isa.hasC) Some(Module(new RvcParcelController(Xlen))) else None
   val instructionPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
+  val instructionLinePmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
   val ptwArbiter = Module(new PtwArbiter(geometry, PhysicalBits))
   val ptwPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
 
@@ -167,6 +172,25 @@ class TinyPagedCore(
   instructionPmp.io.execute := true.B
   instructionPmp.io.config := backend.io.frontendPmpConfig
   instructionPmp.io.pmpAddress := backend.io.frontendPmpAddress
+
+  // A cache may widen a qualified fetch to the containing 8-byte memory beat
+  // only when PMP permits execute access to every byte of that aligned beat.
+  // 8-byte alignment cannot cross the architectural 4 KiB page boundary, so
+  // the already-resolved translation remains valid for the whole candidate.
+  private val instructionLineBase =
+    Cat(fetch.io.physicalAddress(PhysicalBits - 1, 3), 0.U(3.W))
+  instructionLinePmp.io.privilege := backend.io.currentPrivilege
+  instructionLinePmp.io.address := instructionLineBase
+  instructionLinePmp.io.bytes := 8.U
+  instructionLinePmp.io.write := false.B
+  instructionLinePmp.io.execute := true.B
+  instructionLinePmp.io.config := backend.io.frontendPmpConfig
+  instructionLinePmp.io.pmpAddress := backend.io.frontendPmpAddress
+  io.instructionLineFillAllowed :=
+    fetch.io.responseValid &&
+      !fetch.io.pageFault &&
+      !fetch.io.accessFault &&
+      (!isa.hasPmp.B || instructionLinePmp.io.allow)
 
   private val instructionPmpFault = fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && isa.hasPmp.B && !instructionPmp.io.allow
