@@ -8,6 +8,7 @@ AETHER_MEM = ROOT / "src/main/scala/aethercore/memory/AetherMemLink.scala"
 PAGED = CORE_V2 / "TinyPagedCore.scala"
 SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"
 CPU_COMPLEX = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2Complex.scala"
+UART_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherUart16550.scala"
 SIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
 
 
@@ -99,6 +100,28 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
             "AetherMemToAxi4Bridge",
         ):
             self.assertNotIn(forbidden, source)
+
+    def test_uart_register_state_is_peripheral_owned(self):
+        peripheral = UART_PERIPHERAL.read_text(encoding="utf-8")
+        platform = SOC_PLATFORM.read_text(encoding="utf-8")
+
+        self.assertIn("class AetherUart16550(", peripheral)
+        self.assertIn("private val lcr = RegInit", peripheral)
+        self.assertIn("private val ier = RegInit", peripheral)
+        self.assertIn("new Queue(UInt(8.W), rxDepth)", peripheral)
+        self.assertIn("io.txValid :=", peripheral)
+        self.assertIn("io.interrupt := combinedInterrupt", peripheral)
+
+        self.assertIn("val uart = Module(new AetherUart16550(", platform)
+        self.assertIn("uart.io.request := pendingUart", platform)
+        self.assertIn("uartComplete := responseFire", platform)
+        for forbidden in (
+            "val uartLcr = RegInit",
+            "val uartIer = RegInit",
+            "val uartDll = RegInit",
+            "val uartRx = Module(new Queue",
+        ):
+            self.assertNotIn(forbidden, platform)
 
     def test_product_soc_owns_pma_mmio_and_interrupt_topology(self):
         source = SOC_PLATFORM.read_text(encoding="utf-8")
