@@ -21,13 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
   qualify:
     name: Real V2 PID1 through AXI4 AetherSoC
-    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
