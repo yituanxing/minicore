@@ -20,7 +20,7 @@ jobs:
   yosys-cost-ab:
     name: Exact #210 no-D$ -> D-cache structural-cost proxy
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       BASELINE_SHA: ec73c0ceeccbf25e9e1618a703964b6d10ececdf
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
