@@ -5,8 +5,8 @@ import chisel3.util._
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
-import aethercore.core.v2.TinyPagedCore
-import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}\nimport aethercore.soc.peripheral.AetherUart16550
+import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}
+import aethercore.soc.peripheral.AetherUart16550
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
