@@ -7,6 +7,7 @@ CORE_V2 = ROOT / "src/main/scala/aethercore/core/v2"
 AETHER_MEM = ROOT / "src/main/scala/aethercore/memory/AetherMemLink.scala"
 PAGED = CORE_V2 / "TinyPagedCore.scala"
 SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"
+CPU_COMPLEX = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2Complex.scala"
 SIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
 
 
@@ -78,6 +79,27 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, sources)
 
+    def test_cpu_complex_owns_private_cache_not_soc_devices(self):
+        source = CPU_COMPLEX.read_text(encoding="utf-8")
+
+        self.assertIn("class AetherCoreV2Complex(", source)
+        self.assertIn("val dcache = Module(new AetherDirectMappedReadCache(", source)
+        self.assertIn("dcache.io.upstreamRequest <> core.io.memoryRequest", source)
+        self.assertIn("val supervisorExternalInterrupt = Input(Bool())", source)
+        self.assertIn("val resolvedAttributes = Input(new MemoryAttributes)", source)
+
+        for forbidden in (
+            "config.platform.uartAddress",
+            "config.platform.exitAddress",
+            "config.platform.mtimeAddress",
+            "config.platform.mtimecmpAddress",
+            "MachinePlicMmio",
+            "private val ramBase =",
+            "private val plicBase =",
+            "AetherMemToAxi4Bridge",
+        ):
+            self.assertNotIn(forbidden, source)
+
     def test_product_soc_owns_pma_mmio_and_interrupt_topology(self):
         source = SOC_PLATFORM.read_text(encoding="utf-8")
 
@@ -100,7 +122,9 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
 
         self.assertIn("private val supervisorUartSourceId = 10", source)
         self.assertIn("val supervisorPlic = Module(new MachinePlicMmio", source)
-        self.assertIn("core.io.supervisorExternalInterrupt.get := supervisorPlic.io.interrupt", source)
+        self.assertIn("core.io.supervisorExternalInterrupt := supervisorPlic.io.interrupt", source)
+        self.assertIn("val core = Module(new AetherCoreV2Complex(", source)
+        self.assertNotIn("val dcache = Module(new AetherDirectMappedReadCache(", source)
         self.assertIn("assert(!(pendingMmio && pendingAtomic)", source)
 
         self.assertNotIn("package aethercore.sim", source)
