@@ -43,8 +43,14 @@ class AetherMemToAxi4Bridge(
     val axi = new Axi4MasterIO(addrBits, dataBits, txnIdBits)
   })
 
-  private val sIdle :: sDispatch :: sReadAddress :: sReadData ::
-    sWriteIssue :: sWriteResponse :: sRespond :: Nil = Enum(7)
+  private val states = Enum(7)
+  private val sIdle = states(0)
+  private val sDispatch = states(1)
+  private val sReadAddress = states(2)
+  private val sReadData = states(3)
+  private val sWriteIssue = states(4)
+  private val sWriteResponse = states(5)
+  private val sRespond = states(6)
   private val state = RegInit(sIdle)
 
   private val ReadNormal = 0.U(2.W)
