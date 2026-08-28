@@ -22,6 +22,7 @@ class AetherSoCInstructionCacheSpec
   it should "miss once, fill exact bytes, then satisfy a same-cycle hit" in {
     simulate(new AetherSoCInstructionCache()) { dut =>
       dut.io.invalidateAll.poke(false.B)
+      dut.io.frontendLineFillAllowed.poke(false.B)
       dut.io.frontendValid.poke(true.B)
       dut.io.frontendAddr.poke("h80001000".U)
       dut.io.frontendBytes.poke(2.U)
@@ -62,6 +63,7 @@ class AetherSoCInstructionCacheSpec
   it should "invalidate hits at FENCE.I and refuse stale redirected responses" in {
     simulate(new AetherSoCInstructionCache()) { dut =>
       dut.io.invalidateAll.poke(false.B)
+      dut.io.frontendLineFillAllowed.poke(false.B)
       dut.io.frontendValid.poke(true.B)
       dut.io.frontendAddr.poke("h80002000".U)
       dut.io.frontendBytes.poke(4.U)
@@ -111,4 +113,55 @@ class AetherSoCInstructionCacheSpec
       }
     }
   }
+  it should "widen only PMP/PMA-authorized misses to one full memory beat" in {
+    simulate(new AetherSoCInstructionCache()) { dut =>
+      dut.io.invalidateAll.poke(false.B)
+      dut.io.frontendValid.poke(true.B)
+      dut.io.frontendAddr.poke("h80005006".U)
+      dut.io.frontendBytes.poke(2.U)
+      dut.io.frontendLineFillAllowed.poke(true.B)
+      dut.io.request.ready.poke(true.B)
+      idleResponse(dut)
+
+      withClue("authorized miss becomes aligned DWord fill: ") {
+        dut.io.request.valid.expect(true.B)
+        dut.io.request.bits.paddr.expect("h80005000".U)
+        dut.io.request.bits.size.expect(aethercore.common.MemSize.DWord)
+      }
+      dut.clock.step()
+
+      // Bytes at offsets 0..7 are 11 22 33 44 55 66 77 88.
+      dut.io.response.valid.poke(true.B)
+      dut.io.response.bits.rdata.poke("h8877665544332211".U)
+      withClue("requesting parcel at offset 6 receives the selected bytes: ") {
+        dut.io.frontendReady.expect(true.B)
+        dut.io.frontendInst.expect("h00008877".U)
+      }
+      dut.clock.step()
+      idleResponse(dut)
+
+      val hits = Seq(
+        BigInt("80005000", 16) -> BigInt("2211", 16),
+        BigInt("80005002", 16) -> BigInt("4433", 16),
+        BigInt("80005004", 16) -> BigInt("6655", 16),
+        BigInt("80005006", 16) -> BigInt("8877", 16)
+      )
+      for ((address, parcel) <- hits) {
+        dut.io.frontendAddr.poke(address.U)
+        dut.io.frontendReady.expect(true.B)
+        dut.io.frontendInst.expect(parcel.U)
+        dut.io.request.valid.expect(false.B)
+      }
+
+      // Once the wider permission disappears, a cold line falls back to the
+      // original exact 2-byte physical request.
+      dut.io.frontendAddr.poke("h80006002".U)
+      dut.io.frontendLineFillAllowed.poke(false.B)
+      dut.io.frontendReady.expect(false.B)
+      dut.io.request.valid.expect(true.B)
+      dut.io.request.bits.paddr.expect("h80006002".U)
+      dut.io.request.bits.size.expect(aethercore.common.MemSize.Half)
+    }
+  }
+
 }
