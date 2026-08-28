@@ -165,16 +165,19 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   private val acceptedRecoveryValid =
     BoringUtils.tapAndRead(core.backend.dependencyBackend.io.acceptedRecovery.valid)
 
+  private val observedOccupancy = BoringUtils.tapAndRead(core.io.occupancy)
+  private val observedFrontendPc = BoringUtils.tapAndRead(core.io.frontendPc)
+
   events.branchResolved := acceptedCompletionValid && acceptedCompletionBranchValid
   events.branchTaken := events.branchResolved && acceptedCompletionBranchTaken
   events.branchRecovery := acceptedRecoveryValid
   events.branchSquashedUops := Mux(
     events.branchRecovery,
-    core.io.occupancy - 1.U,
+    observedOccupancy - 1.U,
     0.U
   )
   when(events.branchRecovery) {
-    assert(core.io.occupancy >= 1.U)
+    assert(observedOccupancy >= 1.U)
   }
 
   private val branchRequestValid = BoringUtils.tapAndRead(core.backend.branchIssue.io.request.valid)
@@ -192,7 +195,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   private val computeFire = computeRequestValid && computeRequestReady
   private val lsuFire = lsuRequestValid && lsuRequestReady
 
-  events.robNonEmpty := core.io.occupancy =/= 0.U
+  events.robNonEmpty := observedOccupancy =/= 0.U
   events.issueLaunch := branchFire || computeFire || lsuFire
   events.issueRequestVisible := branchRequestValid || computeRequestValid || lsuRequestValid
 
@@ -279,7 +282,7 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
     case Some(parcelController) =>
       val parcelRequestAddress =
         BoringUtils.tapAndRead(parcelController.io.parcelRequestAddress)
-      fetchRequestValid && parcelRequestAddress === (core.io.frontendPc + 2.U)
+      fetchRequestValid && parcelRequestAddress === (observedFrontendPc + 2.U)
     case None =>
       // The RV64 Linux P8 profile currently has no compressed parcel
       // controller. Keep the counter explicit and configuration-safe rather

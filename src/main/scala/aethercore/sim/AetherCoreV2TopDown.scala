@@ -240,14 +240,20 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttribution
   private val head = BoringUtils.tapAndRead(core.backend.dependencyBackend.io.schedulingWindow(0))
   private val lifetime = BoringUtils.tapAndRead(core.backend.lsu.io.lifetimeStatus)
 
+  private val observedCommitValid = BoringUtils.tapAndRead(core.io.commit.valid)
+  private val observedOccupancy = BoringUtils.tapAndRead(core.io.occupancy)
+  private val observedLsuBusy = BoringUtils.tapAndRead(core.io.lsuBusy)
+  private val observedMemoryRequestValid = BoringUtils.tapAndRead(core.io.memoryRequest.valid)
+  private val observedMemoryRequestReady = BoringUtils.tapAndRead(core.io.memoryRequest.ready)
+
   events.frontValid := dispatchValid
   events.backendReady := dispatchReady
-  events.commit := core.io.commit.valid
-  events.robNonEmpty := core.io.occupancy =/= 0.U
+  events.commit := observedCommitValid
+  events.robNonEmpty := observedOccupancy =/= 0.U
   events.headValid := head.valid
   events.headClass := head.uop.executionClass
 
-  events.lsuBusy := core.io.lsuBusy
+  events.lsuBusy := observedLsuBusy
   events.lifetimeValid := lifetime.valid
   events.memoryKind := lifetime.kind
   events.physicalAddressValid := lifetime.physicalAddressValid
@@ -255,9 +261,9 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttribution
   events.writePermitMatched := lifetime.writePermitMatched
   events.physicalRequestIssued := lifetime.physicalRequestIssued
   events.completionPending := lifetime.completionPending
-  events.memoryRequestValid := core.io.memoryRequest.valid
-  events.memoryRequestReady := core.io.memoryRequest.ready
-  events.memoryRequestFire := core.io.memoryRequest.fire
+  events.memoryRequestValid := observedMemoryRequestValid
+  events.memoryRequestReady := observedMemoryRequestReady
+  events.memoryRequestFire := observedMemoryRequestValid && observedMemoryRequestReady
 
   causal.io.events := events
 
