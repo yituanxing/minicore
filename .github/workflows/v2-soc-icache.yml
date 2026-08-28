@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y autoconf bison flex build-essential cmake ninja-build libfl-dev zlib1g-dev
+          sudo apt-get install -y verilator
 
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
@@ -49,19 +49,6 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
-
-      - name: Restore exact fixed Verilator cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cache/aethercore/toolchains/verilator-5.024
-            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b2adb316304126e5361b18bcf1
-            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b2adb316304126e5361b18bcf1
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
-
-      - name: Revalidate fixed Verilator
-        shell: bash
-        run: bash tools/ensure_verilator_5_024.sh
 
       - name: Check I-cache ownership contract
         run: python3 -m unittest tests_py.test_v2_soc_unified_memory -v
