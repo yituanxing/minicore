@@ -81,7 +81,10 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
     def test_product_soc_owns_pma_mmio_and_interrupt_topology(self):
         source = SOC_PLATFORM.read_text(encoding="utf-8")
 
-        self.assertIn("class AetherCoreV2LinuxSoC extends Module", source)
+        self.assertIn("class AetherCoreV2LinuxSoC(", source)
+        self.assertIn("enableInstructionBackpressure: Boolean = false", source)
+        self.assertIn("exposeExternalMemoryAttributes: Boolean = false", source)
+        self.assertIn(") extends Module {", source)
         self.assertIn("private val ramBase =", source)
         self.assertIn("private val plicBase =", source)
         self.assertIn("val resolvedRam = resolvedAddress >= ramBase.U", source)
@@ -107,7 +110,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
 
         self.assertIn("import aethercore.soc.AetherCoreV2LinuxSoC", source)
         self.assertIn(
-            "class AetherCoreV2OpenSbiRV64SimTop extends AetherCoreV2LinuxSoC",
+            "class AetherCoreV2OpenSbiRV64SimTop extends AetherCoreV2LinuxSoC()",
             source,
         )
         for forbidden in (

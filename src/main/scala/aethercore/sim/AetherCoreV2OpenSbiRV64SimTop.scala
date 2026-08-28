@@ -9,4 +9,4 @@ import aethercore.soc.AetherCoreV2LinuxSoC
   * aethercore.soc.AetherCoreV2LinuxSoC. Verilator runners keep this historical
   * top-level class name so existing executable evidence remains reusable.
   */
-class AetherCoreV2OpenSbiRV64SimTop extends AetherCoreV2LinuxSoC
+class AetherCoreV2OpenSbiRV64SimTop extends AetherCoreV2LinuxSoC()
