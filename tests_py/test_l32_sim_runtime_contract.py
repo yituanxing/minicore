@@ -114,7 +114,7 @@ class L32SimRuntimeContractTest(unittest.TestCase):
         # Do not re-declare the wait as a make command-line variable: doing so
         # masks the inherited environment variable without exporting it to the
         # simulator process in the detached historical Makefile.
-        self.assertEqual(text.count("AETHERCORE_DATA_MEM_WAIT_CYCLES="), 2)
+        self.assertEqual(text.count("AETHERCORE_DATA_MEM_WAIT_CYCLES="), 1)
         self.assertNotIn(
             '    AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES" \\\n',
             text,
@@ -123,6 +123,14 @@ class L32SimRuntimeContractTest(unittest.TestCase):
         self.assertIn("observed_stall_cycles=$DATA_MEM_WAIT_CYCLES", text)
         self.assertIn("AETHERCORE_ARCH_AB_MEMORY_QUALIFIED", text)
         self.assertIn("exit 15", text)
+
+    def test_arch_ab_persists_qualified_linux_software_cache(self):
+        workflow = (ROOT / ".github/workflows/v2-p8-architecture-ab.yml").read_text()
+        self.assertIn("id: rv64-software-cache", workflow)
+        self.assertIn("uses: actions/cache/save@v4", workflow)
+        self.assertIn("steps.rv64-software-cache.outputs.cache-hit != 'true'", workflow)
+        self.assertGreaterEqual(workflow.count("~/.cache/aethercore/rv64/linux-build"), 2)
+        self.assertGreaterEqual(workflow.count("~/.cache/aethercore/l32/opensbi"), 2)
 
     def test_makefile_keeps_cold_and_forkserver_as_separate_scenarios(self):
         text = MAKEFILE.read_text()
