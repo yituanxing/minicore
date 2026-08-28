@@ -1,0 +1,47 @@
+name: AetherSoC UART Peripheral Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/peripheral/AetherUart16550.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/test/scala/aethercore/AetherUart16550Spec.scala'
+      - 'tests_py/test_v2_platform_ownership.py'
+      - '.github/workflows/v2-soc-uart-peripheral.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-uart-peripheral-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  uart:
+    name: Prove standalone ns16550 UART ownership
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Check SoC ownership source contract
+        run: python3 -m unittest tests_py.test_v2_platform_ownership -v
+
+      - name: Run standalone UART behavior proof
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherUart16550Spec
