@@ -25,8 +25,8 @@ git cat-file -e "$BASELINE_SHA^{commit}"
 mkdir -p "$OUT_ROOT"
 FW_BIN="$(realpath "$FW_BIN")"
 sha256sum "$FW_BIN" | tee "$OUT_ROOT/workload.sha256"
-printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\nmeasurement_overlay=host-only-marker\n' \
-  "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" \
+printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\ndata_mem_wait_cycles=%s\nmeasurement_overlay=host-only-marker+data-memory-wait\n' \
+  "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" "$DATA_MEM_WAIT_CYCLES" \
   | tee "$OUT_ROOT/identity.txt"
 
 TMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/aethercore-v2-p8-arch-ab.XXXXXX")"
@@ -133,6 +133,11 @@ run_variant() {
   mkdir -p "$build"
   echo "AETHERCORE_ARCH_AB_BEGIN variant=$variant sha=$sha"
 
+  # Export explicitly rather than relying on GNU make's command-line-variable
+  # propagation. The detached baseline uses its historical Makefile, so the
+  # host latency model must enter through the process environment.
+  export AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"
+
   make -C "$src" -f Makefile.l32-linux-boot \
     BUILD_DIR="$build" \
     TOP="$TOP" \
@@ -142,13 +147,20 @@ run_variant() {
     MAX_CYCLES="$MAX_CYCLES" \
     MILESTONE="$MILESTONE" \
     PROGRESS_INTERVAL_CYCLES="$PROGRESS_INTERVAL_CYCLES" \
-    AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES" \
     VERILATOR='verilator -LDFLAGS -ldl' \
     SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
     run-local 2>&1 | tee "$run_log"
 
   grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$run_log"
   grep -Fq "$MILESTONE" "$run_log"
+  if [[ "$DATA_MEM_WAIT_CYCLES" != "0" ]]; then
+    local qualification="AETHERCORE_DATA_MEM_WAIT_QUALIFIED configured=$DATA_MEM_WAIT_CYCLES observed_stall_cycles=$DATA_MEM_WAIT_CYCLES"
+    grep -Fq "$qualification" "$run_log" || {
+      echo "ERROR: data-memory latency overlay was requested but not qualified variant=$variant wait_cycles=$DATA_MEM_WAIT_CYCLES" >&2
+      exit 15
+    }
+    echo "AETHERCORE_ARCH_AB_MEMORY_QUALIFIED variant=$variant wait_cycles=$DATA_MEM_WAIT_CYCLES"
+  fi
   extract_marker_snapshot "$run_log" "$OUT_ROOT/$variant.snapshot.txt"
   echo "AETHERCORE_ARCH_AB_END variant=$variant sha=$sha"
 }

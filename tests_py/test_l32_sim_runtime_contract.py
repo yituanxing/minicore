@@ -6,6 +6,7 @@ RUNTIME = ROOT / "sim/l32_opensbi_runtime.h"
 COLD = ROOT / "sim/opensbi_boot_main.cpp"
 FORKSERVER = ROOT / "sim/opensbi_forkserver_main.cpp"
 MAKEFILE = ROOT / "Makefile.l32-linux-boot"
+ARCH_AB = ROOT / "tools/ci/v2_p8_arch_ab.sh"
 
 
 class L32SimRuntimeContractTest(unittest.TestCase):
@@ -23,19 +24,24 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "void write32Masked",
             "dataBytesFromMemSize",
             "void driveMemory",
+            "bool dataReady = true",
             "top.io_imemAddr",
             "top.io_imemBytes",
             "memory.readInstruction(iaddr, ibytes)",
             "top.io_memValid",
             "top.io_memSize",
             "memory.contains(daddr, dbytes)",
-            "top.io_memReady = true",
+            "top.io_memReady = dataReady",
             "memory.readData(daddr, dbytes)",
             "top.io_ptwValid",
             "constexpr std::size_t ptwBytes = sizeof(top.io_ptwRdata);",
             "memory.contains(ptwAddr, ptwBytes)",
             "top.io_ptwReady = true",
             "memory.readData(ptwAddr, ptwBytes)",
+            "AETHERCORE_DATA_MEM_WAIT_CYCLES",
+            "dataReadyThisLowPhase",
+            "observedStallCycles",
+            "AETHERCORE_DATA_MEM_WAIT_QUALIFIED",
             "bool step",
             "void initialize",
         ):
@@ -100,6 +106,23 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "L32_FORKSERVER_PASS",
         ):
             self.assertIn(marker, forkserver)
+
+    def test_arch_ab_refuses_an_unqualified_memory_wait_overlay(self):
+        text = ARCH_AB.read_text()
+        export_line = 'export AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"'
+        self.assertIn(export_line, text)
+        # Do not re-declare the wait as a make command-line variable: doing so
+        # masks the inherited environment variable without exporting it to the
+        # simulator process in the detached historical Makefile.
+        self.assertEqual(text.count("AETHERCORE_DATA_MEM_WAIT_CYCLES="), 2)
+        self.assertNotIn(
+            '    AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES" \\\n',
+            text,
+        )
+        self.assertIn("AETHERCORE_DATA_MEM_WAIT_QUALIFIED configured=", text)
+        self.assertIn("observed_stall_cycles=$DATA_MEM_WAIT_CYCLES", text)
+        self.assertIn("AETHERCORE_ARCH_AB_MEMORY_QUALIFIED", text)
+        self.assertIn("exit 15", text)
 
     def test_makefile_keeps_cold_and_forkserver_as_separate_scenarios(self):
         text = MAKEFILE.read_text()
