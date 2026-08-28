@@ -1,0 +1,80 @@
+name: AetherSoC I-cache Fast Cost
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCInstructionCache.scala'
+      - 'src/main/scala/aethercore/ElaborateV2ICacheSynthesisRV64.scala'
+      - '.github/workflows/v2-soc-icache-cost.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-icache-cost-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synth:
+    name: I-cache ECP5 structural proxy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+
+      - name: Elaborate I-cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/icache-cost
+          ./mill aethercore.runMain aethercore.ElaborateV2ICacheSynthesisRV64             --target-dir build/icache-cost
+          find build/icache-cost -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Synthesize I-cache structural proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          sv="$(find build/icache-cost -maxdepth 1 -name '*.sv' -print -quit)"
+          yosys -Q -p "
+            read_verilog -sv -DSYNTHESIS $sv;
+            hierarchy -check -top AetherSoCInstructionCache;
+            synth_ecp5 -top AetherSoCInstructionCache;
+            stat;
+            flatten;
+            ltp -noff AetherSoCInstructionCache;
+          " 2>&1 | tee build/icache-cost/yosys.log
+
+          grep -E 'TRELLIS_DPR16X4|TRELLIS_RAM16X2|DP16KD|TRELLIS_FF|LUT4|Longest topological path|Number of cells'             build/icache-cost/yosys.log | tail -120 | tee build/icache-cost/summary.txt || true
+
+      - name: Upload I-cache cost evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-icache-cost-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/icache-cost/*.sv
+            build/icache-cost/yosys.log
+            build/icache-cost/summary.txt
