@@ -23,9 +23,6 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("val attributes = new MemoryAttributes", source)
         self.assertIn("class AetherMemResponse", source)
 
-        # Do not let the semantic core-memory contract become an AXI/TileLink
-        # channel bundle. Mentioning those protocols in architecture comments is
-        # fine; declaring protocol channel ownership here is not.
         self.assertNotIn("class Axi", source)
         self.assertNotIn("class AXI", source)
         self.assertNotIn("class TileLink", source)
@@ -55,8 +52,6 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("val memoryResponse = Flipped(Decoupled(new AetherMemResponse", source)
         self.assertIn("backend.io.resolvedAttributes := io.resolvedAttributes", source)
 
-        # CPU composition may consume construction geometry/reset state, but it
-        # must not know board-device decode addresses.
         for forbidden in (
             "config.platform.uartAddress",
             "config.platform.exitAddress",
@@ -66,8 +61,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
     def test_no_v2_cpu_owner_contains_qualified_board_device_map(self):
-        sources = "
-".join(
+        sources = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted(CORE_V2.glob("*.scala"))
         )
@@ -77,16 +71,17 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
             "exitAddress",
             "mtimeAddress",
             "mtimecmpAddress",
-            "10000000",  # qualified UART base
-            "0c000000",  # qualified PLIC base
-            "0200bff8",  # qualified mtime address
-            "02004000",  # qualified mtimecmp address
+            "10000000",
+            "0c000000",
+            "0200bff8",
+            "02004000",
         ):
             self.assertNotIn(forbidden, sources)
 
-    def test_opensbi_shell_owns_pma_mmio_and_interrupt_topology(self):
-        source = OPEN_SBI_PLATFORM.read_text(encoding="utf-8")
+    def test_product_soc_owns_pma_mmio_and_interrupt_topology(self):
+        source = SOC_PLATFORM.read_text(encoding="utf-8")
 
+        self.assertIn("class AetherCoreV2LinuxSoC extends Module", source)
         self.assertIn("private val ramBase =", source)
         self.assertIn("private val plicBase =", source)
         self.assertIn("val resolvedRam = resolvedAddress >= ramBase.U", source)
@@ -104,6 +99,24 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("val supervisorPlic = Module(new MachinePlicMmio", source)
         self.assertIn("core.io.supervisorExternalInterrupt.get := supervisorPlic.io.interrupt", source)
         self.assertIn("assert(!(pendingMmio && pendingAtomic)", source)
+
+        self.assertNotIn("package aethercore.sim", source)
+
+    def test_sim_top_is_only_a_compatibility_wrapper(self):
+        source = SIM_WRAPPER.read_text(encoding="utf-8")
+
+        self.assertIn("import aethercore.soc.AetherCoreV2LinuxSoC", source)
+        self.assertIn(
+            "class AetherCoreV2OpenSbiRV64SimTop extends AetherCoreV2LinuxSoC",
+            source,
+        )
+        for forbidden in (
+            "private val ramBase =",
+            "val supervisorPlic = Module",
+            "val mtime = RegInit",
+            "val dcache = Module",
+        ):
+            self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__":
