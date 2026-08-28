@@ -91,11 +91,11 @@ if not re.fullmatch(r"[0-9]+", wait):
     raise SystemExit(f"invalid data-memory wait: {wait!r}")
 
 text = path.read_text()
-old = "\t\t$(OBJ_DIR)/V$(TOP) \\\n"
-new = f"\t\tenv AETHERCORE_DATA_MEM_WAIT_CYCLES={wait} $(OBJ_DIR)/V$(TOP) \\\n"
+old = "\t\t$(OBJ_DIR)/V$(TOP) \""
+new = f"\t\tenv AETHERCORE_DATA_MEM_WAIT_CYCLES={wait} $(OBJ_DIR)/V$(TOP) \""
 if text.count(old) != 1:
     raise SystemExit(f"expected one cold-run simulator launch in {path}, found {text.count(old)}")
-path.write_text(text.replace(old, new))
+path.write_text(text.replace(old, new, 1))
 print(f"AETHERCORE_ARCH_AB_MEMORY_EXEC_OVERLAY path={path} wait_cycles={wait}")
 PY
 }
