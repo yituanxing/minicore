@@ -78,10 +78,10 @@ jobs:
             git worktree add --detach "$src" "$BASELINE_SHA"
             cp src/main/scala/aethercore/ElaborateV2OpenSbiSynthesisRV64.scala \
                "$src/src/main/scala/aethercore/ElaborateV2OpenSbiSynthesisRV64.scala"
-            chmod +x "$src/mill"
           else
             src="$GITHUB_WORKSPACE"
           fi
+          chmod +x "$src/mill"
           echo "SRC_DIR=$src" >> "$GITHUB_ENV"
 
       - name: Elaborate one exact core-complex shell
