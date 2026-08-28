@@ -55,9 +55,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sv="$(find build/icache-cost -maxdepth 1 -name '*.sv' -print -quit)"
+          test -n "$(find build/icache-cost -maxdepth 1 -name '*.sv' -print -quit)"
           yosys -Q -p "
-            read_verilog -sv -DSYNTHESIS $sv;
+            read_verilog -sv -DSYNTHESIS build/icache-cost/*.sv;
             hierarchy -check -top AetherSoCInstructionCache;
             synth_ecp5 -top AetherSoCInstructionCache;
             stat;
