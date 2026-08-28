@@ -1,6 +1,7 @@
 package aethercore.soc
 
 import chisel3._
+import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, PageTableReadBusIO}
 import aethercore.config.{CoreConfig, PageTableGeometry}
 import aethercore.core.v2.TinyPagedCore
@@ -76,6 +77,12 @@ class AetherCoreV2Complex(
     enableAsyncInterrupts = true,
     withSupervisorExternalInterrupt = true
   ))
+
+  // Transitional read-only elaboration seam for legacy simulation attribution.
+  // Production SoC wiring must use only this module's IO; the attribution path
+  // will be migrated to explicit observation taps before the old Linux shell is
+  // removed.
+  val backend = core.backend
 
   // Keep the existing physical instruction-fetch seam during the staged SoC
   // migration. The I-cache/fabric ownership remains outside this CPU-complex
