@@ -123,6 +123,8 @@ class L32SimRuntimeContractTest(unittest.TestCase):
         self.assertIn("AETHERCORE_DATA_MEM_WAIT_QUALIFIED configured=", text)
         self.assertIn("observed_stall_cycles=$DATA_MEM_WAIT_CYCLES", text)
         self.assertIn("AETHERCORE_ARCH_AB_MEMORY_QUALIFIED", text)
+        self.assertIn('LATENCY_SIM_CXXFLAGS="-DAETHERCORE_SIM_REFERENCE_SETTLE"', text)
+        self.assertIn("$LATENCY_SIM_CXXFLAGS -I$src/sim/v2_rv64_opensbi_shim", text)
         self.assertIn("exit 15", text)
 
     def test_v2_perf_latency_uses_shared_qualified_step(self):
