@@ -1,0 +1,143 @@
+name: AetherSoC AXI4 V2 Linux PID1
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/**'
+      - 'src/main/scala/aethercore/sim/AetherSoCAxi4HostMemoryAdapter.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2Axi4CompatSimTop.scala'
+      - 'src/main/scala/aethercore/ElaborateV2Axi4LinuxCompatRV64.scala'
+      - 'tests_py/test_v2_soc_axi4_bridge.py'
+      - 'tests_py/test_v2_soc_axi4_top.py'
+      - 'tests_py/test_v2_soc_axi4_linux_path.py'
+      - '.github/workflows/v2-soc-axi4-linux-pid1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-axi4-v2-linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  qualify:
+    name: Real V2 PID1 through AXI4 AetherSoC
+    needs: verilator-tool
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact AXI4-v2 head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y             autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc             libssl-dev libelf-dev build-essential libreadline-dev pkg-config             curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Validate exact AXI4 v2 boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          bash tools/ensure_verilator_5_024.sh
+          python3 -m unittest tests_py.test_v2_soc_axi4_bridge -v
+          python3 -m unittest tests_py.test_v2_soc_axi4_top -v
+          python3 -m unittest tests_py.test_v2_soc_axi4_linux_path -v
+          ./mill aethercore.runMain aethercore.ElaborateV2Axi4LinuxCompatRV64             --target-dir build/v2-soc-axi4-linux-smoke
+          find build/v2-soc-axi4-linux-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Provision exact RV64 Linux toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse qualified Linux 6.6.143 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Build deterministic PID1 payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Run real PID1 through AXI4 V2 SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot             BUILD_DIR="$HOME/.cache/aethercore/v2-soc-axi4-linux/$TARGET_SHA"             TOP=AetherCoreV2OpenSbiRV64SimTop             ELABORATE_MAIN=aethercore.ElaborateV2Axi4LinuxCompatRV64             FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin             JOBS="$(nproc)"             MAX_CYCLES=850000000             MILESTONE='RV64 USER UART IRQ OK'             MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1             PROGRESS_INTERVAL_CYCLES=10000000             VERILATOR='verilator -LDFLAGS -ldl'             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"             run-local
+
+      - name: Upload AXI4-v2 Linux evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-axi4-v2-linux-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
+            ~/.cache/aethercore/v2-soc-axi4-linux/${{ env.TARGET_SHA }}/logs/*.log
