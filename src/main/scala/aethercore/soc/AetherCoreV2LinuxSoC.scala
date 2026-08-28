@@ -95,6 +95,7 @@ class AetherCoreV2LinuxSoC(
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
+    val instructionFence = Output(Bool())
 
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
@@ -330,6 +331,7 @@ class AetherCoreV2LinuxSoC(
   io.dcacheHitCount := dcache.io.hitCount
   io.dcacheMissCount := dcache.io.missCount
   io.dcacheBypassCount := dcache.io.bypassCount
+  io.instructionFence := core.io.instructionFence
   io.commit := core.io.commit
   io.halted := core.io.halted
 
