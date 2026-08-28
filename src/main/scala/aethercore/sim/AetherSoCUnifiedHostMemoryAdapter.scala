@@ -106,6 +106,10 @@ class AetherSoCUnifiedHostMemoryAdapter(
     assert(incomingSource <= InstructionSource.U,
       "unified host adapter received an invalid AetherMem source tag")
   }
+  when(incomingInstructionFire) {
+    assert(io.request.bits.txnId(localTxnIdBits - 1, 0) === 0.U,
+      "flow-through instruction adapter expects local txnId 0")
+  }
 
   // Historical instruction RAM is combinational. When a fresh instruction
   // request is accepted and the response arbiter is free, expose that request
@@ -118,8 +122,14 @@ class AetherSoCUnifiedHostMemoryAdapter(
     Mux(instructionActive, instructionRequest.paddr, io.request.bits.paddr)
   private val visibleInstructionSize =
     Mux(instructionActive, instructionRequest.size, io.request.bits.size)
+  // The production instruction adapter currently owns one local lifetime and
+  // always issues local txnId 0. Construct the fresh flow-through identity from
+  // the frozen source tag plus local zero instead of feeding request bits
+  // combinationally into response bits through the MemoryHub.
+  private val freshInstructionTxnId =
+    Cat(InstructionSource.U(sourceBits.W), 0.U(localTxnIdBits.W))
   private val visibleInstructionTxnId =
-    Mux(instructionActive, instructionRequest.txnId, io.request.bits.txnId)
+    Mux(instructionActive, instructionRequest.txnId, freshInstructionTxnId)
 
   io.imemValid := instructionVisible
   io.imemAddr := visibleInstructionAddr
