@@ -105,15 +105,19 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
 
         self.assertNotIn("package aethercore.sim", source)
 
-    def test_sim_top_is_only_a_compatibility_wrapper(self):
+    def test_sim_top_is_only_a_unified_memory_compatibility_wrapper(self):
         source = SIM_WRAPPER.read_text(encoding="utf-8")
 
-        self.assertIn("import aethercore.soc.AetherCoreV2LinuxSoC", source)
         self.assertIn(
-            "class AetherCoreV2OpenSbiRV64SimTop extends AetherCoreV2LinuxSoC()",
+            "class AetherCoreV2OpenSbiRV64SimTop",
+            source,
+        )
+        self.assertIn(
+            "extends AetherCoreV2UnifiedMemoryCompatSimTop",
             source,
         )
         for forbidden in (
+            "AetherCoreV2LinuxSoC",
             "private val ramBase =",
             "val supervisorPlic = Module",
             "val mtime = RegInit",
