@@ -124,16 +124,27 @@ class AetherSoCInstructionReadAdapter(
   io.request.bits.attributes.supportsAtomic := false.B
   io.request.bits.attributes.supportsPartial := true.B
 
-  when(io.request.fire) {
+  private val launching = io.request.fire
+
+  when(launching) {
     active := true.B
     requestAddr := io.legacyAddr
   }
 
-  private val currentRequestMatches =
+  private val activeRequestMatches =
     io.legacyValid && io.legacyAddr === requestAddr
+  private val flowThroughRequestMatches =
+    launching && io.legacyValid
 
-  io.response.ready := active
-  io.legacyReady := active && io.response.valid && currentRequestMatches
+  // A zero-wait downstream owner may return the just-accepted request in the
+  // same cycle. Keep that path combinational; if the response is not available
+  // immediately, the existing active/requestAddr state retains ownership.
+  io.response.ready := active || launching
+  io.legacyReady := io.response.valid && Mux(
+    active,
+    activeRequestMatches,
+    flowThroughRequestMatches
+  )
   io.legacyInst := io.response.bits.rdata(31, 0)
   io.legacyFault := io.response.bits.fault
 
