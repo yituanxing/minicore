@@ -6,7 +6,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CORE_V2 = ROOT / "src/main/scala/aethercore/core/v2"
 AETHER_MEM = ROOT / "src/main/scala/aethercore/memory/AetherMemLink.scala"
 PAGED = CORE_V2 / "TinyPagedCore.scala"
-SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"\nSIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
+SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"
+SIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
 
 
 class V2PlatformOwnershipSourceContract(unittest.TestCase):
@@ -65,7 +66,8 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
     def test_no_v2_cpu_owner_contains_qualified_board_device_map(self):
-        sources = "\n".join(
+        sources = "
+".join(
             path.read_text(encoding="utf-8")
             for path in sorted(CORE_V2.glob("*.scala"))
         )
