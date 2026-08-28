@@ -99,6 +99,17 @@ void emitSnapshot(const Top& top, const char* reason) {
         << " bypass=" << static_cast<std::uint64_t>(top.io_dcacheBypassCount)
         << "\n";
   }
+
+  if constexpr (requires {
+      top.io_icacheHitCount;
+      top.io_icacheMissCount;
+    }) {
+    std::cerr
+        << "AETHERCORE_V2_ICACHE reason=" << reason
+        << " hit=" << static_cast<std::uint64_t>(top.io_icacheHitCount)
+        << " miss=" << static_cast<std::uint64_t>(top.io_icacheMissCount)
+        << "\n";
+  }
 }
 
 template <typename Top>
