@@ -45,6 +45,7 @@ class AetherSoCInstructionCache(
     val frontendReady = Output(Bool())
     val frontendInst = Output(UInt(32.W))
     val frontendFault = Output(Bool())
+    val frontendLineFillAllowed = Input(Bool())
 
     val invalidateAll = Input(Bool())
 
@@ -73,6 +74,7 @@ class AetherSoCInstructionCache(
   private val missTag = Reg(UInt(TagBits.W))
   private val missOffset = Reg(UInt(OffsetBits.W))
   private val missMask = Reg(UInt(BeatBytes.W))
+  private val missWideFill = RegInit(false.B)
   private val missFillValid = RegInit(false.B)
 
   private val reqOffset = io.frontendAddr(OffsetBits - 1, 0)
@@ -92,6 +94,10 @@ class AetherSoCInstructionCache(
 
   private val reqMask = (baseMask << reqOffset)(BeatBytes - 1, 0)
   private val reqFitsLine = (reqOffset +& requestBytes) <= BeatBytes.U
+  private val reqLineBase =
+    Cat(io.frontendAddr(addrBits - 1, OffsetBits), 0.U(OffsetBits.W))
+  private val wideFill =
+    io.frontendValid && io.frontendLineFillAllowed && reqFitsLine
 
   private val tagHit =
     lineValid(reqIndex) && lineTag(reqIndex) === reqTag
@@ -110,16 +116,22 @@ class AetherSoCInstructionCache(
   // expose only for the exact PA that still owns the frontend request.
   io.frontendReady :=
     hit || (active && io.response.valid && activeMatches)
+  private val missResponseForFrontend =
+    Mux(
+      missWideFill,
+      (io.response.bits.rdata >> (missOffset << 3))(31, 0),
+      io.response.bits.rdata(31, 0)
+    )
   io.frontendInst :=
-    Mux(hit, hitData, io.response.bits.rdata(31, 0))
+    Mux(hit, hitData, missResponseForFrontend)
   io.frontendFault :=
     Mux(hit, false.B, active && io.response.valid && activeMatches && io.response.bits.fault)
 
   io.request.valid := io.frontendValid && !hit && !active && !io.invalidateAll
   io.request.bits.txnId := 0.U
   io.request.bits.op := AetherMemOp.Read
-  io.request.bits.paddr := io.frontendAddr
-  io.request.bits.size := requestSize
+  io.request.bits.paddr := Mux(wideFill, reqLineBase, io.frontendAddr)
+  io.request.bits.size := Mux(wideFill, MemSize.DWord, requestSize)
   io.request.bits.wdata := 0.U
   io.request.bits.wmask := 0.U
   io.request.bits.atomicOp := AtomicOp.None
@@ -139,7 +151,8 @@ class AetherSoCInstructionCache(
     missIndex := reqIndex
     missTag := reqTag
     missOffset := reqOffset
-    missMask := reqMask
+    missMask := Mux(wideFill, Fill(BeatBytes, 1.U(1.W)), reqMask)
+    missWideFill := wideFill
     missFillValid := reqFitsLine
   }
 
@@ -153,8 +166,9 @@ class AetherSoCInstructionCache(
       val sameLine = lineValid(missIndex) && lineTag(missIndex) === missTag
       val oldData = Mux(sameLine, lineData(missIndex), 0.U)
       val oldMask = Mux(sameLine, lineByteValid(missIndex), 0.U)
+      val fillShift = Mux(missWideFill, 0.U, missOffset << 3)
       val shifted =
-        (io.response.bits.rdata << (missOffset << 3))(dataBits - 1, 0)
+        (io.response.bits.rdata << fillShift)(dataBits - 1, 0)
 
       lineValid(missIndex) := true.B
       lineTag.write(missIndex, missTag)
@@ -163,6 +177,7 @@ class AetherSoCInstructionCache(
     }
 
     active := false.B
+    missWideFill := false.B
     missFillValid := false.B
   }
 
