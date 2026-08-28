@@ -55,6 +55,9 @@ class AetherCoreV2LinuxSoC(
     val imemFault = Input(Bool())
     val imemReady =
       if (enableInstructionBackpressure) Some(Input(Bool())) else None
+    // Optional wider I-cache fill is legal only when the core's full-beat PMP
+    // check and this platform's static RAM/PMA ownership both permit it.
+    val imemLineFillAllowed = Output(Bool())
 
     val memValid = Output(Bool())
     val memWrite = Output(Bool())
@@ -123,6 +126,14 @@ class AetherCoreV2LinuxSoC(
   io.imemBytes := core.io.imem.bytes
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
+
+  private val instructionLineBase =
+    Cat(core.io.imem.addr(paddrBits - 1, 3), 0.U(3.W))
+  private val instructionLineEnd = instructionLineBase + 8.U
+  private val instructionLineInRam =
+    instructionLineBase >= ramBase.U && instructionLineEnd <= ramLimit.U
+  io.imemLineFillAllowed :=
+    core.io.instructionLineFillAllowed && instructionLineInRam
   if (enableInstructionBackpressure) {
     core.io.imemReady.get := io.imemReady.get
   }
