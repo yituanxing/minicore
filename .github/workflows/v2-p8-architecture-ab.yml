@@ -104,6 +104,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Restore qualified RV64 software cache
+        id: rv64-software-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -131,6 +132,16 @@ jobs:
           grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Save qualified RV64 software cache
+        if: steps.rv64-software-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Execute bounded exact architecture A/B
         shell: bash
