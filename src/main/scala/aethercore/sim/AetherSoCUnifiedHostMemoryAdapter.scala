@@ -73,7 +73,8 @@ class AetherSoCUnifiedHostMemoryAdapter(
 
   io.request.ready := MuxLookup(
     incomingSource,
-    false.B,
+    false.B
+  )(
     Seq(
       DataSource.U -> !dataActive,
       PtwSource.U -> !ptwActive,
