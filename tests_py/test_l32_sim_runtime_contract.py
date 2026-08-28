@@ -6,6 +6,7 @@ RUNTIME = ROOT / "sim/l32_opensbi_runtime.h"
 COLD = ROOT / "sim/opensbi_boot_main.cpp"
 FORKSERVER = ROOT / "sim/opensbi_forkserver_main.cpp"
 MAKEFILE = ROOT / "Makefile.l32-linux-boot"
+ARCH_AB = ROOT / "tools/ci/v2_p8_arch_ab.sh"
 
 
 class L32SimRuntimeContractTest(unittest.TestCase):
@@ -39,6 +40,8 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "memory.readData(ptwAddr, ptwBytes)",
             "AETHERCORE_DATA_MEM_WAIT_CYCLES",
             "dataReadyThisLowPhase",
+            "observedStallCycles",
+            "AETHERCORE_DATA_MEM_WAIT_QUALIFIED",
             "bool step",
             "void initialize",
         ):
@@ -103,6 +106,17 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "L32_FORKSERVER_PASS",
         ):
             self.assertIn(marker, forkserver)
+
+    def test_arch_ab_refuses_an_unqualified_memory_wait_overlay(self):
+        text = ARCH_AB.read_text()
+        self.assertIn(
+            'export AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"',
+            text,
+        )
+        self.assertIn("AETHERCORE_DATA_MEM_WAIT_QUALIFIED configured=", text)
+        self.assertIn("observed_stall_cycles=$DATA_MEM_WAIT_CYCLES", text)
+        self.assertIn("AETHERCORE_ARCH_AB_MEMORY_QUALIFIED", text)
+        self.assertIn("exit 15", text)
 
     def test_makefile_keeps_cold_and_forkserver_as_separate_scenarios(self):
         text = MAKEFILE.read_text()
