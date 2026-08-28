@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <limits>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -53,7 +54,9 @@ inline std::uint32_t dataMemoryWaitCycles() {
 
 struct DataMemoryWaitState {
   bool active = false;
+  bool qualificationPrinted = false;
   std::uint32_t remaining = 0;
+  std::uint32_t observedStallCycles = 0;
 };
 
 
@@ -304,6 +307,7 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
     if (!dataWait.active) {
       dataWait.active = true;
       dataWait.remaining = configuredWait;
+      dataWait.observedStallCycles = 0;
     }
     return dataWait.remaining == 0;
   };
@@ -317,14 +321,32 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
   top.eval();
   const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
-  const bool acceptedMemory = !top.reset && top.io_memValid && top.io_memReady &&
-      !top.io_memFault;
+  const bool memoryHandshake =
+      !top.reset && top.io_memValid && top.io_memReady;
+  const bool acceptedMemory = memoryHandshake && !top.io_memFault;
 
   if (configuredWait != 0 && dataWait.active) {
-    if (acceptedMemory) {
-      dataWait = {};
-    } else if (dataWait.remaining != 0) {
+    if (memoryHandshake) {
+      if (dataWait.observedStallCycles != configuredWait) {
+        throw std::runtime_error(
+            "data-memory wait qualification mismatch configured=" +
+            std::to_string(configuredWait) + " observed=" +
+            std::to_string(dataWait.observedStallCycles));
+      }
+      if (!dataWait.qualificationPrinted) {
+        std::cerr
+            << "AETHERCORE_DATA_MEM_WAIT_QUALIFIED configured="
+            << configuredWait
+            << " observed_stall_cycles=" << dataWait.observedStallCycles
+            << "\n";
+        dataWait.qualificationPrinted = true;
+      }
+      dataWait.active = false;
+      dataWait.remaining = 0;
+      dataWait.observedStallCycles = 0;
+    } else if (top.io_memValid && dataWait.remaining != 0) {
       --dataWait.remaining;
+      ++dataWait.observedStallCycles;
     }
   }
   bool atomic = false;
