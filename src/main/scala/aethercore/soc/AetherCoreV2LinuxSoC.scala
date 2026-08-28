@@ -6,7 +6,7 @@ import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
 import aethercore.core.v2.TinyPagedCore
-import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}
+import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}\nimport aethercore.soc.peripheral.AetherUart16550
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
@@ -176,28 +176,26 @@ class AetherCoreV2LinuxSoC(
   val pendingMmio = pendingUart || pendingExit || pendingTimer || pendingPlic
   val pendingExternal = pendingValid && !pendingMmio
 
-  // ns16550 subset retained from the frozen OpenSBI/Linux board shell.
-  val uartLcr = RegInit(0.U(8.W))
-  val uartIer = RegInit(0.U(8.W))
-  val uartDll = RegInit(0.U(8.W))
-  val uartDlm = RegInit(0.U(8.W))
-  val uartMcr = RegInit(0.U(8.W))
-  val uartScr = RegInit(0.U(8.W))
+  // UART register/FIFO/IRQ state is now an independent SoC peripheral.
+  // This platform shell owns only region selection and the terminal transaction
+  // pulse while the migration toward a reusable fabric continues.
+  val uart = Module(new AetherUart16550(
+    dataBits = busDataBits,
+    rxDepth = 16
+  ))
   val uartOffset = pending.paddr - uartAddress
-  val uartDlab = uartLcr(7)
-
-  val uartRx = Module(new Queue(UInt(8.W), 16))
-  uartRx.io.enq.valid := io.rxValid
-  uartRx.io.enq.bits := io.rxByte
-  io.rxReady := uartRx.io.enq.ready
-  val uartRxAvailable = uartRx.io.deq.valid
-  val uartRxByte = uartRx.io.deq.bits
-
-  val uartRxInterrupt = uartIer(0) && uartRxAvailable
-  val uartThreInterrupt = uartIer(1)
-  val uartCombinedInterrupt = uartRxInterrupt || uartThreInterrupt
-  io.uartRxInterrupt := uartRxInterrupt
-  io.uartInterrupt := uartCombinedInterrupt
+  val uartComplete = WireDefault(false.B)
+  uart.io.request := pendingUart
+  uart.io.write := pendingWrite
+  uart.io.offset := uartOffset(2, 0)
+  uart.io.wdata := pending.wdata
+  uart.io.wmask := pending.wmask
+  uart.io.complete := uartComplete
+  uart.io.rxValid := io.rxValid
+  uart.io.rxByte := io.rxByte
+  io.rxReady := uart.io.rxReady
+  io.uartInterrupt := uart.io.interrupt
+  io.uartRxInterrupt := uart.io.rxInterrupt
 
   val supervisorPlic = Module(new MachinePlicMmio(
     sourceCount = supervisorPlicSourceCount,
@@ -207,7 +205,7 @@ class AetherCoreV2LinuxSoC(
     claimCompleteOffset = MachinePlicMmioMap.SupervisorClaimComplete
   ))
   supervisorPlic.io.sources :=
-    (uartCombinedInterrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
+    (uart.io.interrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
   supervisorPlic.io.request := pendingPlic
   supervisorPlic.io.write := pendingWrite
   supervisorPlic.io.address := (pending.paddr - plicBase.U)(23, 0)
@@ -221,33 +219,24 @@ class AetherCoreV2LinuxSoC(
   val nextMtime = WireDefault(mtime + 1.U)
   val nextMtimecmp = WireDefault(mtimecmp)
 
-  val uartReadData = WireDefault(0.U(busDataBits.W))
-  switch(uartOffset(2, 0)) {
-    is(0.U) { uartReadData := Mux(uartDlab, uartDll, uartRxByte).pad(busDataBits) }
-    is(1.U) { uartReadData := Mux(uartDlab, uartDlm, uartIer).pad(busDataBits) }
-    is(2.U) {
-      uartReadData := Mux(uartRxInterrupt, 4.U,
-        Mux(uartThreInterrupt, 2.U, 1.U)).pad(busDataBits)
-    }
-    is(3.U) { uartReadData := uartLcr.pad(busDataBits) }
-    is(4.U) { uartReadData := uartMcr.pad(busDataBits) }
-    is(5.U) { uartReadData := ("h60".U(8.W) | uartRxAvailable.asUInt).pad(busDataBits) }
-    is(7.U) { uartReadData := uartScr.pad(busDataBits) }
-  }
-
   val timerReadData = Mux(pending.paddr === mtimeAddress, mtime, mtimecmp)
-  val mmioReady = Mux(pendingPlic, supervisorPlic.io.ready, true.B)
+  val mmioReady = Mux(
+    pendingPlic,
+    supervisorPlic.io.ready,
+    Mux(pendingUart, uart.io.ready, true.B)
+  )
   val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
   val responseData = Mux(
     pendingPlic,
     supervisorPlic.io.rdata.pad(busDataBits),
     Mux(pendingTimer, timerReadData,
-      Mux(pendingUart, uartReadData, io.memRdata))
+      Mux(pendingUart, uart.io.rdata, io.memRdata))
   )
   val responseFault = Mux(
     pendingPlic,
     supervisorPlic.io.fault,
-    Mux(pendingMmio, false.B, io.memFault)
+    Mux(pendingUart, uart.io.fault,
+      Mux(pendingMmio, false.B, io.memFault))
   )
 
   core.io.memoryResponse.valid := pendingValid && responseReady
@@ -257,29 +246,7 @@ class AetherCoreV2LinuxSoC(
   core.io.memoryResponse.bits.last := true.B
   val responseFire = core.io.memoryResponse.fire
   pendingQueue.io.deq.ready := responseFire
-
-  // Apply MMIO state only when the exact AetherMem response is accepted.
-  val uartRxPop = responseFire && pendingUart && !pendingWrite &&
-    uartOffset(2, 0) === 0.U && !uartDlab
-  uartRx.io.deq.ready := uartRxPop
-
-  when(responseFire && pendingUart && pendingWrite) {
-    switch(uartOffset(2, 0)) {
-      is(0.U) {
-        when(uartDlab) { uartDll := pending.wdata(7, 0) }
-      }
-      is(1.U) {
-        when(uartDlab) {
-          uartDlm := pending.wdata(7, 0)
-        }.otherwise {
-          uartIer := pending.wdata(7, 0)
-        }
-      }
-      is(3.U) { uartLcr := pending.wdata(7, 0) }
-      is(4.U) { uartMcr := pending.wdata(7, 0) }
-      is(7.U) { uartScr := pending.wdata(7, 0) }
-    }
-  }
+  uartComplete := responseFire
 
   when(responseFire && pendingTimer && pendingWrite) {
     when(pending.paddr === mtimeAddress) {
@@ -308,10 +275,8 @@ class AetherCoreV2LinuxSoC(
     io.memAttributes.get := pending.attributes
   }
 
-  val isUartTx = responseFire && pendingUart && pendingWrite &&
-    uartOffset(2, 0) === 0.U && !uartDlab
-  io.uartValid := isUartTx
-  io.uartByte := pending.wdata(7, 0)
+  io.uartValid := uart.io.txValid
+  io.uartByte := uart.io.txByte
   io.exitValid := responseFire && pendingExit && pendingWrite
   io.exitCode := pending.wdata
 
