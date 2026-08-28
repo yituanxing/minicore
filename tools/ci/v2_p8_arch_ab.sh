@@ -76,10 +76,36 @@ PY
 install_marker_overlay "$BASE_SRC"
 install_marker_overlay "$TARGET_SRC"
 
+install_memory_wait_overlay() {
+  local src="$1"
+  local makefile="$src/Makefile.l32-linux-boot"
+  local wait_cycles="$2"
+  python3 - "$makefile" "$wait_cycles" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+wait = sys.argv[2]
+if not re.fullmatch(r"[0-9]+", wait):
+    raise SystemExit(f"invalid data-memory wait: {wait!r}")
+
+text = path.read_text()
+old = "\t\t$(OBJ_DIR)/V$(TOP) \\\n"
+new = f"\t\tenv AETHERCORE_DATA_MEM_WAIT_CYCLES={wait} $(OBJ_DIR)/V$(TOP) \\\n"
+if text.count(old) != 1:
+    raise SystemExit(f"expected one cold-run simulator launch in {path}, found {text.count(old)}")
+path.write_text(text.replace(old, new))
+print(f"AETHERCORE_ARCH_AB_MEMORY_EXEC_OVERLAY path={path} wait_cycles={wait}")
+PY
+}
+
 if [[ "$DATA_MEM_WAIT_CYCLES" != "0" ]]; then
   # Measurement-only host overlay: both detached source trees must use the
   # identical latency model so the A/B changes only target RTL/cache semantics.
   cp "$TARGET_SRC/sim/l32_opensbi_runtime.h" "$BASE_SRC/sim/l32_opensbi_runtime.h"
+  install_memory_wait_overlay "$BASE_SRC" "$DATA_MEM_WAIT_CYCLES"
+  install_memory_wait_overlay "$TARGET_SRC" "$DATA_MEM_WAIT_CYCLES"
   echo "AETHERCORE_ARCH_AB_MEMORY_OVERLAY wait_cycles=$DATA_MEM_WAIT_CYCLES"
 fi
 
@@ -132,11 +158,6 @@ run_variant() {
   rm -rf "$build"
   mkdir -p "$build"
   echo "AETHERCORE_ARCH_AB_BEGIN variant=$variant sha=$sha"
-
-  # Export explicitly rather than relying on GNU make's command-line-variable
-  # propagation. The detached baseline uses its historical Makefile, so the
-  # host latency model must enter through the process environment.
-  export AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"
 
   make -C "$src" -f Makefile.l32-linux-boot \
     BUILD_DIR="$build" \
