@@ -287,10 +287,23 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
       (lsuCompletionValid && !lsuCompletionReady) ||
       (executionCompletionValid && !executionCompletionReady)
 
-  events.commit := core.io.commit.valid
+  // The production core is nested below the unified-memory SoC. Observe its
+  // host-performance facts through read-only taps rather than illegal
+  // grandchild-to-wrapper connections.
+  private val observedCommitValid = BoringUtils.tapAndRead(core.io.commit.valid)
+  private val observedOccupancy = BoringUtils.tapAndRead(core.io.occupancy)
+  private val observedInterruptHold = BoringUtils.tapAndRead(core.io.interruptHold)
+  private val observedHalted = BoringUtils.tapAndRead(core.io.halted)
+  private val observedLsuBusy = BoringUtils.tapAndRead(core.io.lsuBusy)
+  private val observedMemoryRequestValid = BoringUtils.tapAndRead(core.io.memoryRequest.valid)
+  private val observedMemoryRequestReady = BoringUtils.tapAndRead(core.io.memoryRequest.ready)
+  private val observedMemoryResponseValid = BoringUtils.tapAndRead(core.io.memoryResponse.valid)
+  private val observedMemoryResponseReady = BoringUtils.tapAndRead(core.io.memoryResponse.ready)
+
+  events.commit := observedCommitValid
   events.dispatchAccepted := dispatchValid && dispatchReady
   events.dispatchBlocked := dispatchValid && !dispatchReady
-  events.robOccupancy := core.io.occupancy
+  events.robOccupancy := observedOccupancy
 
   events.selectiveCandidate := selectiveValid
   events.integerIssue := selectiveFire && selectiveBits.executionClass === ExecutionClass.Integer
@@ -308,23 +321,23 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTop extends AetherCoreV2OpenSbiRV64SimTo
   events.headNotReady := headLive &&
     !head.uop.decoded.exception.valid && !head.operandsReady
   events.headReadyNotIssued := headSchedulable && !headLaunchFire
-  events.commitIdleRobNonEmpty := core.io.occupancy =/= 0.U && !core.io.commit.valid
+  events.commitIdleRobNonEmpty := observedOccupancy =/= 0.U && !observedCommitValid
   events.computeHead := headLive && headIsCompute
   events.branchHead := headLive && headIsBranch
   events.memoryHead := headLive && headIsMemory
   events.systemHead := headLive && headIsSystem
-  events.interruptHold := core.io.interruptHold
-  events.wfiHalted := core.io.halted
+  events.interruptHold := observedInterruptHold
+  events.wfiHalted := observedHalted
 
-  events.lsuBusy := core.io.lsuBusy
+  events.lsuBusy := observedLsuBusy
   events.memoryLaunchBlocked := lsuRequestValid && !lsuRequestReady
-  events.memoryRequest := core.io.memoryRequest.fire
-  events.memoryResponse := core.io.memoryResponse.fire
+  events.memoryRequest := observedMemoryRequestValid && observedMemoryRequestReady
+  events.memoryResponse := observedMemoryResponseValid && observedMemoryResponseReady
   events.ptwActive := io.ptwValid
 
   events.completionCollision := completionValidCount > 1.U
   events.completionBackpressure := completionBackpressured
-  events.lsuComputeOverlapIssue := selectiveFire && core.io.lsuBusy
+  events.lsuComputeOverlapIssue := selectiveFire && observedLsuBusy
 
   perf.io.events := events
 
