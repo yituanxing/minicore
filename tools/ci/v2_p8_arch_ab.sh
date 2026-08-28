@@ -11,6 +11,10 @@ MILESTONE="${MILESTONE:-clocksource: riscv_clocksource}"
 MAX_CYCLES="${MAX_CYCLES:-120000000}"
 PROGRESS_INTERVAL_CYCLES="${PROGRESS_INTERVAL_CYCLES:-10000000}"
 DATA_MEM_WAIT_CYCLES="${DATA_MEM_WAIT_CYCLES:-0}"
+LATENCY_SIM_CXXFLAGS=""
+if [[ "$DATA_MEM_WAIT_CYCLES" != "0" ]]; then
+  LATENCY_SIM_CXXFLAGS="-DAETHERCORE_SIM_REFERENCE_SETTLE"
+fi
 OUT_ROOT="${OUT_ROOT:-$ROOT/build/v2-p8-arch-ab}"
 TOP="${TOP:-AetherCoreV2OpenSbiRV64SimTop}"
 ELABORATE_MAIN="${ELABORATE_MAIN:-aethercore.ElaborateV2OpenSbiRV64}"
@@ -25,8 +29,8 @@ git cat-file -e "$BASELINE_SHA^{commit}"
 mkdir -p "$OUT_ROOT"
 FW_BIN="$(realpath "$FW_BIN")"
 sha256sum "$FW_BIN" | tee "$OUT_ROOT/workload.sha256"
-printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\ndata_mem_wait_cycles=%s\nmeasurement_overlay=host-only-marker+data-memory-wait\n' \
-  "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" "$DATA_MEM_WAIT_CYCLES" \
+printf 'baseline_sha=%s\ntarget_sha=%s\nmilestone=%s\nmax_cycles=%s\ndata_mem_wait_cycles=%s\nlatency_sim_cxxflags=%s\nmeasurement_overlay=host-only-marker+data-memory-wait\n' \
+  "$BASELINE_SHA" "$TARGET_SHA" "$MILESTONE" "$MAX_CYCLES" "$DATA_MEM_WAIT_CYCLES" "$LATENCY_SIM_CXXFLAGS" \
   | tee "$OUT_ROOT/identity.txt"
 
 TMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/aethercore-v2-p8-arch-ab.XXXXXX")"
@@ -169,7 +173,7 @@ run_variant() {
     MILESTONE="$MILESTONE" \
     PROGRESS_INTERVAL_CYCLES="$PROGRESS_INTERVAL_CYCLES" \
     VERILATOR='verilator -LDFLAGS -ldl' \
-    SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
+    SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF $LATENCY_SIM_CXXFLAGS -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
     run-local 2>&1 | tee "$run_log"
 
   grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$run_log"
