@@ -6,7 +6,7 @@ import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
 import aethercore.core.v2.TinyPagedCore
-import aethercore.memory.{AetherDirectMappedReadCache, AetherMemOp, AetherMemRequest, MemoryAttributes}
+import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
@@ -108,13 +108,12 @@ class AetherCoreV2LinuxSoC(
       Mux(mask(byte), newValue(high, low), oldValue(high, low))
     })
 
-  val core = Module(new TinyPagedCore(
+  val core = Module(new AetherCoreV2Complex(
     config,
     geometry,
     txnIdBits = txnIdBits,
-    enableInstructionBackpressure = enableInstructionBackpressure,
-    enableAsyncInterrupts = true,
-    withSupervisorExternalInterrupt = true
+    dcacheEntries = 64,
+    enableInstructionBackpressure = enableInstructionBackpressure
   ))
 
   // Instruction and PTW transport remain direct read-only host-memory ports.
@@ -145,18 +144,9 @@ class AetherCoreV2LinuxSoC(
   core.io.resolvedAttributes.supportsAtomic := resolvedRam
   core.io.resolvedAttributes.supportsPartial := true.B
 
-  // Stage-1 core-complex D-cache. Only ordinary cacheable RAM Reads allocate;
-  // writes remain write-through, atomics/MMIO bypass, and every AetherMem txnId
-  // is preserved. The cache therefore sits entirely outside TinyPagedCore's
-  // architectural/lifetime ownership.
-  val dcache = Module(new AetherDirectMappedReadCache(
-    paddrBits,
-    busDataBits,
-    txnIdBits,
-    entries = 64
-  ))
-  dcache.io.upstreamRequest <> core.io.memoryRequest
-  core.io.memoryResponse <> dcache.io.upstreamResponse
+  // The private D-cache now belongs to AetherCoreV2Complex. This platform
+  // sees only the CPU-complex semantic memory master and remains the PMA/MMIO
+  // owner during the staged migration toward the final AetherSoC fabric.
 
   // Retain up to two downstream AetherMem requests so a cache miss does not
   // collapse the core's qualified LoadQ2 transaction concurrency.
@@ -165,9 +155,9 @@ class AetherCoreV2LinuxSoC(
     entries = 2,
     pipe = true
   ))
-  pendingQueue.io.enq.valid := dcache.io.downstreamRequest.valid
-  pendingQueue.io.enq.bits := dcache.io.downstreamRequest.bits
-  dcache.io.downstreamRequest.ready := pendingQueue.io.enq.ready
+  pendingQueue.io.enq.valid := core.io.memoryRequest.valid
+  pendingQueue.io.enq.bits := core.io.memoryRequest.bits
+  core.io.memoryRequest.ready := pendingQueue.io.enq.ready
 
   val pendingValid = pendingQueue.io.deq.valid
   val pending = pendingQueue.io.deq.bits
@@ -223,7 +213,7 @@ class AetherCoreV2LinuxSoC(
   supervisorPlic.io.address := (pending.paddr - plicBase.U)(23, 0)
   supervisorPlic.io.wdata := pending.wdata(31, 0)
   supervisorPlic.io.wmask := pending.wmask(3, 0)
-  core.io.supervisorExternalInterrupt.get := supervisorPlic.io.interrupt
+  core.io.supervisorExternalInterrupt := supervisorPlic.io.interrupt
   io.supervisorExternalInterrupt := supervisorPlic.io.interrupt
 
   val mtime = RegInit(0.U(64.W))
@@ -260,12 +250,12 @@ class AetherCoreV2LinuxSoC(
     Mux(pendingMmio, false.B, io.memFault)
   )
 
-  dcache.io.downstreamResponse.valid := pendingValid && responseReady
-  dcache.io.downstreamResponse.bits.txnId := pending.txnId
-  dcache.io.downstreamResponse.bits.rdata := responseData
-  dcache.io.downstreamResponse.bits.fault := responseFault
-  dcache.io.downstreamResponse.bits.last := true.B
-  val responseFire = dcache.io.downstreamResponse.fire
+  core.io.memoryResponse.valid := pendingValid && responseReady
+  core.io.memoryResponse.bits.txnId := pending.txnId
+  core.io.memoryResponse.bits.rdata := responseData
+  core.io.memoryResponse.bits.fault := responseFault
+  core.io.memoryResponse.bits.last := true.B
+  val responseFire = core.io.memoryResponse.fire
   pendingQueue.io.deq.ready := responseFire
 
   // Apply MMIO state only when the exact AetherMem response is accepted.
@@ -302,8 +292,8 @@ class AetherCoreV2LinuxSoC(
   mtimecmp := nextMtimecmp
 
   val timerInterrupt = mtime >= mtimecmp
-  core.io.time.get := mtime
-  core.io.timerInterrupt.get := timerInterrupt
+  core.io.time := mtime
+  core.io.timerInterrupt := timerInterrupt
 
   io.memValid := pendingExternal
   io.memWrite := pendingWrite
@@ -328,9 +318,9 @@ class AetherCoreV2LinuxSoC(
   io.mtime := mtime
   io.mtimecmp := mtimecmp
   io.timerInterrupt := timerInterrupt
-  io.dcacheHitCount := dcache.io.hitCount
-  io.dcacheMissCount := dcache.io.missCount
-  io.dcacheBypassCount := dcache.io.bypassCount
+  io.dcacheHitCount := core.io.dcacheHitCount
+  io.dcacheMissCount := core.io.dcacheMissCount
+  io.dcacheBypassCount := core.io.dcacheBypassCount
   io.instructionFence := core.io.instructionFence
   io.commit := core.io.commit
   io.halted := core.io.halted
