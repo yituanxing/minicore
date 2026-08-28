@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CORE_V2 = ROOT / "src/main/scala/aethercore/core/v2"
 AETHER_MEM = ROOT / "src/main/scala/aethercore/memory/AetherMemLink.scala"
 PAGED = CORE_V2 / "TinyPagedCore.scala"
-OPEN_SBI_PLATFORM = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
+SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"\nSIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
 
 
 class V2PlatformOwnershipSourceContract(unittest.TestCase):
