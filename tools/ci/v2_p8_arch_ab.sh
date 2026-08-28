@@ -147,7 +147,6 @@ run_variant() {
     MAX_CYCLES="$MAX_CYCLES" \
     MILESTONE="$MILESTONE" \
     PROGRESS_INTERVAL_CYCLES="$PROGRESS_INTERVAL_CYCLES" \
-    AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES" \
     VERILATOR='verilator -LDFLAGS -ldl' \
     SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_V2_PERF -I$src/sim/v2_rv64_opensbi_shim -I$src/sim" \
     run-local 2>&1 | tee "$run_log"
