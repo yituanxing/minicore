@@ -71,6 +71,13 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
   })
 
   val soc = Module(new AetherCoreV2UnifiedMemorySoC)
+
+  // Simulation-only compatibility alias for the existing performance,
+  // Top-Down and attribution wrappers. Those layers observe TinyPagedCore
+  // internals through BoringUtils; keeping this alias here avoids widening the
+  // production SoC interface or bypassing the unified-memory datapath.
+  val core = soc.platform.core
+
   val hostMemory = Module(new AetherSoCUnifiedHostMemoryAdapter(
     addrBits = paddrBits,
     dataBits = busDataBits,
