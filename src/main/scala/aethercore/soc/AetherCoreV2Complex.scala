@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, PageTableReadBusIO}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.v2.{TinyPagedCore, TinyRobGeometry}
+import aethercore.core.v2.TinyPagedCore
 import aethercore.memory.{AetherDirectMappedReadCache, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -67,7 +67,7 @@ class AetherCoreV2Complex(
 
     // Transitional read-only observation seam for the existing Linux
     // performance/oracle tooling. These are not SoC control inputs.
-    val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
+    val occupancy = Output(UInt(3.W))
     val frontendPc = Output(UInt(xlen.W))
     val interruptHold = Output(Bool())
     val lsuBusy = Output(Bool())
