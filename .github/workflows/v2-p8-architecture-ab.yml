@@ -8,6 +8,7 @@ on:
       - 'src/main/scala/aethercore/core/TranslationUnit.scala'
       - 'src/main/scala/aethercore/core/TranslationTlb.scala'
       - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
       - 'sim/opensbi_boot_main.cpp'
