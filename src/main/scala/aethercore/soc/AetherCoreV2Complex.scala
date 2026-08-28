@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, PageTableReadBusIO}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.v2.TinyPagedCore
+import aethercore.core.v2.{TinyPagedCore, TinyRobGeometry}
 import aethercore.memory.{AetherDirectMappedReadCache, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -65,6 +65,13 @@ class AetherCoreV2Complex(
     val dcacheBypassCount = Output(UInt(64.W))
     val instructionFence = Output(Bool())
 
+    // Transitional read-only observation seam for the existing Linux
+    // performance/oracle tooling. These are not SoC control inputs.
+    val occupancy = Output(UInt(log2Ceil(TinyRobGeometry.Entries + 1).W))
+    val frontendPc = Output(UInt(xlen.W))
+    val interruptHold = Output(Bool())
+    val lsuBusy = Output(Bool())
+
     val commit = Output(new CommitTrace(xlen, paddrBits, dataBits))
     val halted = Output(Bool())
   })
@@ -83,6 +90,8 @@ class AetherCoreV2Complex(
   // will be migrated to explicit observation taps before the old Linux shell is
   // removed.
   val backend = core.backend
+  val fetch = core.fetch
+  val parcel = core.parcel
 
   // Keep the existing physical instruction-fetch seam during the staged SoC
   // migration. The I-cache/fabric ownership remains outside this CPU-complex
@@ -134,6 +143,10 @@ class AetherCoreV2Complex(
   io.dcacheMissCount := dcache.io.missCount
   io.dcacheBypassCount := dcache.io.bypassCount
   io.instructionFence := core.io.instructionFence
+  io.occupancy := core.io.occupancy
+  io.frontendPc := core.io.frontendPc
+  io.interruptHold := core.io.interruptHold
+  io.lsuBusy := core.io.lsuBusy
   io.commit := core.io.commit
   io.halted := core.io.halted
 }
