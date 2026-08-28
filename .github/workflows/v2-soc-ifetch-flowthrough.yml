@@ -17,10 +17,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
   prove:
     name: Prove zero-wait I-fetch flow-through
+    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 12
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
@@ -37,6 +45,19 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Revalidate fixed Verilator from producer cache
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
 
       - name: Run focused Chisel flow-through proof
         shell: bash
