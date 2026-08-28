@@ -55,6 +55,13 @@ class AetherSoCInstructionCache(
     val missCount = Output(UInt(64.W))
   })
 
+  private def mergeBytes(oldValue: UInt, newValue: UInt, mask: UInt): UInt =
+    Cat((0 until BeatBytes).reverse.map { byte =>
+      val high = byte * 8 + 7
+      val low = byte * 8
+      Mux(mask(byte), newValue(high, low), oldValue(high, low))
+    })
+
   private val lineValid = RegInit(VecInit(Seq.fill(entries)(false.B)))
   private val lineTag = Mem(entries, UInt(TagBits.W))
   private val lineData = Mem(entries, UInt(dataBits.W))
@@ -149,18 +156,9 @@ class AetherSoCInstructionCache(
       val shifted =
         (io.response.bits.rdata << (missOffset << 3))(dataBits - 1, 0)
 
-      val merged = Wire(UInt(dataBits.W))
-      merged := oldData
-      for (byte <- 0 until BeatBytes) {
-        when(missMask(byte)) {
-          merged := (merged & ~((BigInt(0xff) << (byte * 8)).U(dataBits.W))) |
-            (shifted & (BigInt(0xff) << (byte * 8)).U(dataBits.W))
-        }
-      }
-
       lineValid(missIndex) := true.B
       lineTag.write(missIndex, missTag)
-      lineData.write(missIndex, merged)
+      lineData.write(missIndex, mergeBytes(oldData, shifted, missMask))
       lineByteValid.write(missIndex, oldMask | missMask)
     }
 
