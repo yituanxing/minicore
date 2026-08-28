@@ -109,16 +109,12 @@ class L32SimRuntimeContractTest(unittest.TestCase):
 
     def test_arch_ab_refuses_an_unqualified_memory_wait_overlay(self):
         text = ARCH_AB.read_text()
-        export_line = 'export AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"'
-        self.assertIn(export_line, text)
-        # Do not re-declare the wait as a make command-line variable: doing so
-        # masks the inherited environment variable without exporting it to the
-        # simulator process in the detached historical Makefile.
-        self.assertEqual(text.count("AETHERCORE_DATA_MEM_WAIT_CYCLES="), 1)
-        self.assertNotIn(
-            '    AETHERCORE_DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES" \\\n',
+        self.assertIn("install_memory_wait_overlay", text)
+        self.assertIn(
+            "env AETHERCORE_DATA_MEM_WAIT_CYCLES={wait} $(OBJ_DIR)/V$(TOP)",
             text,
         )
+        self.assertIn("AETHERCORE_ARCH_AB_MEMORY_EXEC_OVERLAY", text)
         self.assertIn("AETHERCORE_DATA_MEM_WAIT_QUALIFIED configured=", text)
         self.assertIn("observed_stall_cycles=$DATA_MEM_WAIT_CYCLES", text)
         self.assertIn("AETHERCORE_ARCH_AB_MEMORY_QUALIFIED", text)
