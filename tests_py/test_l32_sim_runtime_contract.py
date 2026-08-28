@@ -111,6 +111,10 @@ class L32SimRuntimeContractTest(unittest.TestCase):
         text = ARCH_AB.read_text()
         self.assertIn("install_memory_wait_overlay", text)
         self.assertIn(
+            'old = "\\t\\t$(OBJ_DIR)/V$(TOP) \\\""',
+            text,
+        )
+        self.assertIn(
             "env AETHERCORE_DATA_MEM_WAIT_CYCLES={wait} $(OBJ_DIR)/V$(TOP)",
             text,
         )
