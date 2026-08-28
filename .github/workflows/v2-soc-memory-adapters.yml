@@ -1,0 +1,53 @@
+name: AetherSoC Memory Adapter Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCMemoryAdapters.scala'
+      - 'src/main/scala/aethercore/ElaborateV2SoCMemoryAdapters.scala'
+      - 'tests_py/test_v2_soc_memory_adapters.py'
+      - '.github/workflows/v2-soc-memory-adapters.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-memory-adapters-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  elaborate:
+    name: Elaborate unified-memory adapters
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Check adapter source contracts
+        run: python3 -m unittest tests_py.test_v2_soc_memory_adapters -v
+
+      - name: Elaborate all three adapters
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/soc-memory-adapters
+          mkdir -p build/soc-memory-adapters
+          ./mill aethercore.runMain aethercore.ElaborateV2SoCLegacyDataAdapter             --target-dir build/soc-memory-adapters/data
+          ./mill aethercore.runMain aethercore.ElaborateV2SoCInstructionReadAdapter             --target-dir build/soc-memory-adapters/instruction
+          ./mill aethercore.runMain aethercore.ElaborateV2SoCPtwReadAdapter             --target-dir build/soc-memory-adapters/ptw
+          test -n "$(find build/soc-memory-adapters -name '*.sv' -print -quit)"
