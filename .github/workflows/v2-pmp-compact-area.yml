@@ -5,7 +5,7 @@ on:
     paths:
       - 'src/main/scala/aethercore/core/**'
       - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
-      - '.github/workflows/v2-core-fpga-area.yml'
+      - '.github/workflows/v2-pmp-compact-area.yml'
   workflow_dispatch:
 
 permissions:
@@ -43,6 +43,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y yosys jq
           yosys -V
+
+      - name: Run focused PMP regressions
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.PmpCheckerSpec
+          ./mill aethercore.test.testOnly aethercore.PmpCsrFileSpec
+          ./mill aethercore.test.testOnly aethercore.PmpPhysicalAddressGeometrySpec
+          ./mill aethercore.test.testOnly aethercore.RV64PmpCsrSpec
 
       - name: Elaborate current Linux CPU profile
         run: |
