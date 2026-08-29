@@ -3,8 +3,9 @@
 ## Current freeze line
 
 ```text
-product branch: soc/aethercore-v0-icache
-freeze branch:  release/aethersoc-v0-freeze
+canonical branch: main
+v0 promotion merge: f67838cc417a12c341fc56394e37aead3aa61295
+freeze merge into product line: a502a71df7aac98d3997615e71b29661939ebb5e
 product baseline entering freeze: e9d01f403e78bfb3785515a80d07d7f50dd5dc06
 ```
 
@@ -78,22 +79,23 @@ This path crosses the production FPGA-facing AXI4 and serial-pin boundaries and 
 
 ## FPGA synthesis
 
-The production `AetherCoreV2FpgaSoC` top has already completed the board-neutral Yosys ECP5 synthesis proxy once. The freeze branch is rerunning the same flow on the latest product generation before final resource numbers are frozen.
+The production `AetherCoreV2FpgaSoC` top completed the final board-neutral Yosys ECP5 freeze run `33250167081`.
 
-The proxy proves structural synthesizability and reports mapped resource counts and topological depth. It does not claim a board Fmax.
+Frozen mapped proxy:
+- 96,718 LUT4
+- 18,705 TRELLIS_FF
+- 374 TRELLIS_DPR16X4
+- 39 MULT18X18D
+
+The proxy proves structural synthesizability. It does not claim a board Fmax.
 
 ## Repository status
 
-The default `main` branch is currently stale and still represents the early CPU-only generation. PR #253 is the planned v0 promotion.
+AetherSoC v0 release closure is complete.
 
-Promotion sequence:
-
-1. complete the latest-head synthesis run on `release/aethersoc-v0-freeze`;
-2. record exact final synthesis figures in `docs/AETHERSOC_V0_FREEZE.md`;
-3. merge the freeze branch into `soc/aethercore-v0-icache`;
-4. promote that frozen product line to `main` with PR #253.
-
-After promotion, `main` is the single canonical product line.
+- #254 merged the freeze record into the product line as `a502a71df7aac98d3997615e71b29661939ebb5e`.
+- #253 promoted that frozen product line to `main` as `f67838cc417a12c341fc56394e37aead3aa61295`.
+- `main` is now the single canonical product line; the old CPU-only default state is no longer authoritative.
 
 ## Next checkpoint after v0
 
