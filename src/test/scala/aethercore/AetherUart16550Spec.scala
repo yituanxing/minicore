@@ -63,6 +63,7 @@ class AetherUart16550Spec extends AnyFlatSpec with Matchers with ChiselSim {
       initialize(dut)
 
       dut.io.baudDivisor.expect(2.U)
+      read(dut, AetherUart16550Map.LineControl) shouldBe 0x03
       write(dut, AetherUart16550Map.LineControl, 0x80)
       read(dut, AetherUart16550Map.Data) shouldBe 2
       read(dut, AetherUart16550Map.InterruptEnable) shouldBe 0
