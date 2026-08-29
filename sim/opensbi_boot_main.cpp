@@ -35,6 +35,30 @@ bool isInterruptCause(std::uint64_t cause, std::uint64_t code) {
   return cause == (0x80000000ULL | code) ||
       cause == (0x8000000000000000ULL | code);
 }
+
+template <typename Top>
+void emitAxiDataConcurrency(const Top& top) {
+  if constexpr (requires {
+      top.io_axiDataReadRequestCount;
+      top.io_axiDataReadResponseCount;
+      top.io_axiDataReadOverlapIssueCount;
+      top.io_axiDataReadTwoOutstandingCycles;
+      top.io_axiDataReadMaxOutstanding;
+    }) {
+    std::cerr << "\nL32_AXI_DATA_CONCURRENCY"
+              << " requests="
+              << static_cast<std::uint64_t>(top.io_axiDataReadRequestCount)
+              << " responses="
+              << static_cast<std::uint64_t>(top.io_axiDataReadResponseCount)
+              << " overlap-issues="
+              << static_cast<std::uint64_t>(top.io_axiDataReadOverlapIssueCount)
+              << " two-outstanding-cycles="
+              << static_cast<std::uint64_t>(top.io_axiDataReadTwoOutstandingCycles)
+              << " max-outstanding="
+              << static_cast<std::uint64_t>(top.io_axiDataReadMaxOutstanding)
+              << "\n";
+  }
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -316,26 +340,7 @@ int main(int argc, char** argv) {
                     << " seip=" << supervisorExternalInterrupts
                     << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
         }
-        if constexpr (requires {
-            top.io_axiDataReadRequestCount;
-            top.io_axiDataReadResponseCount;
-            top.io_axiDataReadOverlapIssueCount;
-            top.io_axiDataReadTwoOutstandingCycles;
-            top.io_axiDataReadMaxOutstanding;
-          }) {
-          std::cerr << "\nL32_AXI_DATA_CONCURRENCY"
-                    << " requests="
-                    << static_cast<std::uint64_t>(top.io_axiDataReadRequestCount)
-                    << " responses="
-                    << static_cast<std::uint64_t>(top.io_axiDataReadResponseCount)
-                    << " overlap-issues="
-                    << static_cast<std::uint64_t>(top.io_axiDataReadOverlapIssueCount)
-                    << " two-outstanding-cycles="
-                    << static_cast<std::uint64_t>(top.io_axiDataReadTwoOutstandingCycles)
-                    << " max-outstanding="
-                    << static_cast<std::uint64_t>(top.io_axiDataReadMaxOutstanding)
-                    << "\n";
-        }
+        emitAxiDataConcurrency(top);
 
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
