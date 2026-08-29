@@ -39,6 +39,9 @@ class AetherSoCDtsSpec extends AnyFlatSpec with Matchers {
     )
     dts should include(s"timebase-frequency = <${board.timebaseFrequencyHz}>;")
     dts should include(s"clock-frequency = <${board.uartClockFrequencyHz}>;")
+    board.uartClockFrequencyHz shouldBe 3686400L
+    board.uartBaud shouldBe 115200
+    board.uartDefaultDivisor shouldBe 2
     dts should include("bootargs = \"console=ttyS0 rdinit=/init\";")
     dts should not include "phandle = <1>;"
     dts should not include "phandle = <2>;"

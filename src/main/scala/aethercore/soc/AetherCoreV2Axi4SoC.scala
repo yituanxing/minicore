@@ -30,6 +30,7 @@ class AetherCoreV2Axi4SoC extends Module {
     val rxReady = Output(Bool())
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
+    val uartBaudDivisor = Output(UInt(16.W))
     // Physical-platform seams: a board wrapper owns serializer throughput and
     // the architectural 10 MHz timebase tick.
     val uartTxReady = Input(Bool())
@@ -98,6 +99,7 @@ class AetherCoreV2Axi4SoC extends Module {
   io.rxReady := soc.io.rxReady
   io.uartValid := soc.io.uartValid
   io.uartByte := soc.io.uartByte
+  io.uartBaudDivisor := soc.io.uartBaudDivisor
 
   io.supervisorExternalInterrupt := soc.io.supervisorExternalInterrupt
   io.uartInterrupt := soc.io.uartInterrupt

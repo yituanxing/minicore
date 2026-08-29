@@ -80,6 +80,18 @@ final case class AetherSoCBoardSpec(
   require(timebaseFrequencyHz > 0)
   require(uartClockFrequencyHz > 0)
   require(uartBaud > 0)
+
+  private val uartDivisorDenominator = 16L * uartBaud.toLong
+  require(
+    uartClockFrequencyHz % uartDivisorDenominator == 0,
+    "AetherSoC v0 UART clock must produce an exact ns16550 divisor"
+  )
+  val uartDefaultDivisor: Int =
+    (uartClockFrequencyHz / uartDivisorDenominator).toInt
+  require(
+    uartDefaultDivisor >= 1 && uartDefaultDivisor <= 0xffff,
+    "AetherSoC v0 UART divisor must fit the ns16550 DLL/DLM pair"
+  )
 }
 
 object AetherSoCBoardSpec {

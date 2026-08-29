@@ -75,6 +75,7 @@ class AetherCoreV2LinuxSoC(
     val rxReady = Output(Bool())
     val uartTxReady =
       if (externalPhysicalSeams) Some(Input(Bool())) else None
+    val uartBaudDivisor = Output(UInt(16.W))
     val timebaseTick =
       if (externalPhysicalSeams) Some(Input(Bool())) else None
     val supervisorExternalInterrupt = Output(Bool())
@@ -129,7 +130,8 @@ class AetherCoreV2LinuxSoC(
     txnIdBits = txnIdBits,
     addressMap = addressMap,
     plicSourceCount = board.plicSourceCount,
-    uartPlicSourceId = board.uartPlicSourceId
+    uartPlicSourceId = board.uartPlicSourceId,
+    uartResetDivisor = board.uartDefaultDivisor
   ))
 
   // CPU-complex semantic memory and PMA seam.
@@ -171,6 +173,7 @@ class AetherCoreV2LinuxSoC(
   io.rxReady := fabric.io.rxReady
   io.uartValid := fabric.io.uartValid
   io.uartByte := fabric.io.uartByte
+  io.uartBaudDivisor := fabric.io.uartBaudDivisor
 
   io.supervisorExternalInterrupt := fabric.io.supervisorExternalInterrupt
   io.uartInterrupt := fabric.io.uartInterrupt

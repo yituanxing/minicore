@@ -43,6 +43,7 @@ class AetherCoreV2UnifiedMemorySoC(
     val rxReady = Output(Bool())
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
+    val uartBaudDivisor = Output(UInt(16.W))
     val uartTxReady =
       if (externalPhysicalSeams) Some(Input(Bool())) else None
     val timebaseTick =
@@ -184,6 +185,7 @@ class AetherCoreV2UnifiedMemorySoC(
   io.rxReady := platform.io.rxReady
   io.uartValid := platform.io.uartValid
   io.uartByte := platform.io.uartByte
+  io.uartBaudDivisor := platform.io.uartBaudDivisor
 
   io.supervisorExternalInterrupt := platform.io.supervisorExternalInterrupt
   io.uartInterrupt := platform.io.uartInterrupt
