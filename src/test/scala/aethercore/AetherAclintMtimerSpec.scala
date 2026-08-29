@@ -16,6 +16,7 @@ class AetherAclintMtimerSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.wdata.poke(0.U)
     dut.io.wmask.poke(0.U)
     dut.io.complete.poke(false.B)
+    dut.io.timebaseTick.poke(true.B)
   }
 
   private def write(
@@ -75,6 +76,25 @@ class AetherAclintMtimerSpec extends AnyFlatSpec with Matchers with ChiselSim {
       // Moving MTIMECMP into the future deasserts the level interrupt.
       write(dut, selectMtimecmp = true, value = 100)
       dut.io.interrupt.expect(false.B)
+    }
+  }
+
+  it should "advance MTIME only on explicit timebase ticks" in {
+    simulate(new AetherAclintMtimer()) { dut =>
+      initialize(dut)
+
+      write(dut, selectMtimecmp = false, value = 10)
+      dut.io.timebaseTick.poke(false.B)
+      dut.clock.step(3)
+      dut.io.mtime.expect(10.U)
+
+      dut.io.timebaseTick.poke(true.B)
+      dut.clock.step()
+      dut.io.mtime.expect(11.U)
+
+      dut.io.timebaseTick.poke(false.B)
+      dut.clock.step()
+      dut.io.mtime.expect(11.U)
     }
   }
 
