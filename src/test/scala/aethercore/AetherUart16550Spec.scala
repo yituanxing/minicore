@@ -18,6 +18,7 @@ class AetherUart16550Spec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.complete.poke(false.B)
     dut.io.rxValid.poke(false.B)
     dut.io.rxByte.poke(0.U)
+    dut.io.txReady.poke(true.B)
   }
 
   private def write(dut: AetherUart16550, offset: Int, value: BigInt): Unit = {
@@ -99,6 +100,42 @@ class AetherUart16550Spec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, AetherUart16550Map.Data) shouldBe 0x42
       dut.io.rxInterrupt.expect(false.B)
       dut.io.interrupt.expect(false.B)
+    }
+  }
+
+  it should "backpressure TX writes while the physical serializer is busy" in {
+    simulate(new AetherUart16550(dataBits = 64, rxDepth = 4)) { dut =>
+      initialize(dut)
+
+      write(dut, AetherUart16550Map.InterruptEnable, 2)
+      dut.io.interrupt.expect(true.B)
+
+      dut.io.txReady.poke(false.B)
+      dut.io.interrupt.expect(false.B)
+      (read(dut, AetherUart16550Map.LineStatus) & 0x60) shouldBe 0
+
+      dut.io.request.poke(true.B)
+      dut.io.write.poke(true.B)
+      dut.io.offset.poke(AetherUart16550Map.Data.U)
+      dut.io.wdata.poke(0x5a.U)
+      dut.io.wmask.poke("hff".U)
+      dut.io.complete.poke(true.B)
+      dut.io.ready.expect(false.B)
+      dut.io.txValid.expect(false.B)
+      dut.clock.step()
+      dut.io.txValid.expect(false.B)
+
+      dut.io.txReady.poke(true.B)
+      dut.io.ready.expect(true.B)
+      dut.io.txValid.expect(true.B)
+      dut.io.txByte.expect(0x5a.U)
+      dut.clock.step()
+      dut.io.request.poke(false.B)
+      dut.io.write.poke(false.B)
+      dut.io.complete.poke(false.B)
+
+      (read(dut, AetherUart16550Map.LineStatus) & 0x60) shouldBe 0x60
+      dut.io.interrupt.expect(true.B)
     }
   }
 
