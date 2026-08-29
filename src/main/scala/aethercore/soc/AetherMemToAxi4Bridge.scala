@@ -8,9 +8,10 @@ import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
 /**
   * Correctness-first AetherMem -> AXI4 bridge for the first FPGA-capable SoC.
   *
-  * v0 intentionally allows one AetherMem transaction at a time. The upstream
-  * MemoryHub may preserve several client lifetimes, while this bridge provides
-  * a simple ordered external-memory boundary suitable for initial FPGA bring-up.
+  * Normal idempotent RAM reads may remain concurrently outstanding and are
+  * identified end-to-end by the existing AetherMem/AXI transaction ID. Writes,
+  * ordered/side-effecting reads, LR/SC and AMOs retain the original strict
+  * single-transaction FSM and enter only after all concurrent reads drain.
   *
   * Atomic contract:
   *   - LR/SC reservation is owned here as the final AetherMem memory authority.
@@ -34,6 +35,8 @@ class AetherMemToAxi4Bridge(
 
   private val BusBytes = dataBits / 8
   private val ByteOffsetBits = log2Ceil(BusBytes)
+  private val ReadSlotCount = 1 << txnIdBits
+  private val ReadCountBits = log2Ceil(ReadSlotCount + 1)
 
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(
@@ -62,6 +65,15 @@ class AetherMemToAxi4Bridge(
 
   private val requestReg =
     Reg(new AetherMemRequest(addrBits, dataBits, txnIdBits))
+
+  // Concurrent normal-read metadata. The AXI ID is the authoritative lookup
+  // key, so responses may return out of request order without losing the
+  // original AetherMem byte-lane alignment.
+  private val normalReadValid =
+    RegInit(VecInit(Seq.fill(ReadSlotCount)(false.B)))
+  private val normalReadByteOffset =
+    RegInit(VecInit(Seq.fill(ReadSlotCount)(0.U(ByteOffsetBits.W))))
+  private val normalReadCount = RegInit(0.U(ReadCountBits.W))
   private val readPurpose = RegInit(ReadNormal)
   private val writePurpose = RegInit(WriteNormal)
 
@@ -80,11 +92,45 @@ class AetherMemToAxi4Bridge(
   private val reservationAddress = Reg(UInt(addrBits.W))
   private val reservationSize = Reg(MemSize())
 
-  io.request.ready := state === sIdle
+  private val incomingNormalRead =
+    io.request.bits.op === AetherMemOp.Read &&
+      !io.request.bits.attributes.sideEffecting &&
+      !io.request.bits.attributes.ordered
 
-  when(io.request.fire) {
+  private val incomingReadId = io.request.bits.txnId
+  private val incomingReadSlotFree = !normalReadValid(incomingReadId)
+
+  private val incomingAxiSize = WireDefault(3.U(3.W))
+  switch(io.request.bits.size) {
+    is(MemSize.Byte) { incomingAxiSize := 0.U }
+    is(MemSize.Half) { incomingAxiSize := 1.U }
+    is(MemSize.Word) { incomingAxiSize := 2.U }
+    is(MemSize.DWord) { incomingAxiSize := 3.U }
+  }
+  private val incomingAxiCache =
+    Mux(io.request.bits.attributes.cacheable, "b1111".U(4.W), 0.U(4.W))
+
+  private val fastReadCanIssue =
+    state === sIdle && incomingNormalRead && incomingReadSlotFree
+
+  io.request.ready :=
+    Mux(
+      incomingNormalRead,
+      fastReadCanIssue && io.axi.ar.ready,
+      state === sIdle && normalReadCount === 0.U
+    )
+
+  private val fastReadIssue = io.request.fire && incomingNormalRead
+
+  when(io.request.fire && !incomingNormalRead) {
     requestReg := io.request.bits
     state := sDispatch
+  }
+
+  when(fastReadIssue) {
+    normalReadValid(incomingReadId) := true.B
+    normalReadByteOffset(incomingReadId) :=
+      io.request.bits.paddr(ByteOffsetBits - 1, 0)
   }
 
   private val axiSize = WireDefault(3.U(3.W))
@@ -127,14 +173,64 @@ class AetherMemToAxi4Bridge(
   io.axi.w.bits.last := true.B
   io.axi.b.ready := state === sWriteResponse
 
-  io.axi.ar.valid := state === sReadAddress
-  io.axi.r.ready := state === sReadData
+  private val fastReadArValid =
+    state === sIdle && io.request.valid &&
+      incomingNormalRead && incomingReadSlotFree
 
-  io.response.valid := state === sRespond
-  io.response.bits.txnId := requestReg.txnId
-  io.response.bits.rdata := responseData
-  io.response.bits.fault := responseFault
+  io.axi.ar.valid := state === sReadAddress || fastReadArValid
+  when(fastReadArValid) {
+    io.axi.ar.bits.id := io.request.bits.txnId
+    io.axi.ar.bits.addr := io.request.bits.paddr
+    io.axi.ar.bits.len := 0.U
+    io.axi.ar.bits.size := incomingAxiSize
+    io.axi.ar.bits.burst := Axi4Burst.Incr
+    io.axi.ar.bits.lock := false.B
+    io.axi.ar.bits.cache := incomingAxiCache
+    io.axi.ar.bits.prot := 0.U
+    io.axi.ar.bits.qos := 0.U
+  }
+
+  private val fastReadResponseActive =
+    state === sIdle && normalReadCount =/= 0.U
+  io.axi.r.ready :=
+    Mux(state === sReadData, true.B,
+      fastReadResponseActive && io.response.ready)
+
+  private val returningReadId = io.axi.r.bits.id
+  private val returningReadKnown = normalReadValid(returningReadId)
+  private val returningBitShift =
+    normalReadByteOffset(returningReadId) << 3
+  private val returningReadData =
+    io.axi.r.bits.data >> returningBitShift
+  private val returningReadOkay =
+    io.axi.r.bits.resp === Axi4Resp.Okay ||
+      io.axi.r.bits.resp === Axi4Resp.ExOkay
+  private val returningReadFault =
+    !returningReadOkay || !io.axi.r.bits.last || !returningReadKnown
+
+  io.response.valid :=
+    Mux(fastReadResponseActive, io.axi.r.valid, state === sRespond)
+  io.response.bits.txnId :=
+    Mux(fastReadResponseActive, io.axi.r.bits.id, requestReg.txnId)
+  io.response.bits.rdata :=
+    Mux(fastReadResponseActive, returningReadData, responseData)
+  io.response.bits.fault :=
+    Mux(fastReadResponseActive, returningReadFault, responseFault)
   io.response.bits.last := true.B
+
+  private val fastReadRetire =
+    fastReadResponseActive && io.axi.r.fire
+
+  when(fastReadRetire) {
+    assert(returningReadKnown,
+      "AXI returned an ID with no concurrent AetherMem read lifetime")
+    normalReadValid(returningReadId) := false.B
+  }
+
+  switch(Cat(fastReadIssue, fastReadRetire)) {
+    is("b10".U) { normalReadCount := normalReadCount + 1.U }
+    is("b01".U) { normalReadCount := normalReadCount - 1.U }
+  }
 
   private val shiftedReadData = io.axi.r.bits.data >> bitShift
 
@@ -330,6 +426,11 @@ class AetherMemToAxi4Bridge(
 
   when(io.axi.r.fire) {
     assert(io.axi.r.bits.last,
-      "AetherSoC v0 AXI bridge accepts single-beat reads only")
+      "AetherSoC AXI bridge accepts single-beat reads only")
+  }
+
+  when(state =/= sIdle) {
+    assert(normalReadCount === 0.U,
+      "serialized AXI operation entered before concurrent reads drained")
   }
 }

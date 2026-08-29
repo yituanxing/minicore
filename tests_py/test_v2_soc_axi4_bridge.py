@@ -69,6 +69,20 @@ class V2Axi4BridgeSourceContract(unittest.TestCase):
         self.assertIn("multi-master/coherent FPGA fabric", source)
         self.assertIn("AXI-exclusive/retry", source)
 
+    def test_bridge_allows_only_safe_concurrent_normal_reads(self):
+        source = BRIDGE.read_text(encoding="utf-8")
+        self.assertIn("private val normalReadValid =", source)
+        self.assertIn("private val normalReadCount = RegInit", source)
+        self.assertIn("incomingNormalRead", source)
+        self.assertIn("normalReadByteOffset", source)
+        self.assertIn("returningReadId", source)
+        self.assertIn("returningReadData", source)
+        self.assertIn("state === sIdle && normalReadCount === 0.U", source)
+        self.assertIn(
+            "serialized AXI operation entered before concurrent reads drained",
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

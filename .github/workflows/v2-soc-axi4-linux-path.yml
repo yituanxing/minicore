@@ -7,6 +7,7 @@ on:
       - 'src/main/scala/aethercore/sim/AetherCoreV2Axi4CompatSimTop.scala'
       - 'src/main/scala/aethercore/ElaborateV2Axi4LinuxCompatRV64.scala'
       - 'tests_py/test_v2_soc_axi4_linux_path.py'
+      - 'src/test/scala/aethercore/AetherSoCAxi4HostMemoryAdapterSpec.scala'
       - '.github/workflows/v2-soc-axi4-linux-path.yml'
 
 permissions:
@@ -28,6 +29,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
+      - name: Install Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
         with:
@@ -43,6 +49,11 @@ jobs:
           python3 -m unittest tests_py.test_v2_soc_axi4_bridge -v
           python3 -m unittest tests_py.test_v2_soc_axi4_top -v
           python3 -m unittest tests_py.test_v2_soc_axi4_linux_path -v
+
+      - name: Prove independent AXI host read sources
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherSoCAxi4HostMemoryAdapterSpec
 
       - name: Elaborate AXI4 Linux compatibility top
         shell: bash

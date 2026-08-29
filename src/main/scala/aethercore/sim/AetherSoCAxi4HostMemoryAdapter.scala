@@ -75,81 +75,153 @@ class AetherSoCAxi4HostMemoryAdapter(
   }
 
   // --------------------------------------------------------------------------
-  // AXI read channel -> one historical host read source
+  // AXI read channel -> independent historical host read sources
   // --------------------------------------------------------------------------
-  private val readActive = RegInit(false.B)
-  private val readId = Reg(UInt(idBits.W))
-  private val readAddr = Reg(UInt(addrBits.W))
-  private val readSize = Reg(UInt(3.W))
+  //
+  // The host runner already exposes three physically independent read seams:
+  // instruction, PTW and data. Preserve one outstanding lifetime per source so
+  // the simulation target does not re-serialize the production AXI bridge.
+  // A later DDR timing model may deepen each source queue independently.
+  private val dataReadActive = RegInit(false.B)
+  private val dataReadId = Reg(UInt(idBits.W))
+  private val dataReadAddr = Reg(UInt(addrBits.W))
+  private val dataReadSize = Reg(UInt(3.W))
 
-  io.axi.ar.ready := !readActive
+  private val ptwReadActive = RegInit(false.B)
+  private val ptwReadId = Reg(UInt(idBits.W))
+  private val ptwReadAddr = Reg(UInt(addrBits.W))
+  private val ptwReadSize = Reg(UInt(3.W))
+
+  private val instructionReadActive = RegInit(false.B)
+  private val instructionReadId = Reg(UInt(idBits.W))
+  private val instructionReadAddr = Reg(UInt(addrBits.W))
+  private val instructionReadSize = Reg(UInt(3.W))
+
+  private val incomingReadSource =
+    io.axi.ar.bits.id(idBits - 1, localTxnIdBits)
+  private val incomingReadSourceKnown =
+    incomingReadSource <= InstructionSource.U
+
+  io.axi.ar.ready :=
+    incomingReadSourceKnown &&
+      MuxLookup(
+        incomingReadSource,
+        false.B
+      )(
+        Seq(
+          DataSource.U -> !dataReadActive,
+          PtwSource.U -> !ptwReadActive,
+          InstructionSource.U -> !instructionReadActive
+        )
+      )
+
   when(io.axi.ar.fire) {
     assert(io.axi.ar.bits.len === 0.U, "AXI host adapter accepts one-beat reads only")
     assert(io.axi.ar.bits.burst === Axi4Burst.Incr,
       "AXI host adapter expects incrementing single-beat reads")
-    readActive := true.B
-    readId := io.axi.ar.bits.id
-    readAddr := io.axi.ar.bits.addr
-    readSize := io.axi.ar.bits.size
+    assert(incomingReadSourceKnown,
+      "AXI host adapter received an unknown read source tag")
+
+    switch(incomingReadSource) {
+      is(DataSource.U) {
+        dataReadActive := true.B
+        dataReadId := io.axi.ar.bits.id
+        dataReadAddr := io.axi.ar.bits.addr
+        dataReadSize := io.axi.ar.bits.size
+      }
+      is(PtwSource.U) {
+        ptwReadActive := true.B
+        ptwReadId := io.axi.ar.bits.id
+        ptwReadAddr := io.axi.ar.bits.addr
+        ptwReadSize := io.axi.ar.bits.size
+      }
+      is(InstructionSource.U) {
+        instructionReadActive := true.B
+        instructionReadId := io.axi.ar.bits.id
+        instructionReadAddr := io.axi.ar.bits.addr
+        instructionReadSize := io.axi.ar.bits.size
+      }
+    }
   }
 
-  private val readSource = readId(idBits - 1, localTxnIdBits)
-  private val readByteOffset = readAddr(log2Ceil(BusBytes) - 1, 0)
-  private val readBitShift = readByteOffset << 3
+  io.imemValid := instructionReadActive
+  io.imemAddr := instructionReadAddr
+  io.imemBytes :=
+    Mux(instructionReadSize === 1.U, 2.U,
+      Mux(instructionReadSize === 2.U, 4.U, 0.U))
 
-  io.imemValid := readActive && readSource === InstructionSource.U
-  io.imemAddr := readAddr
-  io.imemBytes := Mux(readSize === 1.U, 2.U, Mux(readSize === 2.U, 4.U, 0.U))
+  io.ptwValid := ptwReadActive
+  io.ptwAddr := ptwReadAddr
 
-  io.ptwValid := readActive && readSource === PtwSource.U
-  io.ptwAddr := readAddr
+  private val dataReadTerminal = dataReadActive && io.memReady
+  private val ptwReadTerminal = ptwReadActive && io.ptwReady
+  private val instructionReadTerminal = instructionReadActive
 
-  private val dataReadActive = readActive && readSource === DataSource.U
+  // AXI permits read responses to return out of request order when IDs differ.
+  // Pick any host source that has reached its terminal condition. The bridge
+  // uses the returned AXI ID to recover the original AetherMem lifetime.
+  private val selectedDataRead = dataReadTerminal
+  private val selectedPtwRead = !selectedDataRead && ptwReadTerminal
+  private val selectedInstructionRead =
+    !selectedDataRead && !selectedPtwRead && instructionReadTerminal
+  private val selectedReadValid =
+    selectedDataRead || selectedPtwRead || selectedInstructionRead
 
-  private val readTerminal = MuxLookup(
-    readSource,
-    false.B
-  )(
+  private val selectedReadId = MuxCase(
+    0.U(idBits.W),
     Seq(
-      DataSource.U -> io.memReady,
-      PtwSource.U -> io.ptwReady,
-      InstructionSource.U -> true.B
+      selectedDataRead -> dataReadId,
+      selectedPtwRead -> ptwReadId,
+      selectedInstructionRead -> instructionReadId
+    )
+  )
+  private val selectedReadAddr = MuxCase(
+    0.U(addrBits.W),
+    Seq(
+      selectedDataRead -> dataReadAddr,
+      selectedPtwRead -> ptwReadAddr,
+      selectedInstructionRead -> instructionReadAddr
+    )
+  )
+  private val selectedSemanticReadData = MuxCase(
+    0.U(dataBits.W),
+    Seq(
+      selectedDataRead -> io.memRdata,
+      selectedPtwRead -> io.ptwRdata,
+      selectedInstructionRead -> io.imemInst.pad(dataBits)
+    )
+  )
+  private val selectedReadFault = MuxCase(
+    true.B,
+    Seq(
+      selectedDataRead -> io.memFault,
+      selectedPtwRead -> io.ptwFault,
+      selectedInstructionRead -> io.imemFault
     )
   )
 
-  private val readFault = MuxLookup(
-    readSource,
-    true.B
-  )(
-    Seq(
-      DataSource.U -> io.memFault,
-      PtwSource.U -> io.ptwFault,
-      InstructionSource.U -> io.imemFault
-    )
-  )
+  private val selectedReadByteOffset =
+    selectedReadAddr(log2Ceil(BusBytes) - 1, 0)
+  private val selectedReadBitShift = selectedReadByteOffset << 3
+  private val selectedLaneReadDataWide =
+    selectedSemanticReadData << selectedReadBitShift
 
-  private val semanticReadData = MuxLookup(
-    readSource,
-    0.U(dataBits.W)
-  )(
-    Seq(
-      DataSource.U -> io.memRdata,
-      PtwSource.U -> io.ptwRdata,
-      InstructionSource.U -> io.imemInst.pad(dataBits)
-    )
-  )
-  private val laneReadDataWide = semanticReadData << readBitShift
-
-  io.axi.r.valid := readActive && readTerminal
-  io.axi.r.bits.id := readId
-  io.axi.r.bits.data := laneReadDataWide(dataBits - 1, 0)
-  io.axi.r.bits.resp := Mux(readFault, Axi4Resp.SlvErr, Axi4Resp.Okay)
+  io.axi.r.valid := selectedReadValid
+  io.axi.r.bits.id := selectedReadId
+  io.axi.r.bits.data := selectedLaneReadDataWide(dataBits - 1, 0)
+  io.axi.r.bits.resp := Mux(selectedReadFault, Axi4Resp.SlvErr, Axi4Resp.Okay)
   io.axi.r.bits.last := true.B
 
   when(io.axi.r.fire) {
-    assert(readSource <= InstructionSource.U,
-      "AXI host adapter received an unknown read source tag")
-    readActive := false.B
+    when(selectedDataRead) {
+      dataReadActive := false.B
+    }.elsewhen(selectedPtwRead) {
+      ptwReadActive := false.B
+    }.otherwise {
+      assert(selectedInstructionRead,
+        "AXI host adapter read response fired without an active source")
+      instructionReadActive := false.B
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -199,16 +271,16 @@ class AetherSoCAxi4HostMemoryAdapter(
   private val lowWriteMask = wStrb >> writeByteOffset
 
   // One legacy data port is shared by AXI data reads and writes. The production
-  // bridge itself is one-transaction-at-a-time, so these cannot contend.
+  // bridge drains all concurrent reads before entering a serialized write.
   io.memValid := dataReadActive || writeActive
   io.memWrite := writeActive
   io.memAtomic := false.B
   io.memOp := Mux(writeActive, AetherMemOp.Write, AetherMemOp.Read)
   io.memAtomicOp := AtomicOp.None
-  io.memAddr := Mux(writeActive, awAddr, readAddr)
+  io.memAddr := Mux(writeActive, awAddr, dataReadAddr)
   io.memWdata := Mux(writeActive, lowWriteData(dataBits - 1, 0), 0.U)
   io.memWmask := Mux(writeActive, lowWriteMask(BusBytes - 1, 0), 0.U)
-  io.memSize := Mux(writeActive, memSizeFromAxi(awSize), memSizeFromAxi(readSize))
+  io.memSize := Mux(writeActive, memSizeFromAxi(awSize), memSizeFromAxi(dataReadSize))
 
   when(writeActive && io.memReady && !bValid) {
     bValid := true.B
@@ -226,8 +298,8 @@ class AetherSoCAxi4HostMemoryAdapter(
     bValid := false.B
   }
 
-  when(readActive) {
-    assert(readSource <= InstructionSource.U,
-      "AXI host adapter read ID must contain a known MemoryHub source tag")
+  when(writeActive) {
+    assert(!dataReadActive && !ptwReadActive && !instructionReadActive,
+      "AXI host adapter write must begin only after concurrent reads drain")
   }
 }
