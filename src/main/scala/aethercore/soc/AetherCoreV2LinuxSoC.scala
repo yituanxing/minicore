@@ -6,7 +6,7 @@ import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}
-import aethercore.soc.peripheral.AetherUart16550
+import aethercore.soc.peripheral.{AetherAclintMtimer, AetherUart16550}
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
@@ -100,13 +100,6 @@ class AetherCoreV2LinuxSoC(
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
-
-  private def mergeBytes(oldValue: UInt, newValue: UInt, mask: UInt, bytes: Int): UInt =
-    Cat((0 until bytes).reverse.map { byte =>
-      val high = byte * 8 + 7
-      val low = byte * 8
-      Mux(mask(byte), newValue(high, low), oldValue(high, low))
-    })
 
   val core = Module(new AetherCoreV2Complex(
     config,
@@ -214,29 +207,39 @@ class AetherCoreV2LinuxSoC(
   core.io.supervisorExternalInterrupt := supervisorPlic.io.interrupt
   io.supervisorExternalInterrupt := supervisorPlic.io.interrupt
 
-  val mtime = RegInit(0.U(64.W))
-  val mtimecmp = RegInit("hffffffffffffffff".U(64.W))
-  val nextMtime = WireDefault(mtime + 1.U)
-  val nextMtimecmp = WireDefault(mtimecmp)
+  // ACLINT/CLINT MTIMER state is an independent SoC peripheral. The
+  // platform retains only address selection while the reusable MMIO fabric is
+  // introduced in a later ownership cut.
+  val timer = Module(new AetherAclintMtimer(
+    dataBits = busDataBits
+  ))
+  val timerComplete = WireDefault(false.B)
+  timer.io.request := pendingTimer
+  timer.io.write := pendingWrite
+  timer.io.selectMtimecmp := pending.paddr === mtimecmpAddress
+  timer.io.wdata := pending.wdata
+  timer.io.wmask := pending.wmask
+  timer.io.complete := timerComplete
 
-  val timerReadData = Mux(pending.paddr === mtimeAddress, mtime, mtimecmp)
   val mmioReady = Mux(
     pendingPlic,
     supervisorPlic.io.ready,
-    Mux(pendingUart, uart.io.ready, true.B)
+    Mux(pendingTimer, timer.io.ready,
+      Mux(pendingUart, uart.io.ready, true.B))
   )
   val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
   val responseData = Mux(
     pendingPlic,
     supervisorPlic.io.rdata.pad(busDataBits),
-    Mux(pendingTimer, timerReadData,
+    Mux(pendingTimer, timer.io.rdata,
       Mux(pendingUart, uart.io.rdata, io.memRdata))
   )
   val responseFault = Mux(
     pendingPlic,
     supervisorPlic.io.fault,
-    Mux(pendingUart, uart.io.fault,
-      Mux(pendingMmio, false.B, io.memFault))
+    Mux(pendingTimer, timer.io.fault,
+      Mux(pendingUart, uart.io.fault,
+        Mux(pendingMmio, false.B, io.memFault)))
   )
 
   core.io.memoryResponse.valid := pendingValid && responseReady
@@ -247,20 +250,10 @@ class AetherCoreV2LinuxSoC(
   val responseFire = core.io.memoryResponse.fire
   pendingQueue.io.deq.ready := responseFire
   uartComplete := responseFire
+  timerComplete := responseFire
 
-  when(responseFire && pendingTimer && pendingWrite) {
-    when(pending.paddr === mtimeAddress) {
-      nextMtime := mergeBytes(mtime, pending.wdata, pending.wmask, busBytes)
-    }.otherwise {
-      nextMtimecmp := mergeBytes(mtimecmp, pending.wdata, pending.wmask, busBytes)
-    }
-  }
-  mtime := nextMtime
-  mtimecmp := nextMtimecmp
-
-  val timerInterrupt = mtime >= mtimecmp
-  core.io.time := mtime
-  core.io.timerInterrupt := timerInterrupt
+  core.io.time := timer.io.mtime
+  core.io.timerInterrupt := timer.io.interrupt
 
   io.memValid := pendingExternal
   io.memWrite := pendingWrite
@@ -280,9 +273,9 @@ class AetherCoreV2LinuxSoC(
   io.exitValid := responseFire && pendingExit && pendingWrite
   io.exitCode := pending.wdata
 
-  io.mtime := mtime
-  io.mtimecmp := mtimecmp
-  io.timerInterrupt := timerInterrupt
+  io.mtime := timer.io.mtime
+  io.mtimecmp := timer.io.mtimecmp
+  io.timerInterrupt := timer.io.interrupt
   io.dcacheHitCount := core.io.dcacheHitCount
   io.dcacheMissCount := core.io.dcacheMissCount
   io.dcacheBypassCount := core.io.dcacheBypassCount

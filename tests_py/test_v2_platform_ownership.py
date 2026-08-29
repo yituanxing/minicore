@@ -9,6 +9,7 @@ PAGED = CORE_V2 / "TinyPagedCore.scala"
 SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"
 CPU_COMPLEX = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2Complex.scala"
 UART_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherUart16550.scala"
+MTIMER_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherAclintMtimer.scala"
 SIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
 
 
@@ -120,6 +121,31 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
             "val uartIer = RegInit",
             "val uartDll = RegInit",
             "val uartRx = Module(new Queue",
+        ):
+            self.assertNotIn(forbidden, platform)
+
+    def test_mtimer_state_is_peripheral_owned(self):
+        peripheral = MTIMER_PERIPHERAL.read_text(encoding="utf-8")
+        platform = SOC_PLATFORM.read_text(encoding="utf-8")
+
+        self.assertIn("class AetherAclintMtimer(", peripheral)
+        self.assertIn("private val mtime = RegInit", peripheral)
+        self.assertIn("private val mtimecmp = RegInit", peripheral)
+        self.assertIn("io.interrupt := mtime >= mtimecmp", peripheral)
+        self.assertIn("private val terminalFire = io.request && io.complete", peripheral)
+
+        self.assertIn("val timer = Module(new AetherAclintMtimer(", platform)
+        self.assertIn("timer.io.request := pendingTimer", platform)
+        self.assertIn("timerComplete := responseFire", platform)
+        self.assertIn("core.io.time := timer.io.mtime", platform)
+        self.assertIn("core.io.timerInterrupt := timer.io.interrupt", platform)
+
+        for forbidden in (
+            "val mtime = RegInit",
+            "val mtimecmp = RegInit",
+            "val nextMtime =",
+            "val nextMtimecmp =",
+            "val timerInterrupt = mtime >= mtimecmp",
         ):
             self.assertNotIn(forbidden, platform)
 
