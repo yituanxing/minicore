@@ -1,6 +1,7 @@
 package aethercore.soc
 
 import chisel3._
+import chisel3.util.Decoupled
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
