@@ -128,7 +128,7 @@ class PmpChecker(
         // the zero-extension of ~mask would incorrectly clear the high encoded
         // address bit for regions in the upper half of the implemented PA space.
         val trailingOnesMask =
-          ((encodedAddress ^ incremented) >> 1).asUInt.pad(pmpAddressBits)
+          ((encodedAddress ^ incremented) >> 1).asUInt.pad(pmpAddressBits).pad(pmpAddressBits)
         val firstZeroOneHot = (~encodedAddress).asUInt & incremented
         val compactBase = Cat(
           0.U(1.W),
