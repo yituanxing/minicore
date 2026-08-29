@@ -3,6 +3,7 @@ package aethercore.soc
 import chisel3._
 import chisel3.util._
 import aethercore.common.CommitTrace
+import aethercore.config.CoreProfiles
 import aethercore.memory.{AetherMemRequest, AetherMemResponse}
 
 /**
@@ -25,6 +26,8 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   private val clientCount = 3
   private val sourceBits = log2Ceil(clientCount)
   val externalTxnIdBits: Int = clientTxnIdBits + sourceBits
+  private val addressMap =
+    AetherSoCAddressMap.qualifiedLinux(CoreProfiles.rv64imasuSv39PmpSoftware.platform)
 
   val io = IO(new Bundle {
     val memoryRequest =
@@ -87,6 +90,18 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
     clientCount = clientCount
   ))
 
+  val bootRom = Module(new AetherSoCBootRom(
+    addrBits = paddrBits,
+    dataBits = dataBits,
+    txnIdBits = externalTxnIdBits,
+    baseAddress = addressMap.bootRomBase,
+    apertureBytes = addressMap.bootRomBytes
+  ))
+  val responseArbiter = Module(new RRArbiter(
+    new AetherMemResponse(dataBits, externalTxnIdBits),
+    2
+  ))
+
   // Historical terminal-response data seam -> semantic AetherMem.
   dataAdapter.io.legacyValid := platform.io.memValid
   dataAdapter.io.legacyOp := platform.io.memOp
@@ -126,14 +141,29 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   hub.io.clients(2).request <> instructionCache.io.request
   instructionCache.io.response <> hub.io.clients(2).response
 
-  // Export exactly one semantic memory master.
-  io.memoryRequest.valid := hub.io.downstreamRequest.valid
-  io.memoryRequest.bits := hub.io.downstreamRequest.bits
-  hub.io.downstreamRequest.ready := io.memoryRequest.ready
+  // BootROM is a first-class target below the client-tagging MemoryHub.
+  // Requests outside its aperture remain the single exported external-memory
+  // master. Responses from ROM and external memory share one backpressured
+  // return path, so transaction/source identity remains unchanged.
+  val bootRomHit =
+    hub.io.downstreamRequest.bits.paddr >= addressMap.bootRomBase.U &&
+      hub.io.downstreamRequest.bits.paddr < addressMap.bootRomLimit.U
 
-  hub.io.downstreamResponse.valid := io.memoryResponse.valid
-  hub.io.downstreamResponse.bits := io.memoryResponse.bits
-  io.memoryResponse.ready := hub.io.downstreamResponse.ready
+  bootRom.io.request.valid := hub.io.downstreamRequest.valid && bootRomHit
+  bootRom.io.request.bits := hub.io.downstreamRequest.bits
+
+  io.memoryRequest.valid := hub.io.downstreamRequest.valid && !bootRomHit
+  io.memoryRequest.bits := hub.io.downstreamRequest.bits
+
+  hub.io.downstreamRequest.ready :=
+    Mux(bootRomHit, bootRom.io.request.ready, io.memoryRequest.ready)
+
+  responseArbiter.io.in(0) <> bootRom.io.response
+  responseArbiter.io.in(1).valid := io.memoryResponse.valid
+  responseArbiter.io.in(1).bits := io.memoryResponse.bits
+  io.memoryResponse.ready := responseArbiter.io.in(1).ready
+
+  hub.io.downstreamResponse <> responseArbiter.io.out
 
   // Byte-stream UART remains at the reusable SoC boundary. A physical serial
   // PHY belongs in the later FPGA wrapper.
