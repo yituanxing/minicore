@@ -1,0 +1,159 @@
+name: AetherCore PMP Checker Area A/B
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/PmpChecker.scala'
+      - 'src/main/scala/aethercore/ElaboratePmpCheckerSynthesisRV64.scala'
+      - '.github/workflows/v2-pmp-checker-area-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-pmp-checker-area-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Compare legacy and compact PMP16 PA56 area
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BASELINE_SHA: e9d01f403e78bfb3785515a80d07d7f50dd5dc06
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+
+      - name: Create exact baseline worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/pmp-area-base"
+          rm -rf "$base"
+          git worktree add --detach "$base" "$BASELINE_SHA"
+          cp src/main/scala/aethercore/ElaboratePmpCheckerSynthesisRV64.scala \
+             "$base/src/main/scala/aethercore/ElaboratePmpCheckerSynthesisRV64.scala"
+          chmod +x mill "$base/mill"
+          echo "BASE_DIR=$base" >> "$GITHUB_ENV"
+
+      - name: Elaborate baseline and target
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pmp-area-ab"
+          rm -rf "$out"
+          mkdir -p "$out/base-rtl" "$out/target-rtl" "$out/base-mill" "$out/target-mill"
+
+          (
+            cd "$BASE_DIR"
+            MILL_OUTPUT_DIR="$out/base-mill" ./mill aethercore.runMain \
+              aethercore.ElaboratePmpCheckerSynthesisRV64 --target-dir "$out/base-rtl"
+          )
+
+          MILL_OUTPUT_DIR="$out/target-mill" ./mill aethercore.runMain \
+            aethercore.ElaboratePmpCheckerSynthesisRV64 --target-dir "$out/target-rtl"
+
+          echo "AREA_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Synthesize exact A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          measure_one() {
+            label="$1"
+            dir="$AREA_OUT/$label-rtl"
+            json="$AREA_OUT/$label.json"
+            log="$AREA_OUT/$label-yosys.log"
+
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do
+              read_cmd+=" $sv"
+            done
+
+            yosys -Q -p "$read_cmd; hierarchy -check -top PmpChecker; synth_ecp5 -top PmpChecker -json $json; stat -top PmpChecker" \
+              2>&1 | tee "$log"
+          }
+
+          measure_one base
+          measure_one target
+
+      - name: Summarize exact PMP area delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ["AREA_OUT"])
+          def stats(label):
+              net = json.loads((root / f"{label}.json").read_text())
+              cells = Counter(c["type"] for c in net["modules"]["PmpChecker"]["cells"].values())
+              return {
+                  "cells": sum(cells.values()),
+                  "lut4": cells["LUT4"],
+                  "ff": cells["TRELLIS_FF"],
+                  "ccu2c": cells["CCU2C"],
+                  "pfumx": cells["PFUMX"],
+                  "l6mux21": cells["L6MUX21"],
+              }
+
+          base = stats("base")
+          target = stats("target")
+          delta = {}
+          for key in base:
+              old, new = base[key], target[key]
+              delta[key] = {
+                  "absolute": new - old,
+                  "percent": None if old == 0 else (new - old) * 100.0 / old,
+              }
+
+          summary = {
+              "baseline_sha": os.environ["BASELINE_SHA"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "baseline": base,
+              "target": target,
+              "delta": delta,
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload PMP A/B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-pmp-checker-area-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.AREA_OUT }}/summary.json
+            ${{ env.AREA_OUT }}/*-yosys.log
