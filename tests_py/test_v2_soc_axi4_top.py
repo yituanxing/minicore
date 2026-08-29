@@ -14,6 +14,7 @@ class V2Axi4SoCSourceContract(unittest.TestCase):
         self.assertIn("new AetherMemToAxi4Bridge", source)
         self.assertIn("bridge.io.request <> soc.io.memoryRequest", source)
         self.assertIn("soc.io.memoryResponse <> bridge.io.response", source)
+        self.assertIn("soc.externalTxnIdBits == TxnIdBits", source)
 
     def test_axi_is_the_only_external_memory_protocol(self):
         source = TOP.read_text(encoding="utf-8")
@@ -23,6 +24,17 @@ class V2Axi4SoCSourceContract(unittest.TestCase):
         self.assertNotIn("val imemValid =", source)
         self.assertNotIn("val ptwValid =", source)
         self.assertNotIn("val memValid =", source)
+
+    def test_bootrom_and_platform_devices_remain_internal_to_the_logical_soc(self):
+        source = TOP.read_text(encoding="utf-8")
+        self.assertIn("BootROM", source)
+        self.assertIn("Only requests that escaped the internal SoC address map", source)
+        self.assertNotIn("new AetherSoCBootRom", source)
+        self.assertNotIn("new AetherUart16550", source)
+        self.assertNotIn("new AetherPlic", source)
+        self.assertNotIn("new AetherAclintMtimer", source)
+        self.assertIn("io.icacheHitCount := soc.io.icacheHitCount", source)
+        self.assertIn("io.icacheMissCount := soc.io.icacheMissCount", source)
 
     def test_board_specific_phy_and_ddr_remain_outside(self):
         source = TOP.read_text(encoding="utf-8")
