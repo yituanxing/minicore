@@ -10,6 +10,7 @@ SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"
 CPU_COMPLEX = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2Complex.scala"
 UART_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherUart16550.scala"
 MTIMER_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherAclintMtimer.scala"
+PLIC_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherPlic.scala"
 SIM_WRAPPER = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala"
 
 
@@ -149,6 +150,28 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, platform)
 
+    def test_plic_state_is_peripheral_owned(self):
+        peripheral = PLIC_PERIPHERAL.read_text(encoding="utf-8")
+        platform = SOC_PLATFORM.read_text(encoding="utf-8")
+
+        self.assertIn("class AetherPlic(", peripheral)
+        self.assertIn("private val terminalAccepted = accepted && io.complete", peripheral)
+        self.assertIn("plic.io.claimRead := true.B", peripheral)
+        self.assertIn("plic.io.completeWrite := true.B", peripheral)
+        self.assertIn("io.interrupt := plic.io.interrupt", peripheral)
+
+        self.assertIn("val plic = Module(new AetherPlic(", platform)
+        self.assertIn("plic.io.request := pendingPlic", platform)
+        self.assertIn("plicComplete := responseFire", platform)
+        self.assertIn("core.io.supervisorExternalInterrupt := plic.io.interrupt", platform)
+
+        for forbidden in (
+            "Module(new MachinePlicMmio",
+            "MachinePlicMmioMap.",
+            "supervisorPlic.io.",
+        ):
+            self.assertNotIn(forbidden, platform)
+
     def test_product_soc_owns_pma_mmio_and_interrupt_topology(self):
         source = SOC_PLATFORM.read_text(encoding="utf-8")
 
@@ -170,8 +193,8 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("val pendingMmio = pendingUart || pendingExit || pendingTimer || pendingPlic", source)
 
         self.assertIn("private val supervisorUartSourceId = 10", source)
-        self.assertIn("val supervisorPlic = Module(new MachinePlicMmio", source)
-        self.assertIn("core.io.supervisorExternalInterrupt := supervisorPlic.io.interrupt", source)
+        self.assertIn("val plic = Module(new AetherPlic(", source)
+        self.assertIn("core.io.supervisorExternalInterrupt := plic.io.interrupt", source)
         self.assertIn("val core = Module(new AetherCoreV2Complex(", source)
         self.assertNotIn("val dcache = Module(new AetherDirectMappedReadCache(", source)
         self.assertIn("assert(!(pendingMmio && pendingAtomic)", source)
