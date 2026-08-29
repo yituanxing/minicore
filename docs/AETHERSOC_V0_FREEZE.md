@@ -1,12 +1,13 @@
 # AetherSoC v0 Freeze
 
-Status: board-less AetherSoC v0 qualification complete; promotion to `main` pending.
+Status: **FROZEN**. Board-less AetherSoC v0 qualification is complete and the frozen product line has been promoted to `main`.
 
 ## Canonical product baseline
 
 - Product branch before freeze: `soc/aethercore-v0-icache`
 - Exact baseline entering freeze: `e9d01f403e78bfb3785515a80d07d7f50dd5dc06`
-- Default `main` is intentionally not promoted until this freeze closes.
+- Freeze merge: `a502a71df7aac98d3997615e71b29661939ebb5e`
+- Canonical `main` promotion merge: `f67838cc417a12c341fc56394e37aead3aa61295`
 
 ## Functional architecture frozen for v0
 
@@ -92,11 +93,11 @@ No FPGA Fmax or board frequency claim is made by this proxy. That requires a con
 
 ## Repository governance closure
 
-With exact-head synthesis and this freeze record complete:
+Repository promotion is complete:
 
-1. merge this freeze branch into `soc/aethercore-v0-icache`;
-2. promote the frozen `soc/aethercore-v0-icache` line to `main` via PR #253;
-3. treat `main` as the single canonical product line;
-4. retain historical milestone PRs/tags as evidence rather than as competing product branches.
+1. PR #254 merged this freeze into the product line at `a502a71df7aac98d3997615e71b29661939ebb5e`;
+2. PR #253 promoted the frozen product line to `main` at `f67838cc417a12c341fc56394e37aead3aa61295`;
+3. `main` is the single canonical product line;
+4. historical milestone branches/PRs remain evidence rather than competing definitions of the current architecture.
 
-After that promotion, new performance or board-specific work must branch from `main` and return to `main` promptly.
+New performance, architecture or board-specific work must branch from `main` and return to `main` promptly.

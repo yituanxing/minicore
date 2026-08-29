@@ -2,7 +2,7 @@
 
 A correctness-first RISC-V CPU and SoC project written in Chisel and driven by executable software, firmware and real operating-system workloads.
 
-The current product line is **AetherCore V2 + AetherSoC v0**. The board-less v0 freeze is being finalized on `release/aethersoc-v0-freeze`; after freeze closure it is promoted to the default `main` branch.
+The current product line is **AetherCore V2 + AetherSoC v0**. Board-less v0 is frozen and the frozen product line is now the default `main` branch.
 
 ## Current product architecture
 

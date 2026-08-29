@@ -29,16 +29,15 @@ AetherCore/AetherSoC is advanced by executable software pressure and frozen qual
 
 The authoritative current freeze record is `docs/AETHERSOC_V0_FREEZE.md`.
 
-## Current: AetherSoC v0 release closure
+## AetherSoC v0 release closure — complete
 
-The current release line is deliberately narrow:
+Board-less AetherSoC v0 is frozen and promoted to `main`.
 
-1. rerun FPGA synthesis on the latest product baseline;
-2. freeze exact runtime/resource evidence;
-3. merge `release/aethersoc-v0-freeze` to the product branch;
-4. promote the frozen product line to the default `main` branch via PR #253.
+- final freeze synthesis: run `33250167081` — SUCCESS;
+- freeze merge: `a502a71df7aac98d3997615e71b29661939ebb5e`;
+- canonical `main` promotion: `f67838cc417a12c341fc56394e37aead3aa61295`.
 
-No new SoC feature is allowed to block this release unless the freeze qualification exposes a correctness failure.
+New SoC features no longer belong to v0 closure. The next bounded hardware line is concrete FPGA-board bring-up and resource/timing closure.
 
 ## Next: concrete FPGA board
 
