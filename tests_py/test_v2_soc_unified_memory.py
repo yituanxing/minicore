@@ -12,13 +12,17 @@ class V2UnifiedMemorySoCSourceContract(unittest.TestCase):
         source = PLATFORM.read_text(encoding="utf-8")
         self.assertIn("enableInstructionBackpressure: Boolean = false", source)
         self.assertIn("exposeExternalMemoryAttributes: Boolean = false", source)
+        self.assertIn("externalPhysicalSeams: Boolean = false", source)
+        self.assertIn("externalSemanticMemory: Boolean = false", source)
         self.assertIn("enableInstructionBackpressure = enableInstructionBackpressure", source)
         self.assertIn("core.io.imemReady.get := io.imemReady.get", source)
-        self.assertIn("io.memAttributes.get := pending.attributes", source)
+        self.assertIn("io.memAttributes.get := fabric.io.memAttributes", source)
+        self.assertIn("io.instructionFence := core.io.instructionFence", source)
 
     def test_unified_top_has_one_semantic_external_memory_master(self):
         source = TOP.read_text(encoding="utf-8")
-        self.assertIn("class AetherCoreV2UnifiedMemorySoC extends Module", source)
+        self.assertIn("class AetherCoreV2UnifiedMemorySoC(", source)
+        self.assertIn(") extends Module {", source)
         self.assertIn("val memoryRequest =", source)
         self.assertIn("val memoryResponse =", source)
         self.assertIn("new AetherMemRequest", source)
@@ -31,20 +35,24 @@ class V2UnifiedMemorySoCSourceContract(unittest.TestCase):
 
     def test_unified_top_joins_data_ptw_and_instruction_clients(self):
         source = TOP.read_text(encoding="utf-8")
-        self.assertIn("new AetherSoCLegacyDataAdapter", source)
+        self.assertNotIn("new AetherSoCLegacyDataAdapter", source)
         self.assertIn("new AetherSoCPtwReadAdapter", source)
-        self.assertIn("new AetherSoCInstructionReadAdapter", source)
+        self.assertIn("new AetherSoCInstructionCache", source)
         self.assertIn("new AetherSoCMemoryHub", source)
-        self.assertIn("hub.io.clients(0).request <> dataAdapter.io.request", source)
+        self.assertIn("externalSemanticMemory = true", source)
+        self.assertIn("hub.io.clients(0).request <> platform.io.externalRequest.get", source)
+        self.assertIn("platform.io.externalResponse.get <> hub.io.clients(0).response", source)
         self.assertIn("hub.io.clients(1).request <> ptwAdapter.io.request", source)
-        self.assertIn("hub.io.clients(2).request <> instructionAdapter.io.request", source)
+        self.assertIn("hub.io.clients(2).request <> instructionCache.io.request", source)
 
     def test_instruction_backpressure_and_memory_attributes_are_enabled_only_here(self):
         source = TOP.read_text(encoding="utf-8")
         self.assertIn("enableInstructionBackpressure = true", source)
-        self.assertIn("exposeExternalMemoryAttributes = true", source)
-        self.assertIn("platform.io.imemReady.get := instructionAdapter.io.legacyReady", source)
-        self.assertIn("dataAdapter.io.legacyAttributes := platform.io.memAttributes.get", source)
+        self.assertIn("exposeExternalMemoryAttributes = false", source)
+        self.assertIn("externalSemanticMemory = true", source)
+        self.assertIn("platform.io.imemReady.get := instructionCache.io.frontendReady", source)
+        self.assertIn("instructionCache.io.invalidateAll := platform.io.instructionFence", source)
+        self.assertIn("platform.io.memReady := false.B", source)
 
     def test_external_bus_protocol_is_still_below_unified_soc(self):
         source = TOP.read_text(encoding="utf-8")

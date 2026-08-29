@@ -1,50 +1,56 @@
-name: AetherSoC Unified V2 Linux PID1
+name: AetherSoC I-cache Architecture A/B
 
 on:
   pull_request:
     paths:
-      - 'src/main/scala/aethercore/soc/**'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2UnifiedMemoryCompatSimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherSoCUnifiedHostMemoryAdapter.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2HostPerformance.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2TopDown.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2AttributionV11.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCInstructionCache.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/main/scala/aethercore/sim/**'
+      - 'src/main/scala/aethercore/core/v2/**'
       - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
-      - '.github/workflows/v2-soc-unified-linux-pid1.yml'
+      - 'tools/ci/v2_p8_arch_ab.sh'
+      - '.github/workflows/v2-soc-icache-arch-ab.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethersoc-unified-v2-linux-${{ github.event.pull_request.number || github.ref }}
+  group: aethersoc-icache-arch-ab-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verilator-tool:
-    name: Produce or verify hosted Verilator
-    uses: ./.github/workflows/hosted-verilator-cache.yml
-
-  qualify:
-    name: Real V2 PID1 through unified AetherMem
-    needs: verilator-tool
+  measure:
+    name: Frozen D-cache vs I-cache Linux clocksource boundary
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 50
     env:
+      BASELINE_SHA: dd9779e6ba30b6bbddd7d3f69ba025156febcf38
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      DATA_MEM_WAIT_CYCLES: '10'
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
       RV64_LINUX_JOBS: '4'
 
     steps:
-      - name: Checkout exact unified-v2 head
+      - name: Checkout exact I-cache head with frozen baseline history
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
           clean: true
+
+      - name: Verify exact A/B identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$BASELINE_SHA" == "dd9779e6ba30b6bbddd7d3f69ba025156febcf38" ]]
+          git cat-file -e "$BASELINE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASELINE_SHA" "$TARGET_SHA"
+          bash -n tools/ci/v2_p8_arch_ab.sh
 
       - name: Install hosted prerequisites
         shell: bash
@@ -94,53 +100,66 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
 
-      - name: Validate exact v2 unified boundary
+      - name: Validate fixed tools
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x mill
           bash tools/ensure_verilator_5_024.sh
-          python3 -m unittest tests_py.test_v2_platform_ownership -v
-          python3 -m unittest tests_py.test_v2_soc_unified_memory -v
-          python3 -m unittest tests_py.test_v2_soc_unified_linux_path -v
-          python3 -m unittest tests_py.test_v2_soc_bootrom -v
-          ./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64             --target-dir build/v2-soc-unified-linux-smoke
-          find build/v2-soc-unified-linux-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Provision exact RV64 Linux toolchain
-        shell: bash
-        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
-
-      - name: Reuse qualified Linux 6.6.143 baseline
+      - name: Reuse or build unchanged Linux workload
         shell: bash
         run: |
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
-
-      - name: Build deterministic PID1 payload
-        shell: bash
-        run: |
-          set -euo pipefail
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
 
-      - name: Run real PID1 through V2 unified-memory path
+      - name: Execute exact frozen-Dcache vs I-cache A/B
         shell: bash
         run: |
           set -euo pipefail
-          make -f Makefile.l32-linux-boot             BUILD_DIR="$HOME/.cache/aethercore/v2-soc-unified-linux/$TARGET_SHA"             TOP=AetherCoreV2OpenSbiRV64SimTop             ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64             FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin             JOBS="$(nproc)"             MAX_CYCLES=850000000             MILESTONE='RV64 USER UART IRQ OK'             MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1             PROGRESS_INTERVAL_CYCLES=10000000             VERILATOR='verilator -LDFLAGS -ldl'             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"             run-local
+          chmod +x tools/ci/v2_p8_arch_ab.sh
+          BASELINE_SHA="$BASELINE_SHA"           TARGET_SHA="$TARGET_SHA"           DATA_MEM_WAIT_CYCLES="$DATA_MEM_WAIT_CYCLES"           MAX_CYCLES=120000000           MILESTONE='clocksource: riscv_clocksource'           PROGRESS_INTERVAL_CYCLES=10000000           bash tools/ci/v2_p8_arch_ab.sh
 
-      - name: Upload unified-v2 Linux evidence
+      - name: Publish I-cache A/B summary
         if: always()
+        shell: bash
+        run: |
+          {
+            echo '### AetherSoC I-cache exact A/B'
+            echo
+            echo '- frozen baseline: `'$BASELINE_SHA'` (#215 D-cache)'
+            echo '- target: `'$TARGET_SHA'`'
+            echo '- boundary: `clocksource: riscv_clocksource`'
+            echo '- data-memory wait: 10 cycles'
+            echo
+            if [[ -s build/v2-p8-arch-ab/result.txt ]]; then
+              echo '~~~text'
+              cat build/v2-p8-arch-ab/result.txt
+              echo '~~~'
+            else
+              echo 'A/B result unavailable; inspect uploaded logs.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact A/B evidence
+        if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: aethersoc-unified-v2-linux-${{ github.run_id }}
+          name: aethersoc-icache-arch-ab-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: warn
           path: |
-            build/rv64-linux-early/result.txt
-            build/rv64-linux-initramfs/result.txt
-            build/rv64-minimal-init-boot/result.txt
-            ~/.cache/aethercore/v2-soc-unified-linux/${{ env.TARGET_SHA }}/logs/*.log
+            build/v2-p8-arch-ab/identity.txt
+            build/v2-p8-arch-ab/workload.sha256
+            build/v2-p8-arch-ab/result.txt
+            build/v2-p8-arch-ab/baseline.snapshot.txt
+            build/v2-p8-arch-ab/target.snapshot.txt
+            build/v2-p8-arch-ab/baseline.run.log
+            build/v2-p8-arch-ab/target.run.log

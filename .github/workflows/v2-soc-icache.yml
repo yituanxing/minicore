@@ -1,0 +1,69 @@
+name: AetherSoC I-cache Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCInstructionCache.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/test/scala/aethercore/AetherSoCInstructionCacheSpec.scala'
+      - 'tests_py/test_v2_soc_unified_memory.py'
+      - '.github/workflows/v2-soc-icache.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-icache-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    name: Prove same-cycle-hit I-cache
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Install Verilator fallback prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Check I-cache ownership contract
+        run: python3 -m unittest tests_py.test_v2_soc_unified_memory -v
+
+      - name: Run focused I-cache behavior proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherSoCInstructionCacheSpec
+
+      - name: Elaborate unified-memory SoC with I-cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build/soc-icache
+          ./mill aethercore.runMain aethercore.ElaborateV2UnifiedMemorySoCRV64             --target-dir build/soc-icache
+          find build/soc-icache -maxdepth 1 -name '*.sv' -print -quit | grep -q .

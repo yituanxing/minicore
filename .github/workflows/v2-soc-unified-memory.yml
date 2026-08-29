@@ -3,12 +3,18 @@ name: AetherSoC Unified Memory Gate
 on:
   pull_request:
     paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCBootRom.scala'
+      - 'src/main/scala/aethercore/soc/peripheral/**'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2Complex.scala'
       - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
       - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
       - 'src/main/scala/aethercore/ElaborateV2UnifiedMemorySoC.scala'
       - 'tests_py/test_v2_platform_ownership.py'
       - 'tests_py/test_v2_soc_unified_memory.py'
+      - 'tests_py/test_v2_soc_bootrom.py'
       - '.github/workflows/v2-soc-unified-memory.yml'
 
 permissions:
@@ -46,6 +52,7 @@ jobs:
           python3 -m unittest tests_py.test_v2_soc_memory_hub -v
           python3 -m unittest tests_py.test_v2_soc_memory_adapters -v
           python3 -m unittest tests_py.test_v2_soc_unified_memory -v
+          python3 -m unittest tests_py.test_v2_soc_bootrom -v
 
       - name: Elaborate unified-memory SoC
         shell: bash

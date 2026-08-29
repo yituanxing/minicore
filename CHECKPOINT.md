@@ -1,140 +1,109 @@
-# AetherCore Supervisor Sv32 V2 checkpoint
+# AetherSoC v0 checkpoint
 
-## Frozen state
+## Current freeze line
 
 ```text
-freeze branch: freeze/sv32-v2-minimal-translation
-qualified commit: 43817d899cd335610a8a4467bc3dff6d4e405d98
-functional/CI-content head before qualification sentinel: caeb34c1e0f54b9a167f23d8d340445056289762
-base freeze: freeze/smode-v1-minimal-trap
+product branch: soc/aethercore-v0-icache
+freeze branch:  release/aethersoc-v0-freeze
+product baseline entering freeze: e9d01f403e78bfb3785515a80d07d7f50dd5dc06
 ```
 
-The executable qualification basis is the exact qualified commit above. Documentation-only commits on the freeze branch do not change that basis.
+The authoritative detailed evidence record is `docs/AETHERSOC_V0_FREEZE.md`.
+
+Historical Supervisor V1 and Sv32 V2 checkpoints remain regression references, but they no longer describe the current product boundary.
 
 ## Architecture now qualified
 
-The frozen architecture ladder now covers:
+The current board-less AetherSoC v0 line covers:
 
-- RV32/RV64 five-stage in-order execution;
-- RV64I/RV64M and qualified RV32IM software profiles;
-- Zicsr Machine CSR behavior;
-- precise synchronous traps and MRET;
-- Machine timer/external interrupts, PLIC and WFI;
-- preemptive context switching;
-- U-mode execution and ECALL/syscall return;
-- PMP isolation and isolated U-mode scheduling;
-- RV32A word atomics driven by protected NuttX userspace;
-- NuttX protected U-mode with trusted per-task kernel exception stacks;
-- M/S/U privilege execution;
-- Supervisor CSR state, synchronous exception delegation and SRET;
-- RV32 Sv32 virtual memory with two-level page-table walking;
-- translated instruction and Load/Store paths with 34-bit physical addresses;
-- precise instruction/load/store page faults;
-- correctness-first I/D translation caches;
-- `SFENCE.VMA` invalidation and serialization;
-- delegated U-mode page faults into S-mode.
+- RV64IMA execution with M/S/U privilege;
+- supervisor delegation, SRET and WFI;
+- Sv39 virtual memory;
+- `satp`, TLBs, page-table walker and `SFENCE.VMA`;
+- PMP/PMA ownership;
+- I-cache and D-cache;
+- concurrent Data read lifetimes through the memory path;
+- BootROM;
+- PlatformFabric and MemoryHub;
+- ns16550-compatible UART;
+- PLIC supervisor external interrupt delivery;
+- ACLINT-style MTIMER/timebase delivery;
+- AXI4 external-memory boundary;
+- DTS generation;
+- board-neutral FPGA-facing SoC top;
+- synthesizable 8N1 UART PHY;
+- virtual FPGA board that exercises production AXI and serial pin boundaries.
 
-## Sv32 V2 boundary
+Earlier RV32/RV32C/Sv32, FreeRTOS, Zephyr and NuttX profiles remain active regression ladders.
 
-Qualified profile:
+## Real software qualification
 
-```text
-rv32imsuSv32Software
-XLEN=32
-PA=34
-bus=32
-modes=M,S,U
-Sv32=enabled
-ASIDLEN=0
-```
+AetherSoC v0 has passed real firmware and Linux execution:
 
-Implemented and qualified:
-
-- `satp` Bare/Sv32 WARL state;
-- `sstatus.SUM` and `sstatus.MXR`;
-- two-level Sv32 walk;
-- 4 KiB leaves and aligned 4 MiB megapages;
-- R/W/X/U, SUM and MXR permission checks;
-- fail-closed A/D handling without PTE mutation;
-- M-mode/Bare physical bypass;
-- S/U instruction and data translation;
-- shared read-only PTW port with Data priority over speculative Fetch;
-- cancellable speculative instruction page walks;
-- full PA34 delivery to imem/dmem and commit memory metadata;
-- page-fault causes 12/13/15 and original-VA trap values;
-- implicit PTE-read access faults;
-- bounded fully-associative translation caches supporting 4 KiB/4 MiB entries;
-- `SFENCE.VMA` retirement, global I/D TLB flush and stale-walk cancellation;
-- U-mode `SFENCE.VMA` precise illegal-instruction behavior;
-- `medeleg` page-fault bits only on the Sv32 profile;
-- real U Load page fault -> delegated S trap -> `scause/stval` validation.
-
-Deliberately excluded from V2:
-
-- nonzero ASIDs;
-- selective VA/ASID `SFENCE.VMA` invalidation;
-- hardware A/D-bit updates;
-- Sv32 + PMP in the same profile;
-- translated RV32A AMOs;
-- S-level timer/external interrupt sources;
-- a real S-mode OS using the page tables;
-- SBI/OpenSBI and Linux boot.
-
-The previous `freeze/smode-v1-minimal-trap` remains the no-VM physical-address M/S/U regression baseline, including its WARL-cleared page-fault delegation bits.
-
-## Final qualification
-
-Final Fast Gate:
+### AXI Linux clocksource
 
 ```text
-run: 31243947400
-job: 93069344932
-conclusion: success
-head: 43817d899cd335610a8a4467bc3dff6d4e405d98
+OpenSBI v1.6
+Linux 6.6.143
+clocksource: riscv_clocksource
+cycles=62047788
+commits=18038710
 ```
 
-Final Full Gate:
+The same qualification observed 1,289,056 Data AXI requests and responses plus 123,939 same-source overlap-issue events.
+
+### Virtual FPGA pin-level PID1
+
+Exact qualification head:
 
 ```text
-run: 31243947508
-job: 93069345207
-conclusion: success
-head: 43817d899cd335610a8a4467bc3dff6d4e405d98
-artifact: aethercore-full-gate-31243947508
-artifact id: 9018110154
-artifact digest: sha256:6a5bb8aedaf65e4442d605225f372b333aaba41b2d4f4376fefd459fe9cec972
+d47c0e504789ce4abcc58877327e73e0724f2059
+workflow run 33244119745
 ```
 
-The Full Gate passed:
+Observed:
 
-- source/image contracts;
-- FreeRTOS preemptive and Machine-external-IRQ workloads;
-- exact FreeRTOS RV32 NEMU DiffTest;
-- all Chisel unit tests including the complete Sv32 V2 suite;
-- frozen Supervisor V1 executable qualification;
-- RV64 RTL and NEMU differential matrices;
-- RV32 GCC/NEMU, Zicsr, precise traps/MRET/timer interrupts;
-- two-task preemptive scheduler;
-- U-mode syscalls, PMP isolation and isolated scheduling;
-- compiler-produced/pinned RV64 workloads;
-- CoreMark;
-- both Embench batches;
-- littlefs;
-- consolidated evidence upload.
+```text
+OpenSBI v1.6
+Linux 6.6.143
+RV64 USER UART IRQ OK
+cycles=421518021
+commits=135262086
+interrupts=8391
+stip=4195
+seip=1
+```
 
-See [`docs/SV32_V2_FREEZE.md`](docs/SV32_V2_FREEZE.md) for the authoritative detailed evidence record.
+This path crosses the production FPGA-facing AXI4 and serial-pin boundaries and is the final board-less functional acceptance line for v0.
 
-## Next checkpoint
+## FPGA synthesis
 
-V2 is frozen. The next architecture milestone should **not** be more synthetic Sv32 feature accumulation.
+The production `AetherCoreV2FpgaSoC` top has already completed the board-neutral Yosys ECP5 synthesis proxy once. The freeze branch is rerunning the same flow on the latest product generation before final resource numbers are frozen.
 
-The next bounded line is to select and run a real S-mode workload that genuinely consumes the V2 mechanisms. The preferred progression is:
+The proxy proves structural synthesizability and reports mapped resource counts and topological depth. It does not claim a board Fmax.
 
-1. audit small RV32/Sv32-capable supervisor kernels and choose the smallest useful real target;
-2. boot it in S-mode using real page tables and `satp`;
-3. let its failures drive any missing supervisor interrupt/timer/SBI boundary;
-4. reach a real U-mode process under an S-mode kernel;
-5. deliberately fault that process through an unmapped/read-only/kernel virtual address and prove process isolation plus scheduler/kernel recovery;
-6. only after that decide whether the next capability jump should be an SBI/OpenSBI layer, broader supervisor interrupts, or the RV64/Linux-class line.
+## Repository status
 
-The frozen V2 MMU is now a platform for real OS pressure, not a reason to add unrelated VM features speculatively.
+The default `main` branch is currently stale and still represents the early CPU-only generation. PR #253 is the planned v0 promotion.
+
+Promotion sequence:
+
+1. complete the latest-head synthesis run on `release/aethersoc-v0-freeze`;
+2. record exact final synthesis figures in `docs/AETHERSOC_V0_FREEZE.md`;
+3. merge the freeze branch into `soc/aethercore-v0-icache`;
+4. promote that frozen product line to `main` with PR #253.
+
+After promotion, `main` is the single canonical product line.
+
+## Next checkpoint after v0
+
+After v0 freezes, work is no longer classified as "missing basic SoC functionality".
+
+The next bounded lines are:
+
+- concrete FPGA-board bring-up: PLL, DDR/controller, pin constraints, place-and-route and bitstream;
+- timing/resource closure on the selected device;
+- optional performance work driven by measured Linux bottlenecks;
+- later platform expansion only when a real workload or board requires it.
+
+Do not reopen AetherSoC v0 simply to chase unbounded performance improvements.
