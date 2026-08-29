@@ -1,16 +1,6 @@
 name: AetherSoC AXI4 V2 Linux PID1
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/soc/**'
-      - 'src/main/scala/aethercore/sim/AetherSoCAxi4HostMemoryAdapter.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2Axi4CompatSimTop.scala'
-      - 'src/main/scala/aethercore/ElaborateV2Axi4LinuxCompatRV64.scala'
-      - 'tests_py/test_v2_soc_axi4_bridge.py'
-      - 'tests_py/test_v2_soc_axi4_top.py'
-      - 'tests_py/test_v2_soc_axi4_linux_path.py'
-      - '.github/workflows/v2-soc-axi4-linux-pid1.yml'
   workflow_dispatch:
 
 permissions:
