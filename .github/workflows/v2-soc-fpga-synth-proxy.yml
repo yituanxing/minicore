@@ -20,7 +20,7 @@ jobs:
   synth:
     name: Measure board-neutral FPGA structural cost
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
