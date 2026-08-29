@@ -65,6 +65,8 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
+    val icacheHitCount = Output(UInt(64.W))
+    val icacheMissCount = Output(UInt(64.W))
 
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
@@ -132,6 +134,8 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
   io.dcacheHitCount := soc.io.dcacheHitCount
   io.dcacheMissCount := soc.io.dcacheMissCount
   io.dcacheBypassCount := soc.io.dcacheBypassCount
+  io.icacheHitCount := soc.io.icacheHitCount
+  io.icacheMissCount := soc.io.icacheMissCount
   io.commit := soc.io.commit
   io.halted := soc.io.halted
 }
