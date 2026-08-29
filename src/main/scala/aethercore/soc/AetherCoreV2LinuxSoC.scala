@@ -3,7 +3,7 @@ package aethercore.soc
 import chisel3._
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
-import aethercore.memory.{AetherMemOp, MemoryAttributes}
+import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
   * Qualified RV64 OpenSBI/Linux compatibility top.
@@ -16,7 +16,8 @@ import aethercore.memory.{AetherMemOp, MemoryAttributes}
 class AetherCoreV2LinuxSoC(
     val enableInstructionBackpressure: Boolean = false,
     val exposeExternalMemoryAttributes: Boolean = false,
-    val externalPhysicalSeams: Boolean = false
+    val externalPhysicalSeams: Boolean = false,
+    val externalSemanticMemory: Boolean = false
 ) extends Module {
   private val config = CoreProfiles.rv64imasuSv39PmpSoftware.copy(
     name = "rv64imasu-sv39-pmp-opensbi-v2",
@@ -61,6 +62,14 @@ class AetherCoreV2LinuxSoC(
     val memFault = Input(Bool())
     val memAttributes =
       if (exposeExternalMemoryAttributes) Some(Output(new MemoryAttributes)) else None
+    val externalRequest =
+      if (externalSemanticMemory)
+        Some(Decoupled(new AetherMemRequest(paddrBits, busDataBits, txnIdBits)))
+      else None
+    val externalResponse =
+      if (externalSemanticMemory)
+        Some(Flipped(Decoupled(new AetherMemResponse(busDataBits, txnIdBits))))
+      else None
 
     val ptwValid = Output(Bool())
     val ptwAddr = Output(UInt(paddrBits.W))
@@ -131,7 +140,8 @@ class AetherCoreV2LinuxSoC(
     addressMap = addressMap,
     plicSourceCount = board.plicSourceCount,
     uartPlicSourceId = board.uartPlicSourceId,
-    uartResetDivisor = board.uartDefaultDivisor
+    uartResetDivisor = board.uartDefaultDivisor,
+    externalSemanticMemory = externalSemanticMemory
   ))
 
   // CPU-complex semantic memory and PMA seam.
@@ -161,6 +171,10 @@ class AetherCoreV2LinuxSoC(
   fabric.io.memFault := io.memFault
   if (exposeExternalMemoryAttributes) {
     io.memAttributes.get := fabric.io.memAttributes
+  }
+  if (externalSemanticMemory) {
+    io.externalRequest.get <> fabric.io.externalRequest.get
+    fabric.io.externalResponse.get <> io.externalResponse.get
   }
 
   // Board-facing UART byte stream.
