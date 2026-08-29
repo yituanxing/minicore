@@ -6,9 +6,10 @@ import aethercore.common.CommitTrace
 /**
   * FPGA-facing logical AetherSoC v0.
   *
-  * All CPU-visible platform behavior remains inside AetherCoreV2UnifiedMemorySoC:
-  * D-cache, PMA, UART MMIO, PLIC, timer, Sv39/PTW and interrupts. The single
-  * semantic AetherMem master is translated here into a standard AXI4 master.
+  * The complete logical SoC remains above this boundary: CPU complex, I/D
+  * caches, Sv39/PTW, PMA, platform fabric, UART, PLIC, MTIMER and BootROM.
+  * Only requests that escaped the internal SoC address map as external memory
+  * reach the semantic AetherMem master translated here into standard AXI4.
   *
   * Board-specific clock/reset generation, DDR-controller instances, pin
   * constraints and serial UART PHY remain outside this reusable logical SoC.
@@ -43,6 +44,8 @@ class AetherCoreV2Axi4SoC extends Module {
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
+    val icacheHitCount = Output(UInt(64.W))
+    val icacheMissCount = Output(UInt(64.W))
 
     val commit = Output(new CommitTrace(Xlen, PaddrBits, DataBits))
     val halted = Output(Bool())
@@ -54,6 +57,10 @@ class AetherCoreV2Axi4SoC extends Module {
     dataBits = DataBits,
     txnIdBits = TxnIdBits
   ))
+  require(
+    soc.externalTxnIdBits == TxnIdBits,
+    "AXI4 top transaction ID width must match the unified-memory SoC boundary"
+  )
 
   bridge.io.request <> soc.io.memoryRequest
   soc.io.memoryResponse <> bridge.io.response
@@ -97,6 +104,8 @@ class AetherCoreV2Axi4SoC extends Module {
   io.dcacheHitCount := soc.io.dcacheHitCount
   io.dcacheMissCount := soc.io.dcacheMissCount
   io.dcacheBypassCount := soc.io.dcacheBypassCount
+  io.icacheHitCount := soc.io.icacheHitCount
+  io.icacheMissCount := soc.io.icacheMissCount
   io.commit := soc.io.commit
   io.halted := soc.io.halted
 }
