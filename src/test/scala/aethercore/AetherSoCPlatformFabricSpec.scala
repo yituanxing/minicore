@@ -40,6 +40,8 @@ class AetherSoCPlatformFabricSpec extends AnyFlatSpec with Matchers with ChiselS
 
     dut.io.rxValid.poke(false.B)
     dut.io.rxByte.poke(0.U)
+    dut.io.uartTxReady.poke(true.B)
+    dut.io.timebaseTick.poke(true.B)
   }
 
   private def issue(
@@ -133,4 +135,31 @@ class AetherSoCPlatformFabricSpec extends AnyFlatSpec with Matchers with ChiselS
       dut.io.uartValid.expect(false.B)
     }
   }
+
+  it should "hold a UART MMIO response until the physical TX sink is ready" in {
+    simulate(new AetherSoCPlatformFabric(
+      paddrBits = platform.paddrBits,
+      dataBits = platform.busDataBits,
+      txnIdBits = 2,
+      addressMap = map
+    )) { dut =>
+      initialize(dut)
+      dut.io.uartTxReady.poke(false.B)
+
+      issue(dut, map.uartBase, AetherMemOp.Write, data = 0x5a, txnId = 1)
+      dut.io.response.valid.expect(false.B)
+      dut.io.uartValid.expect(false.B)
+      dut.clock.step(2)
+      dut.io.response.valid.expect(false.B)
+      dut.io.uartValid.expect(false.B)
+
+      dut.io.uartTxReady.poke(true.B)
+      dut.io.response.valid.expect(true.B)
+      dut.io.uartValid.expect(true.B)
+      dut.io.uartByte.expect(0x5a.U)
+      dut.clock.step()
+      dut.io.uartValid.expect(false.B)
+    }
+  }
+
 }
