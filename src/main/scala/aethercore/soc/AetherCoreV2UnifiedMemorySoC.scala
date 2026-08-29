@@ -10,9 +10,9 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   * First synthesizable unified-memory AetherSoC boundary.
   *
   * The qualified Linux platform remains the software-visible owner of PMA,
-  * D-cache, UART, PLIC, timer and MMIO. This wrapper converts its historical
-  * instruction/PTW/data memory seams into three semantic AetherMem clients and
-  * joins them through AetherSoCMemoryHub.
+  * D-cache, UART, PLIC, timer and MMIO. Its data-side external RAM traffic now
+  * remains semantic AetherMem end-to-end, while PTW and instruction seams are
+  * adapted into the other two MemoryHub clients.
   *
   * The only external memory interface is one AetherMem request/response pair.
   * A later adapter may translate this boundary to AXI4 without teaching the CPU
@@ -71,14 +71,9 @@ class AetherCoreV2UnifiedMemorySoC(
 
   val platform = Module(new AetherCoreV2LinuxSoC(
     enableInstructionBackpressure = true,
-    exposeExternalMemoryAttributes = true,
-    externalPhysicalSeams = externalPhysicalSeams
-  ))
-
-  val dataAdapter = Module(new AetherSoCLegacyDataAdapter(
-    addrBits = paddrBits,
-    dataBits = dataBits,
-    txnIdBits = clientTxnIdBits
+    exposeExternalMemoryAttributes = false,
+    externalPhysicalSeams = externalPhysicalSeams,
+    externalSemanticMemory = true
   ))
   val ptwAdapter = Module(new AetherSoCPtwReadAdapter(
     addrBits = paddrBits,
@@ -111,18 +106,12 @@ class AetherCoreV2UnifiedMemorySoC(
     2
   ))
 
-  // Historical terminal-response data seam -> semantic AetherMem.
-  dataAdapter.io.legacyValid := platform.io.memValid
-  dataAdapter.io.legacyOp := platform.io.memOp
-  dataAdapter.io.legacyAtomicOp := platform.io.memAtomicOp
-  dataAdapter.io.legacyAddr := platform.io.memAddr
-  dataAdapter.io.legacyWdata := platform.io.memWdata
-  dataAdapter.io.legacyWmask := platform.io.memWmask
-  dataAdapter.io.legacySize := platform.io.memSize
-  dataAdapter.io.legacyAttributes := platform.io.memAttributes.get
-  platform.io.memReady := dataAdapter.io.legacyReady
-  platform.io.memRdata := dataAdapter.io.legacyRdata
-  platform.io.memFault := dataAdapter.io.legacyFault
+  // Unified/AXI/FPGA composition uses the platform's semantic external-RAM
+  // seam directly. The historical terminal-response data port is tied off and
+  // remains available only in the standalone Linux compatibility composition.
+  platform.io.memReady := false.B
+  platform.io.memRdata := 0.U
+  platform.io.memFault := false.B
 
   // PTW read seam -> semantic AetherMem.
   ptwAdapter.io.legacyValid := platform.io.ptwValid
@@ -141,8 +130,8 @@ class AetherCoreV2UnifiedMemorySoC(
   platform.io.imemInst := instructionCache.io.frontendInst
   platform.io.imemFault := instructionCache.io.frontendFault
 
-  hub.io.clients(0).request <> dataAdapter.io.request
-  dataAdapter.io.response <> hub.io.clients(0).response
+  hub.io.clients(0).request <> platform.io.externalRequest.get
+  platform.io.externalResponse.get <> hub.io.clients(0).response
 
   hub.io.clients(1).request <> ptwAdapter.io.request
   ptwAdapter.io.response <> hub.io.clients(1).response
