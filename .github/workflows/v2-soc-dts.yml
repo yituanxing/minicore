@@ -65,8 +65,22 @@ jobs:
           rm -rf build/aethersoc-dts
           mkdir -p build/aethersoc-dts
           ./mill aethercore.runMain aethercore.EmitAetherSoCDts             --output build/aethersoc-dts/aethersoc-v0.dts             --isa rv64ima_zicsr_zifencei             --mmu sv39             --bootargs 'console=ttyS0 earlycon'
-          dtc -I dts -O dtb             -o build/aethersoc-dts/aethersoc-v0.dtb             build/aethersoc-dts/aethersoc-v0.dts
-          dtc -I dtb -O dts             -o build/aethersoc-dts/roundtrip.dts             build/aethersoc-dts/aethersoc-v0.dtb
+          dtc -I dts -O dtb \
+            -o build/aethersoc-dts/aethersoc-v0.dtb \
+            build/aethersoc-dts/aethersoc-v0.dts \
+            2> build/aethersoc-dts/dtc.stderr
+          if [[ -s build/aethersoc-dts/dtc.stderr ]]; then
+            cat build/aethersoc-dts/dtc.stderr >&2
+            echo "ERROR: generated AetherSoC DTS must compile with zero dtc warnings" >&2
+            exit 1
+          fi
+          dtc -I dtb -O dts \
+            -o build/aethersoc-dts/roundtrip.dts \
+            build/aethersoc-dts/aethersoc-v0.dtb
+          grep -q 'cpu_intc: interrupt-controller' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'plic: interrupt-controller@c000000' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'interrupt-parent = <&plic>;' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'interrupts-extended = <&cpu_intc' build/aethersoc-dts/aethersoc-v0.dts
           grep -q 'bootrom@1000' build/aethersoc-dts/roundtrip.dts
           grep -q 'memory@80000000' build/aethersoc-dts/roundtrip.dts
           grep -q 'serial@10000000' build/aethersoc-dts/roundtrip.dts
