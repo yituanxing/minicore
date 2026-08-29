@@ -34,7 +34,8 @@ class AetherCoreV2LinuxSoC(
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
   private val txnIdBits = 2
-  private val addressMap = AetherSoCAddressMap.qualifiedLinux(config.platform)
+  private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform)
+  private val addressMap = board.addressMap
 
   val io = IO(new Bundle {
     val imemValid = Output(Bool())
@@ -121,7 +122,9 @@ class AetherCoreV2LinuxSoC(
     paddrBits = paddrBits,
     dataBits = busDataBits,
     txnIdBits = txnIdBits,
-    addressMap = addressMap
+    addressMap = addressMap,
+    plicSourceCount = board.plicSourceCount,
+    uartPlicSourceId = board.uartPlicSourceId
   ))
 
   // CPU-complex semantic memory and PMA seam.
