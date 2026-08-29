@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'src/main/scala/aethercore/soc/AetherCoreV2Axi4SoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCBootRom.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
       - 'src/main/scala/aethercore/ElaborateV2Axi4SoC.scala'
       - 'tests_py/test_v2_soc_axi4_top.py'
       - '.github/workflows/v2-soc-axi4-top.yml'
