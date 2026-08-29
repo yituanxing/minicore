@@ -71,7 +71,8 @@ class AetherSoCBootRom(
   private def imageByte(index: UInt): UInt =
     MuxLookup(
       index,
-      0.U(8.W),
+      0.U(8.W)
+    )(
       image.zipWithIndex.map { case (value, i) =>
         i.U -> value.U(8.W)
       }
