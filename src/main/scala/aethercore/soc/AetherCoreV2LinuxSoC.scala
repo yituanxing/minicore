@@ -23,6 +23,9 @@ class AetherCoreV2LinuxSoC(
       zExtensions = CoreProfiles.rv64imasuSv39PmpSoftware.isa.zExtensions + "Zifencei",
       machineProvidedSupervisorTimer = true,
       timeCounter = true
+    ),
+    platform = CoreProfiles.rv64imasuSv39PmpSoftware.platform.copy(
+      resetVector = AetherSoCAddressMap.QualifiedBootRomBase
     )
   )
   private val geometry = PageTableGeometry.Sv39
