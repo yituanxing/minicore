@@ -35,6 +35,9 @@ class V2Axi4LinuxPathSourceContract(unittest.TestCase):
         self.assertIn("new AetherSoCAxi4HostMemoryAdapter", source)
         self.assertNotIn("new AetherCoreV2UnifiedMemorySoC", source)
         self.assertNotIn("new AetherCoreV2LinuxSoC", source)
+        self.assertIn("internal BootROM decode", source)
+        self.assertIn("io.icacheHitCount := soc.io.icacheHitCount", source)
+        self.assertIn("io.icacheMissCount := soc.io.icacheMissCount", source)
 
 
 if __name__ == "__main__":
