@@ -1,0 +1,128 @@
+name: AetherCore Translation Parts FPGA Area
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
+      - 'src/main/scala/aethercore/core/PageTableWalker.scala'
+      - 'src/main/scala/aethercore/core/PageTableEntryChecker.scala'
+      - 'src/main/scala/aethercore/ElaborateTranslationTlbSynthesisRV64.scala'
+      - 'src/main/scala/aethercore/ElaboratePageTableWalkerSynthesisRV64.scala'
+      - '.github/workflows/v2-translation-parts-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-translation-parts-area-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure Sv39 TLB8 and PTW area
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+
+      - name: Elaborate standalone translation parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          tlb="$RUNNER_TEMP/tlb-rtl"
+          ptw="$RUNNER_TEMP/ptw-rtl"
+          rm -rf "$tlb" "$ptw"
+          ./mill aethercore.runMain aethercore.ElaborateTranslationTlbSynthesisRV64 --target-dir "$tlb"
+          ./mill aethercore.runMain aethercore.ElaboratePageTableWalkerSynthesisRV64 --target-dir "$ptw"
+          echo "TLB_RTL=$tlb" >> "$GITHUB_ENV"
+          echo "PTW_RTL=$ptw" >> "$GITHUB_ENV"
+
+      - name: Map TLB and PTW with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/translation-parts-area"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          measure() {
+            label="$1"
+            top="$2"
+            dir="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do
+              read_cmd+=" $sv"
+            done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $out/$label.json; stat -top $top" \
+              2>&1 | tee "$out/$label-yosys.log"
+          }
+
+          measure tlb TranslationTlb "$TLB_RTL"
+          measure ptw PageTableWalker "$PTW_RTL"
+
+          export AREA_OUT="$out"
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          root = Path(os.environ["AREA_OUT"])
+
+          def stats(label, top):
+              net = json.loads((root / f"{label}.json").read_text())
+              types = Counter(c["type"] for c in net["modules"][top]["cells"].values())
+              return {
+                  "cells": sum(types.values()),
+                  "lut4": types["LUT4"],
+                  "ff": types["TRELLIS_FF"],
+                  "distributed_ram_trellis_dpr16x4": types["TRELLIS_DPR16X4"],
+                  "bram_dp16kd": types["DP16KD"],
+                  "mult18x18d": types["MULT18X18D"],
+                  "ccu2c": types["CCU2C"],
+                  "pfumx": types["PFUMX"],
+                  "l6mux21": types["L6MUX21"],
+              }
+
+          summary = {
+              "geometry": "Sv39",
+              "tlb_entries": 8,
+              "tlb": stats("tlb", "TranslationTlb"),
+              "ptw": stats("ptw", "PageTableWalker"),
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload translation-part evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-translation-parts-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/translation-parts-area/summary.json
+            ${{ runner.temp }}/translation-parts-area/*-yosys.log
