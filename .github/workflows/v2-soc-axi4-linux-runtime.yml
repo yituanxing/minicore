@@ -91,12 +91,17 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
 
+      - name: Activate fixed Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+
       - name: Validate exact AXI4 boundary
         shell: bash
         run: |
           set -euo pipefail
           chmod +x mill
-          bash tools/ensure_verilator_5_024.sh
           python3 -m unittest tests_py.test_v2_soc_axi4_bridge -v
           python3 -m unittest tests_py.test_v2_soc_axi4_top -v
           python3 -m unittest tests_py.test_v2_soc_axi4_linux_path -v
