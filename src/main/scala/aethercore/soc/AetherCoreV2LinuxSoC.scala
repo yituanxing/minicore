@@ -1,23 +1,17 @@
 package aethercore.soc
 
 import chisel3._
-import chisel3.util._
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
-import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}
-import aethercore.soc.peripheral.{AetherAclintMtimer, AetherPlic, AetherPlicMap, AetherUart16550}
+import aethercore.memory.{AetherMemOp, MemoryAttributes}
 
 /**
-  * F7 RV64 OpenSBI simulation boundary for the v2 core.
+  * Qualified RV64 OpenSBI/Linux compatibility top.
   *
-  * This intentionally reuses the frozen software-visible board contract rather
-  * than teaching the CPU about UART/ACLINT/PLIC addresses. TinyPagedCore keeps
-  * speaking AetherMem; this shell classifies PMA attributes, terminates MMIO,
-  * and preserves AetherMem Atomic operations all the way to the host RAM model.
-  *
-  * The external RAM interface is deliberately close to AetherCoreSimTop so the
-  * qualified OpenSBI host runner can be reused. memAtomic/memAtomicOp are the
-  * only additions required to retain LR/SC/AMO semantics at the memory owner.
+  * CPU-internal state belongs to AetherCoreV2Complex. Data-side PMA, address
+  * decode, peripherals and external-RAM routing belong to AetherSoCPlatformFabric.
+  * This wrapper now retains only the historical instruction/PTW compatibility
+  * seams plus host-observability wiring used by the existing Linux oracle.
   */
 class AetherCoreV2LinuxSoC(
     val enableInstructionBackpressure: Boolean = false,
@@ -37,14 +31,7 @@ class AetherCoreV2LinuxSoC(
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
   private val txnIdBits = 2
-
-  private val ramBase = BigInt("80000000", 16)
-  private val ramLimit = ramBase + BigInt("10000000", 16)
-  private val plicBase = BigInt("0c000000", 16)
-  private val plicLimit = plicBase + BigInt("00400000", 16)
-  private val uartLimit = config.platform.uartAddress + BigInt(8)
-  private val supervisorPlicSourceCount = 52
-  private val supervisorUartSourceId = 10
+  private val addressMap = AetherSoCAddressMap.qualifiedLinux(config.platform)
 
   val io = IO(new Bundle {
     val imemValid = Output(Bool())
@@ -100,6 +87,8 @@ class AetherCoreV2LinuxSoC(
     val halted = Output(Bool())
   })
 
+  // Keep this public val name during the compatibility migration: existing
+  // attribution tooling observes core-internal read-only state through it.
   val core = Module(new AetherCoreV2Complex(
     config,
     geometry,
@@ -108,7 +97,8 @@ class AetherCoreV2LinuxSoC(
     enableInstructionBackpressure = enableInstructionBackpressure
   ))
 
-  // Instruction and PTW transport remain direct read-only host-memory ports.
+  // Instruction and PTW transport remain direct read-only host-memory ports
+  // for now. The unified-memory SoC wrapper already adapts these to AetherMem.
   io.imemValid := core.io.imem.valid
   io.imemAddr := core.io.imem.addr
   io.imemBytes := core.io.imem.bytes
@@ -124,169 +114,63 @@ class AetherCoreV2LinuxSoC(
   core.io.ptw.rdata := io.ptwRdata
   core.io.ptw.fault := io.ptwFault
 
-  // PMA stays at the platform boundary. RAM is the only first-stage region
-  // advertising atomic support; device/unknown addresses fail atomics closed.
-  val resolvedAddress = core.io.resolvedPhysicalAddress
-  val resolvedRam = resolvedAddress >= ramBase.U && resolvedAddress < ramLimit.U
-  core.io.resolvedAttributes.cacheable := resolvedRam
-  core.io.resolvedAttributes.idempotent := resolvedRam
-  core.io.resolvedAttributes.sideEffecting := !resolvedRam
-  core.io.resolvedAttributes.ordered := !resolvedRam
-  core.io.resolvedAttributes.executable := resolvedRam
-  core.io.resolvedAttributes.supportsAtomic := resolvedRam
-  core.io.resolvedAttributes.supportsPartial := true.B
-
-  // The private D-cache now belongs to AetherCoreV2Complex. This platform
-  // sees only the CPU-complex semantic memory master and remains the PMA/MMIO
-  // owner during the staged migration toward the final AetherSoC fabric.
-
-  // Retain up to two downstream AetherMem requests so a cache miss does not
-  // collapse the core's qualified LoadQ2 transaction concurrency.
-  val pendingQueue = Module(new Queue(
-    new AetherMemRequest(paddrBits, busDataBits, txnIdBits),
-    entries = 2,
-    pipe = true
-  ))
-  pendingQueue.io.enq.valid := core.io.memoryRequest.valid
-  pendingQueue.io.enq.bits := core.io.memoryRequest.bits
-  core.io.memoryRequest.ready := pendingQueue.io.enq.ready
-
-  val pendingValid = pendingQueue.io.deq.valid
-  val pending = pendingQueue.io.deq.bits
-
-  val pendingWrite = pending.op === AetherMemOp.Write
-  val pendingAtomic = pending.op === AetherMemOp.Atomic
-  val uartAddress = config.platform.uartAddress.U(paddrBits.W)
-  val exitAddress = config.platform.exitAddress.U(paddrBits.W)
-  val mtimeAddress = config.platform.mtimeAddress.U(paddrBits.W)
-  val mtimecmpAddress = config.platform.mtimecmpAddress.U(paddrBits.W)
-  val pendingUart = pendingValid && pending.paddr >= uartAddress && pending.paddr < uartLimit.U
-  val pendingExit = pendingValid && pending.paddr === exitAddress
-  val pendingTimer = pendingValid &&
-    (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
-  val pendingPlic = pendingValid && pending.paddr >= plicBase.U && pending.paddr < plicLimit.U
-  val pendingMmio = pendingUart || pendingExit || pendingTimer || pendingPlic
-  val pendingExternal = pendingValid && !pendingMmio
-
-  // UART register/FIFO/IRQ state is now an independent SoC peripheral.
-  // This platform shell owns only region selection and the terminal transaction
-  // pulse while the migration toward a reusable fabric continues.
-  val uart = Module(new AetherUart16550(
+  val fabric = Module(new AetherSoCPlatformFabric(
+    paddrBits = paddrBits,
     dataBits = busDataBits,
-    rxDepth = 16
+    txnIdBits = txnIdBits,
+    addressMap = addressMap
   ))
-  val uartOffset = pending.paddr - uartAddress
-  val uartComplete = WireDefault(false.B)
-  uart.io.request := pendingUart
-  uart.io.write := pendingWrite
-  uart.io.offset := uartOffset(2, 0)
-  uart.io.wdata := pending.wdata
-  uart.io.wmask := pending.wmask
-  uart.io.complete := uartComplete
-  uart.io.rxValid := io.rxValid
-  uart.io.rxByte := io.rxByte
-  io.rxReady := uart.io.rxReady
-  io.uartInterrupt := uart.io.interrupt
-  io.uartRxInterrupt := uart.io.rxInterrupt
 
-  // PLIC register/claim/completion state is an independent SoC peripheral.
-  // The platform owns only region selection and source topology.
-  val plic = Module(new AetherPlic(
-    sourceCount = supervisorPlicSourceCount,
-    addressBits = 24,
-    enableBase = AetherPlicMap.SupervisorEnable,
-    thresholdOffset = AetherPlicMap.SupervisorThreshold,
-    claimCompleteOffset = AetherPlicMap.SupervisorClaimComplete
-  ))
-  val plicComplete = WireDefault(false.B)
-  plic.io.sources :=
-    (uart.io.interrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
-  plic.io.request := pendingPlic
-  plic.io.write := pendingWrite
-  plic.io.address := (pending.paddr - plicBase.U)(23, 0)
-  plic.io.wdata := pending.wdata(31, 0)
-  plic.io.wmask := pending.wmask(3, 0)
-  plic.io.complete := plicComplete
-  core.io.supervisorExternalInterrupt := plic.io.interrupt
-  io.supervisorExternalInterrupt := plic.io.interrupt
+  // CPU-complex semantic memory and PMA seam.
+  fabric.io.resolvedPhysicalAddress := core.io.resolvedPhysicalAddress
+  core.io.resolvedAttributes := fabric.io.resolvedAttributes
+  fabric.io.request <> core.io.memoryRequest
+  core.io.memoryResponse <> fabric.io.response
 
-  // ACLINT/CLINT MTIMER state is an independent SoC peripheral. The
-  // platform retains only address selection while the reusable MMIO fabric is
-  // introduced in a later ownership cut.
-  val timer = Module(new AetherAclintMtimer(
-    dataBits = busDataBits
-  ))
-  val timerComplete = WireDefault(false.B)
-  timer.io.request := pendingTimer
-  timer.io.write := pendingWrite
-  timer.io.selectMtimecmp := pending.paddr === mtimecmpAddress
-  timer.io.wdata := pending.wdata
-  timer.io.wmask := pending.wmask
-  timer.io.complete := timerComplete
+  core.io.supervisorExternalInterrupt := fabric.io.supervisorExternalInterrupt
+  core.io.time := fabric.io.time
+  core.io.timerInterrupt := fabric.io.timerInterrupt
 
-  val mmioReady = Mux(
-    pendingPlic,
-    plic.io.ready,
-    Mux(pendingTimer, timer.io.ready,
-      Mux(pendingUart, uart.io.ready, true.B))
-  )
-  val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
-  val responseData = Mux(
-    pendingPlic,
-    plic.io.rdata.pad(busDataBits),
-    Mux(pendingTimer, timer.io.rdata,
-      Mux(pendingUart, uart.io.rdata, io.memRdata))
-  )
-  val responseFault = Mux(
-    pendingPlic,
-    plic.io.fault,
-    Mux(pendingTimer, timer.io.fault,
-      Mux(pendingUart, uart.io.fault,
-        Mux(pendingMmio, false.B, io.memFault)))
-  )
-
-  core.io.memoryResponse.valid := pendingValid && responseReady
-  core.io.memoryResponse.bits.txnId := pending.txnId
-  core.io.memoryResponse.bits.rdata := responseData
-  core.io.memoryResponse.bits.fault := responseFault
-  core.io.memoryResponse.bits.last := true.B
-  val responseFire = core.io.memoryResponse.fire
-  pendingQueue.io.deq.ready := responseFire
-  uartComplete := responseFire
-  timerComplete := responseFire
-  plicComplete := responseFire
-
-  core.io.time := timer.io.mtime
-  core.io.timerInterrupt := timer.io.interrupt
-
-  io.memValid := pendingExternal
-  io.memWrite := pendingWrite
-  io.memAtomic := pendingAtomic
-  io.memOp := pending.op
-  io.memAtomicOp := pending.atomicOp
-  io.memAddr := pending.paddr
-  io.memWdata := pending.wdata
-  io.memWmask := pending.wmask
-  io.memSize := pending.size
+  // Historical external-memory compatibility seam. AetherCoreV2UnifiedMemorySoC
+  // converts this terminal-response interface back into a Decoupled AetherMem
+  // client for the synthesizable unified-memory boundary.
+  io.memValid := fabric.io.memValid
+  io.memWrite := fabric.io.memWrite
+  io.memAtomic := fabric.io.memAtomic
+  io.memOp := fabric.io.memOp
+  io.memAtomicOp := fabric.io.memAtomicOp
+  io.memAddr := fabric.io.memAddr
+  io.memWdata := fabric.io.memWdata
+  io.memWmask := fabric.io.memWmask
+  io.memSize := fabric.io.memSize
+  fabric.io.memReady := io.memReady
+  fabric.io.memRdata := io.memRdata
+  fabric.io.memFault := io.memFault
   if (exposeExternalMemoryAttributes) {
-    io.memAttributes.get := pending.attributes
+    io.memAttributes.get := fabric.io.memAttributes
   }
 
-  io.uartValid := uart.io.txValid
-  io.uartByte := uart.io.txByte
-  io.exitValid := responseFire && pendingExit && pendingWrite
-  io.exitCode := pending.wdata
+  // Board-facing UART byte stream.
+  fabric.io.rxValid := io.rxValid
+  fabric.io.rxByte := io.rxByte
+  io.rxReady := fabric.io.rxReady
+  io.uartValid := fabric.io.uartValid
+  io.uartByte := fabric.io.uartByte
 
-  io.mtime := timer.io.mtime
-  io.mtimecmp := timer.io.mtimecmp
-  io.timerInterrupt := timer.io.interrupt
+  io.supervisorExternalInterrupt := fabric.io.supervisorExternalInterrupt
+  io.uartInterrupt := fabric.io.uartInterrupt
+  io.uartRxInterrupt := fabric.io.uartRxInterrupt
+  io.timerInterrupt := fabric.io.timerInterrupt
+
+  io.exitValid := fabric.io.exitValid
+  io.exitCode := fabric.io.exitCode
+  io.mtime := fabric.io.mtime
+  io.mtimecmp := fabric.io.mtimecmp
+
   io.dcacheHitCount := core.io.dcacheHitCount
   io.dcacheMissCount := core.io.dcacheMissCount
   io.dcacheBypassCount := core.io.dcacheBypassCount
   io.instructionFence := core.io.instructionFence
   io.commit := core.io.commit
   io.halted := core.io.halted
-
-  assert(!(pendingMmio && pendingAtomic),
-    "F7 PMA must reject atomic MMIO before it reaches the OpenSBI platform adapter")
 }
