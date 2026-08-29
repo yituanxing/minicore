@@ -1,106 +1,178 @@
 # MiniCore / AetherCore
 
-A correctness-first RISC-V processor project written in Chisel and driven by executable software workloads and real operating systems.
+A correctness-first RISC-V CPU and SoC project written in Chisel and driven by executable software, firmware and real operating-system workloads.
 
-The current frozen architecture checkpoint is **Supervisor Sv32 V2** on `freeze/sv32-v2-minimal-translation`. It extends the frozen physical-address M/S/U Supervisor V1 boundary with 34-bit Sv32 instruction/data translation, precise page faults, a correctness-first TLB, `SFENCE.VMA`, and page-fault delegation to S-mode.
+The current product line is **AetherCore V2 + AetherSoC v0**. The board-less v0 freeze is being finalized on `release/aethersoc-v0-freeze`; after freeze closure it is promoted to the default `main` branch.
 
-## Current core
+## Current product architecture
 
 ```text
-IF -> ID -> EX -> MEM -> WB/commit
+AetherCore V2
+  -> RV64IMA + M/S/U
+  -> Sv39 + TLB + PTW + SFENCE.VMA
+  -> PMP/PMA
+  -> I-cache / D-cache
+  -> PlatformFabric
+  -> BootROM
+  -> PLIC
+  -> ACLINT-style MTIMER
+  -> ns16550-compatible UART
+  -> MemoryHub
+  -> AXI4 external-memory boundary
+  -> FPGA-facing SoC top
+  -> 8N1 serial PHY
 ```
 
-Verified foundations include:
+The historical five-stage `AetherCore.scala` implementation remains in the repository as an earlier architectural generation and regression source. Current Linux/SoC qualification uses the V2 CPU-complex and SoC path under `src/main/scala/aethercore/core/v2` and `src/main/scala/aethercore/soc`.
 
-- five-stage in-order RV32/RV64 integer pipeline;
-- RV64I/RV64M and qualified RV32IM software profiles;
-- RV32A word atomics required by real protected NuttX userspace;
-- forwarding, load-use interlock and branch/jump recovery;
-- precise synchronous traps and xRET redirection at the architectural boundary;
-- Machine timer and external interrupt paths, PLIC and WFI;
-- U-mode execution, ECALL/syscall return and PMP isolation;
-- protected NuttX userspace with independent kernel exception stacks and isolated user faults;
-- M/S/U execution with Supervisor CSR state, synchronous exception delegation and SRET;
-- RV32 Sv32 two-level page-table walking with full 34-bit physical addresses;
-- translated S/U instruction fetch and Load/Store paths;
-- precise instruction/load/store page faults and delegated U -> S page-fault entry;
-- small correctness-first translation caches and globally over-fencing `SFENCE.VMA`;
-- commit-level differential testing against pinned NEMU references;
-- real software gates including FreeRTOS, Zephyr, NuttX, CoreMark, Embench and littlefs.
+## Qualified ISA and privileged execution
 
-## Supervisor Sv32 V2
+The current RV64 Linux profile includes:
 
-The frozen V2 profile adds:
+- RV64I and RV64M integer execution;
+- RV64A LR/SC and AMO operations;
+- M/S/U privilege modes;
+- Zicsr and system-instruction handling;
+- precise synchronous traps and interrupt retirement boundaries;
+- supervisor delegation and SRET;
+- WFI;
+- Sv39 address translation;
+- `satp`, TLBs, page-table walking and `SFENCE.VMA`;
+- PMP/PMA checks;
+- supervisor timer and external-interrupt delivery.
+
+Earlier RV32/RV32C/Sv32/NuttX/FreeRTOS/Zephyr profiles remain as independent regression ladders.
+
+## AetherSoC v0
+
+The SoC implementation is under `src/main/scala/aethercore/soc`.
+
+Major blocks include:
+
+- `AetherCoreV2Complex` CPU-complex boundary;
+- `AetherSoCPlatformFabric` address decode and peripheral ownership;
+- `AetherSoCMemoryHub` multi-client memory routing;
+- `AetherSoCBootRom`;
+- `AetherUart16550`;
+- `AetherPlic`;
+- `AetherAclintMtimer`;
+- I-cache and D-cache;
+- AetherMem semantic memory links;
+- AXI4 external-memory bridge and top;
+- DTS generation;
+- `AetherCoreV2FpgaSoC` board-neutral FPGA-facing top;
+- synthesizable 8N1 UART PHY;
+- virtual FPGA board used to qualify real AXI and serial pin boundaries.
+
+Board-specific PLLs, DDR controller/IP and pin constraints deliberately remain outside the logical SoC and are owned by the future concrete FPGA-board integration.
+
+## Linux and OpenSBI qualification
+
+AetherSoC v0 is already beyond first-boot smoke testing.
+
+Qualified software includes:
+
+- OpenSBI v1.6;
+- Linux 6.6.143;
+- real Sv39/S-mode Linux execution;
+- deterministic initramfs/PID1 qualification;
+- supervisor timer interrupts;
+- supervisor external interrupts through PLIC/UART.
+
+### AXI Linux clocksource baseline
+
+A qualified AXI4 Linux run reached:
 
 ```text
-M-mode setup
-  -> satp.MODE=Sv32
-  -> MRET -> S/U virtual execution
-  -> I/D virtual address
-  -> TLB hit or two-level page-table walk
-  -> 34-bit physical address
-  -> imem / dmem
+clocksource: riscv_clocksource
+62,047,788 cycles
+18,038,710 retired commits
 ```
 
-Qualified VM state and mechanisms include:
+The same run observed 1,289,056 Data AXI requests and responses and 123,939 same-source overlap-issue events.
 
-- `satp` Bare/Sv32 with ASIDLEN=0;
-- 4 KiB pages and aligned 4 MiB megapages;
-- R/W/X/U permission checks plus `SUM` and `MXR`;
-- fail-closed A/D handling without hardware PTE mutation;
-- shared read-only PTW physical memory port;
-- cancellable speculative instruction walks;
-- instruction/load/store page-fault causes 12/13/15 with the original VA in the trap value;
-- I/D translation caches with 4 KiB and 4 MiB entries;
-- precise `SFENCE.VMA`, conservatively implemented as a global I/D TLB flush;
-- page-fault `medeleg` support only on the Sv32 profile;
-- real U-mode Load page fault delegation into an S-mode handler.
+### Virtual FPGA pin-level PID1
 
-V2 deliberately does **not** claim selective `SFENCE.VMA`, nonzero ASIDs, hardware A/D updates, a combined Sv32+PMP profile, translated RV32A AMOs, S-level interrupt delivery, or a real supervisor OS using the MMU yet.
+The final board-less functional acceptance path instantiates the production FPGA-facing SoC. Memory traffic crosses the production AXI4 pins into a virtual DDR target; console traffic crosses the production ns16550, 8N1 serializer and serial pins before the host runner observes it.
 
-The exact qualification head, Fast/Full Gate evidence, artifact digest, architectural boundary and requalification rules are recorded in [`docs/SV32_V2_FREEZE.md`](docs/SV32_V2_FREEZE.md).
-
-## Supervisor Mode V1
-
-The previous frozen V1 checkpoint remains the physical-address M/S/U trap/delegation baseline on `freeze/smode-v1-minimal-trap`:
+Qualified milestone:
 
 ```text
-M-mode
-  -> MRET -> S-mode
-  -> delegated synchronous trap -> S trap handler
-  -> SRET -> S/U
+OpenSBI v1.6
+Linux 6.6.143
+RV64 USER UART IRQ OK
+
+421,518,021 cycles
+135,262,086 retired commits
+8,391 interrupts
+4,195 STIP
+1 SEIP
 ```
 
-Its exact evidence remains in [`docs/SMODE_V1_FREEZE.md`](docs/SMODE_V1_FREEZE.md). V1 deliberately has no `satp`, Sv32, TLB or page-fault delegation bits, so it remains a clean no-VM regression profile.
+This is the functional stop line for AetherSoC v0 without a concrete FPGA board.
 
-## Software-driven architecture ladder
+## FPGA synthesis status
 
-AetherCore is developed by increasing software pressure rather than implementing ISA features speculatively:
+The production top `AetherCoreV2FpgaSoC` is elaborated and mapped with a board-neutral Yosys ECP5 synthesis proxy.
+
+The final v0 freeze proxy run (`33250167081`) reported:
 
 ```text
-small directed programs
+cells             170,143
+LUT4               96,718
+TRELLIS_FF         18,705
+TRELLIS_DPR16X4       374
+MULT18X18D             39
+DP16KD                  0
+structural depth     6,667
+```
+
+The distributed-RAM primitive count above is taken from the authoritative Yosys `stat` output. The current JSON-summary helper has a naming bug that searches for `DPR16X4` instead of the mapped ECP5 primitive `TRELLIS_DPR16X4` and therefore reports zero there.
+
+These numbers are structural synthesis evidence only. They are **not an FPGA Fmax claim**. A real frequency requires a concrete device, clock constraints, board-specific PLL/DDR integration and place-and-route.
+
+## Verification philosophy
+
+AetherCore is developed by increasing software pressure rather than implementing ISA or SoC features speculatively:
+
+```text
+directed programs
   -> compiler-produced programs
   -> CoreMark / Embench / littlefs
-  -> FreeRTOS
-  -> Zephyr
-  -> NuttX flat
-  -> NuttX protected U-mode + PMP
-  -> Supervisor V1
-  -> Sv32 V2
-  -> real S-mode OS using page tables
-  -> firmware/SBI boundary
-  -> Linux-class software
+  -> FreeRTOS / Zephyr / NuttX
+  -> M/S/U privilege
+  -> paging
+  -> OpenSBI
+  -> Linux
+  -> Linux PID1 and interrupt paths
+  -> FPGA-facing pin-level qualification
 ```
 
-Real workload failures are reduced into focused permanent regressions before the architecture is widened.
+Failures from broad workloads are reduced into focused permanent regressions before the architecture is widened.
 
-## Differential verification
+The project also uses pinned NEMU references for deterministic retirement-level differential testing where applicable.
 
-The project uses pinned NEMU references for deterministic retirement comparison. Depending on the qualification path, the harness checks architectural PC/register state, Store effects, CSR/trap state, interrupts and workload-specific invariants. Deliberate mismatch probes are retained to prove that the checkers fail closed.
+## Repository layout
+
+```text
+src/main/scala/aethercore/
+  core/          legacy and shared architectural blocks
+  core/v2/       current V2 CPU microarchitecture
+  memory/        semantic memory/cache structures
+  soc/           current AetherSoC implementation
+  sim/           simulation-only compatibility and virtual-board wrappers
+
+software/        firmware, OS and workload sources
+sim/             Verilator/NEMU host runners
+tests_py/        structural and workflow contracts
+docs/            architecture, freeze and qualification records
+.github/workflows/
+                 executable qualification gates
+```
 
 ## Build
 
-Core verification prerequisites include Java 21, C++, Python 3, Verilator, Bison, Flex and the pinned RISC-V toolchains used by each qualification path.
+Core verification prerequisites include Java, C++, Python 3, Verilator and the pinned RISC-V toolchains used by each qualification path.
 
 Representative commands:
 
@@ -111,20 +183,18 @@ make test
 make rtl
 make run-smoke
 
-make -f Makefile.rv32im-supervisor-v1 run-local
-./mill aethercore.test.testOnly aethercore.Sv32InstructionFetchCoreSpec
-./mill aethercore.test.testOnly aethercore.Sv32SfenceCoreSpec
-./mill aethercore.test.testOnly aethercore.Sv32PageFaultDelegationSpec
+./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64
+./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64
 ```
 
-The consolidated GitHub Full Gate remains the authoritative whole-project regression path.
+Linux/OpenSBI and FPGA qualification are encoded as reproducible GitHub Actions workflows rather than as README-only claims.
 
-## Development policy
+## Freeze and branch policy
 
-- Real programs and operating systems are design inputs, not final demos.
-- Frozen executable hashes and qualification heads are not silently regenerated during microarchitectural changes.
-- A feature is not considered frozen until its focused gate and complete regression gate both pass on the exact qualified source head.
-- Freeze branches may contain documentation-only commits after qualification; the executable qualification commit must remain explicitly recorded.
-- New architecture work starts on a bounded branch from a frozen checkpoint rather than widening the freeze branch.
+A feature is considered frozen only when its focused qualification and relevant regression gates pass on an explicitly recorded source head.
 
-See [`CHECKPOINT.md`](CHECKPOINT.md) for the current architecture boundary and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the next stages.
+For AetherSoC v0, the authoritative freeze record is:
+
+[`docs/AETHERSOC_V0_FREEZE.md`](docs/AETHERSOC_V0_FREEZE.md)
+
+After v0 promotion, the default `main` branch is the single canonical product line. New performance, architecture or board work should branch from `main` and return to `main` promptly. Historical milestone branches and PRs remain evidence, not alternate definitions of the current product.
