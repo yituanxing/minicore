@@ -13,13 +13,18 @@ class V2Axi4LinuxPathSourceContract(unittest.TestCase):
         self.assertIn("private val DataSource = 0", source)
         self.assertIn("private val PtwSource = 1", source)
         self.assertIn("private val InstructionSource = 2", source)
-        self.assertIn("readId(idBits - 1, localTxnIdBits)", source)
+        self.assertIn("incomingReadSource =", source)
+        self.assertIn("io.axi.ar.bits.id(idBits - 1, localTxnIdBits)", source)
+        self.assertIn("private val dataReadActive = RegInit(false.B)", source)
+        self.assertIn("private val ptwReadActive = RegInit(false.B)", source)
+        self.assertIn("private val instructionReadActive = RegInit(false.B)", source)
 
     def test_axi_reads_return_lane_aligned_data(self):
         source = ADAPTER.read_text(encoding="utf-8")
-        self.assertIn("semanticReadData << readBitShift", source)
-        self.assertIn("io.axi.r.bits.data := laneReadDataWide", source)
-        self.assertIn("io.axi.r.bits.resp := Mux(readFault", source)
+        self.assertIn("selectedSemanticReadData << selectedReadBitShift", source)
+        self.assertIn("io.axi.r.bits.data := selectedLaneReadDataWide", source)
+        self.assertIn("io.axi.r.bits.resp := Mux(selectedReadFault", source)
+        self.assertIn("selectedReadId", source)
 
     def test_axi_writes_are_lowered_to_historical_data_port(self):
         source = ADAPTER.read_text(encoding="utf-8")
