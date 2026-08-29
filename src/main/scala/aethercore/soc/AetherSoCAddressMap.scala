@@ -9,6 +9,8 @@ import aethercore.config.PlatformConfig
   * DTS generation and FPGA wrappers without duplicating magic constants.
   */
 final case class AetherSoCAddressMap(
+    bootRomBase: BigInt,
+    bootRomBytes: BigInt,
     ramBase: BigInt,
     ramBytes: BigInt,
     uartBase: BigInt,
@@ -19,10 +21,12 @@ final case class AetherSoCAddressMap(
     plicBase: BigInt,
     plicBytes: BigInt
 ) {
+  require(bootRomBytes > 0)
   require(ramBytes > 0)
   require(uartBytes > 0)
   require(plicBytes > 0)
 
+  val bootRomLimit: BigInt = bootRomBase + bootRomBytes
   val ramLimit: BigInt = ramBase + ramBytes
   val uartLimit: BigInt = uartBase + uartBytes
   val plicLimit: BigInt = plicBase + plicBytes
@@ -36,6 +40,8 @@ object AetherSoCAddressMap {
     */
   def qualifiedLinux(platform: PlatformConfig): AetherSoCAddressMap =
     AetherSoCAddressMap(
+      bootRomBase = BigInt("00001000", 16),
+      bootRomBytes = BigInt("00001000", 16),
       ramBase = BigInt("80000000", 16),
       ramBytes = BigInt("10000000", 16),
       uartBase = platform.uartAddress,
