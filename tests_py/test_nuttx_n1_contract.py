@@ -1,0 +1,92 @@
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "software" / "nuttx" / "manifest.env"
+README = ROOT / "software" / "nuttx" / "README.md"
+BUILD_SCRIPT = ROOT / "tools" / "ci" / "nuttx_n1_build.sh"
+GENROMFS_HELPER = ROOT / "tools" / "ci" / "ensure_genromfs.sh"
+RANGE_FETCHER = ROOT / "tools" / "fetch_range_archive.py"
+WORKFLOW = ROOT / ".github" / "workflows" / "nuttx-stage.yml"
+
+
+class NuttxN1ContractTest(unittest.TestCase):
+    def test_upstream_sources_are_exactly_pinned(self) -> None:
+        text = MANIFEST.read_text()
+        self.assertIn("NUTTX_VERSION=13.0.0", text)
+        self.assertIn(
+            "NUTTX_COMMIT=273c77128b6698f0c95f0d7cde1d0bb803782021", text
+        )
+        self.assertIn(
+            "NUTTX_APPS_COMMIT=20ffb1a3a3b590d52890ee865a28442390e5d16c", text
+        )
+        self.assertNotIn("master", text)
+        self.assertNotIn("main", text)
+
+    def test_n1_is_build_qualification_not_boot_claim(self) -> None:
+        text = README.read_text()
+        n1 = "N1 — pinned host build"
+        n2 = "N2 — AetherCore boot and console"
+        self.assertIn(n1, text)
+        self.assertIn(n2, text)
+        self.assertLess(text.index(n1), text.index(n2))
+        self.assertIn("freeze/zephyr-v3.7.2-z1-z4", text)
+
+    def test_build_is_fail_closed_on_the_aethercore_isa(self) -> None:
+        text = BUILD_SCRIPT.read_text()
+        required = (
+            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_M y",
+            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_A n",
+            "CONFIG_ARCH_CHIP_QEMU_RV_ISA_C n",
+            "CONFIG_ARCH_RV_ISA_ZICSR_ZIFENCEI y",
+            "CONFIG_FS_HOSTFS n",
+            "CONFIG_RISCV_SEMIHOSTING_HOSTFS n",
+            "Tag_RISCV_arch",
+            "forbidden A/C/F/D/V extension present",
+        )
+        for fragment in required:
+            self.assertIn(fragment, text)
+        self.assertIn('[[ -s nuttx ]]', text)
+        self.assertIn("sha256sum", text)
+
+    def test_genromfs_host_tool_is_pinned_and_persistent(self) -> None:
+        build = BUILD_SCRIPT.read_text()
+        helper = GENROMFS_HELPER.read_text()
+        self.assertIn("ensure_genromfs.sh", build)
+        self.assertIn(
+            "GENROMFS_COMMIT=\"e4225b49a7be0ae9d39e98f2175dd674c0d6b1ea\"",
+            helper,
+        )
+        self.assertIn("${CACHE_ROOT}/host-tools/genromfs-", helper)
+        self.assertIn("--continue-at -", helper)
+        self.assertIn("make -C \"${work}\" -j2 >&2", helper)
+
+    def test_range_fetcher_is_fail_closed_and_resumable(self) -> None:
+        text = RANGE_FETCHER.read_text()
+        self.assertIn("Content-Range", text)
+        self.assertIn("SHA-512 mismatch", text)
+        self.assertIn("ThreadPoolExecutor", text)
+        self.assertIn("destination.exists()", text)
+        self.assertIn("os.replace", text)
+
+    def test_workflow_uses_one_bounded_persistent_stage_slot(self) -> None:
+        text = WORKFLOW.read_text()
+        runner = "runs-on: [self-hosted, Linux, X64, minicore]"
+        self.assertEqual(text.count(runner), 1)
+        self.assertNotIn("ubuntu-latest", text)
+        self.assertNotIn("needs: source", text)
+        self.assertIn("tools/fetch_range_archive.py", text)
+        self.assertIn("archive.apache.org/dist/nuttx", text)
+        self.assertIn("downloads.apache.org/nuttx", text)
+        self.assertIn("--jobs 6", text)
+        self.assertIn("${HOME}/.cache/aethercore", text)
+        self.assertIn("group: nuttx-stage-${{ github.ref }}", text)
+        self.assertIn("cancel-in-progress: true", text)
+        self.assertIn("timeout-minutes: 45", text)
+        self.assertNotIn("full-validation", text)
+        self.assertNotIn("Fast Gate", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

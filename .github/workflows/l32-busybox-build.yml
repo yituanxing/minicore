@@ -1,0 +1,284 @@
+name: L32 BusyBox Shell + Multiprocess
+
+on:
+  # Heavy legacy self-hosted Linux userspace milestone. Keep it available for
+  # explicit trusted runs, but never make a public pull request wait for a
+  # personal runner.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-busybox-shell-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify L32 runtime need
+    runs-on: [self-hosted, Linux, X64, minicore]
+    outputs:
+      run_heavy: ${{ steps.changes.outputs.run_heavy }}
+    steps:
+      - name: Checkout for path classification
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Select full Linux runtime only for L32-specific changes or explicit dispatch
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "run_heavy=true" >> "$GITHUB_OUTPUT"
+            echo "L32 full runtime selected by explicit workflow_dispatch"
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "${PR_BASE_SHA}" "${GITHUB_SHA}")"
+          printf '%s\n' "$changed"
+
+          # Core RTL changes are exercised continuously by Fast Gate and the
+          # currently targeted real-system lane. Do not rebuild/run the full
+          # Linux BusyBox matrix for every frontier commit; reserve this heavy
+          # lane for L32 runtime/platform changes and explicit milestone runs.
+          if grep -Eq '^(software/l32/|software/l32_busybox/|software/l32_real/|tools/ci/l32_|tools/ensure_l32_riscv32_linux_gcc\.sh$|tools/ensure_verilator_5_024\.sh$|tests_py/test_l32_|build\.mill$|mill$|Makefile\.l32-linux-boot$|sim/l32_opensbi_runtime\.h$|sim/opensbi_(boot|forkserver)_main\.cpp$|tools/ci/make_l32_dtb\.py$)' <<<"$changed"; then
+            echo "run_heavy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_heavy=false" >> "$GITHUB_OUTPUT"
+            echo "L32 full runtime deferred: this PR only reaches the lane through core/workflow changes"
+          fi
+
+  busybox-shell:
+    name: musl 1.2.5 + BusyBox 1.36.1 + Linux 6.6.143 runtime
+    needs: classify
+    if: needs.classify.outputs.run_heavy == 'true'
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate BusyBox userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_busybox_build.sh
+          bash -n tools/ci/l32_runtime_probe_build.sh
+          bash -n tools/ci/l32_real_programs_build.sh
+          bash -n tools/ci/l32_real_programs_cache.sh
+          bash -n tools/ci/l32_runtime_image_cache.sh
+          bash -n tools/ci/l32_busybox_initramfs_build.sh
+          bash -n tools/ci/l32_busybox_payload_build.sh
+          bash -n tools/ci/l32_busybox_runtime_freeze.sh
+          bash -n tools/ci/l32_software_artifact_cache.sh
+          python3 -m py_compile tools/ci/l32_linux_runtime_suite.py
+          python3 -m unittest \
+            tests_py.test_l32_busybox_contract \
+            tests_py.test_l32_busybox_multiprocess_contract \
+            tests_py.test_l32_forkserver_contract \
+            tests_py.test_l32_linux_runtime_suite_contract \
+            tests_py.test_l32_sim_runtime_contract -v
+
+      - name: Reuse or build soft-float musl and static BusyBox
+        shell: bash
+        env:
+          L32_USERSPACE_JOBS: "6"
+          REALGCC: ${{ github.workspace }}/build/l32-busybox/l32-musl-real-gcc
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_build.sh
+          mkdir -p build/l32-busybox
+          cat > build/l32-busybox/l32-musl-real-gcc <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT_DIR="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+          BUILD_DIR="${ROOT_DIR}/build/l32-busybox"
+          L32_CC="${BUILD_DIR}/l32-rv32ima-ilp32-gcc"
+          MUSL_PREFIX="${BUILD_DIR}/musl-prefix"
+          filtered=()
+          skip_next=0
+          for arg in "$@"; do
+            if (( skip_next )); then skip_next=0; continue; fi
+            case "${arg}" in
+              -specs) skip_next=1 ;;
+              -specs=*) ;;
+              *) filtered+=("${arg}") ;;
+            esac
+          done
+          compile_only=0
+          relocatable=0
+          for arg in "${filtered[@]}"; do
+            case "${arg}" in
+              -c|-S|-E|-M|-MM) compile_only=1 ;;
+              -r|-Wl,-r|-Wl,--relocatable) relocatable=1 ;;
+            esac
+          done
+          gcc_include="$("${L32_CC}" -print-file-name=include)"
+          common=(-nostdinc -isystem "${MUSL_PREFIX}/include" -isystem "${gcc_include}")
+          if (( compile_only )); then exec "${L32_CC}" "${common[@]}" "${filtered[@]}"; fi
+          if (( relocatable )); then exec "${L32_CC}" -nostdlib "${filtered[@]}"; fi
+          libgcc="$("${L32_CC}" -print-libgcc-file-name)"
+          exec "${L32_CC}" "${common[@]}" -nostdlib -static -L"${MUSL_PREFIX}/lib" \
+            "${MUSL_PREFIX}/lib/crt1.o" "${MUSL_PREFIX}/lib/crti.o" "${filtered[@]}" \
+            -Wl,--start-group -lc "${libgcc}" -Wl,--end-group "${MUSL_PREFIX}/lib/crtn.o"
+          EOF
+          chmod +x build/l32-busybox/l32-musl-real-gcc
+          tools/ci/l32_software_artifact_cache.sh busybox \
+            bash tools/ci/l32_busybox_build.sh 2>&1 | tee build/l32-busybox/driver.log
+
+      - name: Reuse or build static Linux runtime probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_runtime_probe_build.sh
+          tools/ci/l32_software_artifact_cache.sh runtime-probe tools/ci/l32_runtime_probe_build.sh
+
+      - name: Reuse or build real Linux programs
+        shell: bash
+        env:
+          L32_REAL_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_real_programs_build.sh tools/ci/l32_real_programs_cache.sh
+          tools/ci/l32_real_programs_cache.sh
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Ensure canonical Linux source and baseline cache
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh tools/ci/l32_linux_build.sh
+          if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            tools/ci/l32_linux_build.sh
+            tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+          fi
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+
+      - name: Reuse or build Linux Image with static BusyBox ash initramfs
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_runtime_image_cache.sh tools/ci/l32_busybox_initramfs_build.sh
+          tools/ci/l32_runtime_image_cache.sh
+
+      - name: Reuse or build OpenSBI with BusyBox Linux payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh busybox-payload tools/ci/l32_busybox_payload_build.sh
+
+      - name: Verify exact BusyBox Linux runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_runtime_freeze.sh
+          tools/ci/l32_busybox_runtime_freeze.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run cumulative Linux functional matrix from warm shell
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir=build/l32-busybox-forkserver-probe
+          batch_file="$probe_dir/workloads.tsv"
+          rm -rf "$probe_dir"
+          mkdir -p "$probe_dir"
+          python3 tools/ci/l32_linux_runtime_suite.py write-batch "$batch_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            FORKSERVER_BATCH_FILE="$batch_file" \
+            FORKSERVER_TRIGGER="L32 BUSYBOX SHELL READY" \
+            FORKSERVER_BOOT_MAX_CYCLES=850000000 \
+            FORKSERVER_CASE_MAX_CYCLES=150000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            forkserver-local
+          log="$probe_dir/logs/forkserver.log"
+          python3 tools/ci/l32_linux_runtime_suite.py verify-log "$log"
+
+      - name: Run real Linux BusyBox multiprocess pipeline over ttyS0
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          L32_BUSYBOX_PIPE_COMMAND: >-
+            printf 'PIPE_TOKEN\n' | /bin/sh -c 'read x; case "$x" in PIPE_TOKEN) printf "L32 BUSYBOX PIPE CHILD %s\n" OK;; *) exit 1;; esac' && printf 'L32 BUSYBOX PIPE PARENT %s\n' OK
+        run: |
+          set -euo pipefail
+          probe_dir=build/l32-busybox-multiprocess-probe
+          command_file="$probe_dir/uart-command.txt"
+          mkdir -p "$probe_dir"
+          printf '%s\n' "$L32_BUSYBOX_PIPE_COMMAND" > "$command_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            FW_BIN=build/l32-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=500000000 \
+            MILESTONE="L32 BUSYBOX PIPE PARENT OK" \
+            MIN_INTERRUPTS=1 MIN_SEIP=1 \
+            UART_TRIGGER="L32 BUSYBOX SHELL READY" \
+            UART_COMMAND_FILE="$command_file" run-local
+          log="$probe_dir/logs/boot-probe.log"
+          normalized_log="$probe_dir/logs/boot-probe-normalized.log"
+          tr -d '\r' < "$log" > "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE CHILD OK' "$normalized_log" || grep -Fxq '# L32 BUSYBOX PIPE CHILD OK' "$normalized_log"
+          grep -Fxq 'L32 BUSYBOX PIPE PARENT OK' "$normalized_log"
+          grep -q '^L32_UART_INPUT_COMPLETE ' "$normalized_log"
+          grep -q '^L32_UART_RX_INTERRUPT ' "$normalized_log"
+          grep -q '^L32_UART_INPUT_SEIP ' "$normalized_log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS .*marker=L32 BUSYBOX PIPE PARENT OK$' "$normalized_log"
+
+      - name: Upload BusyBox runtime evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-busybox-shell-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-busybox/result.txt
+            build/l32-busybox/driver.log
+            build/l32-busybox/evidence/
+            build/l32-runtime-probe/
+            build/l32-real-programs/result.txt
+            build/l32-real-programs/software-cache.txt
+            build/l32-real-programs/*-build.log
+            build/l32-real-programs/evidence/
+            build/l32-linux-busybox/result.txt
+            build/l32-linux-busybox/config.log
+            build/l32-linux-busybox/linux-build.log
+            build/l32-linux-busybox/evidence/
+            build/l32-busybox-shell-boot/result.txt
+            build/l32-busybox-shell-boot/runtime-freeze.txt
+            build/l32-busybox-shell-boot/opensbi-busybox-build.log
+            build/l32-busybox-shell-boot/evidence/
+            build/l32-busybox-forkserver-probe/workloads.tsv
+            build/l32-busybox-forkserver-probe/firmware.sha256
+            build/l32-busybox-forkserver-probe/logs/*.log
+            build/l32-busybox-multiprocess-probe/uart-command.txt
+            build/l32-busybox-multiprocess-probe/firmware.sha256
+            build/l32-busybox-multiprocess-probe/logs/*.log

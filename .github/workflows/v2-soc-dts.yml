@@ -1,0 +1,88 @@
+name: AetherSoC DTS Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCDts.scala'
+      - 'src/main/scala/aethercore/EmitAetherSoCDts.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/test/scala/aethercore/AetherSoCDtsSpec.scala'
+      - 'tools/ci/rv64_linux_early_build.sh'
+      - 'tools/ci/rv64_minimal_init_payload_build.sh'
+      - 'tests_py/test_rv64_linux_early_contract.py'
+      - 'tests_py/test_rv64_minimal_initramfs_contract.py'
+      - '.github/workflows/v2-soc-dts.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-dts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dts:
+    name: Prove board-spec device tree
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Install device-tree compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Check RV64 build contracts
+        run: |
+          python3 -m unittest tests_py.test_rv64_linux_early_contract -v
+          python3 -m unittest tests_py.test_rv64_minimal_initramfs_contract -v
+
+      - name: Run board-spec renderer proof
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherSoCDtsSpec
+
+      - name: Emit and compile exact DTS
+        run: |
+          set -euo pipefail
+          rm -rf build/aethersoc-dts
+          mkdir -p build/aethersoc-dts
+          ./mill aethercore.runMain aethercore.EmitAetherSoCDts             --output build/aethersoc-dts/aethersoc-v0.dts             --isa rv64ima_zicsr_zifencei             --mmu sv39             --bootargs 'console=ttyS0 earlycon'
+          dtc -I dts -O dtb \
+            -o build/aethersoc-dts/aethersoc-v0.dtb \
+            build/aethersoc-dts/aethersoc-v0.dts \
+            2> build/aethersoc-dts/dtc.stderr
+          if [[ -s build/aethersoc-dts/dtc.stderr ]]; then
+            cat build/aethersoc-dts/dtc.stderr >&2
+            echo "ERROR: generated AetherSoC DTS must compile with zero dtc warnings" >&2
+            exit 1
+          fi
+          dtc -I dtb -O dts \
+            -o build/aethersoc-dts/roundtrip.dts \
+            build/aethersoc-dts/aethersoc-v0.dtb
+          grep -q 'cpu_intc: interrupt-controller' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'plic: interrupt-controller@c000000' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'interrupt-parent = <&plic>;' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'interrupts-extended = <&cpu_intc' build/aethersoc-dts/aethersoc-v0.dts
+          grep -q 'bootrom@1000' build/aethersoc-dts/roundtrip.dts
+          grep -q 'memory@80000000' build/aethersoc-dts/roundtrip.dts
+          grep -q 'serial@10000000' build/aethersoc-dts/roundtrip.dts
+          grep -q 'interrupt-controller@c000000' build/aethersoc-dts/roundtrip.dts
+          grep -q 'mtimer@200bff8' build/aethersoc-dts/roundtrip.dts

@@ -15,16 +15,36 @@ if [[ -d "$dest/.git" ]]; then
 fi
 
 mkdir -p "$(dirname "$dest")"
-git init -q "$dest"
-git -C "$dest" remote add origin "$repo_url"
-git -C "$dest" fetch -q --depth=1 origin "$revision"
-git -C "$dest" checkout -q --detach FETCH_HEAD
 
-actual="$(git -C "$dest" rev-parse HEAD)"
-[[ "$actual" == "$revision" ]] || {
-  echo "ERROR: CoreMark revision mismatch: expected=$revision actual=$actual" >&2
+fetched=false
+for attempt in 1 2 3; do
+  rm -rf "$dest"
+  git init -q "$dest"
+  git -C "$dest" remote add origin "$repo_url"
+
+  if git -C "$dest" -c http.version=HTTP/1.1 \
+      fetch -q --depth=1 origin "$revision" && \
+      git -C "$dest" checkout -q --detach FETCH_HEAD; then
+    actual="$(git -C "$dest" rev-parse HEAD)"
+    if [[ "$actual" == "$revision" ]]; then
+      fetched=true
+      break
+    fi
+    echo "WARN: CoreMark revision mismatch on attempt $attempt: expected=$revision actual=$actual" >&2
+  else
+    echo "WARN: CoreMark fetch attempt $attempt/3 failed" >&2
+  fi
+
+  rm -rf "$dest"
+  if [[ "$attempt" -lt 3 ]]; then
+    sleep "$((attempt * 2))"
+  fi
+done
+
+if [[ "$fetched" != true ]]; then
+  echo "ERROR: failed to fetch pinned CoreMark revision after 3 attempts: $revision" >&2
   exit 1
-}
+fi
 
 required=(
   core_list_join.c

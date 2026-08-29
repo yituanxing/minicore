@@ -1,0 +1,76 @@
+name: RV64 VM CSR Contract
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-vm-csr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: RV32 oracle + RV64 satp CSR
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 20
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala .github/workflows || true
+          else
+            git init .
+          fi
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          chmod +x ./mill
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run configuration and satp CSR contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.CoreConfigSpec \
+            aethercore.RV64VirtualMemoryConfigSpec \
+            aethercore.SatpRegisterSpec \
+            aethercore.RV64SupervisorModeSpec \
+            aethercore.RV64SatpCsrSpec
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 VM CSR contract'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- IsaConfig: Sv39 and Sv39+Sv48 geometry described independently from production capability advertisement'
+            echo '- CoreConfig: production paging remains fail-closed at the current integrated capability set'
+            echo '- satp: RV64 MODE/ASID/PPN layout uses the shared geometry-driven register with ASIDLEN=0'
+            echo '- Supervisor status/delegation: SUM, MXR and page-fault delegation are keyed to paged VM rather than Sv32 literals'
+            echo '- historical RV64 Supervisor V1 and RV32 configuration contracts remain in the same focused gate'
+          } >> "$GITHUB_STEP_SUMMARY"

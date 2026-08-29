@@ -9,13 +9,19 @@ class IfId(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
+  val instBytes = UInt(3.W)
+  val faultAddress = UInt(xlen.W)
   val fault = Bool()
+  val pageFault = Bool()
 }
 
 class IdEx(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rs1 = UInt(5.W)
   val rs2 = UInt(5.W)
   val rd = UInt(5.W)
@@ -30,6 +36,8 @@ class ExMem(val xlen: Int = 64) extends Bundle {
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val result = UInt(xlen.W)
   val storeData = UInt(xlen.W)
@@ -48,6 +56,8 @@ class MemWb(
   val valid = Bool()
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val rdData = UInt(xlen.W)
   val regWrite = Bool()
@@ -59,25 +69,53 @@ class MemWb(
   val csrWrite = Bool()
   val csrAddr = UInt(12.W)
   val csrData = UInt(xlen.W)
-  val mret = Bool()
+  val wfi = Bool()
+  val xret = XRetOp()
   val trap = new TrapInfo(xlen)
 }
 
-class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Module {
+class AetherCore(
+    val config: CoreConfig = CoreProfiles.rv64imCurrent,
+    val withMachineExternalInterrupt: Boolean = false,
+    val withSupervisorExternalInterrupt: Boolean = false
+) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
   private val busDataBits = config.platform.busDataBits
   private val busBytes = config.platform.busBytes
+  private val vmGeometry = config.isa.orderedPageTableGeometries.headOption
+  private val vmPteBits = vmGeometry.map(_.pteBits).getOrElse(32)
+  private val vmPteBytes = vmGeometry.map(_.pteBytes).getOrElse(4)
+  private val supervisorTimerCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorTimerInterrupt)
   private val machineTimerCause =
     (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineTimer)
+  private val supervisorExternalCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineCsrBit.SupervisorExternalInterrupt)
+  private val machineExternalCause =
+    (BigInt(1) << (xlen - 1)) | BigInt(MachineInterruptCode.MachineExternal)
 
-  require(paddrBits == xlen, "the current core requires physical and architectural address widths to match")
   require(busDataBits == xlen, "the current load/store path requires bus width to match XLEN")
+  vmGeometry.foreach { geometry =>
+    require(
+      paddrBits >= geometry.architecturalPhysicalAddressBits,
+      s"${geometry.name} requires PA>=${geometry.architecturalPhysicalAddressBits}, got $paddrBits"
+    )
+  }
+  require(!withSupervisorExternalInterrupt || config.isa.hasS,
+    "supervisor external interrupt requires an S-mode profile")
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(paddrBits)
     val dmem = new DataBusIO(paddrBits, busDataBits)
+    val ptw = if (config.isa.hasPagedVirtualMemory)
+      Some(new PageTableReadBusIO(paddrBits, vmPteBits))
+    else None
     val timerInterrupt = Input(Bool())
+    val time = if (config.isa.hasTimeCounter) Some(Input(UInt(64.W))) else None
+    val externalInterrupt = if (withMachineExternalInterrupt) Some(Input(Bool())) else None
+    val supervisorExternalInterrupt =
+      if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -88,31 +126,164 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   val exMem = RegInit(0.U.asTypeOf(new ExMem(xlen)))
   val memWb = RegInit(0.U.asTypeOf(new MemWb(xlen, paddrBits, busDataBits)))
 
+  val reservationValid = RegInit(false.B)
+  val reservationAddress = RegInit(0.U(paddrBits.W))
+  val reservationSize = RegInit(MemSize.Word)
+  val atomicWritePhase = RegInit(false.B)
+  val atomicOldData = RegInit(0.U(xlen.W))
+
   val decoder = Module(new Decoder(config.isa))
   val registerFile = Module(new RegisterFile(xlen))
   val alu = Module(new ALU(xlen))
-  val csrFile = Module(new MachineCsrFile(config.isa))
-  val instructionPmp = Module(new PmpChecker(xlen))
-  val dataPmp = Module(new PmpChecker(xlen))
+  val csrFile = Module(new MachineCsrFile(
+    config.isa,
+    paddrBits,
+    withMachineExternalInterrupt,
+    withSupervisorExternalInterrupt
+  ))
+  val instructionPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
+  val dataPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits))
+  val dataVm = vmGeometry.map(geometry => Module(new DataPathAdapter(geometry, paddrBits)))
+  val fetchVm = vmGeometry.map(geometry => Module(new InstructionFetchAdapter(geometry, paddrBits)))
+  val compressedFetch = if (config.isa.hasC) Some(Module(new Rv32CParcelController(xlen))) else None
+  val ptwArbiter = vmGeometry.map(geometry => Module(new PtwArbiter(geometry, paddrBits)))
+  val ptwPmp = if (config.isa.hasPagedVirtualMemory)
+    Some(Module(new PmpChecker(xlen, PmpConstants.MaxEntries, paddrBits)))
+  else None
 
+  val ifIdSfenceVma = if (config.isa.hasPagedVirtualMemory) SystemInstruction.isSfenceVma(ifId.inst) else false.B
+  val idExSfenceVma = if (config.isa.hasPagedVirtualMemory) SystemInstruction.isSfenceVma(idEx.inst) else false.B
+  val memWbSfenceVma = if (config.isa.hasPagedVirtualMemory) SystemInstruction.isSfenceVma(memWb.inst) else false.B
+
+  val takingTrap = memWb.valid && memWb.trap.valid
+  val takingXret = memWb.valid && memWb.xret =/= XRetOp.None && !memWb.trap.valid
+  val takingSfence = memWb.valid && memWbSfenceVma && !memWb.trap.valid
+
+  val fetchKill = WireDefault(false.B)
+  val fetchResponseReady = WireDefault(false.B)
+  val fetchResponseValid = WireDefault(true.B)
+  val frontendAdvance = WireDefault(false.B)
+  val fetchVirtualAddress = WireDefault(pc)
+  val (bareFetchPhysicalAddress, bareFetchOutOfRange) =
+    PhysicalAddressNarrowing(fetchVirtualAddress, paddrBits)
+  val fetchPhysicalAddress = WireDefault(bareFetchPhysicalAddress)
+  val fetchPageFault = WireDefault(false.B)
+  val fetchAccessFault = WireDefault(bareFetchOutOfRange)
+  val fetchInstructionValid = WireDefault(fetchResponseValid)
+  val fetchedInst = WireDefault(io.imem.inst)
+  val fetchedRawInst = WireDefault(io.imem.inst)
+  val fetchedInstBytes = WireDefault(4.U(3.W))
+  val fetchFaultAddress = WireDefault(fetchVirtualAddress)
+  val fetchInstructionPageFault = WireDefault(fetchPageFault)
+  val fetchInstructionAccessFault = WireDefault(false.B)
+  val instructionTransactionBytes =
+    if (config.isa.hasC) 2.U(3.W) else 4.U(3.W)
+
+  if (config.isa.hasC) {
+    val parcel = compressedFetch.get
+    parcel.io.instructionPc := pc
+    parcel.io.kill := fetchKill
+    parcel.io.advance := frontendAdvance
+    fetchVirtualAddress := parcel.io.parcelRequestAddress
+  }
   instructionPmp.io.privilege := csrFile.io.currentPrivilege
-  instructionPmp.io.address := pc
-  instructionPmp.io.bytes := 4.U
+  instructionPmp.io.address := fetchPhysicalAddress
+  instructionPmp.io.bytes := instructionTransactionBytes
   instructionPmp.io.write := false.B
   instructionPmp.io.execute := true.B
   instructionPmp.io.config := csrFile.io.pmpConfig
   instructionPmp.io.pmpAddress := csrFile.io.pmpAddress
 
-  dataPmp.io.privilege := csrFile.io.currentPrivilege
+  val (bareDataPhysicalAddress, bareDataOutOfRange) =
+    PhysicalAddressNarrowing(exMem.result, paddrBits)
+  val dataPmpAddress = WireDefault(bareDataPhysicalAddress)
+  dataPmp.io.privilege := csrFile.io.effectiveDataPrivilege
+  dataPmp.io.address := dataPmpAddress
   dataPmp.io.config := csrFile.io.pmpConfig
   dataPmp.io.pmpAddress := csrFile.io.pmpAddress
 
-  val takingTrap = memWb.valid && memWb.trap.valid
-  val takingMret = memWb.valid && memWb.mret && !memWb.trap.valid
+  val dataPteValid = WireDefault(false.B)
+  val dataPteAddress = WireDefault(0.U(paddrBits.W))
+  val dataPteReady = WireDefault(false.B)
+  val dataPteRdata = WireDefault(0.U(vmPteBits.W))
+  val dataPteFault = WireDefault(false.B)
 
-  io.imem.addr := pc
+  if (config.isa.hasPagedVirtualMemory) {
+    val fetch = fetchVm.get
+    fetch.io.requestValid := !fetchKill
+    fetch.io.kill := fetchKill
+    fetch.io.flush := takingSfence
+    fetch.io.virtualAddress := fetchVirtualAddress
+    fetch.io.privilege := csrFile.io.currentPrivilege
+    fetch.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
+    fetch.io.satpRootPpn := csrFile.io.satpRootPpn
+    fetch.io.mxr := csrFile.io.supervisorMxr
+    fetch.io.responseReady := fetchResponseReady
+
+    val arbiter = ptwArbiter.get
+    arbiter.io.dataValid := dataPteValid
+    arbiter.io.dataAddress := dataPteAddress
+    dataPteReady := arbiter.io.dataReady
+    dataPteRdata := arbiter.io.dataRdata
+    dataPteFault := arbiter.io.dataFault
+
+    arbiter.io.fetchValid := fetch.io.pteValid
+    arbiter.io.fetchAddress := fetch.io.pteAddress
+    fetch.io.pteReady := arbiter.io.fetchReady
+    fetch.io.pteData := arbiter.io.fetchRdata
+    fetch.io.pteFault := arbiter.io.fetchFault
+
+    val pmp = ptwPmp.get
+    pmp.io.privilege := PrivilegeMode.Supervisor.U
+    pmp.io.address := arbiter.io.memoryAddress
+    pmp.io.bytes := vmPteBytes.U
+    pmp.io.write := false.B
+    pmp.io.execute := false.B
+    pmp.io.config := csrFile.io.pmpConfig
+    pmp.io.pmpAddress := csrFile.io.pmpAddress
+    val ptwPmpFault = arbiter.io.memoryValid &&
+      (if (config.isa.hasPmp) !pmp.io.allow else false.B)
+
+    io.ptw.get.valid := arbiter.io.memoryValid && !ptwPmpFault
+    io.ptw.get.addr := arbiter.io.memoryAddress
+    arbiter.io.memoryReady := Mux(ptwPmpFault, true.B, io.ptw.get.ready)
+    arbiter.io.memoryRdata := io.ptw.get.rdata
+    arbiter.io.memoryFault := ptwPmpFault || (io.ptw.get.valid && io.ptw.get.fault)
+
+    fetchResponseValid := fetch.io.responseValid
+    fetchPhysicalAddress := fetch.io.physicalAddress
+    fetchPageFault := fetch.io.pageFault
+    fetchAccessFault := fetch.io.accessFault
+  }
+
+  val instructionPmpFault = fetchResponseValid && !fetchPageFault && !fetchAccessFault &&
+    (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
+  val physicalParcelAccessFault =
+    fetchAccessFault || instructionPmpFault ||
+      (!fetchPageFault && !instructionPmpFault && io.imem.fault)
+  fetchInstructionAccessFault := physicalParcelAccessFault
+
+  if (config.isa.hasC) {
+    val parcel = compressedFetch.get
+    parcel.io.parcelResponseValid := fetchResponseValid
+    parcel.io.parcelBits := io.imem.inst(15, 0)
+    parcel.io.parcelPageFault := fetchPageFault
+    parcel.io.parcelAccessFault := physicalParcelAccessFault
+    fetchInstructionValid := parcel.io.instructionValid
+    fetchedInst := parcel.io.instruction
+    fetchedRawInst := parcel.io.rawInstruction
+    fetchedInstBytes := parcel.io.instructionBytes
+    fetchFaultAddress := parcel.io.faultAddress
+    fetchInstructionPageFault := parcel.io.pageFault
+    fetchInstructionAccessFault := parcel.io.accessFault
+    if (config.isa.hasPagedVirtualMemory) {
+      fetchResponseReady := parcel.io.parcelResponseReady
+    }
+  }
+
+  io.imem.addr := fetchPhysicalAddress
+  io.imem.bytes := instructionTransactionBytes
   decoder.io.inst := ifId.inst
-
   registerFile.io.rs1Addr := decoder.io.rs1
   registerFile.io.rs2Addr := decoder.io.rs2
   registerFile.io.writeEnable := memWb.valid && memWb.regWrite && !memWb.trap.valid
@@ -123,25 +294,63 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   csrFile.io.writeAddr := memWb.csrAddr
   csrFile.io.writeData := memWb.csrData
   csrFile.io.timerInterrupt := io.timerInterrupt
-  csrFile.io.trapReturn := takingMret
+  if (config.isa.hasTimeCounter) {
+    csrFile.io.time.get := io.time.get
+  }
+  val rawExternalInterrupt =
+    if (withMachineExternalInterrupt) io.externalInterrupt.get else false.B
+  if (withMachineExternalInterrupt) {
+    csrFile.io.externalInterrupt.get := rawExternalInterrupt
+  }
+  val rawSupervisorExternalInterrupt =
+    if (withSupervisorExternalInterrupt) io.supervisorExternalInterrupt.get else false.B
+  if (withSupervisorExternalInterrupt) {
+    csrFile.io.supervisorExternalInterruptPending.get := rawSupervisorExternalInterrupt
+  }
+  csrFile.io.trapReturn := takingXret
+  csrFile.io.trapReturnSupervisor := takingXret && memWb.xret === XRetOp.Supervisor
 
-  // An interrupt is accepted only after a normal WB instruction retires. The
-  // oldest younger instruction has not retired and must be replayed after MRET.
+  val wfiRetiring = memWb.valid && memWb.wfi && !memWb.trap.valid
+  val rawSupervisorTimerPending =
+    if (config.isa.hasSupervisorTimerInterrupt) csrFile.io.supervisorTimerPending.get else false.B
+  val rawInterruptPending =
+    io.timerInterrupt || rawExternalInterrupt || rawSupervisorExternalInterrupt || rawSupervisorTimerPending
+  val waitingForInterrupt = wfiRetiring && !rawInterruptPending
+
   val interruptPc = Mux(
-    exMem.valid,
-    exMem.pc,
-    Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc))
+    wfiRetiring,
+    memWb.pc + memWb.instBytes,
+    Mux(exMem.valid, exMem.pc, Mux(idEx.valid, idEx.pc, Mux(ifId.valid, ifId.pc, pc)))
   )
-  val takingInterrupt = memWb.valid && !memWb.trap.valid && !memWb.mret &&
-    csrFile.io.machineTimerInterrupt
+  val takingExternalInterrupt =
+    if (withMachineExternalInterrupt) csrFile.io.machineExternalInterrupt.get else false.B
+  val takingTimerInterrupt = csrFile.io.machineTimerInterrupt
+  val takingSupervisorExternalInterrupt =
+    if (withSupervisorExternalInterrupt) csrFile.io.supervisorExternalInterrupt.get else false.B
+  val takingSupervisorTimerInterrupt =
+    if (config.isa.hasSupervisorTimerInterrupt) csrFile.io.supervisorTimerInterrupt.get else false.B
+  val qualifiedInterrupt =
+    takingExternalInterrupt || takingTimerInterrupt ||
+      takingSupervisorExternalInterrupt || takingSupervisorTimerInterrupt
+  val takingInterrupt =
+    memWb.valid && !memWb.trap.valid && memWb.xret === XRetOp.None && qualifiedInterrupt
+  val interruptCause = Mux(
+    takingExternalInterrupt,
+    machineExternalCause.U(xlen.W),
+    Mux(
+      takingTimerInterrupt,
+      machineTimerCause.U(xlen.W),
+      Mux(
+        takingSupervisorExternalInterrupt,
+        supervisorExternalCause.U(xlen.W),
+        supervisorTimerCause.U(xlen.W)
+      )
+    )
+  )
 
   csrFile.io.trapEnter := takingTrap || takingInterrupt
   csrFile.io.trapPc := Mux(takingInterrupt, interruptPc, memWb.pc)
-  csrFile.io.trapCause := Mux(
-    takingInterrupt,
-    machineTimerCause.U(xlen.W),
-    memWb.trap.cause
-  )
+  csrFile.io.trapCause := Mux(takingInterrupt, interruptCause, memWb.trap.cause)
   csrFile.io.trapValue := Mux(takingInterrupt, 0.U, memWb.trap.value)
 
   val decodedImm = WireDefault(0.U(xlen.W))
@@ -154,7 +363,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   }
 
   val instructionTrapValue =
-    if (xlen == 32) ifId.inst else Cat(0.U((xlen - 32).W), ifId.inst)
+    if (xlen == 32) ifId.rawInst else Cat(0.U((xlen - 32).W), ifId.rawInst)
   val environmentCallCause = Mux(
     csrFile.io.currentPrivilege === PrivilegeMode.User.U,
     MachineExceptionCode.EnvironmentCallFromU.U(xlen.W),
@@ -165,11 +374,19 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     )
   )
   val decodedTrap = WireInit(0.U.asTypeOf(new TrapInfo(xlen)))
-  when(ifId.fault) {
+  when(ifId.pageFault) {
+    decodedTrap.valid := true.B
+    decodedTrap.cause := MachineExceptionCode.InstructionPageFault.U(xlen.W)
+    decodedTrap.value := ifId.faultAddress
+  }.elsewhen(ifId.fault) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.InstructionAccessFault.U(xlen.W)
-    decodedTrap.value := ifId.pc
-  }.elsewhen(decoder.io.ctrl.illegal) {
+    decodedTrap.value := ifId.faultAddress
+  }.elsewhen(ifIdSfenceVma && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U) {
+    decodedTrap.valid := true.B
+    decodedTrap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
+    decodedTrap.value := instructionTrapValue
+  }.elsewhen(decoder.io.ctrl.illegal && !ifIdSfenceVma) {
     decodedTrap.valid := true.B
     decodedTrap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
     decodedTrap.value := instructionTrapValue
@@ -185,7 +402,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   }
 
   val exMemForward = exMem.valid && exMem.ctrl.regWrite && !exMem.ctrl.memRead &&
-    !exMem.trap.valid && exMem.rd =/= 0.U
+    exMem.ctrl.atomicOp === AtomicOp.None && !exMem.trap.valid && exMem.rd =/= 0.U
   val memWbForward = memWb.valid && memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
 
   val forwardedRs1 = Mux(
@@ -223,11 +440,15 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
 
   val branchTaken = idEx.valid && idEx.ctrl.branch =/= BranchType.None && branchCondition
   val jumpTaken = idEx.valid && idEx.ctrl.jump
-  val redirect = branchTaken || jumpTaken
+  val controlTransferTaken = branchTaken || jumpTaken
   val branchTarget = idEx.pc + idEx.imm
   val jalrAlignmentMask = ((BigInt(1) << xlen) - 2).U(xlen.W)
   val jalrTarget = (forwardedRs1 + idEx.imm) & jalrAlignmentMask
   val redirectTarget = Mux(idEx.ctrl.jalr, jalrTarget, branchTarget)
+  val instructionAlignmentMask = (if (config.isa.hasC) BigInt(1) else BigInt(3)).U(xlen.W)
+  val controlTransferMisaligned =
+    controlTransferTaken && ((redirectTarget & instructionAlignmentMask) =/= 0.U)
+  val redirect = controlTransferTaken && !controlTransferMisaligned
 
   val csrInstruction = idEx.ctrl.csrOp =/= CsrOp.None
   val csrAddr = idEx.inst(31, 20)
@@ -255,57 +476,227 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(CsrOp.Set) { csrWriteData := csrReadData | csrOperand }
     is(CsrOp.Clear) { csrWriteData := csrReadData & ~csrOperand }
   }
-  val canonicalCsrWriteData = MachineCsrWarl.canonicalize(config.isa, csrAddr, csrWriteData)
+  val canonicalCsrWriteData = MachineCsrWarl.canonicalize(
+    config.isa,
+    paddrBits,
+    csrAddr,
+    csrWriteData,
+    withSupervisorExternalInterrupt
+  )
   val csrException = csrInstruction && !csrLegal
-  val mretException =
-    idEx.ctrl.mret && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
+  val wfiException =
+    idEx.ctrl.wfi && csrFile.io.currentPrivilege === PrivilegeMode.User.U
+  val machineXretException =
+    idEx.ctrl.xret === XRetOp.Machine && csrFile.io.currentPrivilege =/= PrivilegeMode.Machine.U
+  val supervisorXretException =
+    idEx.ctrl.xret === XRetOp.Supervisor && csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U
+  val xretException = machineXretException || supervisorXretException
+  val sfencePrivilegeException = idExSfenceVma &&
+    csrFile.io.currentPrivilege < PrivilegeMode.Supervisor.U
 
-  val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idEx.pc + 4.U, alu.io.out)
+  val idExNextPc = idEx.pc + idEx.instBytes
+  val ordinaryExResult = Mux(idEx.ctrl.wbSel === WbSel.PcPlus4, idExNextPc, alu.io.out)
   val exResult = Mux(idEx.ctrl.wbSel === WbSel.Csr, csrReadData, ordinaryExResult)
   val idExInstructionValue =
-    if (xlen == 32) idEx.inst else Cat(0.U((xlen - 32).W), idEx.inst)
+    if (xlen == 32) idEx.rawInst else Cat(0.U((xlen - 32).W), idEx.rawInst)
 
   val fullStoreMask = ((BigInt(1) << busBytes) - 1).U(busBytes.W)
   val storeMask = WireDefault(fullStoreMask)
   val dataAccessBytes = WireDefault(busBytes.U(4.W))
+  val dataAlignmentMask = WireDefault((busBytes - 1).U(xlen.W))
   switch(exMem.ctrl.memSize) {
     is(MemSize.Byte) {
       storeMask := 1.U(busBytes.W)
       dataAccessBytes := 1.U
+      dataAlignmentMask := 0.U
     }
     is(MemSize.Half) {
       storeMask := 3.U(busBytes.W)
       dataAccessBytes := 2.U
+      dataAlignmentMask := 1.U
     }
     is(MemSize.Word) {
       storeMask := 15.U(busBytes.W)
       dataAccessBytes := 4.U
+      dataAlignmentMask := 3.U
     }
     is(MemSize.DWord) {
       storeMask := fullStoreMask
       dataAccessBytes := 8.U
+      dataAlignmentMask := 7.U
     }
   }
 
-  dataPmp.io.address := exMem.result
+  val translatedPhysicalAddress = WireDefault(bareDataPhysicalAddress)
+  val scReservationMatch = WireDefault(
+    reservationValid && reservationSize === exMem.ctrl.memSize &&
+      !bareDataOutOfRange && reservationAddress === bareDataPhysicalAddress
+  )
+
+  val atomicInstruction = exMem.ctrl.atomicOp =/= AtomicOp.None
+  val atomicLr = exMem.ctrl.atomicOp === AtomicOp.Lr
+  val atomicSc = exMem.ctrl.atomicOp === AtomicOp.Sc
+  val atomicRmw = atomicInstruction && !atomicLr && !atomicSc
+  val atomicReadPhase = atomicRmw && !atomicWritePhase
+  val atomicWriteRequest = atomicRmw && atomicWritePhase
+  val atomicWordOperation = exMem.ctrl.memSize === MemSize.Word
+
+  val atomicSignedOperand = if (xlen == 64) {
+    Mux(
+      atomicWordOperation,
+      Cat(Fill(32, exMem.storeData(31)), exMem.storeData(31, 0)),
+      exMem.storeData
+    )
+  } else exMem.storeData
+  val atomicUnsignedOperand = if (xlen == 64) {
+    Mux(
+      atomicWordOperation,
+      Cat(0.U(32.W), exMem.storeData(31, 0)),
+      exMem.storeData
+    )
+  } else exMem.storeData
+  val atomicUnsignedOldData = if (xlen == 64) {
+    Mux(
+      atomicWordOperation,
+      Cat(0.U(32.W), atomicOldData(31, 0)),
+      atomicOldData
+    )
+  } else atomicOldData
+
+  val atomicWriteData = WireDefault(exMem.storeData)
+  switch(exMem.ctrl.atomicOp) {
+    is(AtomicOp.Swap) { atomicWriteData := exMem.storeData }
+    is(AtomicOp.Add) { atomicWriteData := atomicOldData + exMem.storeData }
+    is(AtomicOp.Xor) { atomicWriteData := atomicOldData ^ exMem.storeData }
+    is(AtomicOp.And) { atomicWriteData := atomicOldData & exMem.storeData }
+    is(AtomicOp.Or) { atomicWriteData := atomicOldData | exMem.storeData }
+    is(AtomicOp.Min) {
+      atomicWriteData := Mux(
+        atomicOldData.asSInt < atomicSignedOperand.asSInt,
+        atomicOldData,
+        atomicSignedOperand
+      )
+    }
+    is(AtomicOp.Max) {
+      atomicWriteData := Mux(
+        atomicOldData.asSInt > atomicSignedOperand.asSInt,
+        atomicOldData,
+        atomicSignedOperand
+      )
+    }
+    is(AtomicOp.Minu) {
+      atomicWriteData := Mux(
+        atomicUnsignedOldData < atomicUnsignedOperand,
+        atomicUnsignedOldData,
+        atomicUnsignedOperand
+      )
+    }
+    is(AtomicOp.Maxu) {
+      atomicWriteData := Mux(
+        atomicUnsignedOldData > atomicUnsignedOperand,
+        atomicUnsignedOldData,
+        atomicUnsignedOperand
+      )
+    }
+  }
+
+  val ordinaryDataAccess = !atomicInstruction && (exMem.ctrl.memRead || exMem.ctrl.memWrite)
+  val memoryBoundaryOpen = !exMem.trap.valid && !takingTrap && !takingInterrupt &&
+    !takingXret && !takingSfence && !waitingForInterrupt
+  val candidateDataAccess = exMem.valid && (ordinaryDataAccess || atomicInstruction) && memoryBoundaryOpen
+  val dataAddressMisaligned = candidateDataAccess && ((exMem.result & dataAlignmentMask) =/= 0.U)
+  val alignedDataAccess = candidateDataAccess && !dataAddressMisaligned
+  val atomicNeedsWritePermission = atomicSc || atomicRmw
+
   dataPmp.io.bytes := dataAccessBytes
-  dataPmp.io.write := exMem.ctrl.memWrite
+  dataPmp.io.write := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
   dataPmp.io.execute := false.B
 
-  // A synchronous trap, asynchronous interrupt or return can redirect from WB
-  // while a younger instruction occupies MEM. Suppress that request before the
-  // edge so no Store/MMIO side effect escapes from an instruction being flushed.
-  val candidateDataRequest = exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-    !exMem.trap.valid && !takingTrap && !takingInterrupt && !takingMret
-  val dataPmpFault = candidateDataRequest &&
-    (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+  val dataAddressRangeFault = WireDefault(false.B)
+  val dataPmpFault = WireDefault(false.B)
+  val atomicScBusRequest = if (config.isa.hasPagedVirtualMemory) atomicSc else atomicSc && scReservationMatch
+  val atomicBusRequest = atomicLr || atomicReadPhase || atomicWriteRequest || atomicScBusRequest
+  val rawDataRequest = alignedDataAccess && Mux(atomicInstruction, atomicBusRequest, true.B)
+  val dataBusWrite = Mux(
+    atomicInstruction,
+    atomicWriteRequest || (atomicSc && scReservationMatch),
+    exMem.ctrl.memWrite
+  )
 
-  io.dmem.valid := candidateDataRequest && !dataPmpFault
-  io.dmem.write := exMem.ctrl.memWrite
-  io.dmem.addr := exMem.result
-  io.dmem.wdata := exMem.storeData
-  io.dmem.wmask := storeMask
-  io.dmem.size := exMem.ctrl.memSize
+  val vmCsrHazard = if (config.isa.hasPagedVirtualMemory) {
+    memWb.valid && memWb.csrWrite && !memWb.trap.valid && (
+      memWb.csrAddr === SupervisorCsrAddress.Satp.U ||
+        memWb.csrAddr === SupervisorCsrAddress.Sstatus.U ||
+        memWb.csrAddr === MachineCsrAddress.Mstatus.U
+    )
+  } else false.B
+
+  val vmRequestComplete = WireDefault(false.B)
+  val vmPageFault = WireDefault(false.B)
+  val vmAccessFault = WireDefault(false.B)
+
+  if (config.isa.hasPagedVirtualMemory) {
+    val vm = dataVm.get
+    vm.io.requestValid := rawDataRequest && !vmCsrHazard
+    vm.io.flush := takingSfence
+    vm.io.virtualAddress := exMem.result
+    vm.io.privilege := csrFile.io.effectiveDataPrivilege
+    vm.io.translateWrite := Mux(atomicInstruction, atomicNeedsWritePermission, exMem.ctrl.memWrite)
+    vm.io.write := dataBusWrite
+    vm.io.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
+    vm.io.wmask := storeMask
+    vm.io.size := exMem.ctrl.memSize
+    vm.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
+    vm.io.satpRootPpn := csrFile.io.satpRootPpn
+    vm.io.sum := csrFile.io.supervisorSum
+    vm.io.mxr := csrFile.io.supervisorMxr
+
+    dataPteValid := vm.io.pteValid
+    dataPteAddress := vm.io.pteAddress
+    vm.io.pteReady := dataPteReady
+    vm.io.pteData := dataPteRdata
+    vm.io.pteFault := dataPteFault
+
+    translatedPhysicalAddress := vm.io.physicalAddress
+    scReservationMatch := reservationValid && reservationSize === exMem.ctrl.memSize &&
+      reservationAddress === vm.io.physicalAddress
+    val suppressFailedScDataAccess = atomicSc && !scReservationMatch
+
+    dataPmpAddress := vm.io.dataAddress
+    val translatedDataPmpFault = vm.io.dataValid &&
+      (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+    dataPmpFault := translatedDataPmpFault
+
+    io.dmem.valid := vm.io.dataValid && !translatedDataPmpFault && !suppressFailedScDataAccess
+    io.dmem.write := vm.io.dataWrite
+    io.dmem.addr := vm.io.dataAddress
+    io.dmem.wdata := vm.io.dataWdata
+    io.dmem.wmask := vm.io.dataWmask
+    io.dmem.size := vm.io.dataSize
+    vm.io.dataReady := Mux(
+      translatedDataPmpFault || suppressFailedScDataAccess,
+      true.B,
+      io.dmem.ready
+    )
+    vm.io.dataRdata := io.dmem.rdata
+    vm.io.dataFault := translatedDataPmpFault || (io.dmem.valid && io.dmem.fault)
+
+    vmRequestComplete := vm.io.requestComplete
+    vmPageFault := vm.io.pageFault
+    vmAccessFault := vm.io.accessFault
+  } else {
+    val bareDataRangeFault = alignedDataAccess && bareDataOutOfRange
+    val bareDataPmpFault = alignedDataAccess && !bareDataOutOfRange &&
+      (if (config.isa.hasPmp) !dataPmp.io.allow else false.B)
+    dataAddressRangeFault := bareDataRangeFault
+    dataPmpFault := bareDataPmpFault
+    io.dmem.valid := rawDataRequest && !bareDataRangeFault && !bareDataPmpFault
+    io.dmem.write := dataBusWrite
+    io.dmem.addr := bareDataPhysicalAddress
+    io.dmem.wdata := Mux(atomicWriteRequest, atomicWriteData, exMem.storeData)
+    io.dmem.wmask := storeMask
+    io.dmem.size := exMem.ctrl.memSize
+  }
 
   def extendLoad(bits: Int): UInt = {
     require(bits <= xlen, s"cannot extend a $bits-bit load into XLEN=$xlen")
@@ -316,7 +707,7 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       Mux(
         exMem.ctrl.memUnsigned,
         Cat(0.U((xlen - bits).W), value),
-        Cat(Fill(xlen - bits, value(bits - 1)), value)
+        Cat(Fill(xlen - bits, value(bits - 1)), value(bits - 1, 0))
       )
     }
   }
@@ -329,16 +720,68 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     is(MemSize.DWord) { loadData := io.dmem.rdata }
   }
 
-  val memoryStall = io.dmem.valid && !io.dmem.ready
-  val memoryFault = dataPmpFault || (io.dmem.valid && io.dmem.fault)
-  val loadUseHazard = idEx.valid && idEx.ctrl.memRead && idEx.rd =/= 0.U && ifId.valid && (
+  val memoryStall = if (config.isa.hasPagedVirtualMemory) {
+    alignedDataAccess && (vmCsrHazard || !vmRequestComplete)
+  } else {
+    io.dmem.valid && !io.dmem.ready
+  }
+  val memoryPageFault = if (config.isa.hasPagedVirtualMemory) vmPageFault else false.B
+  val memoryFault = dataAddressRangeFault || dataPmpFault ||
+    (if (config.isa.hasPagedVirtualMemory) vmAccessFault else io.dmem.valid && io.dmem.fault)
+  val atomicReadHold = atomicReadPhase && io.dmem.valid && io.dmem.ready && !io.dmem.fault
+  val lateResultHazard = idEx.ctrl.memRead || idEx.ctrl.atomicOp =/= AtomicOp.None
+  val loadUseHazard = idEx.valid && lateResultHazard && idEx.rd =/= 0.U && ifId.valid && (
     (decoder.io.ctrl.usesRs1 && decoder.io.rs1 === idEx.rd) ||
       (decoder.io.ctrl.usesRs2 && decoder.io.rs2 === idEx.rd)
   )
 
-  io.commit.valid := memWb.valid
+  val atomicRdData = WireDefault(loadData)
+  when(atomicSc) {
+    atomicRdData := Mux(scReservationMatch, 0.U, 1.U)
+  }.elsewhen(atomicRmw) {
+    atomicRdData := atomicOldData
+  }
+
+  val memStageRdData = Mux(
+    atomicInstruction,
+    atomicRdData,
+    Mux(exMem.ctrl.memRead, loadData, exMem.result)
+  )
+  val atomicCommittedMemory = Mux(
+    atomicLr,
+    io.dmem.valid && io.dmem.ready && !io.dmem.fault,
+    Mux(
+      atomicSc,
+      scReservationMatch && io.dmem.valid && io.dmem.ready && !io.dmem.fault,
+      atomicWriteRequest && io.dmem.valid && io.dmem.ready && !io.dmem.fault
+    )
+  )
+  val ordinaryCommittedMemory = exMem.valid && ordinaryDataAccess && !exMem.trap.valid &&
+    !dataAddressMisaligned && !memoryPageFault && !memoryFault
+  val committedMemoryAccess = Mux(atomicInstruction, atomicCommittedMemory, ordinaryCommittedMemory)
+  val committedMemoryWrite = Mux(
+    atomicInstruction,
+    atomicCommittedMemory && (atomicSc || atomicRmw),
+    exMem.ctrl.memWrite
+  )
+  val committedMemoryWdata = Mux(atomicRmw, atomicWriteData, exMem.storeData)
+  val memoryFaultIsLoad = atomicLr || (!atomicInstruction && exMem.ctrl.memRead)
+
+  val fetchContextChange = vmCsrHazard
+  fetchKill := takingTrap || takingInterrupt || takingXret || takingSfence || waitingForInterrupt ||
+    redirect || fetchContextChange
+  io.imem.valid := fetchResponseValid && !fetchKill && !fetchPageFault && !fetchAccessFault &&
+    !instructionPmpFault
+  frontendAdvance := !takingTrap && !takingInterrupt && !takingXret && !takingSfence &&
+    !waitingForInterrupt && !memoryStall && !atomicReadHold && !redirect && !loadUseHazard
+  if (config.isa.hasPagedVirtualMemory && !config.isa.hasC) {
+    fetchResponseReady := frontendAdvance && fetchResponseValid
+  }
+  io.commit.valid := memWb.valid && !waitingForInterrupt
   io.commit.pc := memWb.pc
   io.commit.inst := memWb.inst
+  io.commit.rawInst := memWb.rawInst
+  io.commit.instBytes := memWb.instBytes
   io.commit.rd := memWb.rd
   io.commit.rdWrite := memWb.regWrite && !memWb.trap.valid && memWb.rd =/= 0.U
   io.commit.rdData := memWb.rdData
@@ -351,9 +794,9 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
   io.commit.exceptionCause := memWb.trap.cause
   io.commit.exceptionValue := memWb.trap.value
   io.commit.interrupt := takingInterrupt
-  io.commit.interruptCause := machineTimerCause.U(xlen.W)
+  io.commit.interruptCause := interruptCause
   io.commit.interruptPc := interruptPc
-  io.halted := false.B
+  io.halted := waitingForInterrupt
 
   when(takingTrap || takingInterrupt) {
     pc := csrFile.io.trapVector
@@ -361,45 +804,116 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
-  }.elsewhen(takingMret) {
+    reservationValid := false.B
+    atomicWritePhase := false.B
+  }.elsewhen(takingXret) {
     pc := csrFile.io.returnPc
     ifId.valid := false.B
     idEx.valid := false.B
     exMem.valid := false.B
     memWb.valid := false.B
+    reservationValid := false.B
+    atomicWritePhase := false.B
+  }.elsewhen(takingSfence) {
+    pc := memWb.pc + memWb.instBytes
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    memWb.valid := false.B
+    atomicWritePhase := false.B
+  }.elsewhen(vmCsrHazard) {
+    // A retiring VM-context CSR write changes the architectural translation or
+    // permission context for every younger instruction/data access.  Kill the
+    // old-context younger pipeline and restart exactly at the next PC, just as
+    // SFENCE.VMA serializes its boundary.  This is required for SATP changes
+    // and also keeps sstatus/mstatus permission-context writes precise.
+    // VM 上下文 CSR 在退休点生效；旧上下文下已进入流水线的年轻指令必须丢弃，
+    // 并从该 CSR 的下一条指令精确重新取指。
+    pc := memWb.pc + memWb.instBytes
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    memWb.valid := false.B
+    atomicWritePhase := false.B
+  }.elsewhen(waitingForInterrupt) {
+    pc := memWb.pc + memWb.instBytes
+    ifId.valid := false.B
+    idEx.valid := false.B
+    exMem.valid := false.B
+    reservationValid := false.B
+    atomicWritePhase := false.B
   }.elsewhen(memoryStall) {
     memWb.valid := false.B
-
-    // MEM backpressure freezes ID/EX while the current WB result retires and
-    // its forwarding source disappears. Persist the values already selected
-    // by the forwarding network so the frozen EX instruction cannot fall back
-    // to stale register-file snapshots on the following cycle.
+    idEx.rs1Data := forwardedRs1
+    idEx.rs2Data := forwardedRs2
+  }.elsewhen(atomicReadHold) {
+    memWb.valid := false.B
+    atomicOldData := loadData
+    atomicWritePhase := true.B
+    reservationValid := false.B
     idEx.rs1Data := forwardedRs1
     idEx.rs2Data := forwardedRs2
   }.otherwise {
+    atomicWritePhase := false.B
+
+    when(exMem.valid && atomicInstruction) {
+      when(atomicLr && !memoryFault && io.dmem.valid && io.dmem.ready && !io.dmem.fault) {
+        reservationValid := true.B
+        reservationAddress := translatedPhysicalAddress
+        reservationSize := exMem.ctrl.memSize
+      }.elsewhen(!atomicLr) {
+        reservationValid := false.B
+      }.otherwise {
+        reservationValid := false.B
+      }
+    }.elsewhen(
+      exMem.valid && !exMem.trap.valid && exMem.ctrl.memWrite &&
+        io.dmem.valid && io.dmem.ready && !io.dmem.fault
+    ) {
+      reservationValid := false.B
+    }
+
     memWb.valid := exMem.valid
     memWb.pc := exMem.pc
     memWb.inst := exMem.inst
+    memWb.rawInst := exMem.rawInst
+    memWb.instBytes := exMem.instBytes
     memWb.rd := exMem.rd
-    memWb.rdData := Mux(exMem.ctrl.memRead, loadData, exMem.result)
+    memWb.rdData := memStageRdData
     memWb.regWrite := exMem.ctrl.regWrite
-    memWb.memValid := exMem.valid && (exMem.ctrl.memRead || exMem.ctrl.memWrite) &&
-      !exMem.trap.valid && !memoryFault
-    memWb.memWrite := exMem.ctrl.memWrite
-    memWb.memAddr := exMem.result
-    memWb.memWdata := exMem.storeData
+    memWb.memValid := committedMemoryAccess
+    memWb.memWrite := committedMemoryWrite
+    memWb.memAddr := translatedPhysicalAddress
+    memWb.memWdata := committedMemoryWdata
     memWb.memWmask := storeMask
     memWb.csrWrite := exMem.csrWrite
     memWb.csrAddr := exMem.csrAddr
     memWb.csrData := exMem.csrData
-    memWb.mret := exMem.ctrl.mret
+    memWb.wfi := exMem.ctrl.wfi
+    memWb.xret := exMem.ctrl.xret
     memWb.trap := exMem.trap
-    when(memoryFault) {
+    when(dataAddressMisaligned && !exMem.trap.valid) {
       memWb.trap.valid := true.B
       memWb.trap.cause := Mux(
-        exMem.ctrl.memRead,
-        MachineExceptionCode.LoadAccessFault.U(xlen.W),
-        MachineExceptionCode.StoreAccessFault.U(xlen.W)
+        memoryFaultIsLoad,
+        MachineExceptionCode.LoadAddressMisaligned.U(xlen.W),
+        MachineExceptionCode.StoreAddressMisaligned.U(xlen.W)
+      )
+      memWb.trap.value := exMem.result
+    }.elsewhen((memoryPageFault || memoryFault) && !exMem.trap.valid) {
+      memWb.trap.valid := true.B
+      memWb.trap.cause := Mux(
+        memoryPageFault,
+        Mux(
+          memoryFaultIsLoad,
+          MachineExceptionCode.LoadPageFault.U(xlen.W),
+          MachineExceptionCode.StorePageFault.U(xlen.W)
+        ),
+        Mux(
+          memoryFaultIsLoad,
+          MachineExceptionCode.LoadAccessFault.U(xlen.W),
+          MachineExceptionCode.StoreAccessFault.U(xlen.W)
+        )
       )
       memWb.trap.value := exMem.result
     }
@@ -407,6 +921,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     exMem.valid := idEx.valid
     exMem.pc := idEx.pc
     exMem.inst := idEx.inst
+    exMem.rawInst := idEx.rawInst
+    exMem.instBytes := idEx.instBytes
     exMem.rd := idEx.rd
     exMem.result := exResult
     exMem.storeData := forwardedRs2
@@ -415,7 +931,11 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
     exMem.csrAddr := csrAddr
     exMem.csrData := canonicalCsrWriteData
     exMem.trap := idEx.trap
-    when((csrException || mretException) && !idEx.trap.valid) {
+    when(controlTransferMisaligned && !idEx.trap.valid) {
+      exMem.trap.valid := true.B
+      exMem.trap.cause := MachineExceptionCode.InstructionAddressMisaligned.U(xlen.W)
+      exMem.trap.value := redirectTarget
+    }.elsewhen((csrException || wfiException || xretException || sfencePrivilegeException) && !idEx.trap.valid) {
       exMem.trap.valid := true.B
       exMem.trap.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
       exMem.trap.value := idExInstructionValue
@@ -431,6 +951,8 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       idEx.valid := ifId.valid
       idEx.pc := ifId.pc
       idEx.inst := ifId.inst
+      idEx.rawInst := ifId.rawInst
+      idEx.instBytes := ifId.instBytes
       idEx.rs1 := decoder.io.rs1
       idEx.rs2 := decoder.io.rs2
       idEx.rd := decoder.io.rd
@@ -440,12 +962,39 @@ class AetherCore(val config: CoreConfig = CoreProfiles.rv64imCurrent) extends Mo
       idEx.ctrl := decoder.io.ctrl
       idEx.trap := decodedTrap
 
-      ifId.valid := true.B
-      ifId.pc := pc
-      ifId.inst := io.imem.inst
-      ifId.fault := io.imem.fault ||
-        (if (config.isa.hasPmp) !instructionPmp.io.allow else false.B)
-      pc := pc + 4.U
+      if (config.isa.hasPagedVirtualMemory) {
+        when(fetchInstructionValid) {
+          ifId.valid := true.B
+          ifId.pc := pc
+          ifId.inst := fetchedInst
+          ifId.rawInst := fetchedRawInst
+          ifId.instBytes := fetchedInstBytes
+          ifId.faultAddress := fetchFaultAddress
+          ifId.pageFault := fetchInstructionPageFault
+          ifId.fault := fetchInstructionAccessFault
+          pc := pc + fetchedInstBytes
+        }.otherwise {
+          ifId.valid := false.B
+          ifId.fault := false.B
+          ifId.pageFault := false.B
+        }
+      } else {
+        when(fetchInstructionValid) {
+          ifId.valid := true.B
+          ifId.pc := pc
+          ifId.inst := fetchedInst
+          ifId.rawInst := fetchedRawInst
+          ifId.instBytes := fetchedInstBytes
+          ifId.faultAddress := fetchFaultAddress
+          ifId.fault := fetchInstructionAccessFault
+          ifId.pageFault := false.B
+          pc := pc + fetchedInstBytes
+        }.otherwise {
+          ifId.valid := false.B
+          ifId.fault := false.B
+          ifId.pageFault := false.B
+        }
+      }
     }
   }
 }

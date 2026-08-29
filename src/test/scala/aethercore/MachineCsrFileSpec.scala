@@ -20,6 +20,7 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.trapCause.poke(0.U)
     dut.io.trapValue.poke(0.U)
     dut.io.trapReturn.poke(false.B)
+    dut.io.trapReturnSupervisor.poke(false.B)
   }
 
   private def read(dut: MachineCsrFile, address: Int): BigInt = {
@@ -57,13 +58,21 @@ class MachineCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
       read(dut, MachineCsrAddress.Mstatus) shouldBe BigInt("00001888", 16)
 
       write(dut, MachineCsrAddress.Mie, BigInt("ffffffff", 16))
-      read(dut, MachineCsrAddress.Mie) shouldBe BigInt("00000080", 16)
+      read(dut, MachineCsrAddress.Mie) shouldBe BigInt("00000880", 16)
 
       read(dut, MachineCsrAddress.Mip) shouldBe 0
       dut.io.readImplemented.expect(true.B)
-      dut.io.readWritable.expect(false.B)
+      dut.io.readWritable.expect(true.B)
       dut.io.timerInterrupt.poke(true.B)
       read(dut, MachineCsrAddress.Mip) shouldBe BigInt("00000080", 16)
+
+      dut.io.readAddr.poke(MachineCsrAddress.Medeleg.U)
+      dut.io.readImplemented.expect(false.B)
+      dut.io.readWritable.expect(false.B)
+
+      dut.io.readAddr.poke(MachineCsrAddress.Mideleg.U)
+      dut.io.readImplemented.expect(false.B)
+      dut.io.readWritable.expect(false.B)
 
       dut.io.readAddr.poke("h7ff".U)
       dut.io.readImplemented.expect(false.B)

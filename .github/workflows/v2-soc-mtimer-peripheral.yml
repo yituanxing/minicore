@@ -1,0 +1,54 @@
+name: AetherSoC ACLINT MTIMER Gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/peripheral/AetherAclintMtimer.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/test/scala/aethercore/AetherAclintMtimerSpec.scala'
+      - 'tests_py/test_v2_platform_ownership.py'
+      - '.github/workflows/v2-soc-mtimer-peripheral.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-mtimer-peripheral-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mtimer:
+    name: Prove standalone ACLINT MTIMER ownership
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Install Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Check SoC ownership source contract
+        run: python3 -m unittest tests_py.test_v2_platform_ownership -v
+
+      - name: Run standalone MTIMER behavior proof
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherAclintMtimerSpec

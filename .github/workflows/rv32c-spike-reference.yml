@@ -1,0 +1,100 @@
+name: RV32C Spike Reference
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-spike-reference-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reproduce:
+    name: Pinned RV32IMC Spike ABI reproducibility
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 0
+
+      - name: Run reference source contract
+        shell: bash
+        run: python3 -m unittest tests_py.test_rv32c_spike_reference_contract -v
+
+      - name: Independently build and probe reference A
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AETHERCORE_RV32_SPIKE_WORK_DIR="$GITHUB_WORKSPACE/build/rv32c-spike-reference-a"
+          spike_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
+          test -f "$spike_so"
+          spike_sha="$(sha256sum "$spike_so" | awk '{print $1}')"
+          grep -q '^semantic_smoke=PASS$' build/rv32c-spike-reference-a/evidence/semantic-smoke.txt
+          grep -q '^status=PASS$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          grep -q '^mixed_provenance_bne=fallthrough$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          grep -q '^passive_mmio_maps=2$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          grep -q '^passive_mmio_independent=PASS$' build/rv32c-spike-reference-a/evidence/abi-smoke.txt
+          echo "SPIKE_SO_A=$spike_so" >> "$GITHUB_ENV"
+          echo "SPIKE_SHA_A=$spike_sha" >> "$GITHUB_ENV"
+
+      - name: Independently build and probe reference B
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AETHERCORE_RV32_SPIKE_WORK_DIR="$RUNNER_TEMP/rv32c-spike-reference-b"
+          spike_so="$(bash tools/ensure_rv32c_spike_reference.sh)"
+          test -f "$spike_so"
+          spike_sha="$(sha256sum "$spike_so" | awk '{print $1}')"
+          grep -q '^semantic_smoke=PASS$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/semantic-smoke.txt"
+          grep -q '^status=PASS$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          grep -q '^mixed_provenance_bne=fallthrough$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          grep -q '^passive_mmio_maps=2$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          grep -q '^passive_mmio_independent=PASS$' "$RUNNER_TEMP/rv32c-spike-reference-b/evidence/abi-smoke.txt"
+          echo "SPIKE_SO_B=$spike_so" >> "$GITHUB_ENV"
+          echo "SPIKE_SHA_B=$spike_sha" >> "$GITHUB_ENV"
+
+      - name: Freeze reproducible reference identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df
+          test "$SPIKE_SHA_A" = "$expected"
+          test "$SPIKE_SHA_B" = "$expected"
+          test "$SPIKE_SHA_A" = "$SPIKE_SHA_B"
+
+      - name: Write reference summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV32C Spike reference provider v2'
+            echo
+            echo "- head: \`${GITHUB_SHA}\`"
+            echo '- Spike revision: `530af85d83781a3dae31a4ace84a573ec255fefa`'
+            echo '- ISA profile: `RV32IMC_Zicsr`'
+            echo '- privilege profile: M-mode, bare 64 MiB RAM'
+            echo '- expected shared-object SHA-256: `22dd74006570af19495c6b5449eec908d246c0c6d700f7eabda16001a0ca62df`'
+            echo '- acceptance: two from-scratch builds in independent absolute roots with identical SHA'
+            echo '- ABI semantics: canonical RV32 regcpy values and multiple independent passive MMIO mappings'
+            echo '- consumer cache resolver is deliberately not used by this reproducibility job'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reproducibility evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-spike-reference-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv32c-spike-reference-a/evidence/**
+            build/rv32c-spike-reference-a/rv32imc-spike-reference.so
+            ${{ runner.temp }}/rv32c-spike-reference-b/evidence/**
+            ${{ runner.temp }}/rv32c-spike-reference-b/rv32imc-spike-reference.so

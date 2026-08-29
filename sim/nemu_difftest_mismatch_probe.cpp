@@ -23,6 +23,7 @@ int main(int argc, char** argv) {
     DifftestCommit perturbed{};
     perturbed.pc = kRamBase;
     perturbed.inst = kAddiX1X0Seven;
+    perturbed.rawInst = perturbed.inst;
     perturbed.rd = 1;
     perturbed.rdWrite = true;
     perturbed.rdData = 6;  // The architectural ADDI result is 7. Intentionally unequal.

@@ -7,7 +7,11 @@ final case class IsaConfig(
     extensions: Set[Char],
     privilegeModes: Set[Char],
     zExtensions: Set[String] = Set.empty,
-    pmpEntries: Int = 0
+    virtualMemoryModes: Set[String] = Set.empty,
+    pmpEntries: Int = 0,
+    sstc: Boolean = false,
+    machineProvidedSupervisorTimer: Boolean = false,
+    timeCounter: Boolean = false
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
@@ -16,8 +20,28 @@ final case class IsaConfig(
     zExtensions.forall(name => name.startsWith("Z") && name.length > 1),
     s"multi-letter extensions must use canonical Z-prefixed names: $zExtensions"
   )
-  require(pmpEntries >= 0 && pmpEntries <= 4, s"this core supports 0..4 PMP entries, got $pmpEntries")
-  require(pmpEntries == 0 || xlen == 32, "the current four-entry pmpcfg0 packing is RV32-only")
+
+  val pageTableGeometries: Set[PageTableGeometry] =
+    PageTableGeometry.validateArchitecturalModes(xlen, privilegeModes, virtualMemoryModes)
+
+  require(!sstc || privilegeModes.contains('S'), "Sstc requires Supervisor mode")
+  require(!sstc || xlen == 32, "the current bounded Sstc implementation is RV32-only")
+  require(
+    !(timeCounter || sstc) || zExtensions.contains("Zicsr"),
+    "time counter CSR access requires Zicsr"
+  )
+  require(
+    !machineProvidedSupervisorTimer || privilegeModes.contains('S'),
+    "machine-provided supervisor timer delivery requires Supervisor mode"
+  )
+  require(
+    !(machineProvidedSupervisorTimer && sstc),
+    "machine-provided mip.STIP delivery and Sstc stimecmp delivery are mutually exclusive"
+  )
+  require(
+    Set(0, 16, 64).contains(pmpEntries),
+    s"standard PMP implementation count must be 0, 16 or 64, got $pmpEntries"
+  )
 
   val xBytes: Int = xlen / 8
   val shiftBits: Int = log2Ceil(xlen)
@@ -25,22 +49,31 @@ final case class IsaConfig(
   val hasA: Boolean = extensions.contains('A')
   val hasC: Boolean = extensions.contains('C')
   val hasZicsr: Boolean = zExtensions.contains("Zicsr")
+  val hasZifencei: Boolean = zExtensions.contains("Zifencei")
   val hasS: Boolean = privilegeModes.contains('S')
   val hasU: Boolean = privilegeModes.contains('U')
+  val hasPagedVirtualMemory: Boolean = pageTableGeometries.nonEmpty
+  val hasSv32: Boolean = virtualMemoryModes.contains("Sv32")
+  val hasSv39: Boolean = virtualMemoryModes.contains("Sv39")
+  val hasSv48: Boolean = virtualMemoryModes.contains("Sv48")
+  val hasSstc: Boolean = sstc
+  val hasTimeCounter: Boolean = timeCounter || hasSstc
+  val hasMachineProvidedSupervisorTimer: Boolean = machineProvidedSupervisorTimer
+  val hasSupervisorTimerInterrupt: Boolean = hasSstc || hasMachineProvidedSupervisorTimer
   val hasWordOps: Boolean = xlen == 64
   val hasPmp: Boolean = pmpEntries > 0
 
+  /** Deterministic satp mode order for hardware construction. */
+  val orderedPageTableGeometries: Seq[PageTableGeometry] =
+    pageTableGeometries.toSeq.sortBy(_.satpMode)
+
+  /** Compiler ISA identity. Software ABI selection lives in AbiConfig/SoftwareTarget. */
   val march: String = {
     val ordered = Seq('I', 'M', 'A', 'F', 'D', 'C')
     val baseSuffix = ordered.filter(extensions.contains).map(_.toLower).mkString
     val multiLetterSuffix = zExtensions.toSeq.sorted.map(_.toLowerCase).mkString("_")
     if (multiLetterSuffix.isEmpty) s"rv$xlen$baseSuffix"
     else s"rv$xlen${baseSuffix}_$multiLetterSuffix"
-  }
-
-  val mabi: String = xlen match {
-    case 32 => "ilp32"
-    case 64 => "lp64"
   }
 }
 
@@ -66,12 +99,55 @@ final case class PlatformConfig(
   val busBytes: Int = busDataBits / 8
 }
 
+object AetherCoreCapabilities {
+  val instructionExtensions: Set[Char] = Set('I', 'M', 'A', 'C')
+  val zExtensions: Set[String] = Set("Zicsr", "Zifencei")
+  val privilegeModes: Set[Char] = Set('M', 'S', 'U')
+  val virtualMemoryModes: Set[String] = Set("Sv32", "Sv39")
+}
+
 final case class CoreConfig(
     name: String,
     isa: IsaConfig,
     platform: PlatformConfig
 ) {
+  private val architecturalPmpPhysicalBits = if (isa.xlen == 32) 34 else 56
+
   require(name.nonEmpty, "core profile name must not be empty")
+  require(
+    isa.extensions.subsetOf(AetherCoreCapabilities.instructionExtensions),
+    s"unsupported AetherCore instruction extension set: ${isa.extensions}"
+  )
+  require(
+    isa.zExtensions.subsetOf(AetherCoreCapabilities.zExtensions),
+    s"unsupported AetherCore Z-extension set: ${isa.zExtensions}"
+  )
+  require(
+    isa.privilegeModes.subsetOf(AetherCoreCapabilities.privilegeModes),
+    s"unsupported AetherCore privilege-mode set: ${isa.privilegeModes}"
+  )
+  require(
+    isa.virtualMemoryModes.subsetOf(AetherCoreCapabilities.virtualMemoryModes),
+    s"virtual-memory modes ${isa.virtualMemoryModes} are not integrated into the production AetherCore"
+  )
+  require(
+    isa.pageTableGeometries.size <= 1,
+    "the current production translation datapath supports one active page-table geometry per core profile"
+  )
+  isa.pageTableGeometries.foreach { geometry =>
+    require(
+      platform.paddrBits >= geometry.architecturalPhysicalAddressBits,
+      s"${geometry.name} requires at least ${geometry.architecturalPhysicalAddressBits} physical address bits, got ${platform.paddrBits}"
+    )
+  }
+  require(
+    !isa.hasPmp || isa.pmpEntries == 16,
+    "the current AetherCore PMP implementation exposes the bounded standard PMP16 surface"
+  )
+  require(
+    !isa.hasPmp || platform.paddrBits <= architecturalPmpPhysicalBits,
+    s"RV${isa.xlen} PMP can protect at most $architecturalPmpPhysicalBits physical address bits, got ${platform.paddrBits}"
+  )
 }
 
 object CoreProfiles {
@@ -87,6 +163,21 @@ object CoreProfiles {
     mtimeAddress = mtimeAddress,
     mtimecmpAddress = mtimecmpAddress
   )
+
+  private val rv32Sv32Platform: PlatformConfig = rv32Platform.copy(paddrBits = 34)
+
+  private val rv64Platform: PlatformConfig = PlatformConfig(
+    resetVector = BigInt("80000000", 16),
+    paddrBits = 64,
+    busDataBits = 64,
+    uartAddress = BigInt("10000000", 16),
+    exitAddress = BigInt("10000008", 16),
+    mtimeAddress = mtimeAddress,
+    mtimecmpAddress = mtimecmpAddress
+  )
+
+  // RV64 PMP and Sv39 both terminate in the architectural PA56 domain.
+  private val rv64PmpPlatform: PlatformConfig = rv64Platform.copy(paddrBits = 56)
 
   val rv32iMinimal: CoreConfig = CoreConfig(
     name = "rv32i-minimal",
@@ -109,6 +200,17 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  val rv32imcSoftware: CoreConfig = CoreConfig(
+    name = "rv32imc-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'C'),
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
   val rv32imuSoftware: CoreConfig = CoreConfig(
     name = "rv32imu-software",
     isa = IsaConfig(
@@ -120,6 +222,70 @@ object CoreProfiles {
     platform = rv32Platform
   )
 
+  val rv32imsuSoftware: CoreConfig = CoreConfig(
+    name = "rv32imsu-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imsuSv32Software: CoreConfig = CoreConfig(
+    name = "rv32imsu-sv32-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv32")
+    ),
+    platform = rv32Sv32Platform
+  )
+
+  val rv32imasuSv32Software: CoreConfig = CoreConfig(
+    name = "rv32imasu-sv32-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      virtualMemoryModes = Set("Sv32"),
+      sstc = true
+    ),
+    platform = rv32Sv32Platform
+  )
+
+  val rv32imasuSv32PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv32imasu-sv32-pmp-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      virtualMemoryModes = Set("Sv32"),
+      pmpEntries = 16,
+      sstc = true
+    ),
+    platform = rv32Sv32Platform
+  )
+
+  val rv32imacsuSv32PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv32imacsu-sv32-pmp-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A', 'C'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      virtualMemoryModes = Set("Sv32"),
+      pmpEntries = 16,
+      sstc = true
+    ),
+    platform = rv32Sv32Platform
+  )
+
   val rv32imuPmpSoftware: CoreConfig = CoreConfig(
     name = "rv32imu-pmp-software",
     isa = IsaConfig(
@@ -127,9 +293,98 @@ object CoreProfiles {
       extensions = Set('I', 'M'),
       privilegeModes = Set('M', 'U'),
       zExtensions = Set("Zicsr"),
-      pmpEntries = 4
+      pmpEntries = 16
     ),
     platform = rv32Platform
+  )
+
+  val rv32imuPmpOsSoftware: CoreConfig = CoreConfig(
+    name = "rv32imu-pmp-os-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      pmpEntries = 16
+    ),
+    platform = rv32Platform
+  )
+
+  val rv32imauPmpOsSoftware: CoreConfig = CoreConfig(
+    name = "rv32imau-pmp-os-software",
+    isa = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'U'),
+      zExtensions = Set("Zicsr", "Zifencei"),
+      pmpEntries = 16
+    ),
+    platform = rv32Platform
+  )
+
+  /** Qualified RV64 compressed machine/software profile. */
+  val rv64imcSoftware: CoreConfig = CoreConfig(
+    name = "rv64imc-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M', 'C'),
+      privilegeModes = Set('M'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv64Platform
+  )
+
+  /** First bounded RV64 privileged software profile: bare M/S/U, no later system facilities. */
+  val rv64imsuSoftware: CoreConfig = CoreConfig(
+    name = "rv64imsu-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr")
+    ),
+    platform = rv64Platform
+  )
+
+  /** RV64 PMP V1: same M/S/U execution profile with an independently bounded PA56 protected domain. */
+  val rv64imsuPmpSoftware: CoreConfig = CoreConfig(
+    name = "rv64imsu-pmp-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      pmpEntries = 16
+    ),
+    platform = rv64PmpPlatform
+  )
+
+  /** First production RV64 paged profile: Sv39 + PMP16 over the shared PA56 domain. */
+  val rv64imsuSv39PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv64imsu-sv39-pmp-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv39"),
+      pmpEntries = 16
+    ),
+    platform = rv64PmpPlatform
+  )
+
+  /** RV64A V1: retain the production Sv39/PMP16 system profile and add shared W/D atomics. */
+  val rv64imasuSv39PmpSoftware: CoreConfig = CoreConfig(
+    name = "rv64imasu-sv39-pmp-software",
+    isa = IsaConfig(
+      xlen = 64,
+      extensions = Set('I', 'M', 'A'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv39"),
+      pmpEntries = 16
+    ),
+    platform = rv64PmpPlatform
   )
 
   val rv64imCurrent: CoreConfig = CoreConfig(
@@ -138,16 +393,8 @@ object CoreProfiles {
       xlen = 64,
       extensions = Set('I', 'M'),
       privilegeModes = Set('M'),
-      zExtensions = Set("Zicsr")
+      zExtensions = Set("Zicsr", "Zifencei")
     ),
-    platform = PlatformConfig(
-      resetVector = BigInt("80000000", 16),
-      paddrBits = 64,
-      busDataBits = 64,
-      uartAddress = BigInt("10000000", 16),
-      exitAddress = BigInt("10000008", 16),
-      mtimeAddress = mtimeAddress,
-      mtimecmpAddress = mtimecmpAddress
-    )
+    platform = rv64Platform
   )
 }

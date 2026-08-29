@@ -1,0 +1,242 @@
+name: L32 Linux 6.6.143 Build
+
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - software/l32/manifest.env
+      - software/l32/linux-freeze.env
+      - tools/ci/l32_linux_build.sh
+      - tools/ci/l32_linux_cache_key.sh
+      - tools/ensure_l32_riscv32_linux_gcc.sh
+      - tests_py/test_l32_linux_build_contract.py
+      - .github/workflows/l32-linux-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-rv32:
+    name: Pinned Linux 6.6.143 RV32 build and ISA audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    concurrency:
+      group: aethercore-l32-linux-qualified-v2-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Install hosted-runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison flex build-essential libssl-dev libelf-dev \
+            curl xz-utils git python3
+
+      - name: Restore pinned RV32 Linux toolchain cache
+        id: toolchain-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/riscv32-ilp32d--glibc--stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv32-ilp32d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-gcc-v1-${{ hashFiles('tools/ensure_l32_riscv32_linux_gcc.sh', 'software/l32/manifest.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
+
+      - name: Restore pinned Linux source cache
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/l32/linux
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-source-v1-${{ hashFiles('software/l32/manifest.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-source-v1-
+
+      - name: Restore validated L32 Linux output cache
+        id: linux-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/l32-linux
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-qualified-v2-${{ hashFiles('software/l32/manifest.env', 'software/l32/linux-freeze.env', 'tools/ci/l32_linux_build.sh', 'tools/ci/l32_linux_cache_key.sh', 'tools/ensure_l32_riscv32_linux_gcc.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-qualified-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-v1-
+
+      - name: Restore same-recipe interrupted Kbuild recovery cache
+        id: linux-recovery-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/.l32-linux-staging
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-recovery-v1-${{ hashFiles('software/l32/manifest.env', 'software/l32/linux-freeze.env', 'tools/ci/l32_linux_build.sh', 'tools/ci/l32_linux_cache_key.sh', 'tools/ensure_l32_riscv32_linux_gcc.sh') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-recovery-v1-${{ hashFiles('software/l32/manifest.env', 'software/l32/linux-freeze.env', 'tools/ci/l32_linux_build.sh', 'tools/ci/l32_linux_cache_key.sh', 'tools/ensure_l32_riscv32_linux_gcc.sh') }}-
+
+      - name: Validate Linux build contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_linux_build.sh
+          bash -n tools/ci/l32_linux_cache_key.sh
+          bash -n tools/ensure_l32_riscv32_linux_gcc.sh
+          python3 -m unittest tests_py.test_l32_linux_build_contract -v
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Save validated RV32 Linux toolchain immediately
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/riscv32-ilp32d--glibc--stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv32-ilp32d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-gcc-v1-${{ hashFiles('tools/ensure_l32_riscv32_linux_gcc.sh', 'software/l32/manifest.env') }}
+
+      - name: Probe reusable Linux software build
+        id: linux_output
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh
+          if tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            echo 'hit=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'hit=false' >> "$GITHUB_OUTPUT"
+            echo 'L32 Linux validated output cache miss: rebuild the exact frozen output identity.'
+          fi
+
+      - name: Build pinned Linux 6.6.143 RV32 Image
+        id: linux_build
+        if: steps.linux_output.outputs.hit != 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "4"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_build.sh
+          bash tools/ci/l32_linux_build.sh
+
+      - name: Validate reusable Linux source payload
+        id: linux_source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/l32/manifest.env
+          root="$HOME/.cache/aethercore/l32/linux"
+          archive="$root/linux-${LINUX_VERSION}.tar.xz"
+          source_dir="$root/linux-${LINUX_VERSION}"
+          marker="$source_dir/.aethercore-linux-source-sha256"
+          valid=false
+          if [[ -f "$archive" ]] && printf '%s  %s\n' "$LINUX_SHA256" "$archive" | sha256sum -c - >/dev/null 2>&1 \
+             && [[ -f "$marker" ]] && [[ "$(cat "$marker")" == "$LINUX_SHA256" ]]; then
+            valid=true
+          fi
+          echo "valid=$valid" >> "$GITHUB_OUTPUT"
+          echo "validated_linux_source=$valid"
+
+      - name: Save validated Linux source immediately
+        if: always() && steps.linux_source.outputs.valid == 'true' && steps.linux-source-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/l32/linux
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-source-v1-${{ hashFiles('software/l32/manifest.env') }}
+
+      - name: Save interrupted same-recipe Kbuild for resume
+        if: always() && steps.linux_build.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/.l32-linux-staging
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-recovery-v1-${{ hashFiles('software/l32/manifest.env', 'software/l32/linux-freeze.env', 'tools/ci/l32_linux_build.sh', 'tools/ci/l32_linux_cache_key.sh', 'tools/ensure_l32_riscv32_linux_gcc.sh') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Mark reusable Linux software build
+        if: steps.linux_output.outputs.hit != 'true' && steps.linux_build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+
+      - name: Verify cached or fresh Linux outputs
+        id: verify_linux
+        if: steps.linux_output.outputs.hit == 'true' || steps.linux_build.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+          cat build/l32-linux/result.txt
+          cat build/l32-linux/evidence/sha256.txt
+
+      - name: Save fully qualified L32 Linux outputs
+        if: steps.verify_linux.outcome == 'success' && steps.linux-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/l32-linux
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-l32-linux-qualified-v2-${{ hashFiles('software/l32/manifest.env', 'software/l32/linux-freeze.env', 'tools/ci/l32_linux_build.sh', 'tools/ci/l32_linux_cache_key.sh', 'tools/ensure_l32_riscv32_linux_gcc.sh') }}
+
+      - name: Write hosted-cache summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## L32 Linux hosted build cache'
+            echo
+            echo "- RV32 GCC exact cache hit: \`${{ steps.toolchain-cache.outputs.cache-hit }}\`"
+            echo "- Linux source cache hit: \`${{ steps.linux-source-cache.outputs.cache-hit }}\`"
+            echo "- qualified Linux output cache hit: \`${{ steps.linux-cache.outputs.cache-hit }}\`"
+            echo "- recovery Kbuild cache hit: \`${{ steps.linux-recovery-cache.outputs.cache-hit }}\`"
+            echo "- validated output reused: \`${{ steps.linux_output.outputs.hit }}\`"
+            echo "- fresh build outcome: \`${{ steps.linux_build.outcome }}\`"
+            echo '- tool/source caches are saved as soon as their own identity is validated; failed kernel qualification cannot discard them'
+            echo '- incomplete Kbuild is stored only under a run-scoped recovery key and can never masquerade as the qualified-output cache'
+            echo '- this job is the reusable single owner for the canonical L32 Linux software artifact on one exact head'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload L32 Linux build evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-linux-build-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux/result.txt
+            build/l32-linux/config.log
+            build/l32-linux/linux-build.log
+            build/l32-linux/evidence/
+            build/l32-linux/obj/vmlinux
+            build/l32-linux/obj/arch/riscv/boot/Image
+            build/.l32-linux-staging/result.txt
+            build/.l32-linux-staging/config.log
+            build/.l32-linux-staging/linux-build.log
+            build/.l32-linux-staging/evidence/
+            build/.l32-linux-staging/obj/.config
+            build/.l32-linux-staging/obj/vmlinux
+            build/.l32-linux-staging/obj/arch/riscv/boot/Image
+
+      - name: Propagate fresh Linux build failure after preserving caches
+        if: steps.linux_build.outcome == 'failure'
+        shell: bash
+        run: |
+          echo 'ERROR: fresh L32 Linux build/qualification failed; validated prerequisite and recovery caches were preserved above.' >&2
+          exit 1

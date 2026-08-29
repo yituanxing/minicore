@@ -1,0 +1,10 @@
+BUILD_DIR := build/nuttx-sv32c-boot-probe
+TOP := AetherCoreNuttXPagingCSimTop
+ELABORATE_MAIN := aethercore.ElaborateNuttXPagingC
+# Keep the local M-mode handoff as the historical non-C bootstrap. The real
+# unchanged NuttX kernel/userspace must provide all compressed retirements.
+HANDOFF_MARCH := rv32ima_zicsr_zifencei
+NUTTX_RUNNER_CFLAGS := -DAETHERCORE_NUTTX_C_TOP=1
+REQUIRE_COMPRESSED := 1
+
+include Makefile.nuttx-sv32-probe

@@ -1,0 +1,179 @@
+SHELL := /bin/bash
+.SHELLFLAGS := -euo pipefail -c
+
+BUILD_DIR ?= build/l32-linux-probe
+RTL_DIR ?= $(BUILD_DIR)/rtl
+OBJ_DIR := $(BUILD_DIR)/obj
+FORKSERVER_OBJ_DIR := $(BUILD_DIR)/obj-forkserver
+TOP ?= AetherCoreOpenSbiSimTop
+ELABORATE_MAIN ?= aethercore.ElaborateOpenSbi
+VERILATOR ?= verilator
+VERILATOR_MODEL_OPT ?= -O3
+VERILATOR_THREADS ?= 1
+VERILATOR_THREAD_FLAGS := $(if $(filter 1,$(VERILATOR_THREADS)),,--threads $(VERILATOR_THREADS))
+VERILATOR_MAKE_OPT ?= -MAKEFLAGS "OPT_FAST=-O3 OPT_GLOBAL=-O3"
+SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native
+JOBS ?= 6
+FW_BIN ?= build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
+MAX_CYCLES ?= 50000000
+MILESTONE ?= Linux version 6.6.143
+MIN_INTERRUPTS ?= 0
+MIN_SEIP ?= 0
+MIN_STIP ?= 0
+# Measured P8 snapshots are emitted by a clocked Chisel printf. The host sees
+# the final UART marker byte after that edge, so keep at least one further edge
+# before returning. Two post-marker commits are sufficient for the PID1
+# sched_yield loop while preserving the historical zero-delay default elsewhere.
+MIN_POST_MILESTONE_COMMITS ?= $(if $(findstring -DAETHERCORE_V2_PERF,$(SIM_CXXFLAGS)),2,0)
+UART_TRIGGER ?=
+UART_COMMAND ?=
+UART_COMMAND_FILE ?=
+POST_INPUT_MAX_CYCLES ?= 0
+PROGRESS_INTERVAL_CYCLES ?= 25000000
+REQUIRE_LAYERED_COMPRESSED ?= 0
+RUN_DEPS ?= sim
+FORKSERVER_RUN_DEPS ?= forkserver-sim
+FORKSERVER_BATCH_FILE ?=
+FORKSERVER_TRIGGER ?= L32 BUSYBOX SHELL READY
+FORKSERVER_BOOT_MAX_CYCLES ?= 450000000
+FORKSERVER_CASE_MAX_CYCLES ?= 50000000
+FORKSERVER_REQUIRE_USER_COMPRESSED ?= 0
+UART_INPUT_ENABLED := $(if $(strip $(UART_COMMAND)$(UART_COMMAND_FILE)),1,0)
+export AETHERCORE_UART_COMMAND := $(UART_COMMAND)
+
+.PHONY: all rtl sim forkserver-sim forkserver-sim-existing-rtl run-local run-existing forkserver-local clean
+
+all: run-local
+
+rtl:
+	mkdir -p $(RTL_DIR) $(BUILD_DIR)/logs
+	@test -f ./mill || { echo "ERROR: mill launcher is missing"; exit 4; }
+	chmod +x ./mill
+	set +e; \
+		./mill aethercore.runMain $(ELABORATE_MAIN) --target-dir $(RTL_DIR) \
+			2>&1 | tee $(BUILD_DIR)/logs/rtl-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+sim: rtl
+	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no L32 Linux RTL generated"; exit 4; }
+	mkdir -p $(BUILD_DIR)/logs
+	set +e; \
+		$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_THREAD_FLAGS) $(VERILATOR_MAKE_OPT) --cc --exe --build -Wall -Wno-fatal \
+			--top-module $(TOP) -Mdir $(OBJ_DIR) \
+			-CFLAGS "$(SIM_CXXFLAGS)" \
+			$(RTL_DIR)/*.sv $(abspath sim/opensbi_boot_main.cpp) \
+			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+forkserver-sim: rtl forkserver-sim-existing-rtl
+
+forkserver-sim-existing-rtl:
+	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no reusable L32 Linux RTL in $(RTL_DIR)"; exit 4; }
+	mkdir -p $(BUILD_DIR)/logs
+	set +e; \
+		$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_MAKE_OPT) --cc --exe --build -Wall -Wno-fatal \
+			--top-module $(TOP) -Mdir $(FORKSERVER_OBJ_DIR) \
+			-CFLAGS "$(SIM_CXXFLAGS)" \
+			$(RTL_DIR)/*.sv $(abspath sim/opensbi_forkserver_main.cpp) \
+			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-forkserver-build.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	exit $$rc
+
+run-existing:
+	@test -x "$(OBJ_DIR)/V$(TOP)" || { echo "ERROR: missing existing L32 simulator $(OBJ_DIR)/V$(TOP); run run-local once first"; exit 3; }
+	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) RUN_DEPS= run-local
+
+forkserver-local: $(FORKSERVER_RUN_DEPS)
+	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }
+	@test -s "$(FORKSERVER_BATCH_FILE)" || { echo "ERROR: missing forkserver workload file $(FORKSERVER_BATCH_FILE)"; exit 3; }
+	mkdir -p $(BUILD_DIR)/logs
+	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
+	set +e; \
+		$(FORKSERVER_OBJ_DIR)/V$(TOP) \
+			"$(FW_BIN)" \
+			"$(FORKSERVER_BOOT_MAX_CYCLES)" \
+			"$(FORKSERVER_TRIGGER)" \
+			"$(FORKSERVER_BATCH_FILE)" \
+			"$(FORKSERVER_CASE_MAX_CYCLES)" \
+			"$(PROGRESS_INTERVAL_CYCLES)" \
+			"$(FORKSERVER_REQUIRE_USER_COMPRESSED)" \
+			2>&1 | tee $(BUILD_DIR)/logs/forkserver.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	if [[ $$rc -ne 0 ]]; then \
+		echo "ERROR: L32 Linux forkserver failed (runner rc=$$rc)"; \
+		exit $$rc; \
+	fi
+	grep -q '^L32_FORKSERVER_READY ' $(BUILD_DIR)/logs/forkserver.log || { \
+		echo "ERROR: forkserver did not reach the warm shell boundary"; exit 21; \
+	}
+	grep -q '^L32_FORKSERVER_PASS ' $(BUILD_DIR)/logs/forkserver.log || { \
+		echo "ERROR: forkserver returned without an all-pass result"; exit 22; \
+	}
+	if [[ "$(FORKSERVER_REQUIRE_USER_COMPRESSED)" -gt 0 ]]; then \
+		grep -q '^L32_FORKSERVER_USER_COMPRESSED_PASS ' $(BUILD_DIR)/logs/forkserver.log || { \
+			echo "ERROR: C forkserver returned without per-case userspace compressed evidence"; exit 23; \
+		}; \
+	fi
+
+run-local: $(RUN_DEPS)
+	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }
+	mkdir -p $(BUILD_DIR)/logs
+	sha256sum "$(FW_BIN)" | tee $(BUILD_DIR)/firmware.sha256
+	set +e; \
+		uart_command="$${AETHERCORE_UART_COMMAND-}"; \
+		if [[ -n "$(UART_COMMAND_FILE)" ]]; then \
+			uart_command="$$(cat "$(UART_COMMAND_FILE)")"; \
+		fi; \
+		$(OBJ_DIR)/V$(TOP) "$(FW_BIN)" "$(MAX_CYCLES)" "$(MILESTONE)" "$(MIN_INTERRUPTS)" "$(MIN_SEIP)" "$(UART_TRIGGER)" "$$uart_command" "$(POST_INPUT_MAX_CYCLES)" "$(PROGRESS_INTERVAL_CYCLES)" "$(REQUIRE_LAYERED_COMPRESSED)" "$(MIN_STIP)" "$(MIN_POST_MILESTONE_COMMITS)" 2>&1 | tee $(BUILD_DIR)/logs/boot-probe.log; \
+		rc=$${PIPESTATUS[0]}; \
+	set -e; \
+	if [[ $$rc -ne 0 ]]; then \
+		echo "ERROR: L32 Linux early-boot probe failed (runner rc=$$rc)"; \
+		exit $$rc; \
+	fi
+	grep -q 'L32_RUNTIME_MILESTONE_PASS' $(BUILD_DIR)/logs/boot-probe.log || { \
+		echo "ERROR: Linux runner returned without requested UART/interrupt milestone"; exit 5; \
+	}
+	grep -q 'Linux version 6\.6\.143' $(BUILD_DIR)/logs/boot-probe.log || { \
+		echo "ERROR: Linux version banner was not observed"; exit 6; \
+	}
+	if [[ "$(REQUIRE_LAYERED_COMPRESSED)" -gt 0 ]]; then \
+		grep -q 'L32_LAYERED_COMPRESSED_PASS' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: OpenSBI/Linux C qualification returned without layered compressed evidence"; exit 12; \
+		}; \
+	fi
+	if [[ "$(MIN_INTERRUPTS)" -gt 0 ]]; then \
+		grep -q 'L32_FIRST_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux reached UART marker without a real interrupt retirement"; exit 7; \
+		}; \
+	fi
+	if [[ "$(MIN_SEIP)" -gt 0 ]]; then \
+		grep -q 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux reached UART marker without a retired SEIP interrupt"; exit 8; \
+		}; \
+	fi
+	if [[ "$(MIN_STIP)" -gt 0 ]]; then \
+		grep -q 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux reached UART marker without a retired STIP interrupt"; exit 14; \
+		}; \
+	fi
+	if [[ "$(UART_INPUT_ENABLED)" == "1" ]]; then \
+		grep -q 'L32_UART_INPUT_COMPLETE' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: Linux runner did not deliver the complete UART command"; exit 9; \
+		}; \
+		grep -q 'L32_UART_RX_INTERRUPT' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: UART command completed without an RX interrupt"; exit 10; \
+		}; \
+		grep -q 'L32_UART_INPUT_SEIP' $(BUILD_DIR)/logs/boot-probe.log || { \
+			echo "ERROR: UART command completed without a post-input SEIP"; exit 11; \
+		}; \
+	fi
+
+clean:
+	rm -rf $(BUILD_DIR)

@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "${ROOT_DIR}/software/l32_busybox/manifest.env"
+source "${ROOT_DIR}/software/l32_real/manifest.env"
+source "${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+
+BUILD_DIR="${L32_USERSPACE_REAL_PROGRAMS_BUILD_DIR}"
+CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/l32/real-programs"
+COMPONENT_CACHE_DIR="${CACHE_ROOT}/components${L32_USERSPACE_BUILD_SUFFIX}"
+MARKER="${BUILD_DIR}/software-cache.txt"
+RESULT="${BUILD_DIR}/result.txt"
+BUILD_SCRIPT="${ROOT_DIR}/tools/ci/l32_real_programs_build.sh"
+PROFILE_HELPER="${ROOT_DIR}/tools/ci/l32_userspace_profile.sh"
+PROFILE_AUDIT="${ROOT_DIR}/tools/ci/riscv_elf_profile.py"
+WRAPPER_TOOL="${ROOT_DIR}/tools/ci/l32_musl_link_wrapper.sh"
+MUSL_WRAPPER="${L32_USERSPACE_MUSL_WRAPPER}"
+MUSL_LIBC="${L32_USERSPACE_BUSYBOX_BUILD_DIR}/musl-prefix/lib/libc.a"
+components=(lua sqlite bash busybox zlib libpng)
+
+mkdir -p "${BUILD_DIR}" "${COMPONENT_CACHE_DIR}"
+
+hash_or_missing() {
+  if [[ -f "$1" ]]; then
+    sha256sum "$1"
+  else
+    printf 'missing  %s\n' "$1"
+  fi
+}
+
+component_profile_name() {
+  case "$1" in
+    lua) printf '%s\n' lua ;;
+    sqlite) printf '%s\n' sqlite ;;
+    bash) printf '%s\n' bash ;;
+    busybox) printf '%s\n' busybox-real ;;
+    zlib) printf '%s\n' zlib ;;
+    libpng) printf '%s\n' libpng ;;
+    *) echo "ERROR: unknown real-program component: $1" >&2; return 2 ;;
+  esac
+}
+
+component_outputs() {
+  local profile_name
+  profile_name="$(component_profile_name "$1")"
+  case "$1" in
+    lua) printf '%s\n' "${BUILD_DIR}/lua" "${BUILD_DIR}/lua-smoke.lua" ;;
+    sqlite) printf '%s\n' "${BUILD_DIR}/sqlite-smoke" ;;
+    bash) printf '%s\n' "${BUILD_DIR}/bash" "${BUILD_DIR}/bash-smoke.sh" ;;
+    busybox) printf '%s\n' "${BUILD_DIR}/busybox-real" ;;
+    zlib) printf '%s\n' "${BUILD_DIR}/zlib-smoke" ;;
+    libpng) printf '%s\n' "${BUILD_DIR}/libpng-smoke" ;;
+    *) echo "ERROR: unknown real-program component: $1" >&2; return 2 ;;
+  esac
+  printf '%s\n' "${BUILD_DIR}/evidence/${profile_name}-profile.txt"
+}
+
+component_identity() {
+  local component="$1"
+  printf 'profile=%s\n' "${L32_USERSPACE_PROFILE}"
+  printf 'userspace_prefix=%s\n' "${L32_USERSPACE_CROSS_COMPILE_PREFIX}"
+  printf 'userspace_isa=%s\n' "${L32_USERSPACE_EFFECTIVE_ISA}"
+  printf 'userspace_abi=%s\n' "${L32_USERSPACE_ABI}"
+  printf 'require_c=%s\n' "${L32_USERSPACE_REQUIRE_C}"
+  printf 'musl_version=%s\n' "${MUSL_VERSION}"
+  printf 'musl_sha256=%s\n' "${MUSL_SHA256}"
+  hash_or_missing "${PROFILE_HELPER}"
+  hash_or_missing "${PROFILE_AUDIT}"
+  hash_or_missing "${WRAPPER_TOOL}"
+  hash_or_missing "${MUSL_WRAPPER}"
+  hash_or_missing "${MUSL_LIBC}"
+  printf 'recipe_hash=%s\n' "$("${BUILD_SCRIPT}" recipe-hash "${component}")"
+
+  case "${component}" in
+    lua)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${LUA_VERSION}" "${LUA_ARCHIVE}" "${LUA_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/lua-smoke.lua"
+      ;;
+    sqlite)
+      printf 'version=%s\namalgamation=%s\narchive=%s\nsha256=%s\n' \
+        "${SQLITE_VERSION}" "${SQLITE_AMALGAMATION_ID}" "${SQLITE_ARCHIVE}" "${SQLITE_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/sqlite-smoke.c"
+      ;;
+    bash)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${BASH_VERSION}" "${BASH_ARCHIVE}" "${BASH_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/bash-smoke.sh"
+      ;;
+    busybox)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${BUSYBOX_VERSION}" "${BUSYBOX_ARCHIVE}" "${BUSYBOX_SHA256}"
+      ;;
+    zlib)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${ZLIB_VERSION}" "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/zlib-smoke.c"
+      ;;
+    libpng)
+      printf 'version=%s\narchive=%s\nsha256=%s\n' "${LIBPNG_VERSION}" "${LIBPNG_ARCHIVE}" "${LIBPNG_SHA256}"
+      printf 'zlib_version=%s\nzlib_archive=%s\nzlib_sha256=%s\n' "${ZLIB_VERSION}" "${ZLIB_ARCHIVE}" "${ZLIB_SHA256}"
+      hash_or_missing "${ROOT_DIR}/software/l32_real/libpng-smoke.c"
+      ;;
+  esac
+}
+
+component_key() {
+  component_identity "$1" | sha256sum | awk '{print $1}'
+}
+
+component_cache_entry() {
+  printf '%s/%s/%s\n' "${COMPONENT_CACHE_DIR}" "$1" "$2"
+}
+
+component_hit() {
+  local component="$1" key="$2"
+  local entry marker
+  entry="$(component_cache_entry "${component}" "${key}")"
+  marker="${entry}/marker.txt"
+  [[ -f "${marker}" ]] || return 1
+  [[ "$(awk '$1=="input_key" {print $2; exit}' "${marker}" 2>/dev/null)" == "${key}" ]] || return 1
+  [[ "$(awk '$1=="profile" {print $2; exit}' "${marker}" 2>/dev/null)" == "${L32_USERSPACE_PROFILE}" ]] || return 1
+
+  while IFS= read -r output; do
+    local rel cached expected actual
+    rel="${output#${BUILD_DIR}/}"
+    cached="${entry}/outputs/${rel}"
+    expected="$(awk -v p="${rel}" '$1=="sha256" && $3==p {print $2; exit}' "${marker}")"
+    [[ -n "${expected}" && -s "${cached}" ]] || return 1
+    actual="$(sha256sum "${cached}" | awk '{print $1}')"
+    [[ "${actual}" == "${expected}" ]] || return 1
+  done < <(component_outputs "${component}")
+
+  while IFS= read -r output; do
+    local rel cached tmp
+    rel="${output#${BUILD_DIR}/}"
+    cached="${entry}/outputs/${rel}"
+    mkdir -p "$(dirname "${output}")"
+    tmp="${output}.restore.$$"
+    cp -p "${cached}" "${tmp}"
+    mv "${tmp}" "${output}"
+  done < <(component_outputs "${component}")
+}
+
+mark_component() {
+  local component="$1" key="$2"
+  local entry parent tmp_dir marker
+  entry="$(component_cache_entry "${component}" "${key}")"
+  parent="$(dirname "${entry}")"
+  tmp_dir="${parent}/.${key}.tmp.$$"
+  marker="${tmp_dir}/marker.txt"
+  rm -rf "${tmp_dir}"
+  mkdir -p "${tmp_dir}/outputs"
+  {
+    echo "input_key ${key}"
+    echo "component ${component}"
+    echo "profile ${L32_USERSPACE_PROFILE}"
+    echo "isa ${L32_USERSPACE_EFFECTIVE_ISA}"
+    echo "require_c ${L32_USERSPACE_REQUIRE_C}"
+    while IFS= read -r output; do
+      local rel cached
+      [[ -s "${output}" ]] || { echo "ERROR: component ${component} did not produce ${output}" >&2; exit 40; }
+      rel="${output#${BUILD_DIR}/}"
+      cached="${tmp_dir}/outputs/${rel}"
+      mkdir -p "$(dirname "${cached}")"
+      cp -p "${output}" "${cached}"
+      echo "sha256 $(sha256sum "${cached}" | awk '{print $1}') ${rel}"
+    done < <(component_outputs "${component}")
+  } > "${marker}"
+  rm -rf "${entry}"
+  mv "${tmp_dir}" "${entry}"
+  echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MARK profile=${L32_USERSPACE_PROFILE} component=${component} key=${key}"
+}
+
+declare -A keys
+declare -A decisions
+all_hits=1
+for component in "${components[@]}"; do
+  key="$(component_key "${component}")"
+  keys["${component}"]="${key}"
+  if component_hit "${component}" "${key}"; then
+    decisions["${component}"]="hit"
+    echo "L32_REAL_PROGRAM_COMPONENT_CACHE_HIT profile=${L32_USERSPACE_PROFILE} component=${component} key=${key}"
+    continue
+  fi
+
+  all_hits=0
+  decisions["${component}"]="miss"
+  echo "L32_REAL_PROGRAM_COMPONENT_CACHE_MISS profile=${L32_USERSPACE_PROFILE} component=${component} key=${key}"
+  "${BUILD_SCRIPT}" "${component}"
+  mark_component "${component}" "${key}"
+done
+
+"${BUILD_SCRIPT}" finalize
+grep -qx 'L32_REAL_PROGRAMS_BUILD_RESULT: status=PASS' "${RESULT}"
+grep -qx "profile=${L32_USERSPACE_PROFILE}" "${RESULT}"
+
+aggregate_key="$({ for component in "${components[@]}"; do printf '%s %s\n' "${component}" "${keys[${component}]}"; done; } | sha256sum | awk '{print $1}')"
+tmp="${MARKER}.tmp.$$"
+{
+  echo "format component-v2"
+  echo "profile ${L32_USERSPACE_PROFILE}"
+  echo "isa ${L32_USERSPACE_EFFECTIVE_ISA}"
+  echo "require_c ${L32_USERSPACE_REQUIRE_C}"
+  echo "input_key ${aggregate_key}"
+  for component in "${components[@]}"; do
+    echo "component ${component} ${keys[${component}]}"
+  done
+  for component in "${components[@]}"; do
+    echo "decision ${component} ${decisions[${component}]} ${keys[${component}]}"
+  done
+  for component in "${components[@]}"; do
+    while IFS= read -r output; do
+      echo "sha256 $(sha256sum "${output}" | awk '{print $1}') ${output#${ROOT_DIR}/}"
+    done < <(component_outputs "${component}")
+  done
+} > "${tmp}"
+mv "${tmp}" "${MARKER}"
+
+if (( all_hits )); then
+  echo "L32_REAL_PROGRAMS_CACHE_HIT profile=${L32_USERSPACE_PROFILE} key=${aggregate_key} components=${#components[@]}"
+else
+  echo "L32_REAL_PROGRAMS_CACHE_MARK profile=${L32_USERSPACE_PROFILE} key=${aggregate_key} components=${#components[@]}"
+fi

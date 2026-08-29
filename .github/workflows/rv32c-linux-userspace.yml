@@ -1,0 +1,272 @@
+name: RV32C Linux Userspace Qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv32c-linux-userspace-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: musl + BusyBox + real programs RV32IMAC 25-case
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 120
+    env:
+      AETHERCORE_L32_USERSPACE_PROFILE: rv32imac
+
+    steps:
+      - name: Checkout without deleting persistent source caches
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate RV32C userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            tools/ci/l32_userspace_profile.sh \
+            tools/ci/l32_musl_link_wrapper.sh \
+            tools/ci/l32_busybox_build.sh \
+            tools/ci/l32_runtime_probe_build.sh \
+            tools/ci/l32_real_programs_build.sh \
+            tools/ci/l32_real_programs_cache.sh \
+            tools/ci/l32_software_artifact_cache.sh \
+            tools/ci/l32_runtime_image_cache.sh \
+            tools/ci/l32_busybox_initramfs_build.sh \
+            tools/ci/l32_busybox_payload_build.sh \
+            tools/ci/l32_busybox_runtime_freeze.sh \
+            tools/ci/l32_rv32c_kernel_build.sh; do
+            bash -n "$script"
+          done
+          python3 -m py_compile tools/ci/riscv_elf_profile.py tools/ci/l32_linux_runtime_suite.py
+          python3 -m unittest \
+            tests_py.test_l32_userspace_profile_contract \
+            tests_py.test_riscv_elf_profile \
+            tests_py.test_l32_musl_link_wrapper_contract \
+            tests_py.test_l32_busybox_contract \
+            tests_py.test_l32_real_program_profile_contract \
+            tests_py.test_l32_real_program_component_cache_contract \
+            tests_py.test_l32_software_artifact_cache_contract \
+            tests_py.test_l32_busybox_runtime_freeze_contract \
+            tests_py.test_l32_forkserver_contract \
+            tests_py.test_l32_linux_runtime_suite_contract \
+            tests_py.test_rv32c_linux_userspace_contract -v
+          profile="$(tools/ci/l32_userspace_profile.sh)"
+          grep -qx 'profile=rv32imac' <<<"$profile"
+          grep -qx 'isa=rv32imac_zicsr_zifencei' <<<"$profile"
+          grep -qx 'require_c=1' <<<"$profile"
+          grep -qx 'opensbi_isa=rv32imac_zicsr_zifencei' <<<"$profile"
+          grep -qx 'dtb_isa=rv32imac_zicsr_zifencei_sstc' <<<"$profile"
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Requalify frozen RV32IMAC Linux kernel handoff
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_rv32c_kernel_build.sh
+          tools/ci/l32_rv32c_kernel_build.sh
+          grep -qx 'RV32C_LINUX_KERNEL_RESULT: status=PASS' build/l32-linux-rv32imac/result.txt
+          grep -qx 'profile=rv32imac' build/l32-linux-rv32imac/result.txt
+          grep -qx 'fw_payload_fdt_addr=0x87f00000' build/l32-linux-rv32imac/result.txt
+
+      - name: Reuse or build RV32IMAC musl and BusyBox
+        shell: bash
+        env:
+          L32_USERSPACE_JOBS: "6"
+        run: |
+          set -euo pipefail
+          mkdir -p build/l32-busybox-rv32imac
+          chmod +x \
+            tools/ci/l32_software_artifact_cache.sh \
+            tools/ci/l32_busybox_build.sh \
+            tools/ci/l32_musl_link_wrapper.sh
+          tools/ci/l32_software_artifact_cache.sh busybox \
+            bash tools/ci/l32_busybox_build.sh \
+            2>&1 | tee build/l32-busybox-rv32imac/driver.log
+          tools/ci/l32_musl_link_wrapper.sh
+          grep -qx 'profile=rv32imac' build/l32-busybox-rv32imac/result.txt
+          grep -qx 'require_c=1' build/l32-busybox-rv32imac/result.txt
+
+      - name: Reuse or build RV32IMAC runtime probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_runtime_probe_build.sh tools/ci/l32_software_artifact_cache.sh
+          tools/ci/l32_software_artifact_cache.sh runtime-probe tools/ci/l32_runtime_probe_build.sh
+          grep -qx 'profile=rv32imac' build/l32-runtime-probe-rv32imac/result.txt
+          grep -qx 'require_c=1' build/l32-runtime-probe-rv32imac/result.txt
+
+      - name: Reuse or build unchanged RV32IMAC real programs
+        shell: bash
+        env:
+          L32_REAL_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_real_programs_build.sh tools/ci/l32_real_programs_cache.sh
+          tools/ci/l32_real_programs_cache.sh
+          grep -qx 'profile=rv32imac' build/l32-real-programs-rv32imac/result.txt
+          grep -qx 'require_c=1' build/l32-real-programs-rv32imac/result.txt
+
+      - name: Reuse or build RV32IMAC initramfs Linux Image
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_runtime_image_cache.sh tools/ci/l32_busybox_initramfs_build.sh
+          tools/ci/l32_runtime_image_cache.sh
+          grep -qx 'profile=rv32imac' build/l32-linux-busybox-rv32imac/result.txt
+          grep -qx 'require_c=1' build/l32-linux-busybox-rv32imac/result.txt
+
+      - name: Reuse or build RV32IMAC OpenSBI userspace payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_busybox_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh busybox-payload tools/ci/l32_busybox_payload_build.sh
+          grep -qx 'profile=rv32imac' build/l32-busybox-shell-boot-rv32imac/result.txt
+          grep -qx 'require_c=1' build/l32-busybox-shell-boot-rv32imac/result.txt
+          grep -qx 'next_addr=0x80400000' build/l32-busybox-shell-boot-rv32imac/result.txt
+          grep -qx 'fdt_addr=0x87f00000' build/l32-busybox-shell-boot-rv32imac/result.txt
+
+      - name: Freeze exact profile-matched userspace image
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_busybox_runtime_freeze.sh
+          tools/ci/l32_busybox_runtime_freeze.sh
+          grep -qx 'L32_BUSYBOX_RUNTIME_FREEZE: status=PASS' \
+            build/l32-busybox-shell-boot-rv32imac/runtime-freeze.txt
+          grep -qx 'profile=rv32imac' build/l32-busybox-shell-boot-rv32imac/runtime-freeze.txt
+
+      - name: Prove every executable userspace ELF owns C below OpenSBI
+        shell: bash
+        run: |
+          set -euo pipefail
+          readelf=riscv64-unknown-elf-readelf
+          objdump=riscv64-unknown-elf-objdump
+          evidence=build/l32-userspace-rv32imac-evidence
+          rm -rf "$evidence"
+          mkdir -p "$evidence"
+          audit() {
+            local name="$1" elf="$2"
+            python3 tools/ci/riscv_elf_profile.py \
+              --elf "$elf" \
+              --name "$name" \
+              --readelf "$readelf" \
+              --objdump "$objdump" \
+              --require-c \
+              --max-exec-vaddr-exclusive 0x80000000 \
+              --output "$evidence/$name.txt"
+          }
+          audit musl-probe build/l32-busybox-rv32imac/musl-probe
+          audit busybox build/l32-busybox-rv32imac/busybox-src/busybox
+          audit runtime-probe build/l32-runtime-probe-rv32imac/l32-runtime-probe
+          audit lua build/l32-real-programs-rv32imac/lua
+          audit sqlite build/l32-real-programs-rv32imac/sqlite-smoke
+          audit bash build/l32-real-programs-rv32imac/bash
+          audit busybox-real build/l32-real-programs-rv32imac/busybox-real
+          audit zlib build/l32-real-programs-rv32imac/zlib-smoke
+          audit libpng build/l32-real-programs-rv32imac/libpng-smoke
+          [[ "$(grep -l '^exec_vaddr_limit=0x80000000$' "$evidence"/*.txt | wc -l)" -eq 9 ]]
+          [[ "$(grep -l '^require_c=1$' "$evidence"/*.txt | wc -l)" -eq 9 ]]
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run unchanged 25-case matrix with per-case userspace C proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir=build/l32-busybox-forkserver-rv32imac
+          batch_file="$probe_dir/workloads.tsv"
+          rm -rf "$probe_dir"
+          mkdir -p "$probe_dir"
+          python3 tools/ci/l32_linux_runtime_suite.py write-batch "$batch_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreOpenSbiCSimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiC \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_L32_C_TOP" \
+            FW_BIN=build/l32-busybox-shell-boot-rv32imac/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            FORKSERVER_BATCH_FILE="$batch_file" \
+            FORKSERVER_TRIGGER="L32 BUSYBOX SHELL READY" \
+            FORKSERVER_BOOT_MAX_CYCLES=850000000 \
+            FORKSERVER_CASE_MAX_CYCLES=150000000 \
+            FORKSERVER_REQUIRE_USER_COMPRESSED=1 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            forkserver-local
+          log="$probe_dir/logs/forkserver.log"
+          python3 tools/ci/l32_linux_runtime_suite.py verify-log "$log"
+          python3 - "$log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          from tools.ci.l32_linux_runtime_suite import CASES
+
+          text = Path(sys.argv[1]).read_text(errors="replace").replace("\r", "")
+          matches = re.findall(
+              r"^L32_FORKSERVER_USER_COMPRESSED_PASS id=([^ ]+) delta-userspace-compressed=([0-9]+)$",
+              text,
+              re.MULTILINE,
+          )
+          observed = {case_id: int(delta) for case_id, delta in matches}
+          expected = {case.case_id for case in CASES}
+          if len(matches) != len(CASES) or set(observed) != expected:
+              raise SystemExit(
+                  f"userspace C case set mismatch: expected={sorted(expected)} observed={sorted(observed)} raw={len(matches)}"
+              )
+          missing = sorted(case_id for case_id, delta in observed.items() if delta <= 0)
+          if missing:
+              raise SystemExit(f"userspace C delta was not positive: {missing}")
+          print(
+              f"L32_RV32C_USERSPACE_RUNTIME_PASS cases={len(CASES)} "
+              f"userspace_compressed_total={sum(observed.values())}"
+          )
+          PY
+
+      - name: Upload exact-head RV32C userspace evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32c-linux-userspace-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux-rv32imac/result.txt
+            build/l32-linux-rv32imac/evidence/**
+            build/l32-busybox-rv32imac/result.txt
+            build/l32-busybox-rv32imac/driver.log
+            build/l32-busybox-rv32imac/evidence/**
+            build/l32-runtime-probe-rv32imac/**
+            build/l32-real-programs-rv32imac/result.txt
+            build/l32-real-programs-rv32imac/software-cache.txt
+            build/l32-real-programs-rv32imac/*-build.log
+            build/l32-real-programs-rv32imac/evidence/**
+            build/l32-linux-busybox-rv32imac/result.txt
+            build/l32-linux-busybox-rv32imac/config.log
+            build/l32-linux-busybox-rv32imac/linux-build.log
+            build/l32-linux-busybox-rv32imac/evidence/**
+            build/l32-busybox-shell-boot-rv32imac/result.txt
+            build/l32-busybox-shell-boot-rv32imac/runtime-freeze.txt
+            build/l32-busybox-shell-boot-rv32imac/opensbi-busybox-build.log
+            build/l32-busybox-shell-boot-rv32imac/evidence/**
+            build/l32-userspace-rv32imac-evidence/**
+            build/l32-busybox-forkserver-rv32imac/workloads.tsv
+            build/l32-busybox-forkserver-rv32imac/firmware.sha256
+            build/l32-busybox-forkserver-rv32imac/logs/**

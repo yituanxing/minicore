@@ -1,0 +1,168 @@
+name: RV64 Linux Early Boot
+
+on:
+  # Legacy self-hosted banner milestone. The deeper GitHub-hosted PID1 lane now
+  # covers ordinary public PR qualification; keep this exact historical probe
+  # available only for explicit trusted runs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-linux-early-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  early-boot:
+    name: Unchanged Linux 6.6.143 first RV64 banner
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 90
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact head without deleting persistent caches
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala software/rv64 sim tools/ci tests_py .github/workflows docs || true
+          else
+            git init .
+          fi
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill tools/ci/rv64_linux_early_build.sh tools/ensure_riscv64_linux_gcc_13_3.sh
+          echo "exact_head=$actual"
+
+      - name: Provision pinned RV64 Linux-target GCC
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Validate RV64 Linux early-boot contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/rv64_linux_early_build.sh
+          bash -n tools/ensure_riscv64_linux_gcc_13_3.sh
+          python3 -m py_compile tools/ci/make_l32_dtb.py
+          python3 -m unittest tests_py.test_rv64_linux_early_contract -v
+
+      - name: Preserve frozen RV64 platform MMIO boundary
+        shell: bash
+        run: ./mill aethercore.test.testOnly aethercore.RV64SupervisorPlatformMmioSpec
+
+      - name: Qualify Linux-style Sv39 satp trampoline
+        shell: bash
+        run: ./mill aethercore.test.testOnly aethercore.RV64LinuxTrampolineSpec
+
+      - name: Build unchanged Linux and unchanged OpenSBI payload
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: '6'
+        run: |
+          set -euo pipefail
+          mkdir -p build/rv64-linux-diag
+
+          set +e
+          bash tools/ci/rv64_linux_early_build.sh 2>&1 | tee build/rv64-linux-diag/build.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+
+          latest_config="$(
+            find "$HOME/.cache/aethercore/rv64/linux-build" -path '*/obj/.config' -type f -printf '%T@ %p\n' 2>/dev/null \
+              | sort -nr \
+              | head -n 1 \
+              | cut -d' ' -f2-
+          )"
+          if [[ -n "$latest_config" && -f "$latest_config" ]]; then
+            cp "$latest_config" build/rv64-linux-diag/resolved.config
+            echo '--- RV64 Linux resolved profile config ---'
+            grep -E '^(CONFIG_(NONPORTABLE|PORTABLE|EFI|RISCV_ISA_C|FPU|RISCV_ISA_V)=|# CONFIG_(NONPORTABLE|PORTABLE|EFI|RISCV_ISA_C|FPU|RISCV_ISA_V) is not set$)' \
+              "$latest_config" || true
+            echo '--- end resolved profile config ---'
+          else
+            echo 'WARNING: no resolved RV64 Linux .config found for diagnostics' >&2
+          fi
+
+          if (( build_status != 0 )); then
+            exit "$build_status"
+          fi
+
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          sha256sum build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
+
+      - name: Execute real RV64 Linux banner probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/rv64-linux-probe \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            MAX_CYCLES=50000000 \
+            MILESTONE='Linux version 6.6.143' \
+            PROGRESS_INTERVAL_CYCLES=5000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          grep -Fq 'OpenSBI v1.6' build/rv64-linux-probe/logs/boot-probe.log
+          grep -Fq 'Linux version 6.6.143' build/rv64-linux-probe/logs/boot-probe.log
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' build/rv64-linux-probe/logs/boot-probe.log
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 Linux early boot'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- Linux: pinned unchanged 6.6.143 archive'
+            echo '- firmware: pinned unchanged OpenSBI 1.6'
+            echo '- kernel handoff: 0x80200000 / S-mode / Sv39'
+            echo '- platform: real AetherCoreOpenSbiRV64SimTop with shared historical host runtime'
+            echo '- focused VM oracle: Linux-style satp serialization, delegated physical-PC page fault, high-half stvec and 2 MiB PMD trampoline translation'
+            echo '- acceptance: upstream OpenSBI v1.6 followed by Linux version 6.6.143 on UART'
+            echo '- scope: banner-only early boot; no source patch and no workload-specific CPU feature'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload RV64 Linux early-boot evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-rv64-linux-early-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-diag/build.log
+            build/rv64-linux-diag/resolved.config
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            build/rv64-linux-early/opensbi-linux-build.log
+            build/rv64-linux-probe/firmware.sha256
+            build/rv64-linux-probe/logs/

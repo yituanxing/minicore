@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_AETHERCORE32
+	bool
+	select SOC_FAMILY_AETHERCORE
+
+config SOC
+	default "aethercore32" if SOC_AETHERCORE32

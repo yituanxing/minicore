@@ -1,0 +1,51 @@
+BUILD_DIR ?= build/freertos-rv32imc-qualification
+BUILD_RULES := Makefile.freertos Makefile.freertos-difftest Makefile.freertos-rv32imc
+FREERTOS_MARCH := rv32imc_zicsr
+TOP := AetherCoreRV32IMCTrapSimTop
+ELABORATE_MAIN := aethercore.ElaborateRV32IMCTrap
+override RUNNER_TOOL := tools/make_freertos_rv32imc_runner.py
+DIFFTEST_RUNNER_TOOL := tools/make_freertos_rv32imc_difftest_runner.py
+DIFFTEST_ADAPTER_POSTPROCESSOR := tools/apply_rv32_difftest_isa_profile.py
+
+include Makefile.freertos-difftest
+
+RV32C_ENCODING_EVIDENCE := $(BUILD_DIR)/rv32c-encoding-evidence.txt
+
+.PHONY: rv32c-audit
+
+rv32c-audit: image
+	@set -euo pipefail; \
+	count_object() { \
+		$(OBJDUMP) -d "$$1" | awk '/^[[:space:]]*[0-9a-f]+:[[:space:]]+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][[:space:]]/ { n++ } END { print n + 0 }'; \
+	}; \
+	count_group() { \
+		local total=0 object count; \
+		for object in "$$@"; do \
+			count="$$(count_object "$$object")"; \
+			total=$$((total + count)); \
+		done; \
+		printf '%s\n' "$$total"; \
+	}; \
+	startup="$$(count_object "$(OBJ_DIR)/startup.o")"; \
+	kernel="$$(count_group $(KERNEL_OBJECTS) $(OBJ_DIR)/heap_4.o)"; \
+	app="$$(count_group $(addprefix $(OBJ_DIR)/,$(APP_C_SOURCES:.c=.o)))"; \
+	port_c="$$(count_object "$(OBJ_DIR)/port.o")"; \
+	port_asm="$$(count_object "$(OBJ_DIR)/portASM.o")"; \
+	linked="$$(count_object "$(ELF)")"; \
+	test "$$startup" -eq 0 || { echo "ERROR: local reset/bootstrap unexpectedly contains compressed instructions" >&2; exit 1; }; \
+	test "$$kernel" -gt 0 || { echo "ERROR: unchanged FreeRTOS kernel C emitted no compressed instructions" >&2; exit 1; }; \
+	test "$$app" -gt 0 || { echo "ERROR: unchanged AetherCore FreeRTOS app C emitted no compressed instructions" >&2; exit 1; }; \
+	test "$$port_c" -gt 0 || { echo "ERROR: unchanged upstream FreeRTOS port.c emitted no compressed instructions" >&2; exit 1; }; \
+	test "$$port_asm" -gt 0 || { echo "ERROR: unchanged upstream FreeRTOS portASM.S emitted no compressed instructions" >&2; exit 1; }; \
+	test "$$linked" -gt 0 || { echo "ERROR: linked FreeRTOS RV32IMC image contains no compressed instructions" >&2; exit 1; }; \
+	{ \
+		echo 'status=PASS'; \
+		echo 'march=$(FREERTOS_MARCH)'; \
+		echo "startup_compressed=$$startup"; \
+		echo "kernel_c_compressed=$$kernel"; \
+		echo "app_c_compressed=$$app"; \
+		echo "port_c_compressed=$$port_c"; \
+		echo "port_asm_compressed=$$port_asm"; \
+		echo "linked_compressed=$$linked"; \
+	} > "$(RV32C_ENCODING_EVIDENCE)"; \
+	cat "$(RV32C_ENCODING_EVIDENCE)"

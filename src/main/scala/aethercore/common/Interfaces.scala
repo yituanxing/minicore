@@ -32,8 +32,16 @@ object BranchType extends ChiselEnum {
   val None, Eq, Ne, Lt, Ge, Ltu, Geu = Value
 }
 
+object AtomicOp extends ChiselEnum {
+  val None, Lr, Sc, Swap, Add, Xor, And, Or, Min, Max, Minu, Maxu = Value
+}
+
 object MemSize extends ChiselEnum {
   val Byte, Half, Word, DWord = Value
+}
+
+object XRetOp extends ChiselEnum {
+  val None, Machine, Supervisor = Value
 }
 
 object PrivilegeMode {
@@ -43,18 +51,25 @@ object PrivilegeMode {
 }
 
 object MachineExceptionCode {
+  val InstructionAddressMisaligned: Int = 0
   val InstructionAccessFault: Int = 1
   val IllegalInstruction: Int = 2
   val Breakpoint: Int = 3
+  val LoadAddressMisaligned: Int = 4
   val LoadAccessFault: Int = 5
+  val StoreAddressMisaligned: Int = 6
   val StoreAccessFault: Int = 7
   val EnvironmentCallFromU: Int = 8
   val EnvironmentCallFromS: Int = 9
   val EnvironmentCallFromM: Int = 11
+  val InstructionPageFault: Int = 12
+  val LoadPageFault: Int = 13
+  val StorePageFault: Int = 15
 }
 
 object MachineInterruptCode {
   val MachineTimer: Int = 7
+  val MachineExternal: Int = 11
 }
 
 class TrapInfo(val xlen: Int) extends Bundle {
@@ -68,7 +83,9 @@ class TrapInfo(val xlen: Int) extends Bundle {
 class InstructionBusIO(val addrBits: Int = 64) extends Bundle {
   require(addrBits > 0, s"instruction address width must be positive, got $addrBits")
 
+  val valid = Output(Bool())
   val addr = Output(UInt(addrBits.W))
+  val bytes = Output(UInt(3.W))
   val inst = Input(UInt(32.W))
   val fault = Input(Bool())
 }
@@ -89,6 +106,25 @@ class DataBusIO(val addrBits: Int = 64, val dataBits: Int = 64) extends Bundle {
   val fault = Input(Bool())
 }
 
+/**
+  * Read-only physical-memory port used for implicit page-table-entry loads.
+  * Address and PTE widths are independent: Sv32 uses 32-bit PTEs while the
+  * RV64 Sv39/Sv48 family uses 64-bit PTEs over the same PA56 domain.
+  */
+class PageTableReadBusIO(
+    val addrBits: Int = 34,
+    val dataBits: Int = 32
+) extends Bundle {
+  require(addrBits > 0, s"PTW physical address width must be positive, got $addrBits")
+  require(Set(32, 64).contains(dataBits), s"PTW PTE width must be 32 or 64 bits, got $dataBits")
+
+  val valid = Output(Bool())
+  val addr = Output(UInt(addrBits.W))
+  val ready = Input(Bool())
+  val rdata = Input(UInt(dataBits.W))
+  val fault = Input(Bool())
+}
+
 class CommitTrace(
     val xlen: Int = 64,
     val paddrBits: Int = 64,
@@ -100,7 +136,10 @@ class CommitTrace(
 
   val valid = Bool()
   val pc = UInt(xlen.W)
+  // Canonical 32-bit execution encoding; rawInst preserves fetched bits.
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val rdWrite = Bool()
   val rdData = UInt(xlen.W)
@@ -115,9 +154,6 @@ class CommitTrace(
   val exceptionCause = UInt(xlen.W)
   val exceptionValue = UInt(xlen.W)
 
-  // An asynchronous interrupt is taken after this instruction retires. The
-  // interrupted PC names the oldest younger instruction that must be replayed
-  // after MRET, rather than the retiring instruction reported above.
   val interrupt = Bool()
   val interruptCause = UInt(xlen.W)
   val interruptPc = UInt(xlen.W)
@@ -131,7 +167,9 @@ class ControlSignals extends Bundle {
   val wbSel = WbSel()
   val csrOp = CsrOp()
   val branch = BranchType()
+  val atomicOp = AtomicOp()
   val memSize = MemSize()
+  val xret = XRetOp()
 
   val regWrite = Bool()
   val memRead = Bool()
@@ -143,7 +181,7 @@ class ControlSignals extends Bundle {
   val usesRs1 = Bool()
   val usesRs2 = Bool()
   val csrUseImm = Bool()
-  val mret = Bool()
+  val wfi = Bool()
   val trap = Bool()
   val illegal = Bool()
 }

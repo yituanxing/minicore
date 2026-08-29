@@ -23,6 +23,7 @@ class PmpCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
   private val mtvec = 0x305
   private val mepc = 0x341
   private val pmpcfg0 = 0x3a0
+  private val pmpcfg3 = 0x3a3
   private val pmpaddr0 = 0x3b0
 
   private val ebreak = BigInt("00100073", 16)
@@ -118,6 +119,41 @@ class PmpCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       cycles += 1
     }
     cycles should be < maximumCycles
+  }
+
+  it should "forward canonicalized writes from the upper PMP config banks" in {
+    val program = place(
+      base,
+      li(5, 2) ++ Seq(
+        csr(pmpcfg3, 5),
+        csr(pmpcfg3, 0, funct3 = 2, rd = 6),
+        ebreak
+      )
+    )
+
+    simulate(new AetherCoreSimTop(CoreProfiles.rv32imuPmpSoftware, stopOnTrap = false)) { dut =>
+      initialize(dut)
+      var sawRead = false
+      var cycles = 0
+
+      while (!sawRead && cycles < 120) {
+        dut.io.imemInst.poke(program.getOrElse(dut.io.imemAddr.peek().litValue, ebreak).U)
+        dut.clock.step()
+        cycles += 1
+
+        if (dut.io.commit.valid.peek().litToBoolean &&
+            dut.io.commit.rdWrite.peek().litToBoolean &&
+            dut.io.commit.rd.peek().litValue == 6) {
+          // W=1 with R=0 is WARL-canonicalized to zero. The immediately
+          // following CSRRS must observe that canonical value through the
+          // pipeline forwarding path, before relying on persistent state.
+          dut.io.commit.rdData.expect(0.U)
+          sawRead = true
+        }
+      }
+
+      sawRead shouldBe true
+    }
   }
 
   it should "reject a direct U-mode UART Store without exposing an MMIO pulse" in {

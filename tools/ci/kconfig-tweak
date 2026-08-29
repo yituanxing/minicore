@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Minimal kconfig-tweak subset required by pinned NuttX sethost.sh."""
+
+from pathlib import Path
+import argparse
+import re
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", required=True)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--enable")
+    action.add_argument("--disable")
+    args = parser.parse_args()
+
+    symbol = args.enable or args.disable
+    replacement = f"{symbol}=y" if args.enable else f"# {symbol} is not set"
+    path = Path(args.file)
+    lines = path.read_text().splitlines()
+    pattern = re.compile(rf"^(?:{re.escape(symbol)}=.*|# {re.escape(symbol)} is not set)$")
+
+    output = []
+    replaced = False
+    for line in lines:
+        if pattern.match(line):
+            if not replaced:
+                output.append(replacement)
+                replaced = True
+        else:
+            output.append(line)
+
+    if not replaced:
+        output.append(replacement)
+
+    path.write_text("\n".join(output) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

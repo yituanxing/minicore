@@ -1,0 +1,238 @@
+name: L32 Linux Deeper Boot
+
+on:
+  # The historical L32 self-hosted milestone is explicit/manual only. Keep the
+  # existing RV64 hosted frontier on its dedicated exploration-branch push.
+  push:
+    branches:
+      - explore/rv64-linux-deeper-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: l32-linux-deeper-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-deeper-boot:
+    if: github.event_name != 'push'
+    name: Linux 6.6.143 first real timer interrupt
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate frozen L32 Linux boot contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_linux_build.sh
+          bash -n tools/ci/l32_linux_cache_key.sh
+          bash -n tools/ci/l32_linux_payload_build.sh
+          bash -n tools/ci/l32_software_artifact_cache.sh
+          bash -n tools/ensure_l32_riscv32_linux_gcc.sh
+          python3 -m py_compile tools/ci/make_l32_dtb.py
+          python3 -m unittest \
+            tests_py.test_l32_opensbi_contract \
+            tests_py.test_l32_opensbi_exec_contract \
+            tests_py.test_l32_linux_build_contract \
+            tests_py.test_l32_linux_boot_contract -v
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Reuse exact frozen Linux Image
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh tools/ci/l32_linux_build.sh
+          if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            tools/ci/l32_linux_build.sh
+            tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+          fi
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+
+      - name: Reuse qualified OpenSBI + frozen Linux payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_linux_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh linux-payload tools/ci/l32_linux_payload_build.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Require scheduler clock plus real interrupt retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=1000000000 \
+            MILESTONE="sched_clock:" \
+            MIN_INTERRUPTS=1 \
+            run-local
+
+      - name: Upload deeper-boot evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-linux-deeper-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux/result.txt
+            build/l32-linux/evidence/
+            build/l32-linux-boot/result.txt
+            build/l32-linux-boot/evidence/
+            build/l32-linux-probe/firmware.sha256
+            build/l32-linux-probe/logs/*.log
+
+  rv64-deeper-frontier:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/explore/rv64-linux-deeper-v1'
+    name: RV64 unchanged Linux post-timer frontier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      TARGET_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Publish pending frontier status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload="$(printf '{\"state\":\"pending\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"Hosted RV64 Linux deeper frontier running\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload"
+
+      - name: Install hosted-runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RV64 Linux-target GCC
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build unchanged Linux 6.6.143 and unchanged OpenSBI 1.6
+        shell: bash
+        env:
+          RV64_LINUX_JOBS: '4'
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Discover post-timer Linux retirement frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/rv64-linux-deeper-frontier \
+            TOP=AetherCoreOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateOpenSbiRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            MAX_CYCLES=120000000 \
+            MILESTONE='Linux version 6.6.143' \
+            MIN_INTERRUPTS=1 \
+            MIN_STIP=1 \
+            MIN_POST_MILESTONE_COMMITS=30000000 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            JOBS=4 \
+            run-local
+
+          log=build/rv64-linux-deeper-frontier/logs/boot-probe.log
+          grep -Fq 'OpenSBI v1.6' "$log"
+          grep -Fq '[    0.000000] Linux version 6.6.143' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
+          grep -Eq 'L32_RUNTIME_MILESTONE_PASS .*min-post-milestone-commits=30000000 .*post-milestone-commits=30000000' "$log"
+
+          echo '--- deepest Linux UART lines ---'
+          grep -E '^\[[[:space:]]*[0-9]+\.[0-9]+\]' "$log" | tail -n 80 || true
+          echo '--- runtime markers ---'
+          grep -E '^L32_|L32_' "$log" | tail -n 40 || true
+
+      - name: Publish successful frontier status
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          payload="$(printf '{\"state\":\"success\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"Hosted RV64 Linux deeper frontier passed\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload"
+
+      - name: Publish failed frontier status
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          payload="$(printf '{\"state\":\"failure\",\"context\":\"rv64-linux-deeper-frontier/qualification\",\"description\":\"Hosted RV64 Linux deeper frontier failed\",\"target_url\":\"%s/%s/actions/runs/%s\"}' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "$payload" || true
+
+      - name: Upload RV64 frontier evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-rv64-linux-deeper-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            build/rv64-linux-deeper-frontier/firmware.sha256
+            build/rv64-linux-deeper-frontier/logs/*.log

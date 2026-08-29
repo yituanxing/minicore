@@ -1,0 +1,111 @@
+name: RV64A V1 Qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64a-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Shared RV32A oracle + RV64A W/D production path
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 35
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala software tools sim .github/workflows || true
+            git clean -f -- Makefile.rv64a-sv39-pmp-v1 || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill tools/build_rv64a_sv39_pmp_v1.sh
+          echo "exact_head=$actual"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V newlib toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Run RV32 oracle and RV64A focused contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.CoreConfigSpec \
+            aethercore.DecoderSpec \
+            aethercore.RV32AtomicCoreSpec \
+            aethercore.Sv32AtomicScSpec \
+            aethercore.RV64AtomicCoreSpec \
+            aethercore.RV64AtomicWordLrScSpec \
+            aethercore.RV64AtomicDwordOpsSpec \
+            aethercore.RV64AtomicMisaSpec
+
+      - name: Validate RV64A builder shell contract
+        shell: bash
+        run: bash -n tools/build_rv64a_sv39_pmp_v1.sh
+
+      - name: Run real RV64A M-S-U Sv39 PMP executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          jobs="$(nproc)"
+          build="$HOME/.cache/aethercore/rv64a-v1/$TARGET_SHA"
+          make -j"$jobs" -f Makefile.rv64a-sv39-pmp-v1 \
+            BUILD_DIR="$build" JOBS="$jobs" run-local
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64A V1 qualification'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- production profile: RV64IMA + Zicsr + M/S/U + Sv39 + PMP16 over PA56'
+            echo '- capability discovery: misa reports RV64 MXL plus I/M/A/S/U exactly for the bounded profile'
+            echo '- shared execution: one atomic FSM serves RV32A and RV64A; RV32 remains the historical oracle'
+            echo '- RV64 widths: LR/SC and all AMO operations decode as W or D; AMO.W/LR.W results sign-extend to XLEN'
+            echo '- OpenSBI lock pressure: matching RV64 LR.W/SC.W executes directly under read/write backpressure, returns SC success/failure architecturally, writes only mask 0x0f and preserves the untouched upper word'
+            echo '- AMO.D execution: Swap/Add/Xor/And/Or/Min/Max/Minu/Maxu all run through the shared RMW state machine with full 64-bit write masks'
+            echo '- comparison semantics: signed/unsigned W min/max consume the low 32-bit operand with architectural sign/zero interpretation'
+            echo '- bounded reservation policy: this implementation pairs the reservation with address plus W/D access width, so cross-width SC conservatively fails without a data write'
+            echo '- failed-SC VM boundary: translation and protection are still checked, while a reservation-miss SC is consumed before the final physical data bus and cannot appear as a synthetic load'
+            echo '- real executable: M→S→U through three-level Sv39; U-mode runs matching LR.W/SC.W, matching LR.D/SC.D, cross-width reservation failure, AMOADD.D, AMOMAX.W and AMOMAXU.W behind PMP16'
+            echo '- runner contract: real 8-byte PTW traffic is required; stall=0 and stall=3 must both self-check exit 0'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,152 @@
+name: RV64 OpenSBI First Execution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-opensbi-first-exec-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Unchanged OpenSBI 1.6 to bounded S-mode payload
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala software/rv64 sim tools/ci tests_py .github/workflows || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill tools/ci/rv64_opensbi_first_exec.sh tools/ensure_riscv64_linux_gcc_13_3.sh
+          echo "exact_head=$actual"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RV64 Linux-target GCC
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Validate first-exec source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash -n tools/ci/rv64_opensbi_first_exec.sh
+          python3 -m unittest tests_py.test_rv64_opensbi_first_exec_contract
+
+      - name: Preserve qualified RV64 platform MMIO boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly aethercore.RV64SupervisorPlatformMmioSpec
+
+      - name: Build unchanged OpenSBI 1.6 and bounded S-mode payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-opensbi-first-exec/$TARGET_SHA"
+          rm -rf "$build/software"
+          mkdir -p "$build/software"
+          bash tools/ci/rv64_opensbi_first_exec.sh "$build/software"
+          grep -q '^RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS$' "$build/software/result.txt"
+
+      - name: Elaborate real RV64 OpenSBI top
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-opensbi-first-exec/$TARGET_SHA"
+          rm -rf "$build/rtl" "$build/obj"
+          mkdir -p "$build/rtl" "$build/obj"
+          ./mill aethercore.runMain aethercore.ElaborateOpenSbiRV64 --target-dir "$build/rtl"
+          find "$build/rtl" -maxdepth 1 -name '*.sv' -print | sort > "$build/rtl-sources.txt"
+          test -s "$build/rtl-sources.txt"
+
+      - name: Compile shared OpenSBI runtime against RV64 top
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-opensbi-first-exec/$TARGET_SHA"
+          mapfile -t rtl_sources < "$build/rtl-sources.txt"
+          verilator --cc --exe --build -Wall -Wno-fatal \
+            --top-module AetherCoreOpenSbiRV64SimTop \
+            -Mdir "$build/obj" -j "$(nproc)" \
+            -CFLAGS "-std=c++20 -O2 -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            -LDFLAGS "-ldl" \
+            "${rtl_sources[@]}" \
+            "$GITHUB_WORKSPACE/sim/opensbi_boot_main.cpp"
+
+      - name: Execute unchanged OpenSBI and prove S-mode handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$HOME/.cache/aethercore/rv64-opensbi-first-exec/$TARGET_SHA"
+          firmware="$build/software/opensbi/platform/generic/firmware/fw_payload.bin"
+          simulator="$build/obj/VAetherCoreOpenSbiRV64SimTop"
+          log="$build/runtime.log"
+          test -s "$firmware"
+          test -x "$simulator"
+
+          if ! "$simulator" "$firmware" 30000000 \
+              'RV64 OpenSBI S-mode payload PASS' 0 0 '' '' 0 1000000 0 \
+              2>&1 | tee "$log"; then
+            echo '--- RV64 OpenSBI failure tail ---' >&2
+            tail -n 120 "$log" >&2 || true
+            exit 1
+          fi
+
+          grep -Fq 'OpenSBI v1.6' "$log"
+          grep -Fq 'RV64 OpenSBI S-mode payload PASS' "$log"
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          grep -Fq 'banner=1' "$log"
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 OpenSBI first execution'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- firmware: pinned unchanged OpenSBI 1.6 at bd613dd92113f683052acfb23d9dc8ba60029e0a'
+            echo '- toolchain: pinned Bootlin RV64 Linux-target GCC 13.3.0 / binutils 2.41, archive SHA-256 78e16f3def8b2ff3da09c16155f993ac7e4dc1791d0904ada03fcb2e04910aab'
+            echo '- profile: RV64IMA + Zicsr + Zifencei, M/S/U, Sv39, PMP16/PA56 on the frozen shared platform'
+            echo '- runtime: the historical OpenSBI/Linux host runner is compiled directly against AetherCoreOpenSbiRV64SimTop; no RV64 runtime fork'
+            echo '- payload: fixed 0x80200000 S-mode entry, hart/FDT handoff check, SBI Base GET_SPEC_VERSION round-trip, then UART PASS marker'
+            echo '- acceptance: OpenSBI v1.6 banner plus RV64 OpenSBI S-mode payload PASS on real Verilator execution'
+            echo '- scope: no Linux image, no OpenSBI source patch, no new CPU feature in this slice'
+          } >> "$GITHUB_STEP_SUMMARY"

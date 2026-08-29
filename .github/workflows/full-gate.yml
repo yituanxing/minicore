@@ -4,14 +4,13 @@ on:
   push:
     branches:
       - main
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethercore-full-${{ github.event.pull_request.number || github.ref }}
+  group: aethercore-full-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,6 +20,7 @@ jobs:
     timeout-minutes: 90
     env:
       AETHERCORE_MILL_NO_DAEMON: "1"
+      AETHERCORE_JOBS: "0"
 
     steps:
       - name: Checkout
@@ -34,13 +34,40 @@ jobs:
         shell: bash
         run: bash tools/ci/full_gate.sh toolchain
 
+      - name: Provision pinned RISC-V newlib sysroot
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
       - name: Fast source and image tests
         shell: bash
         run: bash tools/ci/full_gate.sh python
 
+      - name: FreeRTOS V11.3.0 preemptive queue workload
+        shell: bash
+        run: bash tools/ci/full_gate_freertos.sh
+
+      - name: FreeRTOS Machine external IRQ and kernel-object stress matrix
+        shell: bash
+        run: bash tools/ci/full_gate_freertos_irq.sh
+
+      - name: Build both frozen RV32 NEMU references once
+        shell: bash
+        run: bash tools/ci/build_rv32_references.sh
+
+      - name: FreeRTOS exact RV32 NEMU DiffTest
+        shell: bash
+        run: bash tools/ci/full_gate_freertos_difftest.sh
+
       - name: Chisel unit tests
         shell: bash
         run: bash tools/ci/full_gate.sh chisel
+
+      - name: RV32 Supervisor V1 executable M-S-U qualification
+        shell: bash
+        run: |
+          make -j"$(nproc)" -f Makefile.rv32im-supervisor-v1 \
+            BUILD_DIR=build/rv32im-supervisor-v1 \
+            JOBS="$(nproc)" run-local
 
       - name: RV64 RTL, smoke and precise pipeline regressions
         shell: bash
@@ -49,10 +76,6 @@ jobs:
       - name: RV64 NEMU differential matrices
         shell: bash
         run: bash tools/ci/full_gate.sh rv64-difftest
-
-      - name: Build both frozen RV32 NEMU references once
-        shell: bash
-        run: bash tools/ci/build_rv32_references.sh
 
       - name: RV32 GCC workload and 585-retirement DiffTest
         shell: bash
@@ -85,6 +108,10 @@ jobs:
       - name: RV32IMU PMP user isolation
         shell: bash
         run: bash tools/ci/full_gate_pmp.sh
+
+      - name: RV32IMU isolated preemptive scheduler
+        shell: bash
+        run: bash tools/ci/full_gate_isolated_scheduler.sh
 
       - name: RV64 compiler-produced corpus
         shell: bash
@@ -119,16 +146,26 @@ jobs:
             echo
             echo "- head: \`${GITHUB_SHA}\`"
             echo '- one checkout and one persistent toolchain setup'
+            echo '- pinned xPack RISC-V GCC 15.2.0 with a verified newlib 4.5.0 sysroot'
+            echo '- FreeRTOS local, Machine external IRQ and exact NEMU acceptance run before unrelated long regressions'
+            echo '- UART RX reaches PLIC, precise Machine external entry and ISR-driven task wakeup'
+            echo '- event groups, software timers, stream buffers and message buffers run across stall periods 0,2,3,5,7'
+            echo '- wrong-byte and missing-external-event probes must fail closed'
             echo '- one optimized plus one single-step deterministic RV32 NEMU build'
+            echo '- historical FreeRTOS exact DiffTest runs at stall=0 and stall=5 with a deliberate mismatch probe'
             echo '- fast architectural gates run before long software workloads'
+            echo '- Supervisor V1 executes a real RV32IM/Zicsr ELF through M->S, S/U delegated ECALLs and SRET at stall=0 and stall=3'
+            echo '- Supervisor V1 keeps Sv32 disabled and mideleg WARL-zero until genuine S-level interrupt sources exist'
             echo '- Machine timer interrupts drive a frozen two-task preemptive scheduler'
             echo '- U-mode reaches M-mode through write/get_ticks/exit ECALL syscalls'
             echo '- PMP partitions kernel, user text and user data before any MMIO side effect'
+            echo '- timer, syscalls, context switching and dynamic PMP isolate two U-mode tasks'
             echo '- frozen hashes, exact retirement counts and negative probes remain enforced'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload consolidated evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: aethercore-full-gate-${{ github.run_id }}
@@ -152,6 +189,20 @@ jobs:
             build/rv32/
             build/rv32im-*/
             build/rv32imu-*/
+            build/freertos-qualification/evidence/
+            build/freertos-qualification/difftest-evidence/
+            build/freertos-qualification/aethercore-freertos.elf
+            build/freertos-qualification/aethercore-freertos.bin
+            build/freertos-qualification/aethercore-freertos.map
+            build/freertos-qualification/aethercore-freertos.dis
+            build/freertos-qualification/aethercore-freertos.attributes
+            build/freertos-irq-qualification/evidence/
+            build/freertos-irq-qualification/logs/
+            build/freertos-irq-qualification/aethercore-freertos.elf
+            build/freertos-irq-qualification/aethercore-freertos.bin
+            build/freertos-irq-qualification/aethercore-freertos.map
+            build/freertos-irq-qualification/aethercore-freertos.dis
+            build/freertos-irq-qualification/aethercore-freertos.attributes
             !build/**/obj/**
             !build/**/rtl/**
             !build/**/nemu/**

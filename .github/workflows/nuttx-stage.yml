@@ -1,0 +1,248 @@
+name: NuttX Staged Bring-up
+
+on:
+  push:
+    branches:
+      - agent/nuttx-**
+      - '!agent/nuttx-sv32-**'
+    paths:
+      - software/nuttx/**
+      - tests_py/test_nuttx_*.py
+      - tests_py/test_aethercore_nuttx_overlay.py
+      - tools/ci/nuttx_*.sh
+      - tools/ci/ensure_genromfs.sh
+      - tools/ci/kconfig-tweak
+      - tools/make_aethercore_nuttx_*_overlay.py
+      - tools/fetch_range_archive.py
+      - tests_py/test_range_archive_fetcher.py
+      - src/main/scala/aethercore/**
+      - sim/sim_main.cpp
+      - sim/nemu_difftest.cpp
+      - sim/nemu_difftest.h
+      - build.sc
+      - mill
+      - .github/workflows/nuttx-stage.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: nuttx-stage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staged:
+    name: N1 build, N2 NSH, N3 timer, and N4 UART RX IRQ
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 45
+
+    steps:
+      - name: Publish pending NuttX stage status
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          payload=$(printf '%s' '{"state":"pending","context":"nuttx/stage","description":"NuttX N1/N2/N3/N4 staged qualification is running","target_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}')
+          curl --fail --show-error --silent --http1.1 \
+            --connect-timeout 15 --max-time 60 \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -d "${payload}" >/dev/null
+
+      - name: Checkout AetherCore
+        uses: actions/checkout@v4
+
+      - name: Validate NuttX stage contracts
+        run: |
+          python3 -m unittest \
+            tests_py.test_nuttx_n1_contract \
+            tests_py.test_nuttx_n2_contract \
+            tests_py.test_nuttx_n3_contract \
+            tests_py.test_nuttx_n4_contract \
+            tests_py.test_aethercore_nuttx_overlay \
+            tests_py.test_range_archive_fetcher -v
+
+      - name: Fetch verified pinned NuttX release sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          source software/nuttx/manifest.env
+          cache_root="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}/nuttx"
+          archive_dir="${cache_root}/archives"
+          mkdir -p "${archive_dir}" build
+
+          fetch_release() {
+            local release_name="$1"
+            local output_name="$2"
+            python3 tools/fetch_range_archive.py \
+              --url "https://archive.apache.org/dist/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}" \
+              --sha512-url "https://downloads.apache.org/nuttx/${NUTTX_VERSION}/${release_name}.sha512" \
+              --output "${archive_dir}/${output_name}" \
+              --chunk-size 1048576 \
+              --jobs 6 \
+              --retries 5 \
+              --max-time 180
+            tar -tzf "${archive_dir}/${output_name}" >/dev/null
+          }
+
+          {
+            fetch_release \
+              "apache-nuttx-${NUTTX_VERSION}.tar.gz" \
+              "nuttx-${NUTTX_COMMIT}.tar.gz"
+            fetch_release \
+              "apache-nuttx-apps-${NUTTX_VERSION}.tar.gz" \
+              "nuttx-apps-${NUTTX_APPS_COMMIT}.tar.gz"
+          } 2>&1 | tee build/nuttx-source-fetch.log
+
+      - name: Build pinned NuttX N1 image
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+        run: |
+          chmod +x tools/ci/nuttx_n1_build.sh
+          bash tools/ci/nuttx_n1_build.sh
+          cp build/nuttx-source-fetch.log build/nuttx-n1/evidence/source-fetch-range.log
+
+      - name: Upload NuttX N1 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-n1-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-source-fetch.log
+            build/nuttx-n1/nuttx.elf
+            build/nuttx-n1/nuttx.bin
+            build/nuttx-n1/nuttx.hex
+            build/nuttx-n1/nuttx.map
+            build/nuttx-n1/nuttx.config
+            build/nuttx-n1/build.log
+            build/nuttx-n1/evidence/
+
+      - name: Boot pinned NuttX N2 on AetherCore
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+          AETHERCORE_NUTTX_N2_MAX_CYCLES: "12000000"
+        run: |
+          chmod +x tools/ci/nuttx_n2_boot.sh
+          bash tools/ci/nuttx_n2_boot.sh
+
+      - name: Upload NuttX N2 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-n2-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-n2/nuttx.elf
+            build/nuttx-n2/nuttx.bin
+            build/nuttx-n2/nuttx.map
+            build/nuttx-n2/nuttx.config
+            build/nuttx-n2/build.log
+            build/nuttx-n2/evidence/
+
+      - name: Run bounded NuttX N3 timer ostest
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+          AETHERCORE_NUTTX_N3_MAX_CYCLES: "12000000"
+        run: |
+          chmod +x tools/ci/nuttx_n3_timer.sh
+          bash tools/ci/nuttx_n3_timer.sh
+
+      - name: Upload NuttX N3 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-n3-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-n3/nuttx.elf
+            build/nuttx-n3/nuttx.bin
+            build/nuttx-n3/nuttx.map
+            build/nuttx-n3/nuttx.config
+            build/nuttx-n3/build.log
+            build/nuttx-n3/evidence/
+
+      - name: Run bounded NuttX N4 UART RX through PLIC
+        shell: bash
+        env:
+          NUTTX_JOBS: "6"
+          AETHERCORE_NUTTX_N4_MAX_CYCLES: "12000000"
+          AETHERCORE_NUTTX_N4_RX_START_CYCLE: "8000000"
+          AETHERCORE_NUTTX_N4_RX_GAP_CYCLES: "1000"
+        run: |
+          chmod +x tools/ci/nuttx_n4_uart_irq.sh
+          bash tools/ci/nuttx_n4_uart_irq.sh
+
+      - name: Upload NuttX N4 evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-nuttx-n4-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/nuttx-n4/nuttx.elf
+            build/nuttx-n4/nuttx.bin
+            build/nuttx-n4/nuttx.map
+            build/nuttx-n4/nuttx.config
+            build/nuttx-n4/build.log
+            build/nuttx-n4/evidence/
+
+      - name: Publish final NuttX stage status
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "${JOB_STATUS}" in
+            success)
+              state=success
+              description='NuttX N1, N2, N3, and N4 passed'
+              ;;
+            cancelled)
+              state=error
+              description='NuttX N1/N2/N3/N4 staged qualification cancelled'
+              ;;
+            *)
+              state=failure
+              description="NuttX N1/N2/N3/N4 staged qualification ${JOB_STATUS}"
+              ;;
+          esac
+          payload=$(printf '{"state":"%s","context":"nuttx/stage","description":"%s","target_url":"%s"}' \
+            "${state}" "${description}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+          curl --fail --show-error --silent --http1.1 \
+            --connect-timeout 15 --max-time 60 \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -d "${payload}" >/dev/null

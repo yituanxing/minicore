@@ -1,0 +1,194 @@
+name: AetherCore V2 P8 Architecture A/B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-p8-architecture-ab.yml'
+      - 'tools/ci/v2_p8_arch_ab.sh'
+      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
+      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
+      - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'sim/v2_rv64_opensbi_shim/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+  workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Exact baseline commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-p8-architecture-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Baseline vs exact-head Linux clocksource boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Freeze the no-D-cache #210 boundary as the architectural baseline.
+      BASELINE_SHA: ec73c0ceeccbf25e9e1618a703964b6d10ececdf
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      DATA_MEM_WAIT_CYCLES: '10'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact experiment head with baseline history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Verify exact A/B identities and runner contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          git cat-file -e "$BASELINE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASELINE_SHA" "$TARGET_SHA"
+          bash -n tools/ci/v2_p8_arch_ab.sh
+          grep -q 'clocksource: riscv_clocksource' tools/ci/v2_p8_arch_ab.sh
+          grep -q 'AETHERCORE_V2_PERF' tools/ci/v2_p8_arch_ab.sh
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 software cache
+        id: rv64-software-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse or build unchanged Linux 6.6.143 workload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Save qualified RV64 software cache
+        if: steps.rv64-software-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Execute bounded exact architecture A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/v2_p8_arch_ab.sh
+          BASELINE_SHA="$BASELINE_SHA" \
+          TARGET_SHA="$TARGET_SHA" \
+          MAX_CYCLES=120000000 \
+          MILESTONE='clocksource: riscv_clocksource' \
+          PROGRESS_INTERVAL_CYCLES=10000000 \
+          bash tools/ci/v2_p8_arch_ab.sh
+
+      - name: Publish A/B summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### AetherCore V2 bounded architecture A/B'
+            echo
+            echo '- baseline: `'$BASELINE_SHA'`'
+            echo '- target: `'$TARGET_SHA'`'
+            echo '- boundary: `clocksource: riscv_clocksource`'
+            echo
+            if [[ -s build/v2-p8-arch-ab/result.txt ]]; then
+              echo '```text'
+              cat build/v2-p8-arch-ab/result.txt
+              echo '```'
+            else
+              echo 'A/B result unavailable; inspect uploaded logs.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bounded architecture A/B evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-p8-architecture-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/v2-p8-arch-ab/identity.txt
+            build/v2-p8-arch-ab/workload.sha256
+            build/v2-p8-arch-ab/result.txt
+            build/v2-p8-arch-ab/baseline.snapshot.txt
+            build/v2-p8-arch-ab/target.snapshot.txt
+            build/v2-p8-arch-ab/baseline.run.log
+            build/v2-p8-arch-ab/target.run.log

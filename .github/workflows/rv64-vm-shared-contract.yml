@@ -1,0 +1,112 @@
+name: RV64 VM Shared Contract
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-vm-shared-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Sv32 oracle + RV64 Sv39 production core
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 30
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      TARGET_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout exact head without external actions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ -d .git ]]; then
+            git clean -fd -- src/main/scala src/test/scala sim software tools .github/workflows || true
+            git clean -f -- Makefile.rv64im-sv39-pmp-v1 || true
+          else
+            git init .
+          fi
+
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          else
+            git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          fi
+
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            fetch --no-tags --prune --depth=1 origin "$TARGET_SHA"
+          git checkout --detach --force FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$TARGET_SHA" ]] || {
+            echo "ERROR: exact-head checkout mismatch: expected=$TARGET_SHA actual=$actual" >&2
+            exit 1
+          }
+          chmod +x ./mill tools/build_rv64im_sv39_pmp_v1.sh
+          echo "exact_head=$actual"
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V newlib toolchain
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Run frozen Sv32 oracle and RV64 shared plus production Sv39 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.Sv32PageTableWalkerSpec \
+            aethercore.Sv32TlbSpec \
+            aethercore.Sv32TranslationUnitTlbSpec \
+            aethercore.Sv32InstructionTranslationSpec \
+            aethercore.Sv32InstructionFetchCoreSpec \
+            aethercore.Sv32DataPathCoreSpec \
+            aethercore.Sv32PmpCompositionSpec \
+            aethercore.Sv32SfenceCoreSpec \
+            aethercore.RV64SharedVirtualMemorySpec \
+            aethercore.TranslationUnitSpec \
+            aethercore.RV64VirtualMemoryAdapterSpec \
+            aethercore.RV64Sv39CoreSpec \
+            aethercore.RV64Sv39ProtectionSpec
+
+      - name: Run real RV64 M-S-U Sv39 executable contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          jobs="$(nproc)"
+          build="$HOME/.cache/aethercore/rv64-sv39-pmp-v1/$TARGET_SHA"
+          make -j"$jobs" -f Makefile.rv64im-sv39-pmp-v1 \
+            BUILD_DIR="$build" JOBS="$jobs" run-local
+
+      - name: Write qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## RV64 shared virtual-memory and production Sv39 core contract'
+            echo
+            echo "- exact head: \`${TARGET_SHA}\`"
+            echo '- production profile: RV64IM + Zicsr + M/S/U + Sv39 + PMP16 over PA56'
+            echo '- simulation composition: one shared AetherCoreSimTop exposes geometry-width PTW traffic; the RV64 Sv39 top is only a profile wrapper'
+            echo '- Sv32 oracle: historical walker, TLB, translation unit, PMP-composition and SFENCE core specs still execute through the shared machinery'
+            echo '- Sv39 shared machinery: three-level walk, 64-bit PTE stride, shared TLB/translation unit, instruction adapter, data adapter and PTW arbitration'
+            echo '- Sv39 production core: M-mode programs PMP16 and satp, MRET enters S-mode through three-level translation, then SRET enters a U page and performs 64-bit LD/SD'
+            echo '- Sv39 negative paths: page faults suppress final physical requests; PMP suppresses denied implicit PTW and translated instruction requests; SFENCE.VMA invalidates stale data translation'
+            echo '- real runner contract: PTW must be exercised and the generated Sv39 top must expose an 8-byte PTE response port; stall=0 and stall=3 both exit 0'
+            echo '- focused full-width proof: leaf PTE payloads and final code/data physical requests exceed 32 bits while remaining inside PA56'
+            echo '- Sv48 remains shared-contract-only and is still not advertised as a production CoreConfig capability'
+            echo '- bare RV64 PA56 boundary: high architectural bits fault instead of aliasing low physical bits'
+            echo '- PTE correctness: non-leaf U/A/D are reserved and ancestor G is inherited by descendants'
+          } >> "$GITHUB_STEP_SUMMARY"

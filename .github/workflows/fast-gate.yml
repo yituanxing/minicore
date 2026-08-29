@@ -1,0 +1,567 @@
+name: AetherCore Fast Gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify fast-gate paths
+    runs-on: ubuntu-24.04
+    outputs:
+      run_v2: ${{ steps.changes.outputs.run_v2 }}
+      run_v2_history: ${{ steps.changes.outputs.run_v2_history }}
+      run_v2_f5: ${{ steps.changes.outputs.run_v2_f5 }}
+      run_v2_f6: ${{ steps.changes.outputs.run_v2_f6 }}
+      run_legacy_chisel: ${{ steps.changes.outputs.run_legacy_chisel }}
+      run_smode_v1: ${{ steps.changes.outputs.run_smode_v1 }}
+      run_freertos: ${{ steps.changes.outputs.run_freertos }}
+      run_hardware: ${{ steps.changes.outputs.run_hardware }}
+      classified_base: ${{ steps.changes.outputs.classified_base }}
+    steps:
+      - name: Checkout exact head for path classification
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: changes
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PR_BASE_SHA:-}" ]]; then
+            classified_base="${PR_BASE_SHA}"
+            changed="$(git diff --name-only "${classified_base}" HEAD)"
+          else
+            classified_base="HEAD^1"
+            changed="$(git diff --name-only HEAD^1 HEAD || git show --pretty='' --name-only HEAD)"
+          fi
+          printf '%s\n' "$changed"
+
+          run_v2=false
+          run_v2_history=false
+          run_v2_f5=false
+          run_v2_f6=false
+          run_legacy_chisel=false
+          run_smode_v1=false
+          run_freertos=false
+
+          # Pure v2 implementation/tests get the short development lane only.
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/|src/test/scala/aethercore/V2[^/]*\.scala$)' <<<"$changed"; then
+            run_v2=true
+          fi
+
+          # Current stage ownership is explicit so F6 edits do not replay the
+          # already-frozen privileged suite, and vice versa.
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/TinyPrivileged\.scala$|src/test/scala/aethercore/V2F5[^/]*\.scala$)' <<<"$changed"; then
+            run_v2=true
+            run_v2_f5=true
+          fi
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/TinyBlockingLsu\.scala$|src/test/scala/aethercore/V2F6[^/]*\.scala$)' <<<"$changed"; then
+            run_v2=true
+            run_v2_f6=true
+          fi
+
+          # Re-run inherited F1-F4 only when their actual ownership surfaces or
+          # direct stage tests move. Changes there can feed both current stages.
+          if grep -Eq '^(src/main/scala/aethercore/core/v2/(FoundationTypes|TinyRobCommit|TinyDependency|TinyExecution|TinyRecovery)\.scala$|src/test/scala/aethercore/V2F[1-4][^/]*\.scala$|src/test/scala/aethercore/V2FoundationTypesSpec\.scala$)' <<<"$changed"; then
+            run_v2=true
+            run_v2_history=true
+            run_v2_f5=true
+            run_v2_f6=true
+          fi
+
+          # Build/test infrastructure and the shared width smoke exercise both
+          # Chisel surfaces, but do not pull software workloads by themselves.
+          if grep -Eq '^(build\.mill$|mill$|src/test/scala/aethercore/DatapathWidthSpec\.scala$|\.github/workflows/(fast-gate|hosted-verilator-cache)\.yml$)' <<<"$changed"; then
+            run_v2=true
+            run_legacy_chisel=true
+          fi
+
+          # Any Scala outside the isolated v2 tree may affect the legacy core,
+          # its software execution path, and the reusable primitives v2 wraps.
+          shared_scala="$(
+            grep -E '^src/(main|test)/scala/' <<<"$changed" \
+              | grep -Ev '^(src/main/scala/aethercore/core/v2/|src/test/scala/aethercore/V2[^/]*\.scala$|src/test/scala/aethercore/DatapathWidthSpec\.scala$)' \
+              || true
+          )"
+          if [[ -n "$shared_scala" ]]; then
+            run_v2=true
+            run_v2_history=true
+            run_v2_f5=true
+            run_v2_f6=true
+            run_legacy_chisel=true
+            run_smode_v1=true
+            run_freertos=true
+          fi
+
+          if grep -Eq '^(software/rv32/supervisor_v1_workload\.S|Makefile\.rv32im-supervisor-v1$|tools/build_rv32im_supervisor_v1\.sh$)' <<<"$changed"; then
+            run_smode_v1=true
+          fi
+
+          if grep -Eq '^(software/freertos/|Makefile\.freertos($|-)|sim/|tools/(make_freertos|ci/full_gate_freertos)|tools/ensure_(riscv_none_elf|rv32_nemu))' <<<"$changed"; then
+            run_freertos=true
+          fi
+
+          run_hardware=false
+          if [[ "$run_v2" == true || "$run_legacy_chisel" == true || "$run_smode_v1" == true || "$run_freertos" == true ]]; then
+            run_hardware=true
+          fi
+
+          echo "classified_base=${classified_base}" >> "$GITHUB_OUTPUT"
+          echo "run_v2=$run_v2" >> "$GITHUB_OUTPUT"
+          echo "run_v2_history=$run_v2_history" >> "$GITHUB_OUTPUT"
+          echo "run_v2_f5=$run_v2_f5" >> "$GITHUB_OUTPUT"
+          echo "run_v2_f6=$run_v2_f6" >> "$GITHUB_OUTPUT"
+          echo "run_legacy_chisel=$run_legacy_chisel" >> "$GITHUB_OUTPUT"
+          echo "run_smode_v1=$run_smode_v1" >> "$GITHUB_OUTPUT"
+          echo "run_freertos=$run_freertos" >> "$GITHUB_OUTPUT"
+          echo "run_hardware=$run_hardware" >> "$GITHUB_OUTPUT"
+
+  source-contract:
+    name: Fast source contract tests
+    needs: classify
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Run tracked source contracts only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tracked_tests < <(git ls-files 'tests_py/test_*.py')
+          [[ "${#tracked_tests[@]}" -gt 0 ]] || {
+            echo 'ERROR: no tracked Python source contracts were found' >&2
+            exit 2
+          }
+          modules=()
+          for path in "${tracked_tests[@]}"; do
+            module="${path%.py}"
+            module="${module//\//.}"
+            modules+=("$module")
+          done
+          echo "tracked_source_contracts=${#modules[@]}"
+          python3 -m unittest "${modules[@]}" -v
+
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    needs: classify
+    if: needs.classify.outputs.run_hardware == 'true'
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
+  v2-dev:
+    name: V2 focused development gate
+    needs: [classify, verilator-tool]
+    if: needs.classify.outputs.run_v2 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        id: scala-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Configure v2 build directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-v2-dev"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Restore previous v2 Mill output accelerator
+        id: v2-mill-output-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-dev/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-
+
+      - name: Revalidate fixed Verilator from producer cache
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run v2 stage-local Chisel checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=()
+          if [[ "${{ needs.classify.outputs.run_v2_history }}" == "true" ]]; then
+            tests+=(
+              aethercore.V2FoundationTypesSpec
+              aethercore.V2F1RobCommitSpec
+              aethercore.V2F2DependencySpec
+              aethercore.V2F3ExecutionSpec
+              aethercore.V2F4RecoverySpec
+            )
+          fi
+          if [[ "${{ needs.classify.outputs.run_v2_f5 }}" == "true" ]]; then
+            tests+=(aethercore.V2F5PrivilegedSpec)
+          fi
+          if [[ "${{ needs.classify.outputs.run_v2_f6 }}" == "true" ]]; then
+            tests+=(aethercore.V2F6BlockingLsuSpec)
+          fi
+          if [[ "${#tests[@]}" -eq 0 ]]; then
+            tests=(
+              aethercore.V2FoundationTypesSpec
+              aethercore.V2F5PrivilegedSpec
+              aethercore.V2F6BlockingLsuSpec
+            )
+          fi
+          printf 'v2_test=%s\n' "${tests[@]}"
+          ./mill aethercore.test.testOnly "${tests[@]}"
+
+      - name: Save validated v2 Mill output accelerator
+        if: success() && steps.v2-mill-output-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-v2-dev/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-v2-millout-v1-${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Write v2 development summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore v2 development gate'
+            echo
+            echo "- head: \`${{ github.event.pull_request.head.sha || github.sha }}\`"
+            echo "- inherited F1-F4 selected: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo "- F5 privileged selected: \`${{ needs.classify.outputs.run_v2_f5 }}\`"
+            echo "- F6 memory selected: \`${{ needs.classify.outputs.run_v2_f6 }}\`"
+            echo "- exact-head Mill output cache hit: \`${{ steps.v2-mill-output-cache.outputs.cache-hit }}\`"
+            echo '- a prior successful head may seed compile outputs; Mill still validates inputs and testOnly executes the selected tests'
+            echo '- pure-v2 lane uses the stock hosted image and does not apt-provision on every commit'
+            echo '- hosted Mill daemon remains enabled; WSL-only no-daemon workaround is not applied'
+            echo '- Supervisor, FreeRTOS and exact DiffTest are intentionally outside the pure-v2 edit loop'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  legacy-chisel:
+    name: Legacy/shared Chisel compatibility
+    needs: [classify, source-contract, verilator-tool]
+    if: needs.classify.outputs.run_legacy_chisel == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Install hosted Chisel prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            build-essential git curl openjdk-17-jdk-headless
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Configure Chisel build directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-legacy-chisel"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Revalidate fixed Verilator from producer cache
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Cross-XLEN shared integer-core Chisel guard
+        shell: bash
+        run: |
+          ./mill aethercore.test.testOnly \
+            aethercore.DatapathWidthSpec \
+            aethercore.RV32CoreSpec \
+            aethercore.CoreSmokeSpec \
+            aethercore.RV64MDecoderSpec \
+            aethercore.RV64MALUSpec
+
+      - name: Focused VM, configuration, privilege, RV32A, interrupt and WFI Chisel tests
+        shell: bash
+        run: |
+          ./mill aethercore.test.testOnly \
+            aethercore.CoreConfigSpec \
+            aethercore.PmpCsrFileSpec \
+            aethercore.PmpCheckerSpec \
+            aethercore.PmpCoreSpec \
+            aethercore.PmpPhysicalAddressGeometrySpec \
+            aethercore.PhysicalInstructionRequestSpec \
+            aethercore.Sv32PmpCompositionSpec \
+            aethercore.DecoderSpec \
+            aethercore.Rv32CDecompressorSpec \
+            aethercore.Rv32CParcelControllerSpec \
+            aethercore.Rv32CCoreConfigSpec \
+            aethercore.Rv32CCoreSpec \
+            aethercore.Rv32CSv32ParcelSpec \
+            aethercore.Sv32PageTableWalkerSpec \
+            aethercore.Sv32SatpRegisterSpec \
+            aethercore.Sv32SupervisorCsrSpec \
+            aethercore.Sv32DataPathCoreSpec \
+            aethercore.Sv32InstructionTranslationSpec \
+            aethercore.Sv32InstructionFetchCoreSpec \
+            aethercore.Sv32TlbSpec \
+            aethercore.Sv32TranslationUnitTlbSpec \
+            aethercore.Sv32SfenceCoreSpec \
+            aethercore.Sv32PageFaultDelegationSpec \
+            aethercore.MachineCsrFileSpec \
+            aethercore.MstatushSpec \
+            aethercore.ScounterenSpec \
+            aethercore.MachineIdentitySpec \
+            aethercore.Rv32SstcTimerSpec \
+            aethercore.Rv32SstcCsrSpec \
+            aethercore.Rv32SstcCoreSpec \
+            aethercore.PrivilegeModeSpec \
+            aethercore.MachineMretCoreSpec \
+            aethercore.UserModeCoreSpec \
+            aethercore.SupervisorModeSpec \
+            aethercore.SupervisorPrivilegeBoundarySpec \
+            aethercore.MprvCoreSpec \
+            aethercore.RV32AtomicCoreSpec \
+            aethercore.Sv32AtomicCoreSpec \
+            aethercore.MachinePlicSpec \
+            aethercore.MachinePlicMmioSpec \
+            aethercore.MachineUartRxSpec \
+            aethercore.MachineInterruptPlatformSpec \
+            aethercore.MachineInterruptArbiterSpec \
+            aethercore.MachineExternalCsrSpec \
+            aethercore.MachineExternalInterruptCoreSpec \
+            aethercore.SupervisorExternalInterruptSpec \
+            aethercore.AetherCoreInterruptPlatformSpec \
+            aethercore.WaitForInterruptCoreSpec
+
+  software-compat:
+    name: Supervisor and FreeRTOS compatibility
+    needs: [classify, source-contract, verilator-tool]
+    if: needs.classify.outputs.run_smode_v1 == 'true' || needs.classify.outputs.run_freertos == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Install hosted software prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential \
+            libreadline-dev pkg-config curl xz-utils git python3 \
+            openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Restore pinned RISC-V newlib toolchain cache
+        id: newlib-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/xpack-riscv-none-elf-gcc-15.2.0-1
+            ~/.cache/aethercore/toolchains/downloads/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-riscv-none-elf-gcc-v1-${{ hashFiles('tools/ensure_riscv_none_elf_gcc_15_2.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-riscv-none-elf-gcc-v1-
+
+      - name: Restore verified reference cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/references
+            ~/.cache/aethercore/sources
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-references-v1-${{ hashFiles('tools/ensure_rv32_nemu_single_step.sh', 'tools/probe_rv32_nemu_deterministic.sh', 'tools/probe_rv32_nemu_historical.sh', 'tools/ensure_berkeley_softfloat.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-references-v1-
+
+      - name: Configure software build directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-software-compat"
+          mkdir -p "$root/mill-out" "$root/smode-v1" "$root/freertos" "$root/freertos-irq"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+          echo "FAST_SMODE_V1_BUILD=$root/smode-v1" >> "$GITHUB_ENV"
+          echo "FAST_FREERTOS_BUILD=$root/freertos" >> "$GITHUB_ENV"
+          echo "FAST_FREERTOS_IRQ_BUILD=$root/freertos-irq" >> "$GITHUB_ENV"
+          echo "AETHERCORE_JOBS=$(nproc)" >> "$GITHUB_ENV"
+
+      - name: Revalidate fixed Verilator from producer cache
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Provision pinned RISC-V newlib sysroot
+        shell: bash
+        run: bash tools/ensure_riscv_none_elf_gcc_15_2.sh
+
+      - name: Save validated RISC-V newlib toolchain immediately
+        if: steps.newlib-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/xpack-riscv-none-elf-gcc-15.2.0-1
+            ~/.cache/aethercore/toolchains/downloads/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-riscv-none-elf-gcc-v1-${{ hashFiles('tools/ensure_riscv_none_elf_gcc_15_2.sh') }}
+
+      - name: Executable Supervisor V1 M-S-U workload
+        if: needs.classify.outputs.run_smode_v1 == 'true'
+        shell: bash
+        run: |
+          make -j"$AETHERCORE_JOBS" -f Makefile.rv32im-supervisor-v1 \
+            BUILD_DIR="$FAST_SMODE_V1_BUILD" \
+            JOBS="$AETHERCORE_JOBS" run-local
+
+      - name: Incremental FreeRTOS WFI workload
+        if: needs.classify.outputs.run_freertos == 'true'
+        shell: bash
+        run: |
+          make -j"$AETHERCORE_JOBS" -f Makefile.freertos \
+            BUILD_DIR="$FAST_FREERTOS_BUILD" \
+            JOBS="$AETHERCORE_JOBS" TRACE=0 run-local
+
+      - name: FreeRTOS UART ISR and Tickless early-wake workload
+        if: needs.classify.outputs.run_freertos == 'true'
+        shell: bash
+        run: |
+          make -j"$AETHERCORE_JOBS" -f Makefile.freertos-irq \
+            BUILD_DIR="$FAST_FREERTOS_IRQ_BUILD" \
+            JOBS="$AETHERCORE_JOBS" TRACE=0 run-irq-local
+
+      - name: Incremental FreeRTOS WFI exact DiffTest
+        if: needs.classify.outputs.run_freertos == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rv32_nemu_so="$(bash tools/ensure_rv32_nemu_single_step.sh)"
+          test -f "$rv32_nemu_so"
+          for stall in 0 5; do
+            make -j"$AETHERCORE_JOBS" -f Makefile.freertos-difftest \
+              BUILD_DIR="$FAST_FREERTOS_BUILD" \
+              JOBS="$AETHERCORE_JOBS" TRACE=0 \
+              RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD="$stall" run-difftest
+          done
+          make -j"$AETHERCORE_JOBS" -f Makefile.freertos-difftest \
+            BUILD_DIR="$FAST_FREERTOS_BUILD" \
+            JOBS="$AETHERCORE_JOBS" TRACE=0 \
+            RV32_NEMU_SO="$rv32_nemu_so" STALL_PERIOD=5 run-difftest-negative
+
+  summary:
+    name: Fast-gate routing summary
+    needs: [classify, source-contract, verilator-tool, v2-dev, legacy-chisel, software-compat]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Write routing summary
+        shell: bash
+        run: |
+          {
+            echo '## AetherCore fast-gate routing'
+            echo
+            echo "- head: \`${{ github.event.pull_request.head.sha || github.sha }}\`"
+            echo "- classified base: \`${{ needs.classify.outputs.classified_base }}\`"
+            echo "- v2 development lane: \`${{ needs.classify.outputs.run_v2 }}\`"
+            echo "- inherited v2 F1-F4: \`${{ needs.classify.outputs.run_v2_history }}\`"
+            echo "- v2 F5 privileged: \`${{ needs.classify.outputs.run_v2_f5 }}\`"
+            echo "- v2 F6 memory: \`${{ needs.classify.outputs.run_v2_f6 }}\`"
+            echo "- legacy/shared Chisel lane: \`${{ needs.classify.outputs.run_legacy_chisel }}\`"
+            echo "- Supervisor V1 lane: \`${{ needs.classify.outputs.run_smode_v1 }}\`"
+            echo "- FreeRTOS lane: \`${{ needs.classify.outputs.run_freertos }}\`"
+            echo '- pure v2 edits no longer pay Supervisor/FreeRTOS/DiffTest latency'
+            echo '- stage-local v2 edits run only their owning stage unless shared ownership moves'
+            echo '- source contracts and the shared Verilator producer start in parallel after classification'
+            echo '- Full Gate remains the complete freeze/milestone qualification surface'
+          } >> "$GITHUB_STEP_SUMMARY"

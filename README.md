@@ -1,88 +1,180 @@
 # MiniCore / AetherCore
 
-A correctness-first RISC-V processor project written in Chisel and driven by executable software workloads.
+A correctness-first RISC-V CPU and SoC project written in Chisel and driven by executable software, firmware and real operating-system workloads.
 
-The current verified checkpoint is **S1.2**: a five-stage in-order RV64IM core with Chisel/CIRCT/Verilator implementation, commit-level differential testing against a pinned OpenXiangShan/NEMU reference, and a frozen corpus of real freestanding C programs compiled across multiple optimization levels.
+The current product line is **AetherCore V2 + AetherSoC v0**. The board-less v0 freeze is being finalized on `release/aethersoc-v0-freeze`; after freeze closure it is promoted to the default `main` branch.
 
-## Current core
-
-```text
-IF -> ID -> EX -> MEM -> WB/commit
-```
-
-Implemented foundations:
-
-- complete RV64I integer execution, including W-class operations;
-- complete RV64M multiply/divide extension;
-- EX/MEM and MEM/WB forwarding;
-- load-use interlock and branch/jump recovery;
-- preservation of forwarded EX operands across memory backpressure;
-- blocking instruction/data interfaces with host-backed 64 MiB simulation RAM;
-- UART MMIO at `0x10000000` and self-check exit MMIO at `0x10000008`;
-- architectural commit trace with PC, instruction, destination write and Store metadata;
-- temporary halt-on-exception behavior with precise suppression of younger memory side effects;
-- Chisel unit tests, strict full-core smoke, directed/generated programs and NEMU DiffTest.
-
-Supported M instructions:
+## Current product architecture
 
 ```text
-MUL  MULH  MULHSU  MULHU
-DIV  DIVU  REM     REMU
-MULW DIVW  DIVUW   REMW  REMUW
+AetherCore V2
+  -> RV64IMA + M/S/U
+  -> Sv39 + TLB + PTW + SFENCE.VMA
+  -> PMP/PMA
+  -> I-cache / D-cache
+  -> PlatformFabric
+  -> BootROM
+  -> PLIC
+  -> ACLINT-style MTIMER
+  -> ns16550-compatible UART
+  -> MemoryHub
+  -> AXI4 external-memory boundary
+  -> FPGA-facing SoC top
+  -> 8N1 serial PHY
 ```
 
-The current M implementation is combinational and correctness-first. A later checkpoint will replace division, and potentially multiplication, with a multi-cycle unit while preserving the same architectural results.
+The historical five-stage `AetherCore.scala` implementation remains in the repository as an earlier architectural generation and regression source. Current Linux/SoC qualification uses the V2 CPU-complex and SoC path under `src/main/scala/aethercore/core/v2` and `src/main/scala/aethercore/soc`.
 
-## Real compiler-produced software
+## Qualified ISA and privileged execution
+
+The current RV64 Linux profile includes:
+
+- RV64I and RV64M integer execution;
+- RV64A LR/SC and AMO operations;
+- M/S/U privilege modes;
+- Zicsr and system-instruction handling;
+- precise synchronous traps and interrupt retirement boundaries;
+- supervisor delegation and SRET;
+- WFI;
+- Sv39 address translation;
+- `satp`, TLBs, page-table walking and `SFENCE.VMA`;
+- PMP/PMA checks;
+- supervisor timer and external-interrupt delivery.
+
+Earlier RV32/RV32C/Sv32/NuttX/FreeRTOS/Zephyr profiles remain as independent regression ladders.
+
+## AetherSoC v0
+
+The SoC implementation is under `src/main/scala/aethercore/soc`.
+
+Major blocks include:
+
+- `AetherCoreV2Complex` CPU-complex boundary;
+- `AetherSoCPlatformFabric` address decode and peripheral ownership;
+- `AetherSoCMemoryHub` multi-client memory routing;
+- `AetherSoCBootRom`;
+- `AetherUart16550`;
+- `AetherPlic`;
+- `AetherAclintMtimer`;
+- I-cache and D-cache;
+- AetherMem semantic memory links;
+- AXI4 external-memory bridge and top;
+- DTS generation;
+- `AetherCoreV2FpgaSoC` board-neutral FPGA-facing top;
+- synthesizable 8N1 UART PHY;
+- virtual FPGA board used to qualify real AXI and serial pin boundaries.
+
+Board-specific PLLs, DDR controller/IP and pin constraints deliberately remain outside the logical SoC and are owned by the future concrete FPGA-board integration.
+
+## Linux and OpenSBI qualification
+
+AetherSoC v0 is already beyond first-boot smoke testing.
+
+Qualified software includes:
+
+- OpenSBI v1.6;
+- Linux 6.6.143;
+- real Sv39/S-mode Linux execution;
+- deterministic initramfs/PID1 qualification;
+- supervisor timer interrupts;
+- supervisor external interrupts through PLIC/UART.
+
+### AXI Linux clocksource baseline
+
+A qualified AXI4 Linux run reached:
 
 ```text
-C source
-  -> riscv64-unknown-elf-gcc -march=rv64im -mabi=lp64
-  -> crt0.S + linker.ld
-  -> ELF + flat binary + map + disassembly
-  -> Verilated AetherCore
-  -> one-for-one NEMU retirement comparison
+clocksource: riscv_clocksource
+62,047,788 cycles
+18,038,710 retired commits
 ```
 
-Current source workloads:
+The same run observed 1,289,056 Data AXI requests and responses and 123,939 same-source overlap-issue events.
 
-- `call_stack`: recursion, nested calls, stack frames, arrays, structures and remainder;
-- `memory`: `.rodata/.data/.bss`, byte loops, pointers, structures and checksum code;
-- `arithmetic`: signed/unsigned 64-bit and W-class multiply/divide/remainder;
-- `sort`: insertion sort and recursive quicksort;
-- `crc_hash`: CRC32, FNV-1a and rotate/multiply hashing;
-- `mixed_integer`: signed matrix multiplication and quotient/remainder chains.
+### Virtual FPGA pin-level PID1
 
-The last three are compiled at `-O0`, `-O2` and `-Os`, producing distinct stack layouts, register allocation and control-flow shapes.
+The final board-less functional acceptance path instantiates the production FPGA-facing SoC. Memory traffic crosses the production AXI4 pins into a virtual DDR target; console traffic crosses the production ns16550, 8N1 serializer and serial pins before the host runner observes it.
 
-## Verified scale
-
-GitHub Actions runs `30702481540` and `30702481539` passed:
+Qualified milestone:
 
 ```text
-frozen directed/generated architecture:     3,119 comparisons
-compiler-produced corpus:                 204,218 comparisons
-----------------------------------------------------------
-complete normal-retirement gate:          207,337 comparisons
+OpenSBI v1.6
+Linux 6.6.143
+RV64 USER UART IRQ OK
+
+421,518,021 cycles
+135,262,086 retired commits
+8,391 interrupts
+4,195 STIP
+1 SEIP
 ```
 
-Every normal retirement matched the pinned NEMU reference. All 12 compiled programs returned exit code zero. Strict smoke, the deliberate mismatch probe and all three precise fault-boundary regressions also remain green.
+This is the functional stop line for AetherSoC v0 without a concrete FPGA board.
 
-Exact optimization levels, image sizes, cycle counts, retirement counts and hashes are recorded in [`docs/COMPILED_CORPUS.md`](docs/COMPILED_CORPUS.md).
+## FPGA synthesis status
 
-## NEMU reference
+The production top `AetherCoreV2FpgaSoC` is elaborated and mapped with a board-neutral Yosys ECP5 synthesis proxy.
+
+The final v0 freeze proxy run (`33250167081`) reported:
 
 ```text
-OpenXiangShan/NEMU
-commit ad6bfde6241f2fc1e864b1efb2bed99b3670eb73
-config riscv64-nutshell-ref_defconfig
+cells             170,143
+LUT4               96,718
+TRELLIS_FF         18,705
+TRELLIS_DPR16X4       374
+MULT18X18D             39
+DP16KD                  0
+structural depth     6,667
 ```
 
-For every normal DUT retirement, the harness checks the pre-instruction PC and all 32 GPRs, executes exactly one NEMU instruction, compares all post-instruction GPRs, and verifies enabled Store bytes. DUT state is never copied back into NEMU after initialization.
+The distributed-RAM primitive count above is taken from the authoritative Yosys `stat` output. The current JSON-summary helper has a naming bug that searches for `DPR16X4` instead of the mapped ECP5 primitive `TRELLIS_DPR16X4` and therefore reports zero there.
+
+These numbers are structural synthesis evidence only. They are **not an FPGA Fmax claim**. A real frequency requires a concrete device, clock constraints, board-specific PLL/DDR integration and place-and-route.
+
+## Verification philosophy
+
+AetherCore is developed by increasing software pressure rather than implementing ISA or SoC features speculatively:
+
+```text
+directed programs
+  -> compiler-produced programs
+  -> CoreMark / Embench / littlefs
+  -> FreeRTOS / Zephyr / NuttX
+  -> M/S/U privilege
+  -> paging
+  -> OpenSBI
+  -> Linux
+  -> Linux PID1 and interrupt paths
+  -> FPGA-facing pin-level qualification
+```
+
+Failures from broad workloads are reduced into focused permanent regressions before the architecture is widened.
+
+The project also uses pinned NEMU references for deterministic retirement-level differential testing where applicable.
+
+## Repository layout
+
+```text
+src/main/scala/aethercore/
+  core/          legacy and shared architectural blocks
+  core/v2/       current V2 CPU microarchitecture
+  memory/        semantic memory/cache structures
+  soc/           current AetherSoC implementation
+  sim/           simulation-only compatibility and virtual-board wrappers
+
+software/        firmware, OS and workload sources
+sim/             Verilator/NEMU host runners
+tests_py/        structural and workflow contracts
+docs/            architecture, freeze and qualification records
+.github/workflows/
+                 executable qualification gates
+```
 
 ## Build
 
-Core verification prerequisites are Java 21, C++, Python 3, Verilator, Bison, Flex, Readline and SDL2 development files. Compiled workloads additionally require `gcc-riscv64-unknown-elf` and `binutils-riscv64-unknown-elf`.
+Core verification prerequisites include Java, C++, Python 3, Verilator and the pinned RISC-V toolchains used by each qualification path.
+
+Representative commands:
 
 ```bash
 chmod +x mill
@@ -90,20 +182,19 @@ make python-test
 make test
 make rtl
 make run-smoke
-make run-difftest
-make run-generated-difftest
-make run-rv64m-regressions
-make run-generated-rv64m
 
-bash tools/build_compiled_workloads.sh build/compiled-workloads
-bash tools/run_compiled_workloads.sh \
-  build/obj/VAetherCoreSimTop \
-  "$(pwd)/build/nemu/build/riscv64-nemu-interpreter-so" \
-  build/compiled-workloads
+./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64
+./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64
 ```
 
-## Development policy
+Linux/OpenSBI and FPGA qualification are encoded as reproducible GitHub Actions workflows rather than as README-only claims.
 
-Real programs are design inputs, not final demos. New compiler-generated failures are reduced to focused regressions before RTL is changed. Frozen binary hashes must run unchanged across microarchitectural changes; recompilation is a separate compiler-compatibility gate.
+## Freeze and branch policy
 
-`main` contains only checkpoints that pass the complete CI path. See [`CHECKPOINT.md`](CHECKPOINT.md) for the exact verified boundary and [`docs/ROADMAP.md`](docs/ROADMAP.md) for Minic integration, the multi-cycle M unit, privileged architecture, Linux and FPGA bring-up.
+A feature is considered frozen only when its focused qualification and relevant regression gates pass on an explicitly recorded source head.
+
+For AetherSoC v0, the authoritative freeze record is:
+
+[`docs/AETHERSOC_V0_FREEZE.md`](docs/AETHERSOC_V0_FREEZE.md)
+
+After v0 promotion, the default `main` branch is the single canonical product line. New performance, architecture or board work should branch from `main` and return to `main` promptly. Historical milestone branches and PRs remain evidence, not alternate definitions of the current product.

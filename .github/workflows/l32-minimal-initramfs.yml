@@ -1,0 +1,100 @@
+name: L32 Minimal Initramfs Userspace
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l32-minimal-initramfs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minimal-initramfs:
+    name: Linux 6.6.143 /init UART IRQ proof
+    runs-on: [self-hosted, Linux, X64, minicore]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout without deleting persistent outputs
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Validate minimal userspace contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/l32_minimal_initramfs_build.sh
+          bash -n tools/ci/l32_minimal_init_payload_build.sh
+          bash -n tools/ci/l32_software_artifact_cache.sh
+          python3 -m unittest tests_py.test_l32_minimal_initramfs_contract -v
+
+      - name: Provision pinned Bootlin RV32 Linux GCC
+        shell: bash
+        run: bash tools/ensure_l32_riscv32_linux_gcc.sh
+
+      - name: Ensure frozen Linux source and baseline cache
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_linux_cache_key.sh tools/ci/l32_linux_build.sh
+          if ! tools/ci/l32_linux_cache_key.sh check build/l32-linux; then
+            tools/ci/l32_linux_build.sh
+            tools/ci/l32_linux_cache_key.sh mark build/l32-linux
+          fi
+          tools/ci/l32_linux_cache_key.sh check build/l32-linux
+
+      - name: Reuse or build libc-free /init and Linux initramfs Image
+        shell: bash
+        env:
+          L32_LINUX_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_minimal_initramfs_build.sh
+          tools/ci/l32_software_artifact_cache.sh minimal-initramfs tools/ci/l32_minimal_initramfs_build.sh
+
+      - name: Reuse or build OpenSBI with minimal-init Linux payload
+        shell: bash
+        env:
+          L32_JOBS: "6"
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/l32_software_artifact_cache.sh tools/ci/l32_minimal_init_payload_build.sh
+          tools/ci/l32_software_artifact_cache.sh minimal-payload tools/ci/l32_minimal_init_payload_build.sh
+
+      - name: Provision fixed Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Run real PID 1 UART interrupt proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            FW_BIN=build/l32-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=500000000 \
+            MILESTONE="L32 USER UART IRQ OK" \
+            MIN_INTERRUPTS=1 \
+            MIN_SEIP=1 \
+            run-local
+
+      - name: Upload minimal userspace evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-l32-minimal-init-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/l32-linux-initramfs/result.txt
+            build/l32-linux-initramfs/evidence/
+            build/l32-minimal-init-boot/result.txt
+            build/l32-minimal-init-boot/evidence/
+            build/l32-linux-probe/firmware.sha256
+            build/l32-linux-probe/logs/*.log

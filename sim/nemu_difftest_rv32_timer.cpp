@@ -189,14 +189,18 @@ class NemuDifftest::Impl {
     }
 
     const auto commitPc = checkedAddress(commit.pc, "commit PC");
+    if (commit.instBytes != 2 && commit.instBytes != 4) {
+      fail("DUT reported unsupported instruction length " +
+           std::to_string(commit.instBytes));
+    }
     NemuState32 before{};
     regcpy_(&before, kToDut);
     comparePc(before.pc, commitPc, "before reference execution");
     compareRegisters(before, "before reference execution");
 
-    const std::uint32_t imageInst = instructionAt(commitPc);
-    if (imageInst != commit.inst) {
-      fail("DUT instruction " + hex32(commit.inst) + " differs from image instruction " +
+    const std::uint32_t imageInst = instructionAt(commitPc, commit.instBytes);
+    if (imageInst != commit.rawInst) {
+      fail("DUT raw instruction " + hex32(commit.rawInst) + " differs from image instruction " +
            hex32(imageInst) + " at pc=" + hex32(commitPc));
     }
 
@@ -208,7 +212,7 @@ class NemuDifftest::Impl {
       regcpy_(&after, kToRef);
       ++mretShadowSteps_;
     } else if (zicsrStep) {
-      after = executeZicsr(before, commit.inst);
+      after = executeZicsr(before, commit.inst, commit.instBytes);
       regcpy_(&after, kToRef);
       ++zicsrShadowSteps_;
     } else {
@@ -240,7 +244,9 @@ class NemuDifftest::Impl {
 
     std::ostringstream line;
     line << "#" << checked_ << " pc=" << hex32(commitPc)
-         << " inst=" << hex32(commit.inst);
+         << " inst=" << hex32(commit.inst)
+         << " raw=" << hex32(commit.rawInst)
+         << " bytes=" << static_cast<unsigned>(commit.instBytes);
     if (commit.rdWrite) {
       line << " x" << static_cast<unsigned>(commit.rd) << "="
            << hex32(static_cast<std::uint32_t>(commit.rdData));
@@ -362,7 +368,8 @@ class NemuDifftest::Impl {
     }
   }
 
-  NemuState32 executeZicsr(const NemuState32& before, std::uint32_t instruction) {
+  NemuState32 executeZicsr(const NemuState32& before, std::uint32_t instruction,
+                             std::uint8_t instBytes) {
     const std::uint32_t funct3 = (instruction >> 12) & 0x7U;
     const std::uint32_t operation = funct3 & 0x3U;
     const bool immediate = (funct3 & 0x4U) != 0;
@@ -380,7 +387,7 @@ class NemuDifftest::Impl {
     }
 
     NemuState32 after = before;
-    after.pc = before.pc + 4;
+    after.pc = before.pc + instBytes;
     if (rd != 0) after.gpr[rd] = oldValue;
     after.gpr[0] = 0;
 
@@ -416,7 +423,9 @@ class NemuDifftest::Impl {
       fail("unexpected machine interrupt cause " + hex32(cause));
     }
     if ((epc & 3U) != 0) fail("machine timer interrupt EPC is not 4-byte aligned");
-    (void)instructionAt(epc);
+    // This timer reference still models the fail-closed RV32IM profile;
+    // replay-target alignment becomes C-aware only when C is enabled.
+    (void)instructionAt(epc, 4);
     if ((machine_.mstatus & kMstatusMie) == 0) {
       fail("machine timer interrupt was accepted while mstatus.MIE was clear");
     }
@@ -452,15 +461,21 @@ class NemuDifftest::Impl {
     }
   }
 
-  std::uint32_t instructionAt(std::uint32_t pc) const {
-    if (pc < resetPc_ || static_cast<std::uint64_t>(pc - resetPc_) + 4 > image_.size()) {
+  std::uint32_t instructionAt(std::uint32_t pc, std::uint8_t bytes) const {
+    if (bytes != 2 && bytes != 4) {
+      fail("DUT reported unsupported instruction length " +
+           std::to_string(bytes));
+    }
+    if (pc < resetPc_ ||
+        static_cast<std::uint64_t>(pc - resetPc_) + bytes > image_.size()) {
       fail("DUT event outside the loaded image at pc=" + hex32(pc));
     }
     const std::size_t offset = static_cast<std::size_t>(pc - resetPc_);
-    return std::uint32_t(image_[offset]) |
-           (std::uint32_t(image_[offset + 1]) << 8) |
-           (std::uint32_t(image_[offset + 2]) << 16) |
-           (std::uint32_t(image_[offset + 3]) << 24);
+    std::uint32_t value = 0;
+    for (std::uint8_t byte = 0; byte < bytes; ++byte) {
+      value |= std::uint32_t(image_[offset + byte]) << (byte * 8);
+    }
+    return value;
   }
 
   void comparePc(std::uint32_t reference, std::uint32_t dut, const char* phase) const {

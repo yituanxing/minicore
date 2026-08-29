@@ -1,0 +1,155 @@
+name: AetherSoC Virtual FPGA Linux Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
+      - 'src/main/scala/aethercore/soc/phy/AetherUart8N1Phy.scala'
+      - 'src/main/scala/aethercore/soc/phy/AetherFractionalTickGenerator.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2VirtualFpgaBoardSimTop.scala'
+      - 'src/main/scala/aethercore/ElaborateV2VirtualFpgaBoard.scala'
+      - 'src/test/scala/aethercore/AetherFractionalTickGeneratorSpec.scala'
+      - 'tests_py/test_v2_virtual_fpga_board.py'
+      - '.github/workflows/v2-soc-virtual-fpga-linux-runtime.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-virtual-fpga-linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Boot real Linux through virtual FPGA pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact virtual-board head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Activate fixed Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+
+      - name: Validate exact virtual FPGA boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          python3 -m unittest tests_py.test_v2_virtual_fpga_board -v
+          ./mill aethercore.test.testOnly aethercore.AetherFractionalTickGeneratorSpec
+          ./mill aethercore.test.testOnly aethercore.AetherUart8N1PhySpec
+          ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardRV64 \
+            --target-dir build/v2-virtual-fpga-linux-runtime-smoke
+          find build/v2-virtual-fpga-linux-runtime-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Provision exact RV64 Linux toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build unchanged Linux and OpenSBI payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Boot Linux through virtual DDR and serial pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$HOME/.cache/aethercore/v2-virtual-fpga-linux/$TARGET_SHA" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=200000000 \
+            MILESTONE='clocksource: riscv_clocksource' \
+            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          log="$HOME/.cache/aethercore/v2-virtual-fpga-linux/$TARGET_SHA/logs/boot-probe.log"
+          grep -Fq 'OpenSBI v1.6' "$log"
+          grep -Fq 'Linux version 6.6.143' "$log"
+          grep -Fq 'clocksource: riscv_clocksource' "$log"
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+
+      - name: Upload virtual FPGA Linux evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-virtual-fpga-linux-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-early/evidence/
+            ~/.cache/aethercore/v2-virtual-fpga-linux/${{ env.TARGET_SHA }}/logs/*.log

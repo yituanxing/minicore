@@ -9,6 +9,16 @@ source_dir="$cache_root/src/verilator-$revision"
 build_dir="$cache_root/build/verilator-$revision"
 marker="$prefix/.aethercore-source-revision"
 jobs="${AETHERCORE_TOOLCHAIN_JOBS:-4}"
+fast_verify="${AETHERCORE_VERILATOR_FAST_VERIFY:-0}"
+
+case "$fast_verify" in
+  0|1) ;;
+  *)
+    printf 'ERROR: AETHERCORE_VERILATOR_FAST_VERIFY must be 0 or 1, got %s\n' \
+      "$fast_verify" >&2
+    exit 44
+    ;;
+esac
 
 ensure_runtime_assets() {
   if [[ -f "$prefix/include/verilated.mk" && \
@@ -59,9 +69,14 @@ verify_install() {
   cmp -s "$source_dir/bin/verilator_includer" \
     "$prefix/bin/verilator_includer"
 
-  # Exercise the full Verilator -> generated makefile -> C++ archive path.
-  # Lint-only is insufficient because it does not consume verilated.mk or the
-  # verilator_includer helper.
+  # A fast pull-request gate already runs the real AetherCore Verilator build.
+  # It needs the pinned binary/runtime identity checks above, but does not need
+  # a second disposable build probe on every commit. Full/milestone gates keep
+  # this independent end-to-end installation probe enabled.
+  if [[ "$fast_verify" == "1" ]]; then
+    return 0
+  fi
+
   local probe_dir
   probe_dir="$(mktemp -d)"
   cat > "$probe_dir/top.sv" <<'EOF'
@@ -75,12 +90,13 @@ EOF
 }
 
 activate() {
-  verify_install
   if [[ -n "${GITHUB_PATH:-}" ]]; then
     printf '%s\n' "$prefix/bin" >> "$GITHUB_PATH"
   fi
   export PATH="$prefix/bin:$PATH"
   printf 'aethercore_verilator_source_revision=%s\n' "$revision"
+  printf 'aethercore_verilator_verify_mode=%s\n' \
+    "$([[ "$fast_verify" == "1" ]] && printf fast || printf full)"
   sha256sum \
     "$prefix/bin/verilator_bin" \
     "$prefix/bin/verilator_includer" \
@@ -105,6 +121,7 @@ if [[ -x "$prefix/bin/verilator" && -x "$prefix/bin/verilator_bin" && \
    [[ "$(git -C "$source_dir" rev-parse HEAD)" = "$revision" ]] && \
    cmp -s "$build_dir/src/verilator_bin" "$prefix/bin/verilator_bin"; then
   printf '%s\n' "$revision" > "$marker"
+  verify_install
   activate
   exit 0
 fi
@@ -145,4 +162,5 @@ cmake --install "$build_dir"
 cmp -s "$build_dir/src/verilator_bin" "$prefix/bin/verilator_bin"
 printf '%s\n' "$revision" > "$marker"
 
+verify_install
 activate

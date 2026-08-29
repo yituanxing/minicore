@@ -1,0 +1,132 @@
+name: AetherCore V2 F7 OpenSBI Frontier Symbols
+
+on:
+  push:
+    branches:
+      - feature/aethercore-v2-f7-software-parity
+    paths:
+      - '.github/v2-f7-opensbi-symbolize-request'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  symbolize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      STATUS_CONTEXT: AetherCore V2 F7 OpenSBI Frontier Symbols
+      RV64_OPENSBI_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Publish pending status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"pending\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"Symbolizing first v2 OpenSBI runtime frontier\",\"target_url\":\"$url\"}"
+
+      - name: Restore pinned RV64 Linux-target GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Provision pinned toolchain
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Restore pinned OpenSBI source cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
+
+      - name: Rebuild exact unchanged OpenSBI image
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/rv64_opensbi_first_exec.sh tools/ensure_riscv64_linux_gcc_13_3.sh
+          build="$RUNNER_TEMP/opensbi-symbols"
+          mkdir -p "$build"
+          bash tools/ci/rv64_opensbi_first_exec.sh "$build"
+          elf="$build/opensbi/platform/generic/firmware/fw_payload.elf"
+          test -s "$elf"
+          echo "OPENSBI_ELF=$elf" >> "$GITHUB_ENV"
+
+      - name: Symbolize first F7 runtime frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
+          addr2line="${prefix}addr2line"
+          objdump="${prefix}objdump"
+          nm="${prefix}nm"
+          test -x "$addr2line"
+          test -x "$objdump"
+          test -x "$nm"
+
+          echo '=== addr2line ==='
+          "$addr2line" -a -f -C -e "$OPENSBI_ELF" \
+            0x800196d4 \
+            0x8002b0f8 0x8002b0fc 0x8002b100 0x8002b104 \
+            0x8002b108 0x8002b10c 0x8002b110 0x8002b114 \
+            0x8002b118 0x8002b11c 0x8002b120 0x8002b124 \
+            0x8002b128 0x8002b12c 0x8002b130 0x8002b134
+
+          echo '=== ordered symbols near stall ==='
+          "$nm" -n "$OPENSBI_ELF" | awk '$1 >= "000000008002a000" && $1 <= "000000008002c000" {print}' | tail -n 120
+
+          echo '=== disassembly around first exception ==='
+          "$objdump" -d -S --start-address=0x800196b0 --stop-address=0x80019710 "$OPENSBI_ELF"
+
+          echo '=== disassembly around terminal commits ==='
+          "$objdump" -d -S --start-address=0x8002b0c0 --stop-address=0x8002b160 "$OPENSBI_ELF"
+
+      - name: Publish success status
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"success\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"OpenSBI stall PCs symbolized\",\"target_url\":\"$url\"}"
+
+      - name: Publish failure status
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            -d "{\"state\":\"failure\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"OpenSBI frontier symbolization failed\",\"target_url\":\"$url\"}"

@@ -183,19 +183,19 @@ def main() -> None:
     text = replace_once(
         text,
         '      case kEnvironmentCallFromM:\n'
-        '        if (commit.inst != kEcall || instructionAt(pc) != kEcall || value != 0) {\n'
+        '        if (commit.inst != kEcall || instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {\n'
         '          fail("M-mode ECALL trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n',
         '      case kEnvironmentCallFromU:\n'
         '        if (machine_.currentPrivilege != kPrivilegeUser || commit.inst != kEcall ||\n'
-        '            instructionAt(pc) != kEcall || value != 0) {\n'
+        '            instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {\n'
         '          fail("U-mode ECALL trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n\n'
         '      case kEnvironmentCallFromM:\n'
         '        if (machine_.currentPrivilege != kPrivilegeMachine || commit.inst != kEcall ||\n'
-        '            instructionAt(pc) != kEcall || value != 0) {\n'
+        '            instructionAt(pc, commit.instBytes) != commit.rawInst || value != 0) {\n'
         '          fail("M-mode ECALL trap metadata is inconsistent");\n'
         '        }\n'
         '        return;\n',
@@ -220,7 +220,7 @@ def main() -> None:
 
     text = replace_once(
         text,
-        '  std::uint32_t instructionAt(std::uint32_t pc) const {\n',
+        '  std::uint32_t instructionAt(std::uint32_t pc, std::uint8_t bytes) const {\n',
         '  void synchronizeTimerLoad(const DifftestCommit& commit) {\n'
         '    if (!commit.memValid || commit.memWrite) return;\n'
         '    const auto address = checkedAddress(commit.memAddr, "mtime Load address");\n'
@@ -242,7 +242,7 @@ def main() -> None:
         '      mtimeSpace_[offset + byte] = static_cast<std::uint8_t>(value >> (byte * 8));\n'
         '    }\n'
         '  }\n\n'
-        '  std::uint32_t instructionAt(std::uint32_t pc) const {\n',
+        '  std::uint32_t instructionAt(std::uint32_t pc, std::uint8_t bytes) const {\n',
         "mtime load synchronization",
     )
 
