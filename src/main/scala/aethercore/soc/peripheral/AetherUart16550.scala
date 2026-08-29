@@ -62,7 +62,9 @@ class AetherUart16550(
     val rxInterrupt = Output(Bool())
   })
 
-  private val lcr = RegInit(0.U(8.W))
+  // AetherSoC v0 physical PHY is 8N1; expose the same reset framing in LCR
+  // so software-visible state and the pin-level serializer agree from reset.
+  private val lcr = RegInit("h03".U(8.W))
   private val ier = RegInit(0.U(8.W))
   private val dll = RegInit((resetDivisor & 0xff).U(8.W))
   private val dlm = RegInit(((resetDivisor >> 8) & 0xff).U(8.W))
