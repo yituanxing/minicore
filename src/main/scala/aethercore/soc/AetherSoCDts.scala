@@ -8,9 +8,6 @@ package aethercore.soc
   * Linux/OpenSBI-compatible node bindings.
   */
 object AetherSoCDts {
-  private val CpuIntcPhandle = 1
-  private val PlicPhandle = 2
-
   private def hex(value: BigInt): String = "0x" + value.toString(16)
 
   private def cells64(value: BigInt): String = {
@@ -70,11 +67,10 @@ ${chosenBootargs}    };
             riscv,isa = "${escape(isa)}";
             mmu-type = "riscv,${escape(mmu)}";
 
-            interrupt-controller {
+            cpu_intc: interrupt-controller {
                 #interrupt-cells = <1>;
                 interrupt-controller;
                 compatible = "riscv,cpu-intc";
-                phandle = <${CpuIntcPhandle}>;
             };
         };
     };
@@ -95,15 +91,14 @@ ${chosenBootargs}    };
             reg = ${reg64(map.bootRomBase, map.bootRomBytes)};
         };
 
-        interrupt-controller@${nodeAddress(map.plicBase)} {
+        plic: interrupt-controller@${nodeAddress(map.plicBase)} {
             compatible = "sifive,plic-1.0.0", "riscv,plic0";
             reg = ${reg64(map.plicBase, map.plicBytes)};
             #address-cells = <0>;
             #interrupt-cells = <1>;
             interrupt-controller;
             riscv,ndev = <${board.plicSourceCount}>;
-            interrupts-extended = <${CpuIntcPhandle} 0xffffffff ${CpuIntcPhandle} ${board.supervisorExternalInterruptId}>;
-            phandle = <${PlicPhandle}>;
+            interrupts-extended = <&cpu_intc 0xffffffff &cpu_intc ${board.supervisorExternalInterruptId}>;
         };
 
         serial@${nodeAddress(map.uartBase)} {
@@ -113,7 +108,7 @@ ${chosenBootargs}    };
             current-speed = <${board.uartBaud}>;
             reg-shift = <0>;
             reg-io-width = <1>;
-            interrupt-parent = <${PlicPhandle}>;
+            interrupt-parent = <&plic>;
             interrupts = <${board.uartPlicSourceId}>;
             status = "okay";
         };
@@ -123,7 +118,7 @@ ${chosenBootargs}    };
             reg = <${cells64(map.mtimeAddress)} ${cells64(8)}
                    ${cells64(map.mtimecmpAddress)} ${cells64(8)}>;
             reg-names = "mtime", "mtimecmp";
-            interrupts-extended = <${CpuIntcPhandle} ${board.machineTimerInterruptId}>;
+            interrupts-extended = <&cpu_intc ${board.machineTimerInterruptId}>;
         };
     };
 };
