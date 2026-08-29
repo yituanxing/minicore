@@ -14,6 +14,7 @@ LINUX_IMAGE="${LINUX_BUILD_DIR}/obj/arch/riscv/boot/Image"
 BUILD_DIR="${ROOT_DIR}/build/rv64-minimal-init-boot"
 OPENSBI_BUILD_DIR="${BUILD_DIR}/opensbi"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
+DTS="${BUILD_DIR}/aethersoc-v0-initramfs.dts"
 DTB="${BUILD_DIR}/aethercore-rv64-initramfs.dtb"
 JOBS="${RV64_LINUX_JOBS:-$(nproc)}"
 # Freeze-path bootargs: prove the same userspace/interrupt workload through the
@@ -41,12 +42,15 @@ git -C "${OPENSBI_SOURCE}" diff --quiet --ignore-submodules -- || fail "cached O
 rm -rf "${BUILD_DIR}"
 mkdir -p "${OPENSBI_BUILD_DIR}" "${EVIDENCE_DIR}"
 
-python3 "${ROOT_DIR}/tools/ci/make_l32_dtb.py" \
-  --output "${DTB}" \
-  --summary "${EVIDENCE_DIR}/aethercore-rv64-initramfs-dtb.txt" \
+command -v dtc >/dev/null 2>&1 || fail "device-tree-compiler (dtc) is required for RV64 AetherSoC DTS"
+chmod +x "${ROOT_DIR}/mill"
+"${ROOT_DIR}/mill" aethercore.runMain aethercore.EmitAetherSoCDts \
+  --output "${DTS}" \
   --isa "${RV64_OPENSBI_ISA}" \
   --mmu "${RV64_OPENSBI_MMU}" \
-  --bootargs "${BOOTARGS}"
+  --bootargs "${BOOTARGS}" \
+  | tee "${EVIDENCE_DIR}/aethersoc-rv64-initramfs-dts.txt"
+dtc -I dts -O dtb -o "${DTB}" "${DTS}"
 
 {
   echo "RV64_MINIMAL_INIT_PAYLOAD_INPUT: status=READY"

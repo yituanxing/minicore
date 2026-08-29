@@ -14,6 +14,7 @@ SOURCE_DIR="${LINUX_CACHE}/linux-${RV64_LINUX_VERSION}"
 OPENSBI_SOURCE="${CACHE_ROOT}/l32/opensbi/${RV64_OPENSBI_COMMIT}"
 BUILD_DIR="${ROOT_DIR}/build/rv64-linux-early"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
+DTS="${BUILD_DIR}/aethersoc-v0-linux.dts"
 DTB="${BUILD_DIR}/aethercore-rv64-linux.dtb"
 OPENSBI_BUILD_DIR="${BUILD_DIR}/opensbi"
 JOBS="${RV64_LINUX_JOBS:-$(nproc)}"
@@ -217,12 +218,15 @@ cp "${QUALIFIED}" "${EVIDENCE_DIR}/qualified.env"
 file "${VMLINUX}" "${IMAGE}" > "${EVIDENCE_DIR}/files.txt"
 sha256sum "${VMLINUX}" "${IMAGE}" "${OBJ_DIR}/.config" > "${EVIDENCE_DIR}/kernel-sha256.txt"
 
-python3 "${ROOT_DIR}/tools/ci/make_l32_dtb.py" \
-  --output "${DTB}" \
-  --summary "${EVIDENCE_DIR}/aethercore-rv64-linux-dtb.txt" \
+command -v dtc >/dev/null 2>&1 || fail "device-tree-compiler (dtc) is required for RV64 AetherSoC DTS"
+chmod +x "${ROOT_DIR}/mill"
+"${ROOT_DIR}/mill" aethercore.runMain aethercore.EmitAetherSoCDts \
+  --output "${DTS}" \
   --isa "${RV64_OPENSBI_ISA}" \
   --mmu "${RV64_OPENSBI_MMU}" \
-  --bootargs "${RV64_LINUX_BOOTARGS}"
+  --bootargs "${RV64_LINUX_BOOTARGS}" \
+  | tee "${EVIDENCE_DIR}/aethersoc-rv64-linux-dts.txt"
+dtc -I dts -O dtb -o "${DTB}" "${DTS}"
 
 if [[ ! -d "${OPENSBI_SOURCE}/.git" ]]; then
   rm -rf "${OPENSBI_SOURCE}"

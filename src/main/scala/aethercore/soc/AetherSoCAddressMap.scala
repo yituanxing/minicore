@@ -56,3 +56,42 @@ object AetherSoCAddressMap {
       plicBytes = BigInt("00400000", 16)
     )
 }
+
+
+/**
+  * Software-visible board topology shared by RTL construction and device-tree
+  * generation. Values in this case class are not simulation metadata: they are
+  * the hardware/software contract for the qualified single-hart AetherSoC v0.
+  */
+final case class AetherSoCBoardSpec(
+    addressMap: AetherSoCAddressMap,
+    plicSourceCount: Int,
+    uartPlicSourceId: Int,
+    supervisorExternalInterruptId: Int,
+    machineTimerInterruptId: Int,
+    timebaseFrequencyHz: Long,
+    uartClockFrequencyHz: Long,
+    uartBaud: Int
+) {
+  require(plicSourceCount > 0)
+  require(uartPlicSourceId > 0 && uartPlicSourceId <= plicSourceCount)
+  require(supervisorExternalInterruptId > 0)
+  require(machineTimerInterruptId > 0)
+  require(timebaseFrequencyHz > 0)
+  require(uartClockFrequencyHz > 0)
+  require(uartBaud > 0)
+}
+
+object AetherSoCBoardSpec {
+  def qualifiedLinux(platform: PlatformConfig): AetherSoCBoardSpec =
+    AetherSoCBoardSpec(
+      addressMap = AetherSoCAddressMap.qualifiedLinux(platform),
+      plicSourceCount = 52,
+      uartPlicSourceId = 10,
+      supervisorExternalInterruptId = 9,
+      machineTimerInterruptId = 7,
+      timebaseFrequencyHz = 10_000_000L,
+      uartClockFrequencyHz = 3_686_400L,
+      uartBaud = 115_200
+    )
+}

@@ -47,8 +47,11 @@ class RV64LinuxEarlyContract(unittest.TestCase):
         build = BUILD.read_text()
         self.assertIn('FW_PAYLOAD_OFFSET="${RV64_OPENSBI_PAYLOAD_OFFSET}"', build)
         self.assertIn('RV64_LINUX_PHYS_ENTRY', build)
+        self.assertIn("aethercore.EmitAetherSoCDts", build)
         self.assertIn('--isa "${RV64_OPENSBI_ISA}"', build)
         self.assertIn('--mmu "${RV64_OPENSBI_MMU}"', build)
+        self.assertIn('dtc -I dts -O dtb -o "${DTB}" "${DTS}"', build)
+        self.assertNotIn("make_l32_dtb.py", build)
         self.assertIn('FW_PAYLOAD_FDT_ADDR="${RV64_OPENSBI_FDT_ADDR}"', build)
         self.assertIn("rv64ima_zicsr_zifencei", (ROOT / "software/rv64/opensbi_first_exec.env").read_text())
 

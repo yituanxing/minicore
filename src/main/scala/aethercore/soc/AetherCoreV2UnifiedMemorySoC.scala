@@ -26,8 +26,9 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   private val clientCount = 3
   private val sourceBits = log2Ceil(clientCount)
   val externalTxnIdBits: Int = clientTxnIdBits + sourceBits
-  private val addressMap =
-    AetherSoCAddressMap.qualifiedLinux(CoreProfiles.rv64imasuSv39PmpSoftware.platform)
+  private val board =
+    AetherSoCBoardSpec.qualifiedLinux(CoreProfiles.rv64imasuSv39PmpSoftware.platform)
+  private val addressMap = board.addressMap
 
   val io = IO(new Bundle {
     val memoryRequest =

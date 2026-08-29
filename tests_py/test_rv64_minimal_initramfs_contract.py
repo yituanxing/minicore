@@ -38,6 +38,9 @@ class Rv64MinimalInitramfsContractTest(unittest.TestCase):
         self.assertIn("RV64_OPENSBI_PAYLOAD_OFFSET", text)
         self.assertIn("RV64_LINUX_PHYS_ENTRY", text)
         self.assertIn("RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS", text)
+        self.assertIn("aethercore.EmitAetherSoCDts", text)
+        self.assertIn('dtc -I dts -O dtb -o "${DTB}" "${DTS}"', text)
+        self.assertNotIn("make_l32_dtb.py", text)
 
     def test_hosted_workflow_checkpoints_each_validated_layer_before_deep_proof(self):
         text = (ROOT / ".github/workflows/rv64-minimal-initramfs-v1.yml").read_text()
