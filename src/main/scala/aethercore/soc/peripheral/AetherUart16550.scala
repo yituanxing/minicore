@@ -27,10 +27,12 @@ object AetherUart16550Map {
   */
 class AetherUart16550(
     val dataBits: Int = 64,
-    val rxDepth: Int = 16
+    val rxDepth: Int = 16,
+    val resetDivisor: Int = 1
 ) extends Module {
   require(dataBits >= 32 && dataBits % 8 == 0)
   require(rxDepth > 0)
+  require(resetDivisor >= 1 && resetDivisor <= 0xffff)
 
   val io = IO(new Bundle {
     val request = Input(Bool())
@@ -53,6 +55,8 @@ class AetherUart16550(
     // Physical serializer readiness. A TX data-register write remains
     // backpressured until the downstream PHY can accept the byte.
     val txReady = Input(Bool())
+    // Live ns16550 divisor consumed by the physical serializer/deserializer.
+    val baudDivisor = Output(UInt(16.W))
 
     val interrupt = Output(Bool())
     val rxInterrupt = Output(Bool())
@@ -60,11 +64,12 @@ class AetherUart16550(
 
   private val lcr = RegInit(0.U(8.W))
   private val ier = RegInit(0.U(8.W))
-  private val dll = RegInit(0.U(8.W))
-  private val dlm = RegInit(0.U(8.W))
+  private val dll = RegInit((resetDivisor & 0xff).U(8.W))
+  private val dlm = RegInit(((resetDivisor >> 8) & 0xff).U(8.W))
   private val mcr = RegInit(0.U(8.W))
   private val scr = RegInit(0.U(8.W))
   private val dlab = lcr(7)
+  io.baudDivisor := Cat(dlm, dll)
 
   private val rx = Module(new Queue(UInt(8.W), rxDepth))
   rx.io.enq.valid := io.rxValid
