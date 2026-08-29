@@ -1,6 +1,7 @@
 package aethercore.sim
 
 import chisel3._
+import chisel3.util._
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
 import aethercore.soc.AetherCoreV2Axi4SoC
@@ -73,6 +74,15 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
     val icacheHitCount = Output(UInt(64.W))
     val icacheMissCount = Output(UInt(64.W))
 
+    // Simulation-only observability for same-source AXI read concurrency.
+    // MemoryHub encodes source in AXI ID[3:2]: 0=Data, 1=PTW, 2=I-cache.
+    // These counters must never feed production request/response control.
+    val axiDataReadRequestCount = Output(UInt(64.W))
+    val axiDataReadResponseCount = Output(UInt(64.W))
+    val axiDataReadOverlapIssueCount = Output(UInt(64.W))
+    val axiDataReadTwoOutstandingCycles = Output(UInt(64.W))
+    val axiDataReadMaxOutstanding = Output(UInt(3.W))
+
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -104,6 +114,55 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
   soc.io.axi.r.valid := hostMemory.io.axi.r.valid
   soc.io.axi.r.bits := hostMemory.io.axi.r.bits
   hostMemory.io.axi.r.ready := soc.io.axi.r.ready
+
+  // Observe the production AXI boundary after every upstream cache/fabric/hub
+  // policy decision. Source 0 is the Data client and its low two ID bits retain
+  // the CPU-complex transaction identity. This is observation only.
+  private val dataSource = 0.U(2.W)
+  private val dataArFire =
+    soc.io.axi.ar.fire && soc.io.axi.ar.bits.id(3, 2) === dataSource
+  private val dataRFire =
+    soc.io.axi.r.fire && soc.io.axi.r.bits.last &&
+      soc.io.axi.r.bits.id(3, 2) === dataSource
+
+  private val dataReadOutstanding = RegInit(0.U(3.W))
+  private val dataReadRequestCount = RegInit(0.U(64.W))
+  private val dataReadResponseCount = RegInit(0.U(64.W))
+  private val dataReadOverlapIssueCount = RegInit(0.U(64.W))
+  private val dataReadTwoOutstandingCycles = RegInit(0.U(64.W))
+  private val dataReadMaxOutstanding = RegInit(0.U(3.W))
+
+  private val dataReadOutstandingNext = WireDefault(dataReadOutstanding)
+  switch(Cat(dataArFire, dataRFire)) {
+    is("b10".U) { dataReadOutstandingNext := dataReadOutstanding + 1.U }
+    is("b01".U) { dataReadOutstandingNext := dataReadOutstanding - 1.U }
+  }
+
+  when(dataArFire) {
+    dataReadRequestCount := dataReadRequestCount + 1.U
+    when(dataReadOutstanding =/= 0.U) {
+      dataReadOverlapIssueCount := dataReadOverlapIssueCount + 1.U
+    }
+  }
+  when(dataRFire) {
+    dataReadResponseCount := dataReadResponseCount + 1.U
+  }
+  when(dataReadOutstanding >= 2.U) {
+    dataReadTwoOutstandingCycles := dataReadTwoOutstandingCycles + 1.U
+  }
+  when(dataReadOutstandingNext > dataReadMaxOutstanding) {
+    dataReadMaxOutstanding := dataReadOutstandingNext
+  }
+  dataReadOutstanding := dataReadOutstandingNext
+
+  assert(dataReadOutstanding <= 4.U,
+    "simulation Data AXI read occupancy must fit the four local transaction IDs")
+
+  io.axiDataReadRequestCount := dataReadRequestCount
+  io.axiDataReadResponseCount := dataReadResponseCount
+  io.axiDataReadOverlapIssueCount := dataReadOverlapIssueCount
+  io.axiDataReadTwoOutstandingCycles := dataReadTwoOutstandingCycles
+  io.axiDataReadMaxOutstanding := dataReadMaxOutstanding
 
   io.imemValid := hostMemory.io.imemValid
   io.imemAddr := hostMemory.io.imemAddr

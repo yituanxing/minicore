@@ -15,7 +15,12 @@ class V2Axi4LinuxPathSourceContract(unittest.TestCase):
         self.assertIn("private val InstructionSource = 2", source)
         self.assertIn("incomingReadSource =", source)
         self.assertIn("io.axi.ar.bits.id(idBits - 1, localTxnIdBits)", source)
-        self.assertIn("private val dataReadActive = RegInit(false.B)", source)
+        self.assertIn("private val DataTxnCount = 1 << localTxnIdBits", source)
+        self.assertIn("RegInit(VecInit(Seq.fill(DataTxnCount)(false.B)))", source)
+        self.assertIn("incomingReadLocalTxn =", source)
+        self.assertIn("incomingDataSlotFree =", source)
+        self.assertIn("DataSource.U -> incomingDataSlotFree", source)
+        self.assertIn("dataReadActive(incomingReadLocalTxn) := true.B", source)
         self.assertIn("private val ptwReadActive = RegInit(false.B)", source)
         self.assertIn("private val instructionReadActive = RegInit(false.B)", source)
 

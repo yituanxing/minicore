@@ -65,18 +65,24 @@ class AetherSoCAxi4HostMemoryAdapterSpec
     dut.io.axi.ar.bits.burst.poke(Axi4Burst.Incr)
   }
 
-  it should "keep data PTW and instruction reads independently outstanding" in {
+  it should "keep multiple data IDs plus PTW and instruction reads outstanding" in {
     simulate(new AetherSoCAxi4HostMemoryAdapter()) { dut =>
       initialize(dut)
 
       // ID[3:2] source tags: 0=data, 1=PTW, 2=instruction.
+      // Low ID bits remain independent Data transaction identities.
       presentRead(dut, id = 1, address = BigInt("80000000", 16))
       dut.io.axi.ar.ready.expect(true.B)
       dut.clock.step()
 
-      // A second data-source read is blocked while its source slot is occupied.
-      presentRead(dut, id = 2, address = BigInt("80000008", 16))
+      // Reusing the same live Data txnId is forbidden.
+      presentRead(dut, id = 1, address = BigInt("80000018", 16))
       dut.io.axi.ar.ready.expect(false.B)
+
+      // A distinct Data txnId must remain independently acceptable.
+      presentRead(dut, id = 2, address = BigInt("80000008", 16))
+      dut.io.axi.ar.ready.expect(true.B)
+      dut.clock.step()
 
       // PTW is independent and can enter immediately.
       presentRead(dut, id = 5, address = BigInt("80001000", 16))
@@ -91,10 +97,11 @@ class AetherSoCAxi4HostMemoryAdapterSpec
 
       dut.io.memValid.expect(true.B)
       dut.io.memWrite.expect(false.B)
+      dut.io.memAddr.expect(BigInt("80000000", 16).U)
       dut.io.ptwValid.expect(true.B)
       dut.io.imemValid.expect(true.B)
 
-      // Instruction is terminal immediately and may return ahead of older IDs.
+      // With the data host seam not yet terminal, instruction may return first.
       dut.io.imemInst.poke("h11223344".U)
       dut.io.axi.r.valid.expect(true.B)
       dut.io.axi.r.bits.id.expect(9.U)
@@ -109,12 +116,20 @@ class AetherSoCAxi4HostMemoryAdapterSpec
       dut.clock.step()
       dut.io.ptwReady.poke(false.B)
 
-      // Finally retire the oldest data read.
+      // The single historical data host port services the two live Data IDs
+      // one per cycle, while AXI identity remains intact.
       dut.io.memRdata.poke("hdeadbeefcafef00d".U)
       dut.io.memReady.poke(true.B)
       dut.io.axi.r.valid.expect(true.B)
       dut.io.axi.r.bits.id.expect(1.U)
       dut.io.axi.r.bits.data.expect("hdeadbeefcafef00d".U)
+      dut.clock.step()
+
+      dut.io.memAddr.expect(BigInt("80000008", 16).U)
+      dut.io.memRdata.poke("h0123456789abcdef".U)
+      dut.io.axi.r.valid.expect(true.B)
+      dut.io.axi.r.bits.id.expect(2.U)
+      dut.io.axi.r.bits.data.expect("h0123456789abcdef".U)
       dut.clock.step()
       dut.io.memReady.poke(false.B)
 
