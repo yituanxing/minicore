@@ -186,14 +186,22 @@ class PmpCheckerSpec extends AnyFlatSpec with Matchers with ChiselSim {
             (base, base + size)
           }
 
-        check(dut, base, 1, allow = true, entry = 0)
-        check(dut, upper - 1, 1, allow = true, entry = 0)
+        withClue(s"NAPOT encoded=$encoded base=$base upper=$upper lower-bound: ") {
+          check(dut, base, 1, allow = true, entry = 0)
+        }
+        withClue(s"NAPOT encoded=$encoded base=$base upper=$upper upper-bound: ") {
+          check(dut, upper - 1, 1, allow = true, entry = 0)
+        }
 
         if (base > 0) {
-          check(dut, base - 1, 1, allow = false, matched = false)
+          withClue(s"NAPOT encoded=$encoded base=$base upper=$upper below-range: ") {
+            check(dut, base - 1, 1, allow = false, matched = false)
+          }
         }
         if (upper < physicalLimit) {
-          check(dut, upper, 1, allow = false, matched = false)
+          withClue(s"NAPOT encoded=$encoded base=$base upper=$upper above-range: ") {
+            check(dut, upper, 1, allow = false, matched = false)
+          }
         }
       }
     }
