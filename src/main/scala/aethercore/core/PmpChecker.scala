@@ -123,8 +123,12 @@ class PmpChecker(
         // bank of wide comparators. Keep the architectural all-ones encoding as
         // the explicit whole-domain special case.
         val incremented = encodedAddress + 1.U
+        // Static right shift narrows a Chisel UInt. Pad back to the
+        // architectural pmpaddr width before complementing the mask; otherwise
+        // the zero-extension of ~mask would incorrectly clear the high encoded
+        // address bit for regions in the upper half of the implemented PA space.
         val trailingOnesMask =
-          ((encodedAddress ^ incremented) >> 1).asUInt
+          ((encodedAddress ^ incremented) >> 1).asUInt.pad(pmpAddressBits)
         val firstZeroOneHot = (~encodedAddress).asUInt & incremented
         val compactBase = Cat(
           0.U(1.W),
