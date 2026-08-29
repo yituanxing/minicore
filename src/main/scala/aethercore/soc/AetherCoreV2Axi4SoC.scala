@@ -30,6 +30,10 @@ class AetherCoreV2Axi4SoC extends Module {
     val rxReady = Output(Bool())
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
+    // Physical-platform seams: a board wrapper owns serializer throughput and
+    // the architectural 10 MHz timebase tick.
+    val uartTxReady = Input(Bool())
+    val timebaseTick = Input(Bool())
 
     val supervisorExternalInterrupt = Output(Bool())
     val uartInterrupt = Output(Bool())
@@ -51,7 +55,9 @@ class AetherCoreV2Axi4SoC extends Module {
     val halted = Output(Bool())
   })
 
-  val soc = Module(new AetherCoreV2UnifiedMemorySoC)
+  val soc = Module(new AetherCoreV2UnifiedMemorySoC(
+    externalPhysicalSeams = true
+  ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = PaddrBits,
     dataBits = DataBits,
@@ -87,6 +93,8 @@ class AetherCoreV2Axi4SoC extends Module {
 
   soc.io.rxValid := io.rxValid
   soc.io.rxByte := io.rxByte
+  soc.io.uartTxReady.get := io.uartTxReady
+  soc.io.timebaseTick.get := io.timebaseTick
   io.rxReady := soc.io.rxReady
   io.uartValid := soc.io.uartValid
   io.uartByte := soc.io.uartByte
