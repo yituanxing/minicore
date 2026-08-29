@@ -115,19 +115,19 @@ This is the functional stop line for AetherSoC v0 without a concrete FPGA board.
 
 The production top `AetherCoreV2FpgaSoC` is elaborated and mapped with a board-neutral Yosys ECP5 synthesis proxy.
 
-The first completed proxy run reported:
+The final v0 freeze proxy run (`33250167081`) reported:
 
 ```text
-cells             170,235
-LUT4               96,076
-TRELLIS_FF         18,624
+cells             170,143
+LUT4               96,718
+TRELLIS_FF         18,705
+TRELLIS_DPR16X4       374
 MULT18X18D             39
 DP16KD                  0
-DPR16X4                  0
-structural depth     7,014
+structural depth     6,667
 ```
 
-The v0 freeze reruns this proxy on the latest product baseline before those figures are declared the frozen resource baseline.
+The distributed-RAM primitive count above is taken from the authoritative Yosys `stat` output. The current JSON-summary helper has a naming bug that searches for `DPR16X4` instead of the mapped ECP5 primitive `TRELLIS_DPR16X4` and therefore reports zero there.
 
 These numbers are structural synthesis evidence only. They are **not an FPGA Fmax claim**. A real frequency requires a concrete device, clock constraints, board-specific PLL/DDR integration and place-and-route.
 
