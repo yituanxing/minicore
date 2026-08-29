@@ -37,7 +37,7 @@ object EmitAetherSoCDts extends App {
   private val text = AetherSoCDts.render(board, isa, mmu, bootargs)
 
   private val path = Paths.get(output)
-  Option(path.getParent).foreach(Files.createDirectories(_))
+  Option(path.getParent).foreach(parent => Files.createDirectories(parent))
   Files.write(path, text.getBytes(StandardCharsets.UTF_8))
 
   println(s"AETHERSOC_DTS_RESULT: status=PASS")
