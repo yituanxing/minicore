@@ -26,7 +26,8 @@ class AetherSoCPlatformFabric(
     val txnIdBits: Int,
     val addressMap: AetherSoCAddressMap,
     val plicSourceCount: Int = 52,
-    val uartPlicSourceId: Int = 10
+    val uartPlicSourceId: Int = 10,
+    val uartResetDivisor: Int = 1
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 platform fabric currently targets RV64")
   require(txnIdBits > 0)
@@ -65,6 +66,7 @@ class AetherSoCPlatformFabric(
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
     val uartTxReady = Input(Bool())
+    val uartBaudDivisor = Output(UInt(16.W))
 
     // Board-owned architectural timebase pulse. The simulator may assert this
     // every cycle; an FPGA clock/reset shell must generate the declared rate.
@@ -134,7 +136,8 @@ class AetherSoCPlatformFabric(
 
   private val uart = Module(new AetherUart16550(
     dataBits = dataBits,
-    rxDepth = 16
+    rxDepth = 16,
+    resetDivisor = uartResetDivisor
   ))
   private val uartComplete = WireDefault(false.B)
   uart.io.request := pendingUart
@@ -223,6 +226,7 @@ class AetherSoCPlatformFabric(
   io.rxReady := uart.io.rxReady
   io.uartValid := uart.io.txValid
   io.uartByte := uart.io.txByte
+  io.uartBaudDivisor := uart.io.baudDivisor
   io.uartInterrupt := uart.io.interrupt
   io.uartRxInterrupt := uart.io.rxInterrupt
 
