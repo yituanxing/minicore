@@ -1,4 +1,5 @@
 name: AetherSoC FPGA Synthesis Proxy
+# AetherSoC v0 freeze qualification: rerun on the exact promoted product baseline.
 
 on:
   pull_request:
