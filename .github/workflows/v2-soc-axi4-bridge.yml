@@ -7,6 +7,7 @@ on:
       - 'src/main/scala/aethercore/soc/AetherMemToAxi4Bridge.scala'
       - 'src/main/scala/aethercore/ElaborateV2AetherMemToAxi4.scala'
       - 'tests_py/test_v2_soc_axi4_bridge.py'
+      - 'src/test/scala/aethercore/AetherMemToAxi4BridgeSpec.scala'
       - '.github/workflows/v2-soc-axi4-bridge.yml'
 
 permissions:
@@ -28,6 +29,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
+      - name: Install Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
         with:
@@ -40,6 +46,11 @@ jobs:
 
       - name: Check AXI4 bridge source contract
         run: python3 -m unittest tests_py.test_v2_soc_axi4_bridge -v
+
+      - name: Prove AXI4 bridge transaction semantics
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherMemToAxi4BridgeSpec
 
       - name: Elaborate AXI4 bridge
         shell: bash
