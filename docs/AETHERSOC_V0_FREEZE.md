@@ -1,6 +1,6 @@
 # AetherSoC v0 Freeze
 
-Status: final board-less freeze qualification in progress.
+Status: board-less AetherSoC v0 qualification complete; promotion to `main` pending.
 
 ## Canonical product baseline
 
@@ -70,26 +70,32 @@ The synthesis methodology is:
 - mapped structural resource counts
 - flattened `ltp -noff` topological depth
 
-The first successful synthesis-proxy run (`33242719855`) on the pre-freeze synthesis branch reported:
+The final freeze synthesis ran on exact freeze head `ba5f110a8fab05824f45df1fc4d67107a46e0283`.
 
-- cells: 170,235
-- LUT4: 96,076
-- TRELLIS_FF: 18,624
+Workflow run: `33250167081` — SUCCESS.
+
+Mapped ECP5 proxy result:
+
+- cells: 170,143
+- LUT4: 96,718
+- TRELLIS_FF: 18,705
+- TRELLIS_DPR16X4: 374
 - DP16KD: 0
-- DPR16X4: 0
 - MULT18X18D: 39
-- structural logic depth: 7,014
+- structural `ltp -noff` depth: 6,667
 
-These values are **not yet the final frozen resource baseline**, because that run predates later production memory-path changes. The freeze branch intentionally reruns the same synthesis methodology on the exact current product baseline. This section must be updated with that exact-head result before promotion to `main`.
+The workflow summary currently reports distributed RAM as zero because the reporting script searches for `DPR16X4`; the actual mapped ECP5 primitive name in the Yosys `stat` output is `TRELLIS_DPR16X4`. The authoritative mapped count for this freeze is therefore 374.
+
+The `ltp -noff` output also emits combinational-loop warnings around mapped sequential/memory feedback structures, so the scalar depth value is retained only as a structural diagnostic. It is **not** an FPGA Fmax estimate.
 
 No FPGA Fmax or board frequency claim is made by this proxy. That requires a concrete device, constraints, vendor DDR/PLL integration and place-and-route.
 
 ## Repository governance closure
 
-After the exact-head synthesis rerun succeeds and this document is updated:
+With exact-head synthesis and this freeze record complete:
 
-1. merge the freeze branch into `soc/aethercore-v0-icache`;
-2. promote `soc/aethercore-v0-icache` to `main` via PR #253;
+1. merge this freeze branch into `soc/aethercore-v0-icache`;
+2. promote the frozen `soc/aethercore-v0-icache` line to `main` via PR #253;
 3. treat `main` as the single canonical product line;
 4. retain historical milestone PRs/tags as evidence rather than as competing product branches.
 
