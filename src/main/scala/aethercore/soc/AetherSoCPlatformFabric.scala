@@ -64,6 +64,11 @@ class AetherSoCPlatformFabric(
     val rxReady = Output(Bool())
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
+    val uartTxReady = Input(Bool())
+
+    // Board-owned architectural timebase pulse. The simulator may assert this
+    // every cycle; an FPGA clock/reset shell must generate the declared rate.
+    val timebaseTick = Input(Bool())
 
     // Interrupt/time topology returned to the CPU complex.
     val supervisorExternalInterrupt = Output(Bool())
@@ -140,6 +145,7 @@ class AetherSoCPlatformFabric(
   uart.io.complete := uartComplete
   uart.io.rxValid := io.rxValid
   uart.io.rxByte := io.rxByte
+  uart.io.txReady := io.uartTxReady
 
   private val plic = Module(new AetherPlic(
     sourceCount = plicSourceCount,
@@ -168,6 +174,7 @@ class AetherSoCPlatformFabric(
   timer.io.wdata := pending.wdata
   timer.io.wmask := pending.wmask
   timer.io.complete := timerComplete
+  timer.io.timebaseTick := io.timebaseTick
 
   private val mmioReady = Mux(
     pendingPlic,
