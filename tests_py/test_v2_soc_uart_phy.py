@@ -25,6 +25,7 @@ class V2SoCUartPhyContract(unittest.TestCase):
         self.assertIn("io.baudDivisor := Cat(dlm, dll)", source)
         self.assertIn("resetDivisor & 0xff", source)
         self.assertIn("resetDivisor >> 8", source)
+        self.assertIn('private val lcr = RegInit("h03".U(8.W))', source)
 
     def test_phy_is_divisor_driven_standard_8n1(self):
         source = PHY.read_text(encoding="utf-8")
