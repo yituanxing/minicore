@@ -1,54 +1,102 @@
 # Roadmap
 
-AetherCore is advanced by executable software pressure: small programs establish architectural mechanisms, focused regressions freeze them, and increasingly capable operating systems expose the next missing boundary.
+AetherCore/AetherSoC is advanced by executable software pressure and frozen qualification points. Real workloads expose missing architectural boundaries; focused regressions lock them down before the design is widened.
 
 ## Completed / frozen ladder
 
-- **S0.x** — Chisel/CIRCT/Verilator bring-up, directed RV64I pipeline/hazard/fault regressions and pinned NEMU retirement DiffTest.
-- **S1.x** — RV64M, compiler-produced workloads, CoreMark, Embench and littlefs-style real software qualification.
-- **Machine OS line** — FreeRTOS-driven Machine CSRs, precise traps, timer/external interrupts, PLIC, WFI and preemptive context switching.
-- **U-mode line** — U-mode execution, ECALL/syscall return, PMP isolation and isolated preemptive tasks.
-- **Zephyr Z1-Z4** — frozen Zephyr kernel/interrupt qualification.
-- **NuttX N1-N4** — frozen flat NuttX build, NSH, timer/scheduler and UART RX through PLIC.
-- **NuttX protected P1-P3** — real protected userspace, RV32A workload-driven atomics, trusted kernel exception stacks, PMP fault isolation and scheduler/NSH recovery.
-- **Supervisor V1** — frozen physical-address M/S/U execution with Supervisor CSRs, synchronous exception delegation and SRET; Sv32 intentionally disabled in the V1 regression profile.
-- **Supervisor Sv32 V2** — frozen RV32 Sv32 address translation with PA34 instruction/data paths, two-level page-table walk, precise page faults, correctness-first TLBs, `SFENCE.VMA`, and U-to-S page-fault delegation. Authoritative evidence: `docs/SV32_V2_FREEZE.md`.
+- directed RV32/RV64 pipeline and NEMU differential bring-up;
+- RV64M, compiler-produced workloads, CoreMark, Embench and littlefs;
+- FreeRTOS Machine-mode traps, timer/external interrupts and preemption;
+- U-mode ECALL/syscall paths and PMP isolation;
+- Zephyr and NuttX qualification;
+- protected NuttX userspace and RV32A atomics;
+- Supervisor V1 M/S/U execution;
+- Supervisor Sv32 V2 translation, TLB/PTW, precise page faults and `SFENCE.VMA`;
+- RV64 supervisor/Sv39 line;
+- RV64A LR/SC and AMO execution;
+- OpenSBI firmware bring-up;
+- Linux 6.6.143 first execution and deeper runtime;
+- AetherCore V2 architecture and performance line;
+- AetherSoC PlatformFabric, MemoryHub and peripheral ownership;
+- BootROM, PLIC, ACLINT-style MTIMER and ns16550-compatible UART;
+- I-cache and D-cache;
+- unified semantic memory and AXI4 external-memory boundary;
+- DTS generation;
+- FPGA-facing SoC and physical UART PHY;
+- virtual FPGA board;
+- pin-level OpenSBI -> Linux -> deterministic PID1 qualification;
+- board-neutral FPGA synthesis proxy.
 
-## Next: real Supervisor-OS pressure
+The authoritative current freeze record is `docs/AETHERSOC_V0_FREEZE.md`.
 
-V2 has enough virtual-memory architecture to stop adding synthetic MMU features. The next bounded branch should start from `freeze/sv32-v2-minimal-translation` and use a real S-mode kernel as the design driver.
+## Current: AetherSoC v0 release closure
+
+The current release line is deliberately narrow:
+
+1. rerun FPGA synthesis on the latest product baseline;
+2. freeze exact runtime/resource evidence;
+3. merge `release/aethersoc-v0-freeze` to the product branch;
+4. promote the frozen product line to the default `main` branch via PR #253.
+
+No new SoC feature is allowed to block this release unless the freeze qualification exposes a correctness failure.
+
+## Next: concrete FPGA board
+
+After v0, the next hardware milestone is board-specific rather than another abstract SoC rewrite.
 
 Target sequence:
 
-1. audit small RV32/Sv32-capable kernels and choose the smallest target that genuinely creates page tables and enters S-mode;
-2. boot the kernel through the existing M -> S boundary without inventing unnecessary firmware features;
-3. prove that its real code consumes `satp`, Sv32 translation, TLB invalidation and page-fault handling;
-4. allow the workload to expose the next missing architectural boundary, likely S-level interrupt/timer plumbing and/or an SBI-like firmware interface;
-5. reach a real U-mode process under the S-mode kernel;
-6. deliberately trigger unmapped/read-only/kernel-VA accesses from that process;
-7. prove precise page-fault delivery, process termination/isolation and continued kernel/scheduler execution;
-8. freeze the resulting OS-driven checkpoint before adding wider Linux-class capability.
+1. select a concrete FPGA device/board;
+2. bind `AetherCoreV2FpgaSoC` to board clocks and reset;
+3. integrate vendor/device PLL or clocking primitives;
+4. integrate the actual DDR/SDRAM controller or external-memory interface;
+5. write pin and timing constraints;
+6. run synthesis, place-and-route and timing analysis;
+7. generate a bitstream;
+8. bring up UART first;
+9. boot OpenSBI;
+10. boot Linux and reach the same frozen PID1 milestone on real hardware.
 
-The chosen OS should drive new architecture. Do not add Supervisor interrupt sources, firmware calls, ASIDs, hardware A/D updates or more MMU machinery merely because the specification contains them; add them when the real workload demonstrates the need.
+Only this phase can establish a real Fmax and board boot-time claim.
 
-## After the first real S-mode OS
+## Performance after v0
 
-Depending on the failures exposed by that workload:
+Performance work is optional and measurement-driven. It must not be confused with missing SoC functionality.
 
-- **Supervisor interrupt line** — add only the delegated timer/external interrupt mechanisms the selected kernel actually requires.
-- **Firmware/SBI boundary** — introduce an M-mode firmware/SBI layer when a real S-mode kernel requires it rather than simulating Linux conventions prematurely.
-- **Process/VM hardening** — expand address-space switching, page-fault recovery and user-process isolation from real kernel behavior.
-- **RV64/Linux-class line** — when the architecture is ready, select the required RV64/MMU profile, then introduce OpenSBI, Linux, musl, BusyBox and deterministic user programs such as Lua/SQLite.
+Current evidence already shows that memory serialization mattered materially and that same-source Data overlap opportunities exist. Future candidates include:
 
-## Performance and hardware after software completeness
+- latency-bearing DDR models;
+- deeper memory-level parallelism;
+- cache refill/burst refinements;
+- larger or more associative caches if workload data justifies them;
+- branch/front-end work when measured as a material Linux bottleneck;
+- execution/ROB/load-queue changes only when attribution supports them.
 
-Once the functional software ladder is stable:
+Each optimization requires an A/B measurement with identical retired work.
 
-- caches and memory hierarchy;
-- multi-cycle multiply/divide and other execution-unit latency work;
-- branch prediction;
-- bus/interconnect refinement;
-- FPGA synthesis, timing closure and board bring-up;
-- optional later superscalar work such as dual issue, ROB, register renaming and partial out-of-order execution.
+## Platform expansion
 
-Correctness and software completeness precede performance optimization. Every upstream failure that reveals an architectural bug should be reduced into a focused permanent regression before RTL is changed, and microarchitectural changes should rerun frozen executable hashes without silently recompiling them.
+Do not add peripherals or architectural features merely because other SoCs contain them.
+
+Possible later additions should be workload- or board-driven, for example:
+
+- SD/eMMC;
+- SPI/QSPI;
+- Ethernet;
+- DMA;
+- additional interrupt sources;
+- multi-hart support;
+- debug/JTAG;
+- richer boot media.
+
+These belong to later platform revisions, not AetherSoC v0 release closure.
+
+## Repository policy
+
+After v0 promotion:
+
+- `main` is the single canonical product branch;
+- feature/performance/board work branches from `main`;
+- completed work returns to `main` promptly;
+- milestone PRs/tags preserve history;
+- long-lived product branches must not diverge thousands of commits ahead of `main` again.
