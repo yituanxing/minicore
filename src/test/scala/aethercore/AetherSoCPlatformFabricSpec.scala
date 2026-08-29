@@ -37,6 +37,14 @@ class AetherSoCPlatformFabricSpec extends AnyFlatSpec with Matchers with ChiselS
     dut.io.memReady.poke(false.B)
     dut.io.memRdata.poke(0.U)
     dut.io.memFault.poke(false.B)
+    dut.io.externalRequest.foreach(_.ready.poke(false.B))
+    dut.io.externalResponse.foreach { response =>
+      response.valid.poke(false.B)
+      response.bits.txnId.poke(0.U)
+      response.bits.rdata.poke(0.U)
+      response.bits.fault.poke(false.B)
+      response.bits.last.poke(true.B)
+    }
 
     dut.io.rxValid.poke(false.B)
     dut.io.rxByte.poke(0.U)
@@ -159,6 +167,105 @@ class AetherSoCPlatformFabricSpec extends AnyFlatSpec with Matchers with ChiselS
       dut.io.uartByte.expect(0x5a.U)
       dut.clock.step()
       dut.io.uartValid.expect(false.B)
+    }
+  }
+
+
+  it should "allow semantic RAM reads to remain concurrently outstanding and return out of order" in {
+    simulate(new AetherSoCPlatformFabric(
+      paddrBits = platform.paddrBits,
+      dataBits = platform.busDataBits,
+      txnIdBits = 2,
+      addressMap = map,
+      externalSemanticMemory = true
+    )) { dut =>
+      initialize(dut)
+      dut.io.externalRequest.get.ready.poke(true.B)
+
+      val a0 = map.ramBase + 0x1000
+      val a1 = map.ramBase + 0x2000
+
+      issue(dut, a0, AetherMemOp.Read, txnId = 0)
+      dut.io.externalRequest.get.valid.expect(true.B)
+      dut.io.externalRequest.get.bits.txnId.expect(0.U)
+      dut.io.externalRequest.get.bits.paddr.expect(a0.U)
+      dut.clock.step()
+
+      issue(dut, a1, AetherMemOp.Read, txnId = 1)
+      dut.io.externalRequest.get.valid.expect(true.B)
+      dut.io.externalRequest.get.bits.txnId.expect(1.U)
+      dut.io.externalRequest.get.bits.paddr.expect(a1.U)
+      dut.clock.step()
+
+      // Return the younger read first. Transaction identity, not request order,
+      // owns the response.
+      dut.io.externalResponse.get.valid.poke(true.B)
+      dut.io.externalResponse.get.bits.txnId.poke(1.U)
+      dut.io.externalResponse.get.bits.rdata.poke("h2222222222222222".U)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(1.U)
+      dut.io.response.bits.rdata.expect("h2222222222222222".U)
+      dut.clock.step()
+
+      dut.io.externalResponse.get.bits.txnId.poke(0.U)
+      dut.io.externalResponse.get.bits.rdata.poke("h1111111111111111".U)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(0.U)
+      dut.io.response.bits.rdata.expect("h1111111111111111".U)
+      dut.clock.step()
+      dut.io.externalResponse.get.valid.poke(false.B)
+    }
+  }
+
+  it should "hold serialized RAM operations behind the concurrent read drain barrier" in {
+    simulate(new AetherSoCPlatformFabric(
+      paddrBits = platform.paddrBits,
+      dataBits = platform.busDataBits,
+      txnIdBits = 2,
+      addressMap = map,
+      externalSemanticMemory = true
+    )) { dut =>
+      initialize(dut)
+      dut.io.externalRequest.get.ready.poke(true.B)
+
+      val readAddress = map.ramBase + 0x3000
+      val writeAddress = map.ramBase + 0x4000
+
+      issue(dut, readAddress, AetherMemOp.Read, txnId = 0)
+      dut.io.externalRequest.get.valid.expect(true.B)
+      dut.clock.step()
+
+      // The write may enter the local queue, but cannot cross the semantic
+      // external seam until the older read lifetime has retired.
+      issue(dut, writeAddress, AetherMemOp.Write, data = 0x55, txnId = 2)
+      dut.io.externalRequest.get.valid.expect(false.B)
+
+      dut.io.externalResponse.get.valid.poke(true.B)
+      dut.io.externalResponse.get.bits.txnId.poke(0.U)
+      dut.io.externalResponse.get.bits.rdata.poke("h1234".U)
+      dut.io.response.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.externalResponse.get.valid.poke(false.B)
+
+      dut.io.externalRequest.get.valid.expect(true.B)
+      dut.io.externalRequest.get.bits.op.expect(AetherMemOp.Write)
+      dut.io.externalRequest.get.bits.txnId.expect(2.U)
+      dut.clock.step()
+
+      // A younger read can queue, but the serialized write response owns the
+      // global barrier until completion.
+      issue(dut, readAddress + 8, AetherMemOp.Read, txnId = 1)
+      dut.io.externalRequest.get.valid.expect(false.B)
+
+      dut.io.externalResponse.get.valid.poke(true.B)
+      dut.io.externalResponse.get.bits.txnId.poke(2.U)
+      dut.io.externalResponse.get.bits.rdata.poke(0.U)
+      dut.io.response.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.externalResponse.get.valid.poke(false.B)
+
+      dut.io.externalRequest.get.valid.expect(true.B)
+      dut.io.externalRequest.get.bits.txnId.expect(1.U)
     }
   }
 
