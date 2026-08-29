@@ -4,6 +4,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TOP = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2Axi4SoC.scala"
+UNIFIED = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala"
 
 
 class V2Axi4SoCSourceContract(unittest.TestCase):
@@ -27,6 +28,7 @@ class V2Axi4SoCSourceContract(unittest.TestCase):
 
     def test_bootrom_and_platform_devices_remain_internal_to_the_logical_soc(self):
         source = TOP.read_text(encoding="utf-8")
+        unified = UNIFIED.read_text(encoding="utf-8")
         self.assertIn("BootROM", source)
         self.assertIn("Only requests that escaped the internal SoC address map", source)
         self.assertNotIn("new AetherSoCBootRom", source)
@@ -35,6 +37,11 @@ class V2Axi4SoCSourceContract(unittest.TestCase):
         self.assertNotIn("new AetherAclintMtimer", source)
         self.assertIn("io.icacheHitCount := soc.io.icacheHitCount", source)
         self.assertIn("io.icacheMissCount := soc.io.icacheMissCount", source)
+        self.assertIn("val bootRomHit =", unified)
+        self.assertIn(
+            "io.memoryRequest.valid := hub.io.downstreamRequest.valid && !bootRomHit",
+            unified,
+        )
 
     def test_board_specific_phy_and_ddr_remain_outside(self):
         source = TOP.read_text(encoding="utf-8")
