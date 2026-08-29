@@ -3,6 +3,9 @@ name: AetherSoC Unified Linux Path Gate
 on:
   pull_request:
     paths:
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
       - 'src/main/scala/aethercore/soc/peripheral/**'
       - 'src/main/scala/aethercore/soc/AetherCoreV2Complex.scala'
       - 'src/main/scala/aethercore/sim/AetherSoCUnifiedHostMemoryAdapter.scala'
