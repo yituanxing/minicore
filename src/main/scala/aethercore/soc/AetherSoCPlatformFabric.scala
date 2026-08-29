@@ -27,7 +27,8 @@ class AetherSoCPlatformFabric(
     val addressMap: AetherSoCAddressMap,
     val plicSourceCount: Int = 52,
     val uartPlicSourceId: Int = 10,
-    val uartResetDivisor: Int = 1
+    val uartResetDivisor: Int = 1,
+    val externalSemanticMemory: Boolean = false
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 platform fabric currently targets RV64")
   require(txnIdBits > 0)
@@ -43,6 +44,19 @@ class AetherSoCPlatformFabric(
     // CPU-complex semantic memory master.
     val request = Flipped(Decoupled(new AetherMemRequest(paddrBits, dataBits, txnIdBits)))
     val response = Decoupled(new AetherMemResponse(dataBits, txnIdBits))
+
+    // Preferred semantic external-RAM seam. Unified/AXI/FPGA compositions opt
+    // into this interface so transaction identity survives below the platform
+    // decoder. The legacy terminal-response seam remains for the historical
+    // Linux oracle only.
+    val externalRequest =
+      if (externalSemanticMemory)
+        Some(Decoupled(new AetherMemRequest(paddrBits, dataBits, txnIdBits)))
+      else None
+    val externalResponse =
+      if (externalSemanticMemory)
+        Some(Flipped(Decoupled(new AetherMemResponse(dataBits, txnIdBits))))
+      else None
 
     // External RAM / lower-memory compatibility seam.
     val memValid = Output(Bool())
@@ -185,34 +199,21 @@ class AetherSoCPlatformFabric(
     Mux(pendingTimer, timer.io.ready,
       Mux(pendingUart, uart.io.ready, true.B))
   )
-  private val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
-  private val responseData = Mux(
+  private val mmioData = Mux(
     pendingPlic,
     plic.io.rdata.pad(dataBits),
     Mux(pendingTimer, timer.io.rdata,
-      Mux(pendingUart, uart.io.rdata, io.memRdata))
+      Mux(pendingUart, uart.io.rdata, 0.U))
   )
-  private val responseFault = Mux(
+  private val mmioFault = Mux(
     pendingPlic,
     plic.io.fault,
     Mux(pendingTimer, timer.io.fault,
-      Mux(pendingUart, uart.io.fault,
-        Mux(pendingMmio, false.B, io.memFault)))
+      Mux(pendingUart, uart.io.fault, false.B))
   )
 
-  io.response.valid := pendingValid && responseReady
-  io.response.bits.txnId := pending.txnId
-  io.response.bits.rdata := responseData
-  io.response.bits.fault := responseFault
-  io.response.bits.last := true.B
-
-  private val responseFire = io.response.fire
-  pendingQueue.io.deq.ready := responseFire
-  uartComplete := responseFire
-  timerComplete := responseFire
-  plicComplete := responseFire
-
-  io.memValid := pendingExternal
+  // Keep compatibility outputs deterministic in both compositions.
+  io.memValid := false.B
   io.memWrite := pendingWrite
   io.memAtomic := pendingAtomic
   io.memOp := pending.op
@@ -222,6 +223,171 @@ class AetherSoCPlatformFabric(
   io.memWmask := pending.wmask
   io.memSize := pending.size
   io.memAttributes := pending.attributes
+
+  private val responseFire = WireDefault(false.B)
+  private val mmioResponseFire = WireDefault(false.B)
+
+  if (externalSemanticMemory) {
+    private val TxnCount = 1 << txnIdBits
+    private val ReadCountBits = log2Ceil(TxnCount + 1)
+    private val normalReadOutstanding =
+      RegInit(VecInit(Seq.fill(TxnCount)(false.B)))
+    private val normalReadCount = RegInit(0.U(ReadCountBits.W))
+    private val serializedExternalActive = RegInit(false.B)
+
+    private val pendingNormalExternalRead =
+      pendingExternal &&
+        pending.op === AetherMemOp.Read &&
+        !pending.attributes.sideEffecting &&
+        !pending.attributes.ordered
+    private val pendingSerializedExternal =
+      pendingExternal && !pendingNormalExternalRead
+
+    private val pendingReadSlotFree =
+      !normalReadOutstanding(pending.txnId)
+    private val canIssueNormalRead =
+      pendingNormalExternalRead &&
+        !serializedExternalActive &&
+        pendingReadSlotFree
+    private val canIssueSerializedExternal =
+      pendingSerializedExternal &&
+        normalReadCount === 0.U &&
+        !serializedExternalActive
+    private val canRunMmio =
+      pendingMmio &&
+        normalReadCount === 0.U &&
+        !serializedExternalActive
+
+    io.externalRequest.get.valid :=
+      pendingValid && (canIssueNormalRead || canIssueSerializedExternal)
+    io.externalRequest.get.bits := pending
+
+    private val externalRequestFire = io.externalRequest.get.fire
+    private val normalReadIssue =
+      externalRequestFire && pendingNormalExternalRead
+    private val serializedExternalIssue =
+      externalRequestFire && pendingSerializedExternal
+
+    when(normalReadIssue) {
+      normalReadOutstanding(pending.txnId) := true.B
+    }
+    when(serializedExternalIssue) {
+      serializedExternalActive := true.B
+    }
+
+    private val externalResponseKnown =
+      serializedExternalActive ||
+        normalReadOutstanding(io.externalResponse.get.bits.txnId)
+
+    private val responseArbiter = Module(new RRArbiter(
+      new AetherMemResponse(dataBits, txnIdBits),
+      2
+    ))
+
+    responseArbiter.io.in(0).valid :=
+      io.externalResponse.get.valid && externalResponseKnown
+    responseArbiter.io.in(0).bits := io.externalResponse.get.bits
+    io.externalResponse.get.ready :=
+      responseArbiter.io.in(0).ready && externalResponseKnown
+
+    responseArbiter.io.in(1).valid :=
+      pendingValid && canRunMmio && mmioReady
+    responseArbiter.io.in(1).bits.txnId := pending.txnId
+    responseArbiter.io.in(1).bits.rdata := mmioData
+    responseArbiter.io.in(1).bits.fault := mmioFault
+    responseArbiter.io.in(1).bits.last := true.B
+
+    io.response <> responseArbiter.io.out
+    responseFire := io.response.fire
+    mmioResponseFire := responseArbiter.io.in(1).fire
+
+    private val externalResponseFire = responseArbiter.io.in(0).fire
+    private val normalReadRetire =
+      externalResponseFire && !serializedExternalActive
+
+    when(normalReadRetire) {
+      val txn = io.externalResponse.get.bits.txnId
+      assert(normalReadOutstanding(txn),
+        "PlatformFabric received a RAM read response for a non-outstanding txnId")
+      normalReadOutstanding(txn) := false.B
+    }
+
+    when(externalResponseFire && serializedExternalActive) {
+      serializedExternalActive := false.B
+    }
+
+    switch(Cat(normalReadIssue, normalReadRetire)) {
+      is("b10".U) { normalReadCount := normalReadCount + 1.U }
+      is("b01".U) { normalReadCount := normalReadCount - 1.U }
+    }
+
+    when(io.externalResponse.get.valid) {
+      assert(externalResponseKnown,
+        "PlatformFabric received an external response with no live transaction")
+    }
+
+    // Normal RAM reads leave the request queue at acceptance and may complete
+    // later/out of order. Serialized RAM operations also leave at acceptance,
+    // but hold the global barrier until their terminal response. MMIO retains
+    // the historical terminal-response ownership in the queue.
+    pendingQueue.io.deq.ready :=
+      externalRequestFire || mmioResponseFire
+
+    uartComplete := mmioResponseFire
+    timerComplete := mmioResponseFire
+    plicComplete := mmioResponseFire
+
+    io.exitValid := mmioResponseFire && pendingExit && pendingWrite
+    io.exitCode := pending.wdata
+
+    assert(!(pendingMmio && pendingAtomic),
+      "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
+    when(serializedExternalActive) {
+      assert(normalReadCount === 0.U,
+        "serialized external RAM lifetime must exclude concurrent normal reads")
+    }
+  } else {
+    // Historical terminal-response external-memory contract. This branch is
+    // intentionally kept behavior-identical for the qualified compatibility
+    // oracle while production Unified/AXI/FPGA paths use the semantic seam.
+    io.externalRequest.foreach { request =>
+      request.valid := false.B
+      request.bits := 0.U.asTypeOf(request.bits)
+    }
+    io.externalResponse.foreach(_.ready := false.B)
+
+    private val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
+    private val responseData = Mux(
+      pendingExternal,
+      io.memRdata,
+      mmioData
+    )
+    private val responseFault = Mux(
+      pendingExternal,
+      io.memFault,
+      mmioFault
+    )
+
+    io.response.valid := pendingValid && responseReady
+    io.response.bits.txnId := pending.txnId
+    io.response.bits.rdata := responseData
+    io.response.bits.fault := responseFault
+    io.response.bits.last := true.B
+
+    responseFire := io.response.fire
+    pendingQueue.io.deq.ready := responseFire
+    uartComplete := responseFire
+    timerComplete := responseFire
+    plicComplete := responseFire
+
+    io.memValid := pendingExternal
+
+    io.exitValid := responseFire && pendingExit && pendingWrite
+    io.exitCode := pending.wdata
+
+    assert(!(pendingMmio && pendingAtomic),
+      "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
+  }
 
   io.rxReady := uart.io.rxReady
   io.uartValid := uart.io.txValid
