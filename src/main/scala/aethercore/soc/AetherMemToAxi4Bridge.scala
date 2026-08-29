@@ -72,7 +72,7 @@ class AetherMemToAxi4Bridge(
   private val normalReadValid =
     RegInit(VecInit(Seq.fill(ReadSlotCount)(false.B)))
   private val normalReadByteOffset =
-    Reg(Vec(ReadSlotCount, UInt(ByteOffsetBits.W)))
+    RegInit(VecInit(Seq.fill(ReadSlotCount)(0.U(ByteOffsetBits.W))))
   private val normalReadCount = RegInit(0.U(ReadCountBits.W))
   private val readPurpose = RegInit(ReadNormal)
   private val writePurpose = RegInit(WriteNormal)
