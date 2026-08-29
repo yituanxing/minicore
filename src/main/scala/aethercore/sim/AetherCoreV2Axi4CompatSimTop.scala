@@ -115,6 +115,55 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
   soc.io.axi.r.bits := hostMemory.io.axi.r.bits
   hostMemory.io.axi.r.ready := soc.io.axi.r.ready
 
+  // Observe the production AXI boundary after every upstream cache/fabric/hub
+  // policy decision. Source 0 is the Data client and its low two ID bits retain
+  // the CPU-complex transaction identity. This is observation only.
+  private val dataSource = 0.U(2.W)
+  private val dataArFire =
+    soc.io.axi.ar.fire && soc.io.axi.ar.bits.id(3, 2) === dataSource
+  private val dataRFire =
+    soc.io.axi.r.fire && soc.io.axi.r.bits.last &&
+      soc.io.axi.r.bits.id(3, 2) === dataSource
+
+  private val dataReadOutstanding = RegInit(0.U(3.W))
+  private val dataReadRequestCount = RegInit(0.U(64.W))
+  private val dataReadResponseCount = RegInit(0.U(64.W))
+  private val dataReadOverlapIssueCount = RegInit(0.U(64.W))
+  private val dataReadTwoOutstandingCycles = RegInit(0.U(64.W))
+  private val dataReadMaxOutstanding = RegInit(0.U(3.W))
+
+  private val dataReadOutstandingNext = WireDefault(dataReadOutstanding)
+  switch(Cat(dataArFire, dataRFire)) {
+    is("b10".U) { dataReadOutstandingNext := dataReadOutstanding + 1.U }
+    is("b01".U) { dataReadOutstandingNext := dataReadOutstanding - 1.U }
+  }
+
+  when(dataArFire) {
+    dataReadRequestCount := dataReadRequestCount + 1.U
+    when(dataReadOutstanding =/= 0.U) {
+      dataReadOverlapIssueCount := dataReadOverlapIssueCount + 1.U
+    }
+  }
+  when(dataRFire) {
+    dataReadResponseCount := dataReadResponseCount + 1.U
+  }
+  when(dataReadOutstanding >= 2.U) {
+    dataReadTwoOutstandingCycles := dataReadTwoOutstandingCycles + 1.U
+  }
+  when(dataReadOutstandingNext > dataReadMaxOutstanding) {
+    dataReadMaxOutstanding := dataReadOutstandingNext
+  }
+  dataReadOutstanding := dataReadOutstandingNext
+
+  assert(dataReadOutstanding <= 4.U,
+    "simulation Data AXI read occupancy must fit the four local transaction IDs")
+
+  io.axiDataReadRequestCount := dataReadRequestCount
+  io.axiDataReadResponseCount := dataReadResponseCount
+  io.axiDataReadOverlapIssueCount := dataReadOverlapIssueCount
+  io.axiDataReadTwoOutstandingCycles := dataReadTwoOutstandingCycles
+  io.axiDataReadMaxOutstanding := dataReadMaxOutstanding
+
   io.imemValid := hostMemory.io.imemValid
   io.imemAddr := hostMemory.io.imemAddr
   io.imemBytes := hostMemory.io.imemBytes
