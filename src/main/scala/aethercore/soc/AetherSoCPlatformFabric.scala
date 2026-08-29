@@ -228,32 +228,32 @@ class AetherSoCPlatformFabric(
   private val mmioResponseFire = WireDefault(false.B)
 
   if (externalSemanticMemory) {
-    private val TxnCount = 1 << txnIdBits
-    private val ReadCountBits = log2Ceil(TxnCount + 1)
-    private val normalReadOutstanding =
+    val TxnCount = 1 << txnIdBits
+    val ReadCountBits = log2Ceil(TxnCount + 1)
+    val normalReadOutstanding =
       RegInit(VecInit(Seq.fill(TxnCount)(false.B)))
-    private val normalReadCount = RegInit(0.U(ReadCountBits.W))
-    private val serializedExternalActive = RegInit(false.B)
+    val normalReadCount = RegInit(0.U(ReadCountBits.W))
+    val serializedExternalActive = RegInit(false.B)
 
-    private val pendingNormalExternalRead =
+    val pendingNormalExternalRead =
       pendingExternal &&
         pending.op === AetherMemOp.Read &&
         !pending.attributes.sideEffecting &&
         !pending.attributes.ordered
-    private val pendingSerializedExternal =
+    val pendingSerializedExternal =
       pendingExternal && !pendingNormalExternalRead
 
-    private val pendingReadSlotFree =
+    val pendingReadSlotFree =
       !normalReadOutstanding(pending.txnId)
-    private val canIssueNormalRead =
+    val canIssueNormalRead =
       pendingNormalExternalRead &&
         !serializedExternalActive &&
         pendingReadSlotFree
-    private val canIssueSerializedExternal =
+    val canIssueSerializedExternal =
       pendingSerializedExternal &&
         normalReadCount === 0.U &&
         !serializedExternalActive
-    private val canRunMmio =
+    val canRunMmio =
       pendingMmio &&
         normalReadCount === 0.U &&
         !serializedExternalActive
@@ -262,10 +262,10 @@ class AetherSoCPlatformFabric(
       pendingValid && (canIssueNormalRead || canIssueSerializedExternal)
     io.externalRequest.get.bits := pending
 
-    private val externalRequestFire = io.externalRequest.get.fire
-    private val normalReadIssue =
+    val externalRequestFire = io.externalRequest.get.fire
+    val normalReadIssue =
       externalRequestFire && pendingNormalExternalRead
-    private val serializedExternalIssue =
+    val serializedExternalIssue =
       externalRequestFire && pendingSerializedExternal
 
     when(normalReadIssue) {
@@ -275,11 +275,11 @@ class AetherSoCPlatformFabric(
       serializedExternalActive := true.B
     }
 
-    private val externalResponseKnown =
+    val externalResponseKnown =
       serializedExternalActive ||
         normalReadOutstanding(io.externalResponse.get.bits.txnId)
 
-    private val responseArbiter = Module(new RRArbiter(
+    val responseArbiter = Module(new RRArbiter(
       new AetherMemResponse(dataBits, txnIdBits),
       2
     ))
@@ -301,8 +301,8 @@ class AetherSoCPlatformFabric(
     responseFire := io.response.fire
     mmioResponseFire := responseArbiter.io.in(1).fire
 
-    private val externalResponseFire = responseArbiter.io.in(0).fire
-    private val normalReadRetire =
+    val externalResponseFire = responseArbiter.io.in(0).fire
+    val normalReadRetire =
       externalResponseFire && !serializedExternalActive
 
     when(normalReadRetire) {
@@ -356,13 +356,13 @@ class AetherSoCPlatformFabric(
     }
     io.externalResponse.foreach(_.ready := false.B)
 
-    private val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
-    private val responseData = Mux(
+    val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
+    val responseData = Mux(
       pendingExternal,
       io.memRdata,
       mmioData
     )
-    private val responseFault = Mux(
+    val responseFault = Mux(
       pendingExternal,
       io.memFault,
       mmioFault
