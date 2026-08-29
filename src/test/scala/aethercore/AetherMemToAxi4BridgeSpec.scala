@@ -73,29 +73,35 @@ class AetherMemToAxi4BridgeSpec extends AnyFlatSpec with Matchers with ChiselSim
       initialize(dut)
 
       val address = BigInt("80000003", 16)
-      issue(dut, txnId = 3, AetherMemOp.Read, address, MemSize.Byte)
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.bits.txnId.poke(3.U)
+      dut.io.request.bits.op.poke(AetherMemOp.Read)
+      dut.io.request.bits.paddr.poke(address.U)
+      dut.io.request.bits.size.poke(MemSize.Byte)
 
+      dut.io.request.ready.expect(true.B)
       dut.io.axi.ar.valid.expect(true.B)
       dut.io.axi.ar.bits.id.expect(3.U)
       dut.io.axi.ar.bits.addr.expect(address.U)
       dut.io.axi.ar.bits.len.expect(0.U)
       dut.io.axi.ar.bits.size.expect(0.U)
       dut.clock.step()
+      dut.io.request.valid.poke(false.B)
 
       dut.io.axi.r.valid.poke(true.B)
       dut.io.axi.r.bits.id.poke(3.U)
       dut.io.axi.r.bits.data.poke(BigInt("00000000ab000000", 16).U)
       dut.io.axi.r.bits.resp.poke(Axi4Resp.Okay)
       dut.io.axi.r.bits.last.poke(true.B)
-      dut.io.axi.r.ready.expect(true.B)
-      dut.clock.step()
-      dut.io.axi.r.valid.poke(false.B)
 
+      dut.io.axi.r.ready.expect(true.B)
       dut.io.response.valid.expect(true.B)
       dut.io.response.bits.txnId.expect(3.U)
       dut.io.response.bits.rdata.expect(0xab.U)
       dut.io.response.bits.fault.expect(false.B)
       dut.clock.step()
+      dut.io.axi.r.valid.poke(false.B)
+
       dut.io.request.ready.expect(true.B)
     }
   }
@@ -143,31 +149,120 @@ class AetherMemToAxi4BridgeSpec extends AnyFlatSpec with Matchers with ChiselSim
     }
   }
 
-  it should "convert AXI response identity errors into AetherMem faults" in {
+  it should "convert AXI read response errors into AetherMem faults" in {
     simulate(new AetherMemToAxi4Bridge()) { dut =>
       initialize(dut)
 
-      issue(
-        dut,
-        txnId = 1,
-        op = AetherMemOp.Read,
-        address = BigInt("80001000", 16),
-        size = MemSize.DWord
-      )
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.bits.txnId.poke(1.U)
+      dut.io.request.bits.op.poke(AetherMemOp.Read)
+      dut.io.request.bits.paddr.poke(BigInt("80001000", 16).U)
+      dut.io.request.bits.size.poke(MemSize.DWord)
+      dut.io.request.ready.expect(true.B)
       dut.io.axi.ar.valid.expect(true.B)
       dut.clock.step()
+      dut.io.request.valid.poke(false.B)
 
       dut.io.axi.r.valid.poke(true.B)
-      dut.io.axi.r.bits.id.poke(2.U)
+      dut.io.axi.r.bits.id.poke(1.U)
       dut.io.axi.r.bits.data.poke("h1122334455667788".U)
-      dut.io.axi.r.bits.resp.poke(Axi4Resp.Okay)
+      dut.io.axi.r.bits.resp.poke(Axi4Resp.SlvErr)
       dut.io.axi.r.bits.last.poke(true.B)
-      dut.clock.step()
-      dut.io.axi.r.valid.poke(false.B)
-
       dut.io.response.valid.expect(true.B)
       dut.io.response.bits.txnId.expect(1.U)
       dut.io.response.bits.fault.expect(true.B)
+      dut.clock.step()
     }
   }
+
+  it should "allow multiple normal reads outstanding and accept out-of-order AXI responses" in {
+    simulate(new AetherMemToAxi4Bridge()) { dut =>
+      initialize(dut)
+
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.bits.op.poke(AetherMemOp.Read)
+      dut.io.request.bits.txnId.poke(1.U)
+      dut.io.request.bits.paddr.poke(BigInt("80000001", 16).U)
+      dut.io.request.bits.size.poke(MemSize.Byte)
+      dut.io.request.ready.expect(true.B)
+      dut.io.axi.ar.valid.expect(true.B)
+      dut.io.axi.ar.bits.id.expect(1.U)
+      dut.clock.step()
+
+      dut.io.request.bits.txnId.poke(2.U)
+      dut.io.request.bits.paddr.poke(BigInt("80000006", 16).U)
+      dut.io.request.bits.size.poke(MemSize.Half)
+      dut.io.request.ready.expect(true.B)
+      dut.io.axi.ar.valid.expect(true.B)
+      dut.io.axi.ar.bits.id.expect(2.U)
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+
+      // Return ID 2 before ID 1. Its halfword lives in byte lanes 6..7.
+      dut.io.axi.r.valid.poke(true.B)
+      dut.io.axi.r.bits.id.poke(2.U)
+      dut.io.axi.r.bits.data.poke(BigInt("beef000000000000", 16).U)
+      dut.io.axi.r.bits.resp.poke(Axi4Resp.Okay)
+      dut.io.axi.r.bits.last.poke(true.B)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(2.U)
+      dut.io.response.bits.rdata.expect(0xbeef.U)
+      dut.io.response.bits.fault.expect(false.B)
+      dut.clock.step()
+
+      dut.io.axi.r.bits.id.poke(1.U)
+      dut.io.axi.r.bits.data.poke(BigInt("000000000000aa00", 16).U)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(1.U)
+      dut.io.response.bits.rdata.expect(0xaa.U)
+      dut.io.response.bits.fault.expect(false.B)
+      dut.clock.step()
+      dut.io.axi.r.valid.poke(false.B)
+
+      dut.io.request.ready.expect(true.B)
+    }
+  }
+
+  it should "hold writes behind the concurrent read drain barrier" in {
+    simulate(new AetherMemToAxi4Bridge()) { dut =>
+      initialize(dut)
+
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.bits.op.poke(AetherMemOp.Read)
+      dut.io.request.bits.txnId.poke(1.U)
+      dut.io.request.bits.paddr.poke(BigInt("80002000", 16).U)
+      dut.io.request.bits.size.poke(MemSize.DWord)
+      dut.io.request.ready.expect(true.B)
+      dut.clock.step()
+
+      // Present a write while the read is still outstanding: it must stall.
+      dut.io.request.bits.op.poke(AetherMemOp.Write)
+      dut.io.request.bits.txnId.poke(3.U)
+      dut.io.request.bits.paddr.poke(BigInt("80003000", 16).U)
+      dut.io.request.bits.wdata.poke("hdeadbeef".U)
+      dut.io.request.bits.wmask.poke("hff".U)
+      dut.io.request.ready.expect(false.B)
+      dut.io.axi.aw.valid.expect(false.B)
+
+      // Drain the read.
+      dut.io.axi.r.valid.poke(true.B)
+      dut.io.axi.r.bits.id.poke(1.U)
+      dut.io.axi.r.bits.data.poke(0.U)
+      dut.io.axi.r.bits.resp.poke(Axi4Resp.Okay)
+      dut.io.axi.r.bits.last.poke(true.B)
+      dut.io.response.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.axi.r.valid.poke(false.B)
+
+      // The held write may enter only after the read lifetime is gone.
+      dut.io.request.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.request.valid.poke(false.B)
+      dut.clock.step()
+
+      dut.io.axi.aw.valid.expect(true.B)
+      dut.io.axi.w.valid.expect(true.B)
+    }
+  }
+
 }
