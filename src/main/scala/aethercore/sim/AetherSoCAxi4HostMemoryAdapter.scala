@@ -75,17 +75,22 @@ class AetherSoCAxi4HostMemoryAdapter(
   }
 
   // --------------------------------------------------------------------------
-  // AXI read channel -> independent historical host read sources
+  // AXI read channel -> historical host read sources
   // --------------------------------------------------------------------------
   //
-  // The host runner already exposes three physically independent read seams:
-  // instruction, PTW and data. Preserve one outstanding lifetime per source so
-  // the simulation target does not re-serialize the production AXI bridge.
-  // A later DDR timing model may deepen each source queue independently.
-  private val dataReadActive = RegInit(false.B)
-  private val dataReadId = Reg(UInt(idBits.W))
-  private val dataReadAddr = Reg(UInt(addrBits.W))
-  private val dataReadSize = Reg(UInt(3.W))
+  // PTW and instruction each retain one lifetime because their historical host
+  // seams are single-request interfaces. Data is different: the production
+  // LoadQ/D-cache path has a 2-bit local transaction ID and may now present
+  // multiple reads from the same MemoryHub source. Keep one simulation slot per
+  // local Data txnId, then time-multiplex those slots over the historical host
+  // data port. This prevents the compatibility target from re-serializing a
+  // production AXI capability while preserving the qualified host-memory oracle.
+  private val DataTxnCount = 1 << localTxnIdBits
+  private val dataReadActive =
+    RegInit(VecInit(Seq.fill(DataTxnCount)(false.B)))
+  private val dataReadId = Reg(Vec(DataTxnCount, UInt(idBits.W)))
+  private val dataReadAddr = Reg(Vec(DataTxnCount, UInt(addrBits.W)))
+  private val dataReadSize = Reg(Vec(DataTxnCount, UInt(3.W)))
 
   private val ptwReadActive = RegInit(false.B)
   private val ptwReadId = Reg(UInt(idBits.W))
@@ -99,8 +104,12 @@ class AetherSoCAxi4HostMemoryAdapter(
 
   private val incomingReadSource =
     io.axi.ar.bits.id(idBits - 1, localTxnIdBits)
+  private val incomingReadLocalTxn =
+    io.axi.ar.bits.id(localTxnIdBits - 1, 0)
   private val incomingReadSourceKnown =
     incomingReadSource <= InstructionSource.U
+  private val incomingDataSlotFree =
+    !dataReadActive(incomingReadLocalTxn)
 
   io.axi.ar.ready :=
     incomingReadSourceKnown &&
@@ -109,7 +118,7 @@ class AetherSoCAxi4HostMemoryAdapter(
         false.B
       )(
         Seq(
-          DataSource.U -> !dataReadActive,
+          DataSource.U -> incomingDataSlotFree,
           PtwSource.U -> !ptwReadActive,
           InstructionSource.U -> !instructionReadActive
         )
@@ -124,10 +133,12 @@ class AetherSoCAxi4HostMemoryAdapter(
 
     switch(incomingReadSource) {
       is(DataSource.U) {
-        dataReadActive := true.B
-        dataReadId := io.axi.ar.bits.id
-        dataReadAddr := io.axi.ar.bits.addr
-        dataReadSize := io.axi.ar.bits.size
+        assert(incomingDataSlotFree,
+          "AXI host adapter Data txnId must not be reused before response")
+        dataReadActive(incomingReadLocalTxn) := true.B
+        dataReadId(incomingReadLocalTxn) := io.axi.ar.bits.id
+        dataReadAddr(incomingReadLocalTxn) := io.axi.ar.bits.addr
+        dataReadSize(incomingReadLocalTxn) := io.axi.ar.bits.size
       }
       is(PtwSource.U) {
         ptwReadActive := true.B
@@ -144,6 +155,12 @@ class AetherSoCAxi4HostMemoryAdapter(
     }
   }
 
+  private val dataReadSelectValid = dataReadActive.asUInt.orR
+  private val dataReadSelect = PriorityEncoder(dataReadActive)
+  private val selectedDataReadId = dataReadId(dataReadSelect)
+  private val selectedDataReadAddr = dataReadAddr(dataReadSelect)
+  private val selectedDataReadSize = dataReadSize(dataReadSelect)
+
   io.imemValid := instructionReadActive
   io.imemAddr := instructionReadAddr
   io.imemBytes :=
@@ -153,13 +170,14 @@ class AetherSoCAxi4HostMemoryAdapter(
   io.ptwValid := ptwReadActive
   io.ptwAddr := ptwReadAddr
 
-  private val dataReadTerminal = dataReadActive && io.memReady
+  private val dataReadTerminal = dataReadSelectValid && io.memReady
   private val ptwReadTerminal = ptwReadActive && io.ptwReady
   private val instructionReadTerminal = instructionReadActive
 
   // AXI permits read responses to return out of request order when IDs differ.
-  // Pick any host source that has reached its terminal condition. The bridge
-  // uses the returned AXI ID to recover the original AetherMem lifetime.
+  // Pick any host source that has reached its terminal condition. Data may have
+  // several live IDs but the legacy host RAM port services one selected slot per
+  // cycle; the AXI boundary remains free to accept the other lifetimes meanwhile.
   private val selectedDataRead = dataReadTerminal
   private val selectedPtwRead = !selectedDataRead && ptwReadTerminal
   private val selectedInstructionRead =
@@ -170,7 +188,7 @@ class AetherSoCAxi4HostMemoryAdapter(
   private val selectedReadId = MuxCase(
     0.U(idBits.W),
     Seq(
-      selectedDataRead -> dataReadId,
+      selectedDataRead -> selectedDataReadId,
       selectedPtwRead -> ptwReadId,
       selectedInstructionRead -> instructionReadId
     )
@@ -178,7 +196,7 @@ class AetherSoCAxi4HostMemoryAdapter(
   private val selectedReadAddr = MuxCase(
     0.U(addrBits.W),
     Seq(
-      selectedDataRead -> dataReadAddr,
+      selectedDataRead -> selectedDataReadAddr,
       selectedPtwRead -> ptwReadAddr,
       selectedInstructionRead -> instructionReadAddr
     )
@@ -214,7 +232,7 @@ class AetherSoCAxi4HostMemoryAdapter(
 
   when(io.axi.r.fire) {
     when(selectedDataRead) {
-      dataReadActive := false.B
+      dataReadActive(dataReadSelect) := false.B
     }.elsewhen(selectedPtwRead) {
       ptwReadActive := false.B
     }.otherwise {
@@ -272,15 +290,15 @@ class AetherSoCAxi4HostMemoryAdapter(
 
   // One legacy data port is shared by AXI data reads and writes. The production
   // bridge drains all concurrent reads before entering a serialized write.
-  io.memValid := dataReadActive || writeActive
+  io.memValid := dataReadSelectValid || writeActive
   io.memWrite := writeActive
   io.memAtomic := false.B
   io.memOp := Mux(writeActive, AetherMemOp.Write, AetherMemOp.Read)
   io.memAtomicOp := AtomicOp.None
-  io.memAddr := Mux(writeActive, awAddr, dataReadAddr)
+  io.memAddr := Mux(writeActive, awAddr, selectedDataReadAddr)
   io.memWdata := Mux(writeActive, lowWriteData(dataBits - 1, 0), 0.U)
   io.memWmask := Mux(writeActive, lowWriteMask(BusBytes - 1, 0), 0.U)
-  io.memSize := Mux(writeActive, memSizeFromAxi(awSize), memSizeFromAxi(dataReadSize))
+  io.memSize := Mux(writeActive, memSizeFromAxi(awSize), memSizeFromAxi(selectedDataReadSize))
 
   when(writeActive && io.memReady && !bValid) {
     bValid := true.B
@@ -299,7 +317,7 @@ class AetherSoCAxi4HostMemoryAdapter(
   }
 
   when(writeActive) {
-    assert(!dataReadActive && !ptwReadActive && !instructionReadActive,
+    assert(!dataReadSelectValid && !ptwReadActive && !instructionReadActive,
       "AXI host adapter write must begin only after concurrent reads drain")
   }
 }
