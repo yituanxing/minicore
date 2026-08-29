@@ -18,7 +18,9 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   * A later adapter may translate this boundary to AXI4 without teaching the CPU
   * or the internal SoC fabric about AXI channel semantics.
   */
-class AetherCoreV2UnifiedMemorySoC extends Module {
+class AetherCoreV2UnifiedMemorySoC(
+    val externalPhysicalSeams: Boolean = false
+) extends Module {
   private val xlen = 64
   private val paddrBits = 56
   private val dataBits = 64
@@ -41,6 +43,10 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
     val rxReady = Output(Bool())
     val uartValid = Output(Bool())
     val uartByte = Output(UInt(8.W))
+    val uartTxReady =
+      if (externalPhysicalSeams) Some(Input(Bool())) else None
+    val timebaseTick =
+      if (externalPhysicalSeams) Some(Input(Bool())) else None
 
     val supervisorExternalInterrupt = Output(Bool())
     val uartInterrupt = Output(Bool())
@@ -64,7 +70,8 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
 
   val platform = Module(new AetherCoreV2LinuxSoC(
     enableInstructionBackpressure = true,
-    exposeExternalMemoryAttributes = true
+    exposeExternalMemoryAttributes = true,
+    externalPhysicalSeams = externalPhysicalSeams
   ))
 
   val dataAdapter = Module(new AetherSoCLegacyDataAdapter(
@@ -170,6 +177,10 @@ class AetherCoreV2UnifiedMemorySoC extends Module {
   // PHY belongs in the later FPGA wrapper.
   platform.io.rxValid := io.rxValid
   platform.io.rxByte := io.rxByte
+  if (externalPhysicalSeams) {
+    platform.io.uartTxReady.get := io.uartTxReady.get
+    platform.io.timebaseTick.get := io.timebaseTick.get
+  }
   io.rxReady := platform.io.rxReady
   io.uartValid := platform.io.uartValid
   io.uartByte := platform.io.uartByte
