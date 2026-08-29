@@ -1,6 +1,7 @@
 package aethercore.sim
 
 import chisel3._
+import chisel3.util._
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
 import aethercore.soc.AetherCoreV2Axi4SoC
