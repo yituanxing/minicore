@@ -25,7 +25,7 @@ object AetherSoCDts {
   private def escape(value: String): String =
     value
       .replace("\\", "\\\\")
-      .replace(""", "\\"")
+      .replace("\"", "\\\"")
 
   private def nodeAddress(value: BigInt): String = value.toString(16)
 
