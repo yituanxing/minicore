@@ -15,7 +15,8 @@ import aethercore.memory.{AetherMemOp, MemoryAttributes}
   */
 class AetherCoreV2LinuxSoC(
     val enableInstructionBackpressure: Boolean = false,
-    val exposeExternalMemoryAttributes: Boolean = false
+    val exposeExternalMemoryAttributes: Boolean = false,
+    val externalPhysicalSeams: Boolean = false
 ) extends Module {
   private val config = CoreProfiles.rv64imasuSv39PmpSoftware.copy(
     name = "rv64imasu-sv39-pmp-opensbi-v2",
@@ -72,6 +73,10 @@ class AetherCoreV2LinuxSoC(
     val rxValid = Input(Bool())
     val rxByte = Input(UInt(8.W))
     val rxReady = Output(Bool())
+    val uartTxReady =
+      if (externalPhysicalSeams) Some(Input(Bool())) else None
+    val timebaseTick =
+      if (externalPhysicalSeams) Some(Input(Bool())) else None
     val supervisorExternalInterrupt = Output(Bool())
     val uartInterrupt = Output(Bool())
     val uartRxInterrupt = Output(Bool())
@@ -159,6 +164,10 @@ class AetherCoreV2LinuxSoC(
   // Board-facing UART byte stream.
   fabric.io.rxValid := io.rxValid
   fabric.io.rxByte := io.rxByte
+  fabric.io.uartTxReady :=
+    (if (externalPhysicalSeams) io.uartTxReady.get else true.B)
+  fabric.io.timebaseTick :=
+    (if (externalPhysicalSeams) io.timebaseTick.get else true.B)
   io.rxReady := fabric.io.rxReady
   io.uartValid := fabric.io.uartValid
   io.uartByte := fabric.io.uartByte

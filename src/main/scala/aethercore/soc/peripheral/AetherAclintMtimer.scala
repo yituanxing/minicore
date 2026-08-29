@@ -24,6 +24,9 @@ class AetherAclintMtimer(
     val wdata = Input(UInt(dataBits.W))
     val wmask = Input(UInt(busBytes.W))
     val complete = Input(Bool())
+    // One pulse advances MTIME by one architectural timebase tick.
+    // FPGA clock generation owns the relationship between SoC clock and tick.
+    val timebaseTick = Input(Bool())
 
     val ready = Output(Bool())
     val rdata = Output(UInt(dataBits.W))
@@ -43,14 +46,14 @@ class AetherAclintMtimer(
 
   private val mtime = RegInit(0.U(64.W))
   private val mtimecmp = RegInit("hffffffffffffffff".U(64.W))
-  private val nextMtime = WireDefault(mtime + 1.U)
+  private val nextMtime = WireDefault(Mux(io.timebaseTick, mtime + 1.U, mtime))
   private val nextMtimecmp = WireDefault(mtimecmp)
 
   io.ready := true.B
   io.fault := false.B
   io.rdata := Mux(io.selectMtimecmp, mtimecmp, mtime)
 
-  private val terminalFire = io.request && io.complete
+  private val terminalFire = io.request && io.complete && io.ready
   when(terminalFire && io.write) {
     when(io.selectMtimecmp) {
       nextMtimecmp := mergeBytes(mtimecmp, io.wdata, io.wmask)

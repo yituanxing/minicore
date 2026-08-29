@@ -132,6 +132,10 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
 
   soc.io.rxValid := io.rxValid
   soc.io.rxByte := io.rxByte
+  // Preserve the qualified simulator semantics: one simulator cycle is one
+  // architectural timebase tick and the host UART sink is always ready.
+  soc.io.uartTxReady := true.B
+  soc.io.timebaseTick := true.B
   io.rxReady := soc.io.rxReady
   io.uartValid := soc.io.uartValid
   io.uartByte := soc.io.uartByte
