@@ -58,6 +58,23 @@ class AetherUart16550Spec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.rxValid.poke(false.B)
   }
 
+  it should "reset to the board baud divisor and expose live DLL/DLM programming" in {
+    simulate(new AetherUart16550(dataBits = 64, rxDepth = 4, resetDivisor = 2)) { dut =>
+      initialize(dut)
+
+      dut.io.baudDivisor.expect(2.U)
+      write(dut, AetherUart16550Map.LineControl, 0x80)
+      read(dut, AetherUart16550Map.Data) shouldBe 2
+      read(dut, AetherUart16550Map.InterruptEnable) shouldBe 0
+
+      write(dut, AetherUart16550Map.Data, 0x34)
+      write(dut, AetherUart16550Map.InterruptEnable, 0x12)
+      dut.io.baudDivisor.expect("h1234".U)
+      read(dut, AetherUart16550Map.Data) shouldBe 0x34
+      read(dut, AetherUart16550Map.InterruptEnable) shouldBe 0x12
+    }
+  }
+
   it should "preserve the Linux ns16550 DLAB, TX and RX semantics" in {
     simulate(new AetherUart16550(dataBits = 64, rxDepth = 4)) { dut =>
       initialize(dut)
