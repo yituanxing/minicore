@@ -50,6 +50,9 @@ class AetherUart16550(
 
     val txValid = Output(Bool())
     val txByte = Output(UInt(8.W))
+    // Physical serializer readiness. A TX data-register write remains
+    // backpressured until the downstream PHY can accept the byte.
+    val txReady = Input(Bool())
 
     val interrupt = Output(Bool())
     val rxInterrupt = Output(Bool())
@@ -71,13 +74,17 @@ class AetherUart16550(
   private val rxAvailable = rx.io.deq.valid
   private val rxByte = rx.io.deq.bits
   private val rxInterrupt = ier(0) && rxAvailable
-  private val threInterrupt = ier(1)
+  private val txHoldingEmpty = io.txReady
+  private val threInterrupt = ier(1) && txHoldingEmpty
   private val combinedInterrupt = rxInterrupt || threInterrupt
 
   io.rxInterrupt := rxInterrupt
   io.interrupt := combinedInterrupt
 
-  io.ready := true.B
+  private val txDataWrite =
+    io.request && io.write &&
+      io.offset === AetherUart16550Map.Data.U && !dlab
+  io.ready := !txDataWrite || io.txReady
   io.fault := false.B
 
   val readData = WireDefault(0.U(dataBits.W))
@@ -102,7 +109,8 @@ class AetherUart16550(
       readData := mcr.pad(dataBits)
     }
     is(AetherUart16550Map.LineStatus.U) {
-      readData := ("h60".U(8.W) | rxAvailable.asUInt).pad(dataBits)
+      val transmitterStatus = Mux(txHoldingEmpty, "h60".U(8.W), 0.U(8.W))
+      readData := (transmitterStatus | rxAvailable.asUInt).pad(dataBits)
     }
     is(AetherUart16550Map.Scratch.U) {
       readData := scr.pad(dataBits)
@@ -110,7 +118,7 @@ class AetherUart16550(
   }
   io.rdata := readData
 
-  private val terminalFire = io.request && io.complete
+  private val terminalFire = io.request && io.complete && io.ready
   private val readDataFire =
     terminalFire && !io.write && io.offset === AetherUart16550Map.Data.U && !dlab
   rx.io.deq.ready := readDataFire
