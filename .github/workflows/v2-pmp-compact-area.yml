@@ -16,10 +16,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verilator-tool:
+    name: Produce or verify hosted Verilator
+    uses: ./.github/workflows/hosted-verilator-cache.yml
+
   measure:
     name: Measure PMP-compact CPU ECP5 area
+    needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
 
     steps:
       - name: Checkout exact head
@@ -27,6 +35,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
 
       - name: Restore Scala dependency cache
         uses: actions/cache@v4
@@ -38,11 +57,17 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-      - name: Install synthesis tools
+      - name: Install synthesis and Verilator prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y yosys jq
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev yosys jq
           yosys -V
+
+      - name: Activate fixed Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
 
       - name: Run focused PMP regressions
         run: |
