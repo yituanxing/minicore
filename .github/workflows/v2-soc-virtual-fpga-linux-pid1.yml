@@ -101,12 +101,17 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
 
+      - name: Activate fixed Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+
       - name: Validate exact virtual FPGA boundary
         shell: bash
         run: |
           set -euo pipefail
           chmod +x mill
-          bash tools/ensure_verilator_5_024.sh
           python3 -m unittest tests_py.test_v2_virtual_fpga_board -v
           ./mill aethercore.test.testOnly aethercore.AetherFractionalTickGeneratorSpec
           ./mill aethercore.test.testOnly aethercore.AetherUart8N1PhySpec
