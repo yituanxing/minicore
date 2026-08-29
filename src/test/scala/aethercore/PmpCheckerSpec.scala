@@ -192,11 +192,15 @@ class PmpCheckerSpec extends AnyFlatSpec with Matchers with ChiselSim {
           case e: Throwable =>
             fail(s"NAPOT encoded=$encoded base=$base upper=$upper lower-bound failed", e)
         }
+        val clippedUpper = upper.min(physicalLimit)
         try {
-          check(dut, upper - 1, 1, allow = true, entry = 0)
+          check(dut, clippedUpper - 1, 1, allow = true, entry = 0)
         } catch {
           case e: Throwable =>
-            fail(s"NAPOT encoded=$encoded base=$base upper=$upper upper-bound failed", e)
+            fail(
+              s"NAPOT encoded=$encoded base=$base upper=$upper clippedUpper=$clippedUpper upper-bound failed",
+              e
+            )
         }
 
         if (base > 0) {
