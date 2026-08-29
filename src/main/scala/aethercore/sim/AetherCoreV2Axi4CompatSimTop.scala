@@ -11,7 +11,8 @@ import aethercore.soc.AetherCoreV2Axi4SoC
   * The external C++ runner still sees the historical host-memory ABI, but every
   * CPU memory transaction has already traversed:
   *
-  *   I/PTW/D -> adapters -> MemoryHub -> AetherMem -> AXI4 bridge.
+  *   I/PTW/D -> adapters -> MemoryHub -> internal BootROM decode
+  *           -> external AetherMem -> AXI4 bridge.
   *
   * This top therefore dynamically qualifies the production AXI path without
   * introducing a second CPU/platform implementation.
@@ -69,6 +70,8 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
+    val icacheHitCount = Output(UInt(64.W))
+    val icacheMissCount = Output(UInt(64.W))
 
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
@@ -146,6 +149,8 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
   io.dcacheHitCount := soc.io.dcacheHitCount
   io.dcacheMissCount := soc.io.dcacheMissCount
   io.dcacheBypassCount := soc.io.dcacheBypassCount
+  io.icacheHitCount := soc.io.icacheHitCount
+  io.icacheMissCount := soc.io.icacheMissCount
   io.commit := soc.io.commit
   io.halted := soc.io.halted
 }
