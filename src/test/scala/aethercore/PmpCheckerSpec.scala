@@ -153,6 +153,76 @@ class PmpCheckerSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "preserve every NAPOT encoding boundary in a small physical domain" in {
+    simulate(new PmpChecker(32, paddrBits = 8)) { dut =>
+      initialize(dut)
+
+      val encodedBits = 6
+      val encodedMask = (BigInt(1) << encodedBits) - 1
+      val physicalLimit = BigInt(1) << 8
+
+      for (encoded <- BigInt(0) to encodedMask) {
+        for (entry <- 0 until PmpConstants.MaxEntries) {
+          dut.io.config(entry).poke(0.U)
+          dut.io.pmpAddress(entry).poke(0.U)
+        }
+
+        dut.io.pmpAddress(0).poke(encoded.U)
+        dut.io.config(0).poke(
+          config(read = true, mode = PmpAddressMode.Napot).U
+        )
+
+        val (base, upper) =
+          if (encoded == encodedMask) {
+            (BigInt(0), physicalLimit)
+          } else {
+            var trailingOnes = 0
+            while (((encoded >> trailingOnes) & 1) == 1) {
+              trailingOnes += 1
+            }
+            val lowMask = (BigInt(1) << trailingOnes) - 1
+            val base = (encoded & (encodedMask ^ lowMask)) << 2
+            val size = BigInt(1) << (trailingOnes + 3)
+            (base, base + size)
+          }
+
+        try {
+          check(dut, base, 1, allow = true, entry = 0)
+        } catch {
+          case e: Throwable =>
+            fail(s"NAPOT encoded=$encoded base=$base upper=$upper lower-bound failed", e)
+        }
+        val clippedUpper = upper.min(physicalLimit)
+        try {
+          check(dut, clippedUpper - 1, 1, allow = true, entry = 0)
+        } catch {
+          case e: Throwable =>
+            fail(
+              s"NAPOT encoded=$encoded base=$base upper=$upper clippedUpper=$clippedUpper upper-bound failed",
+              e
+            )
+        }
+
+        if (base > 0) {
+          try {
+            check(dut, base - 1, 1, allow = false, matched = false)
+          } catch {
+            case e: Throwable =>
+              fail(s"NAPOT encoded=$encoded base=$base upper=$upper below-range failed", e)
+          }
+        }
+        if (upper < physicalLimit) {
+          try {
+            check(dut, upper, 1, allow = false, matched = false)
+          } catch {
+            case e: Throwable =>
+              fail(s"NAPOT encoded=$encoded base=$base upper=$upper above-range failed", e)
+          }
+        }
+      }
+    }
+  }
+
   it should "keep lowest-numbered match priority across the full PMP16 bank" in {
     simulate(new PmpChecker(32)) { dut =>
       initialize(dut)

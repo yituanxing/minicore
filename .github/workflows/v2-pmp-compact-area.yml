@@ -1,0 +1,138 @@
+name: AetherCore V2 PMP Compact Area
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/**'
+      - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
+      - '.github/workflows/v2-pmp-compact-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-pmp-compact-area-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure PMP-compact CPU ECP5 area
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis and Verilator prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev yosys jq
+          yosys -V
+
+      - name: Activate fixed Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+
+      - name: Run focused PMP regressions
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.PmpCheckerSpec
+          ./mill aethercore.test.testOnly aethercore.PmpCsrFileSpec
+          ./mill aethercore.test.testOnly aethercore.PmpPhysicalAddressGeometrySpec
+          ./mill aethercore.test.testOnly aethercore.RV64PmpCsrSpec
+
+      - name: Elaborate current Linux CPU profile
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/v2-core-fpga-area
+          ./mill aethercore.runMain aethercore.ElaborateV2CoreSynthesisRV64 \
+            --target-dir build/v2-core-fpga-area
+          find build/v2-core-fpga-area -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Map CPU only with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethercore-v2-core-area"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          mapfile -t svs < <(find build/v2-core-fpga-area -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do
+            read_cmd+=" $sv"
+          done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $out/core.json; stat -top TinyPagedCore" \
+            2>&1 | tee "$out/yosys.log"
+
+          export AREA_OUT="$out"
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ["AREA_OUT"])
+          net = json.loads((root / "core.json").read_text())
+          cells = net["modules"]["TinyPagedCore"]["cells"].values()
+          types = Counter(c["type"] for c in cells)
+          summary = {
+              "top": "TinyPagedCore",
+              "cells": sum(types.values()),
+              "lut4": types["LUT4"],
+              "ff": types["TRELLIS_FF"],
+              "distributed_ram_trellis_dpr16x4": types["TRELLIS_DPR16X4"],
+              "bram_dp16kd": types["DP16KD"],
+              "mult18x18d": types["MULT18X18D"],
+              "ccu2c": types["CCU2C"],
+              "pfumx": types["PFUMX"],
+              "l6mux21": types["L6MUX21"],
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload CPU-area evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-pmp-compact-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethercore-v2-core-area/summary.json
+            ${{ runner.temp }}/aethercore-v2-core-area/yosys.log
