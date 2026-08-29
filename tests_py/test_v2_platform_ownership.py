@@ -7,6 +7,8 @@ CORE_V2 = ROOT / "src/main/scala/aethercore/core/v2"
 AETHER_MEM = ROOT / "src/main/scala/aethercore/memory/AetherMemLink.scala"
 PAGED = CORE_V2 / "TinyPagedCore.scala"
 SOC_PLATFORM = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala"
+SOC_FABRIC = ROOT / "src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala"
+SOC_ADDRESS_MAP = ROOT / "src/main/scala/aethercore/soc/AetherSoCAddressMap.scala"
 CPU_COMPLEX = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2Complex.scala"
 UART_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherUart16550.scala"
 MTIMER_PERIPHERAL = ROOT / "src/main/scala/aethercore/soc/peripheral/AetherAclintMtimer.scala"
@@ -105,6 +107,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
 
     def test_uart_register_state_is_peripheral_owned(self):
         peripheral = UART_PERIPHERAL.read_text(encoding="utf-8")
+        fabric = SOC_FABRIC.read_text(encoding="utf-8")
         platform = SOC_PLATFORM.read_text(encoding="utf-8")
 
         self.assertIn("class AetherUart16550(", peripheral)
@@ -114,9 +117,10 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("io.txValid :=", peripheral)
         self.assertIn("io.interrupt := combinedInterrupt", peripheral)
 
-        self.assertIn("val uart = Module(new AetherUart16550(", platform)
-        self.assertIn("uart.io.request := pendingUart", platform)
-        self.assertIn("uartComplete := responseFire", platform)
+        self.assertIn("private val uart = Module(new AetherUart16550(", fabric)
+        self.assertIn("uart.io.request := pendingUart", fabric)
+        self.assertIn("uartComplete := responseFire", fabric)
+        self.assertNotIn("Module(new AetherUart16550(", platform)
         for forbidden in (
             "val uartLcr = RegInit",
             "val uartIer = RegInit",
@@ -127,6 +131,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
 
     def test_mtimer_state_is_peripheral_owned(self):
         peripheral = MTIMER_PERIPHERAL.read_text(encoding="utf-8")
+        fabric = SOC_FABRIC.read_text(encoding="utf-8")
         platform = SOC_PLATFORM.read_text(encoding="utf-8")
 
         self.assertIn("class AetherAclintMtimer(", peripheral)
@@ -135,11 +140,12 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("io.interrupt := mtime >= mtimecmp", peripheral)
         self.assertIn("private val terminalFire = io.request && io.complete", peripheral)
 
-        self.assertIn("val timer = Module(new AetherAclintMtimer(", platform)
-        self.assertIn("timer.io.request := pendingTimer", platform)
-        self.assertIn("timerComplete := responseFire", platform)
-        self.assertIn("core.io.time := timer.io.mtime", platform)
-        self.assertIn("core.io.timerInterrupt := timer.io.interrupt", platform)
+        self.assertIn("private val timer = Module(new AetherAclintMtimer(", fabric)
+        self.assertIn("timer.io.request := pendingTimer", fabric)
+        self.assertIn("timerComplete := responseFire", fabric)
+        self.assertIn("io.time := timer.io.mtime", fabric)
+        self.assertIn("io.timerInterrupt := timer.io.interrupt", fabric)
+        self.assertNotIn("Module(new AetherAclintMtimer(", platform)
 
         for forbidden in (
             "val mtime = RegInit",
@@ -152,6 +158,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
 
     def test_plic_state_is_peripheral_owned(self):
         peripheral = PLIC_PERIPHERAL.read_text(encoding="utf-8")
+        fabric = SOC_FABRIC.read_text(encoding="utf-8")
         platform = SOC_PLATFORM.read_text(encoding="utf-8")
 
         self.assertIn("class AetherPlic(", peripheral)
@@ -160,10 +167,11 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("plic.io.completeWrite := true.B", peripheral)
         self.assertIn("io.interrupt := plic.io.interrupt", peripheral)
 
-        self.assertIn("val plic = Module(new AetherPlic(", platform)
-        self.assertIn("plic.io.request := pendingPlic", platform)
-        self.assertIn("plicComplete := responseFire", platform)
-        self.assertIn("core.io.supervisorExternalInterrupt := plic.io.interrupt", platform)
+        self.assertIn("private val plic = Module(new AetherPlic(", fabric)
+        self.assertIn("plic.io.request := pendingPlic", fabric)
+        self.assertIn("plicComplete := responseFire", fabric)
+        self.assertIn("io.supervisorExternalInterrupt := plic.io.interrupt", fabric)
+        self.assertNotIn("Module(new AetherPlic(", platform)
 
         for forbidden in (
             "Module(new MachinePlicMmio",
@@ -172,34 +180,55 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, platform)
 
-    def test_product_soc_owns_pma_mmio_and_interrupt_topology(self):
-        source = SOC_PLATFORM.read_text(encoding="utf-8")
+    def test_platform_fabric_owns_pma_mmio_and_interrupt_topology(self):
+        fabric = SOC_FABRIC.read_text(encoding="utf-8")
+        platform = SOC_PLATFORM.read_text(encoding="utf-8")
+        address_map = SOC_ADDRESS_MAP.read_text(encoding="utf-8")
 
-        self.assertIn("class AetherCoreV2LinuxSoC(", source)
-        self.assertIn("enableInstructionBackpressure: Boolean = false", source)
-        self.assertIn("exposeExternalMemoryAttributes: Boolean = false", source)
-        self.assertIn(") extends Module {", source)
-        self.assertIn("private val ramBase =", source)
-        self.assertIn("private val plicBase =", source)
-        self.assertIn("val resolvedRam = resolvedAddress >= ramBase.U", source)
-        self.assertIn("core.io.resolvedAttributes.cacheable := resolvedRam", source)
-        self.assertIn("core.io.resolvedAttributes.sideEffecting := !resolvedRam", source)
-        self.assertIn("core.io.resolvedAttributes.supportsAtomic := resolvedRam", source)
+        self.assertIn("class AetherSoCPlatformFabric(", fabric)
+        self.assertIn("val resolvedPhysicalAddress = Input(UInt(paddrBits.W))", fabric)
+        self.assertIn("val resolvedAttributes = Output(new MemoryAttributes)", fabric)
+        self.assertIn("private val resolvedRam =", fabric)
+        self.assertIn("io.resolvedAttributes.cacheable := resolvedRam", fabric)
+        self.assertIn("io.resolvedAttributes.sideEffecting := !resolvedRam", fabric)
+        self.assertIn("io.resolvedAttributes.supportsAtomic := resolvedRam", fabric)
 
-        self.assertIn("val pendingUart =", source)
-        self.assertIn("val pendingExit =", source)
-        self.assertIn("val pendingTimer =", source)
-        self.assertIn("val pendingPlic =", source)
-        self.assertIn("val pendingMmio = pendingUart || pendingExit || pendingTimer || pendingPlic", source)
+        self.assertIn("private val pendingUart =", fabric)
+        self.assertIn("private val pendingExit =", fabric)
+        self.assertIn("private val pendingTimer =", fabric)
+        self.assertIn("private val pendingPlic =", fabric)
+        self.assertIn("private val pendingMmio =", fabric)
+        self.assertIn("private val pendingExternal =", fabric)
+        self.assertIn("private val pendingQueue = Module(new Queue(", fabric)
+        self.assertIn("assert(!(pendingMmio && pendingAtomic)", fabric)
 
-        self.assertIn("private val supervisorUartSourceId = 10", source)
-        self.assertIn("val plic = Module(new AetherPlic(", source)
-        self.assertIn("core.io.supervisorExternalInterrupt := plic.io.interrupt", source)
-        self.assertIn("val core = Module(new AetherCoreV2Complex(", source)
-        self.assertNotIn("val dcache = Module(new AetherDirectMappedReadCache(", source)
-        self.assertIn("assert(!(pendingMmio && pendingAtomic)", source)
+        self.assertIn("final case class AetherSoCAddressMap(", address_map)
+        self.assertIn("def qualifiedLinux(platform: PlatformConfig)", address_map)
+        self.assertIn('ramBase = BigInt("80000000", 16)', address_map)
+        self.assertIn('plicBase = BigInt("0c000000", 16)', address_map)
 
-        self.assertNotIn("package aethercore.sim", source)
+        self.assertIn("val core = Module(new AetherCoreV2Complex(", platform)
+        self.assertIn("val fabric = Module(new AetherSoCPlatformFabric(", platform)
+        self.assertIn("fabric.io.resolvedPhysicalAddress := core.io.resolvedPhysicalAddress", platform)
+        self.assertIn("core.io.resolvedAttributes := fabric.io.resolvedAttributes", platform)
+        self.assertIn("fabric.io.request <> core.io.memoryRequest", platform)
+        self.assertIn("core.io.memoryResponse <> fabric.io.response", platform)
+
+        for forbidden in (
+            "private val ramBase =",
+            "private val plicBase =",
+            "val pendingUart =",
+            "val pendingExit =",
+            "val pendingTimer =",
+            "val pendingPlic =",
+            "Module(new AetherUart16550",
+            "Module(new AetherAclintMtimer",
+            "Module(new AetherPlic",
+            "assert(!(pendingMmio && pendingAtomic)",
+        ):
+            self.assertNotIn(forbidden, platform)
+
+        self.assertNotIn("package aethercore.sim", fabric)
 
     def test_sim_top_is_only_a_unified_memory_compatibility_wrapper(self):
         source = SIM_WRAPPER.read_text(encoding="utf-8")
