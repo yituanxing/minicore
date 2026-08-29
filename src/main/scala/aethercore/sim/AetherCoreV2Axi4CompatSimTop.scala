@@ -73,6 +73,15 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
     val icacheHitCount = Output(UInt(64.W))
     val icacheMissCount = Output(UInt(64.W))
 
+    // Simulation-only observability for same-source AXI read concurrency.
+    // MemoryHub encodes source in AXI ID[3:2]: 0=Data, 1=PTW, 2=I-cache.
+    // These counters must never feed production request/response control.
+    val axiDataReadRequestCount = Output(UInt(64.W))
+    val axiDataReadResponseCount = Output(UInt(64.W))
+    val axiDataReadOverlapIssueCount = Output(UInt(64.W))
+    val axiDataReadTwoOutstandingCycles = Output(UInt(64.W))
+    val axiDataReadMaxOutstanding = Output(UInt(3.W))
+
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
