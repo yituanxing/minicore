@@ -108,29 +108,37 @@ class PmpChecker(
         upper := byteAddress + 4.U
       }
       is(PmpAddressMode.Napot.U) {
+        // NAPOT size is encoded by the number of trailing one bits in pmpaddr.
+        //
+        // The previous implementation enumerated every possible trailing-one
+        // count and built one wide compare/mux candidate per size. PA56 therefore
+        // expanded 54 candidates for each PMP entry and every checker instance.
+        //
+        // For any non-all-ones x:
+        //   (x ^ (x + 1)) >> 1  = mask of the trailing one bits
+        //   (~x) & (x + 1)      = one-hot bit for the first zero above them
+        //
+        // These identities recover exactly the same NAPOT base and range size
+        // with one incrementer plus bitwise logic instead of a PA-width-sized
+        // bank of wide comparators. Keep the architectural all-ones encoding as
+        // the explicit whole-domain special case.
+        val incremented = encodedAddress + 1.U
+        val trailingOnesMask =
+          ((encodedAddress ^ incremented) >> 1).asUInt
+        val firstZeroOneHot = (~encodedAddress).asUInt & incremented
+        val compactBase = Cat(
+          0.U(1.W),
+          encodedAddress & ~trailingOnesMask,
+          0.U(2.W)
+        ).pad(paddrBits + 1)
+        val compactSize = Cat(firstZeroOneHot, 0.U(3.W))
+
         when(encodedAddress.andR) {
           lower := 0.U
           upper := geometry.allOnesNapotUpper.U((paddrBits + 1).W)
         }.otherwise {
-          // NAPOT encodes size/8-1 in the low-order one bits. Exactly one
-          // condition below is true: `ones` trailing ones followed by zero.
-          for (ones <- 0 until pmpAddressBits) {
-            val lowMask = (BigInt(1) << ones) - 1
-            val discriminatorMask = (BigInt(1) << (ones + 1)) - 1
-            val condition =
-              (encodedAddress & discriminatorMask.U(pmpAddressBits.W)) ===
-                lowMask.U(pmpAddressBits.W)
-            when(condition) {
-              val clearMask = addressMask & ~lowMask
-              val base = Cat(
-                0.U(1.W),
-                encodedAddress & clearMask.U(pmpAddressBits.W),
-                0.U(2.W)
-              ).pad(paddrBits + 1)
-              lower := base
-              upper := base + (BigInt(1) << (ones + 3)).U((paddrBits + 1).W)
-            }
-          }
+          lower := compactBase
+          upper := compactBase + compactSize
         }
       }
     }
