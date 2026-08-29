@@ -1,0 +1,133 @@
+name: AetherSoC FPGA Synthesis Proxy
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/**'
+      - 'src/main/scala/aethercore/ElaborateV2FpgaSoC.scala'
+      - 'tests_py/test_v2_fpga_synth_proxy.py'
+      - '.github/workflows/v2-soc-fpga-synth-proxy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-fpga-synth-proxy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synth:
+    name: Measure board-neutral FPGA structural cost
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+
+      - name: Check board-less synthesis contract
+        run: python3 -m unittest tests_py.test_v2_fpga_synth_proxy -v
+
+      - name: Elaborate production FPGA SoC
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/fpga-synth-proxy
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 \
+            --target-dir build/fpga-synth-proxy
+          find build/fpga-synth-proxy -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Map FPGA SoC with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethersoc-fpga-synth"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          mapfile -t svs < <(find build/fpga-synth-proxy -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do
+            read_cmd+=" $sv"
+          done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_ecp5 -top AetherCoreV2FpgaSoC -json $out/fpga.json; stat -top AetherCoreV2FpgaSoC; flatten; ltp -noff AetherCoreV2FpgaSoC" \
+            2>&1 | tee "$out/yosys.log"
+
+          depth=$(sed -n 's/.*Longest topological path in AetherCoreV2FpgaSoC (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
+          test -n "$depth"
+          printf '%s\n' "$depth" > "$out/depth"
+
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[]] | length' "$out/fpga.json" > "$out/cells"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
+          echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Summarize board-less structural cost
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["SYNTH_OUT"])
+          def n(name):
+              return int((root / name).read_text().strip())
+
+          summary = {
+              "proxy": "Yosys synth_ecp5 mapped netlist + flatten + ltp -noff",
+              "top": "AetherCoreV2FpgaSoC",
+              "cells": n("cells"),
+              "lut4": n("lut4"),
+              "ff": n("ff"),
+              "bram_dp16kd": n("bram"),
+              "distributed_ram_dpr16x4": n("dpr"),
+              "mult18x18d": n("mult"),
+              "logic_depth": n("depth"),
+              "note": "Board-neutral structural proxy only; no concrete device placement, timing constraints, or board frequency claim."
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## AetherSoC board-neutral FPGA synthesis proxy\n\n")
+              for key in ("cells", "lut4", "ff", "bram_dp16kd", "distributed_ram_dpr16x4", "mult18x18d", "logic_depth"):
+                  f.write(f"- {key}: {summary[key]}\n")
+              f.write("\nNo board frequency claim is made without a concrete device, constraints and place-and-route.\n")
+          PY
+
+      - name: Upload synthesis evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-fpga-synth-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethersoc-fpga-synth/summary.json
+            ${{ runner.temp }}/aethersoc-fpga-synth/yosys.log
