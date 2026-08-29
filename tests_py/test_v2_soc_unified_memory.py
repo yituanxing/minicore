@@ -14,7 +14,7 @@ class V2UnifiedMemorySoCSourceContract(unittest.TestCase):
         self.assertIn("exposeExternalMemoryAttributes: Boolean = false", source)
         self.assertIn("enableInstructionBackpressure = enableInstructionBackpressure", source)
         self.assertIn("core.io.imemReady.get := io.imemReady.get", source)
-        self.assertIn("io.memAttributes.get := pending.attributes", source)
+        self.assertIn("io.memAttributes.get := fabric.io.memAttributes", source)
         self.assertIn("io.instructionFence := core.io.instructionFence", source)
 
     def test_unified_top_has_one_semantic_external_memory_master(self):
