@@ -4,9 +4,8 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.config.{CoreProfiles, PageTableGeometry}
-import aethercore.core.{MachinePlicMmio, MachinePlicMmioMap}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, MemoryAttributes}
-import aethercore.soc.peripheral.{AetherAclintMtimer, AetherUart16550}
+import aethercore.soc.peripheral.{AetherAclintMtimer, AetherPlic, AetherPlicMap, AetherUart16550}
 
 /**
   * F7 RV64 OpenSBI simulation boundary for the v2 core.
@@ -190,22 +189,26 @@ class AetherCoreV2LinuxSoC(
   io.uartInterrupt := uart.io.interrupt
   io.uartRxInterrupt := uart.io.rxInterrupt
 
-  val supervisorPlic = Module(new MachinePlicMmio(
+  // PLIC register/claim/completion state is an independent SoC peripheral.
+  // The platform owns only region selection and source topology.
+  val plic = Module(new AetherPlic(
     sourceCount = supervisorPlicSourceCount,
     addressBits = 24,
-    enableBase = MachinePlicMmioMap.SupervisorEnable,
-    thresholdOffset = MachinePlicMmioMap.SupervisorThreshold,
-    claimCompleteOffset = MachinePlicMmioMap.SupervisorClaimComplete
+    enableBase = AetherPlicMap.SupervisorEnable,
+    thresholdOffset = AetherPlicMap.SupervisorThreshold,
+    claimCompleteOffset = AetherPlicMap.SupervisorClaimComplete
   ))
-  supervisorPlic.io.sources :=
+  val plicComplete = WireDefault(false.B)
+  plic.io.sources :=
     (uart.io.interrupt.asUInt << (supervisorUartSourceId - 1)).pad(supervisorPlicSourceCount)
-  supervisorPlic.io.request := pendingPlic
-  supervisorPlic.io.write := pendingWrite
-  supervisorPlic.io.address := (pending.paddr - plicBase.U)(23, 0)
-  supervisorPlic.io.wdata := pending.wdata(31, 0)
-  supervisorPlic.io.wmask := pending.wmask(3, 0)
-  core.io.supervisorExternalInterrupt := supervisorPlic.io.interrupt
-  io.supervisorExternalInterrupt := supervisorPlic.io.interrupt
+  plic.io.request := pendingPlic
+  plic.io.write := pendingWrite
+  plic.io.address := (pending.paddr - plicBase.U)(23, 0)
+  plic.io.wdata := pending.wdata(31, 0)
+  plic.io.wmask := pending.wmask(3, 0)
+  plic.io.complete := plicComplete
+  core.io.supervisorExternalInterrupt := plic.io.interrupt
+  io.supervisorExternalInterrupt := plic.io.interrupt
 
   // ACLINT/CLINT MTIMER state is an independent SoC peripheral. The
   // platform retains only address selection while the reusable MMIO fabric is
@@ -223,20 +226,20 @@ class AetherCoreV2LinuxSoC(
 
   val mmioReady = Mux(
     pendingPlic,
-    supervisorPlic.io.ready,
+    plic.io.ready,
     Mux(pendingTimer, timer.io.ready,
       Mux(pendingUart, uart.io.ready, true.B))
   )
   val responseReady = Mux(pendingExternal, io.memReady, mmioReady)
   val responseData = Mux(
     pendingPlic,
-    supervisorPlic.io.rdata.pad(busDataBits),
+    plic.io.rdata.pad(busDataBits),
     Mux(pendingTimer, timer.io.rdata,
       Mux(pendingUart, uart.io.rdata, io.memRdata))
   )
   val responseFault = Mux(
     pendingPlic,
-    supervisorPlic.io.fault,
+    plic.io.fault,
     Mux(pendingTimer, timer.io.fault,
       Mux(pendingUart, uart.io.fault,
         Mux(pendingMmio, false.B, io.memFault)))
@@ -251,6 +254,7 @@ class AetherCoreV2LinuxSoC(
   pendingQueue.io.deq.ready := responseFire
   uartComplete := responseFire
   timerComplete := responseFire
+  plicComplete := responseFire
 
   core.io.time := timer.io.mtime
   core.io.timerInterrupt := timer.io.interrupt
