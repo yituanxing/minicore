@@ -12,6 +12,7 @@ class V2UnifiedMemorySoCSourceContract(unittest.TestCase):
         source = PLATFORM.read_text(encoding="utf-8")
         self.assertIn("enableInstructionBackpressure: Boolean = false", source)
         self.assertIn("exposeExternalMemoryAttributes: Boolean = false", source)
+        self.assertIn("externalPhysicalSeams: Boolean = false", source)
         self.assertIn("enableInstructionBackpressure = enableInstructionBackpressure", source)
         self.assertIn("core.io.imemReady.get := io.imemReady.get", source)
         self.assertIn("io.memAttributes.get := fabric.io.memAttributes", source)
@@ -19,7 +20,8 @@ class V2UnifiedMemorySoCSourceContract(unittest.TestCase):
 
     def test_unified_top_has_one_semantic_external_memory_master(self):
         source = TOP.read_text(encoding="utf-8")
-        self.assertIn("class AetherCoreV2UnifiedMemorySoC extends Module", source)
+        self.assertIn("class AetherCoreV2UnifiedMemorySoC(", source)
+        self.assertIn(") extends Module {", source)
         self.assertIn("val memoryRequest =", source)
         self.assertIn("val memoryResponse =", source)
         self.assertIn("new AetherMemRequest", source)
