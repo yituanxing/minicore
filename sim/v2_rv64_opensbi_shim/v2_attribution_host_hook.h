@@ -91,6 +91,9 @@ void emitSnapshot(const Top& top, const char* reason) {
       << " loadq_full_ready_load=" << static_cast<std::uint64_t>(top.ioArchLoadQueueFullReadyLoad)
       << " critical_load_head=" << static_cast<std::uint64_t>(top.ioArchCriticalLoadHead)
       << " critical_store_atomic_head=" << static_cast<std::uint64_t>(top.ioArchCriticalStoreAtomicHead)
+      << " rob_full_no_launchable=" << static_cast<std::uint64_t>(top.ioArchRobFullNoLaunchable)
+      << " rob_full_no_launchable_load_head=" << static_cast<std::uint64_t>(top.ioArchRobFullNoLaunchableLoadHead)
+      << " rob_full_no_launchable_store_atomic_head=" << static_cast<std::uint64_t>(top.ioArchRobFullNoLaunchableStoreAtomicHead)
       << "\n";
 }
 
