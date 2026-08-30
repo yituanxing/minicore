@@ -384,12 +384,11 @@ class TinyPagedCore(
   fetch.io.pteData := ptwArbiter.io.fetchRdata
   fetch.io.pteFault := ptwArbiter.io.fetchFault
 
-  // Every implicit PTE read has exactly one PMP owner. Data requests reaching
-  // this arbiter have already passed TinyMemoryBackend's local Supervisor-mode
-  // PTW PMP guard. Only a selected fetch request is checked here. The arbiter
-  // owns source selection and exports memoryIsFetch as routing metadata so this
-  // parent does not duplicate the data-priority selection policy. A denied fetch
-  // walk is consumed locally in the same cycle and never reaches external PTW.
+  // The arbiter already serializes fetch/data implicit PTE reads onto one
+  // external PTW lane (data has deterministic priority). Therefore one PMP
+  // checker can own the selected request for both sources. A denial is consumed
+  // locally and returned through the arbiter's existing per-source fault path;
+  // no denied implicit PTE read reaches external PTW.
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
   ptwPmp.io.address := ptwArbiter.io.memoryAddress
   ptwPmp.io.bytes := geometry.pteBytes.U
@@ -397,14 +396,14 @@ class TinyPagedCore(
   ptwPmp.io.execute := false.B
   ptwPmp.io.config := backend.io.frontendPmpConfig
   ptwPmp.io.pmpAddress := backend.io.frontendPmpAddress
-  private val fetchPtwPmpFault =
-    ptwArbiter.io.memoryIsFetch && isa.hasPmp.B && !ptwPmp.io.allow
+  private val selectedPtwPmpFault =
+    ptwArbiter.io.memoryValid && isa.hasPmp.B && !ptwPmp.io.allow
 
-  io.ptw.valid := ptwArbiter.io.memoryValid && !fetchPtwPmpFault
+  io.ptw.valid := ptwArbiter.io.memoryValid && !selectedPtwPmpFault
   io.ptw.addr := ptwArbiter.io.memoryAddress
-  ptwArbiter.io.memoryReady := Mux(fetchPtwPmpFault, true.B, io.ptw.ready)
+  ptwArbiter.io.memoryReady := Mux(selectedPtwPmpFault, true.B, io.ptw.ready)
   ptwArbiter.io.memoryRdata := io.ptw.rdata
-  ptwArbiter.io.memoryFault := fetchPtwPmpFault || (io.ptw.valid && io.ptw.fault)
+  ptwArbiter.io.memoryFault := selectedPtwPmpFault || (io.ptw.valid && io.ptw.fault)
 
   io.commit := backend.io.commit
   io.currentPrivilege := backend.io.currentPrivilege
