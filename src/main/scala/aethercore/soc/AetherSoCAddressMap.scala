@@ -98,7 +98,7 @@ object AetherSoCBoardSpec {
   def qualifiedLinux(platform: PlatformConfig): AetherSoCBoardSpec =
     AetherSoCBoardSpec(
       addressMap = AetherSoCAddressMap.qualifiedLinux(platform),
-      plicSourceCount = 52,
+      plicSourceCount = 10,
       uartPlicSourceId = 10,
       supervisorExternalInterruptId = 9,
       machineTimerInterruptId = 7,
