@@ -45,10 +45,10 @@ def test_dependency_repair_uses_rob_accepted_recovery_as_its_only_trigger() -> N
     recovery = dep.split("when(io.recovery.valid)", 1)[1]
     assert "branchTaken" not in recovery
     assert "branchValid" not in recovery
-    assert "rename(register).valid := false.B" in recovery
+    assert "private val rename" not in dep
     assert "index.U =/= survivor.robToken.index" in recovery
     assert "index.U =/= survivor.producerTag.id" in recovery
-    assert "rename(survivor.decoded.rd).producerTag := survivor.producerTag" in recovery
+    assert "producers(survivor.producerTag.id).rd := survivor.decoded.rd" in recovery
 
 
 def test_redirect_seam_carries_only_surviving_order_identity_and_target() -> None:
