@@ -1,0 +1,98 @@
+name: Parent-PMP Area Ceiling
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/measure/ElaborateParentPmpArea.scala'
+      - '.github/workflows/parent-pmp-area-ceiling.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill','mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+      - name: Elaborate exact memory-backend A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/parent-pmp-area"
+          rm -rf "$out"
+          mkdir -p "$out/current" "$out/no-parent-pmp"
+          ./mill aethercore.runMain aethercore.measure.ElaborateLoadQueueBackendCurrentRV64 \
+            --target-dir "$out/current"
+          ./mill aethercore.runMain aethercore.measure.ElaborateLoadQueueBackendNoParentPmpRV64 \
+            --target-dir "$out/no-parent-pmp"
+          echo "AREA_OUT=$out" >> "$GITHUB_ENV"
+      - name: Map exact A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          map_one() {
+            dir="$1"; top="$2"; tag="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $AREA_OUT/$tag.json; stat -top $top" \
+              2>&1 | tee "$AREA_OUT/$tag.log"
+          }
+          map_one "$AREA_OUT/current" TinyLoadQueueMemoryBackend current
+          map_one "$AREA_OUT/no-parent-pmp" TinyLoadQueueMemoryBackendNoParentPmp no-parent-pmp
+      - name: Summarize area ceiling
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          root=Path(os.environ["AREA_OUT"])
+          def one(file,top):
+              d=json.loads((root/file).read_text())
+              t=Counter(c["type"] for c in d["modules"][top]["cells"].values())
+              return {
+                  "cells":sum(t.values()),
+                  "lut4":t["LUT4"],
+                  "ff":t["TRELLIS_FF"],
+                  "pfumx":t["PFUMX"],
+                  "l6mux21":t["L6MUX21"],
+                  "dpr16x4":t["TRELLIS_DPR16X4"],
+                  "mult18x18d":t["MULT18X18D"],
+              }
+          data={
+              "current":one("current.json","TinyLoadQueueMemoryBackend"),
+              "no_parent_pmp":one("no-parent-pmp.json","TinyLoadQueueMemoryBackendNoParentPmp"),
+          }
+          data["delta"]={k:data["no_parent_pmp"][k]-data["current"][k] for k in data["current"]}
+          data["note"]=(
+              "Area ceiling only. no_parent_pmp is intentionally architecturally invalid; "
+              "it estimates the maximum integrated memory-backend saving available to a "
+              "future correctly shared parent+Load physical PMP owner."
+          )
+          (root/"summary.json").write_text(json.dumps(data,indent=2)+"\n")
+          print(json.dumps(data,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parent-pmp-area-ceiling-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            ${{ env.AREA_OUT }}/summary.json
+            ${{ env.AREA_OUT }}/*.log
