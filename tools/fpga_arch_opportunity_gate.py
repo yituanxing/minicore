@@ -101,7 +101,14 @@ def main() -> int:
         "fetch_queue": data.get("frontend_bound", 0),
     }
     pressure = {
-        "rob8": data.get("rob_full_dispatch_pressure", 0),
+        "rob8_full_dispatch": data.get("rob_full_dispatch_pressure", 0),
+        "rob8_full_no_launchable": data.get("rob_full_no_launchable", 0),
+        "rob8_full_no_launchable_load_head": data.get(
+            "rob_full_no_launchable_load_head", 0
+        ),
+        "rob8_full_no_launchable_store_atomic_head": data.get(
+            "rob_full_no_launchable_store_atomic_head", 0
+        ),
         "loadq4": data.get("loadq_full_ready_load", 0),
     }
     critical_caps = {
@@ -135,6 +142,15 @@ def main() -> int:
     print("\n[capacity pressure -- requires trace/shadow model before RTL]")
     for name, value in pressure.items():
         print(f"{name}: cycles={value} pressure={pct(value, cycles):.3f}%")
+
+    full = pressure["rob8_full_dispatch"]
+    starved = pressure["rob8_full_no_launchable"]
+    if full:
+        print(
+            "rob8_starved_given_full="
+            f"{100.0 * starved / full:.3f}% "
+            "(fraction of full-ROB blocked cycles where current ROB4 exposes no launchable work)"
+        )
 
     print("\n[retirement-critical ownership caps]")
     for name, value in critical_caps.items():
