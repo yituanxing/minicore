@@ -63,6 +63,7 @@ jobs:
             for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
             yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $AREA_OUT/mapped/$tag.json; stat -top $top" \
               2>&1 | tee "$AREA_OUT/mapped/$tag.log"
+            printf '%s\n' "$top" > "$AREA_OUT/mapped/$tag.top"
           }
 
           # Whole CPU and its current major cones.
@@ -100,15 +101,15 @@ jobs:
           rows=[]
           for path in sorted(root.glob("*.json")):
               net=json.loads(path.read_text())
-              if len(net["modules"]) != 1:
-                  # synth_ecp5 normally leaves one selected top module in JSON;
-                  # choose the only module if possible, otherwise fail closed.
-                  mods=list(net["modules"])
-                  if not mods:
-                      continue
-                  top=mods[0]
-              else:
-                  top=next(iter(net["modules"]))
+              top_path=path.with_suffix(".top")
+              if not top_path.exists():
+                  raise RuntimeError(f"missing top-name sidecar for {path.name}")
+              top=top_path.read_text().strip()
+              if top not in net["modules"]:
+                  raise RuntimeError(
+                      f"mapped top {top!r} missing from {path.name}; "
+                      f"available={list(net['modules'])[:8]}"
+                  )
               types=Counter(c["type"] for c in net["modules"][top]["cells"].values())
               rows.append({
                   "tag":path.stem,
@@ -142,4 +143,5 @@ jobs:
           path: |
             ${{ env.AREA_OUT }}/mapped/ranking.json
             ${{ env.AREA_OUT }}/mapped/*.log
+            ${{ env.AREA_OUT }}/mapped/*.top
             ${{ env.AREA_OUT }}/mapped/*.skip
