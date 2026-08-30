@@ -8,13 +8,16 @@ WIDTH_SPEC = ROOT / "src/test/scala/aethercore/DatapathWidthSpec.scala"
 F2_CHECKS = ROOT / "src/test/scala/aethercore/V2F2DependencyChecks.scala"
 
 
-def test_f2_owns_only_tiny_rat_and_operand_readiness() -> None:
+def test_f2_owns_bounded_producer_lookup_and_operand_readiness() -> None:
     text = DEPENDENCY.read_text(encoding="utf-8")
     assert "class OperandState" in text
     assert "val ready = Bool()" in text
     assert "val value = UInt(xlen.W)" in text
     assert "val producerTag = new ProducerTag" in text
-    assert "Seq.fill(32)" in text
+    assert "val rd = UInt(5.W)" in text
+    assert "for (age <- 0 until Entries)" in text
+    assert "producer.rd === address" in text
+    assert "private val rename" not in text
     assert "class TinyDependencyState" in text
     assert "class TinyDependencyBackend" in text
 
@@ -25,13 +28,13 @@ def test_f2_derives_rob_parallel_geometry_from_the_rob_owner() -> None:
     assert "private[v2] object TinyRobGeometry" in rob
     assert "val Entries: Int = 4" in rob
     assert "val IndexBits: Int = 2" in rob
-    assert "val GenerationBits: Int = 2" in rob
+    assert "val GenerationBits: Int = 8" in rob
     assert "private val Entries = TinyRobGeometry.Entries" in dependency
     assert "private val IdentityBits = TinyRobGeometry.IndexBits" in dependency
     assert "private val GenerationBits = TinyRobGeometry.GenerationBits" in dependency
     assert "private val Entries = 4" not in dependency
     assert "private val IdentityBits = 2" not in dependency
-    assert "private val GenerationBits = 2" not in dependency
+    assert "private val GenerationBits = 8" not in dependency
     assert "log2Ceil(TinyRobGeometry.Entries + 1).W" in rob
     assert "log2Ceil(TinyRobGeometry.Entries + 1).W" in dependency
 
@@ -39,7 +42,7 @@ def test_f2_derives_rob_parallel_geometry_from_the_rob_owner() -> None:
 def test_dependency_identity_is_producer_tag_not_order_or_storage_identity() -> None:
     text = DEPENDENCY.read_text(encoding="utf-8")
     assert "sameProducer" in text
-    assert "mapping.producerTag" in text
+    assert "mappingTag" in text
     assert "sameProducer(dependencies(index).rs1.producerTag" in text
     assert "sameProducer(dependencies(index).rs2.producerTag" in text
     assert "producers(allocated.producerTag.id).valid := createsProducer" in text
@@ -59,12 +62,14 @@ def test_rob_remains_the_completion_identity_authority() -> None:
     assert "dependencyState.io.completion := io.completion" not in dependency
 
 
-def test_waw_retirement_clears_only_the_matching_latest_mapping() -> None:
+def test_waw_ownership_is_reconstructed_from_live_producers_in_rob_age_order() -> None:
     text = DEPENDENCY.read_text(encoding="utf-8")
-    assert "sameProducer(rename(retiringRd).producerTag, retiringProducer)" in text
-    assert "rename(retiringRd).valid := false.B" in text
-    assert "when(io.allocate.valid)" in text
-    assert "rename(allocated.decoded.rd).producerTag := allocated.producerTag" in text
+    assert "io.head.bits.robToken.index + age.U" in text
+    assert "producer.rd === address" in text
+    assert "mappingTag := producer.producerTag" in text
+    assert "producers(allocated.producerTag.id).rd := allocated.decoded.rd" in text
+    assert "producers(survivor.producerTag.id).rd := survivor.decoded.rd" in text
+    assert "rename(" not in text
 
 
 def test_f2_does_not_pull_future_ooo_machinery_forward() -> None:
