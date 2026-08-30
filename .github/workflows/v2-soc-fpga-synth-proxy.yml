@@ -1,4 +1,5 @@
 name: AetherSoC FPGA Synthesis Proxy
+# Measurement-only trigger for the mirrored-register-file full-SoC A/B.
 
 on:
   pull_request:
