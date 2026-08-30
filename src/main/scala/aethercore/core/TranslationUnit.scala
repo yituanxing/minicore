@@ -22,7 +22,8 @@ import chisel3.util._
   */
 class TranslationUnit(
     val geometry: PageTableGeometry,
-    val tlbEntries: Int = 8
+    val tlbEntries: Int = 8,
+    val externalWalkGate: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
@@ -43,6 +44,7 @@ class TranslationUnit(
     val satpRootPpn = Input(UInt(PpnBits.W))
     val sum = Input(Bool())
     val mxr = Input(Bool())
+    val walkAllowed = if (externalWalkGate) Some(Input(Bool())) else None
 
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PaddrBits.W))
@@ -105,7 +107,8 @@ class TranslationUnit(
   tlb.io.refillLeafLevel := walker.io.leafLevel
   tlb.io.refillGlobal := walker.io.global
 
-  walker.io.requestValid := lookupActive && !tlb.io.hit
+  val walkAllowed = if (externalWalkGate) io.walkAllowed.get else true.B
+  walker.io.requestValid := lookupActive && !tlb.io.hit && walkAllowed
   walker.io.kill := abort
   walker.io.virtualAddress := io.virtualAddress
   walker.io.rootPpn := io.satpRootPpn
@@ -126,7 +129,7 @@ class TranslationUnit(
   // backpressure therefore keeps the source request stable rather than losing it.
   io.requestReady := state === idle && !abort && Mux(
     translationRequired,
-    Mux(tlb.io.hit, io.responseReady, walker.io.requestReady),
+    Mux(tlb.io.hit, io.responseReady, walkAllowed && walker.io.requestReady),
     true.B
   )
 
