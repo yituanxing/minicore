@@ -20,11 +20,6 @@ class OperandState(val xlen: Int, val identityBits: Int, val generationBits: Int
   val producerTag = new ProducerTag(identityBits, generationBits)
 }
 
-private class TinyRenameEntry(val identityBits: Int, val generationBits: Int) extends Bundle {
-  val valid = Bool()
-  val producerTag = new ProducerTag(identityBits, generationBits)
-}
-
 private class TinyProducerState(
     val xlen: Int,
     val identityBits: Int,
@@ -32,6 +27,7 @@ private class TinyProducerState(
 ) extends Bundle {
   val valid = Bool()
   val producerTag = new ProducerTag(identityBits, generationBits)
+  val rd = UInt(5.W)
   val ready = Bool()
   val value = UInt(xlen.W)
 }
@@ -114,9 +110,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val headOperandsReady = Output(Bool())
   })
 
-  private val rename = RegInit(
-    VecInit(Seq.fill(32)(0.U.asTypeOf(new TinyRenameEntry(IdentityBits, GenerationBits))))
-  )
   private val producers = RegInit(
     VecInit(
       Seq.fill(Entries)(
@@ -148,24 +141,41 @@ class TinyDependencyState(val xlen: Int) extends Module {
     resolved.ready := true.B
 
     when(used && address =/= 0.U) {
-      val mapping = rename(address)
-      when(mapping.valid) {
-        val producer = producers(mapping.producerTag.id)
+      // ROB4 has at most four live producer lifetimes. Search those bounded
+      // producer slots in ROB age order instead of paying for a 32-entry,
+      // two-read architectural RAT. Last-connect priority leaves the youngest
+      // matching producer as the source owner, preserving WAW semantics.
+      val mappingValid = WireDefault(false.B)
+      val mappingTag = WireDefault(
+        0.U.asTypeOf(new ProducerTag(IdentityBits, GenerationBits))
+      )
+      val mappingReady = WireDefault(false.B)
+      val mappingValue = WireDefault(0.U(xlen.W))
+
+      for (age <- 0 until Entries) {
+        val slot = (io.head.bits.robToken.index + age.U)(IdentityBits - 1, 0)
+        val producer = producers(slot)
+        when(io.head.valid && producer.valid && producer.rd === address) {
+          mappingValid := true.B
+          mappingTag := producer.producerTag
+          mappingReady := producer.ready
+          mappingValue := producer.value
+        }
+      }
+
+      when(mappingValid) {
         val completionBypass = io.completion.valid &&
           io.completion.bits.hasValue &&
           !io.completion.bits.exception.valid &&
-          sameProducer(io.completion.bits.producerTag, mapping.producerTag)
-        val retainedValue = producer.valid &&
-          producer.ready &&
-          sameProducer(producer.producerTag, mapping.producerTag)
+          sameProducer(io.completion.bits.producerTag, mappingTag)
 
-        resolved.producerTag := mapping.producerTag
+        resolved.producerTag := mappingTag
         when(completionBypass) {
           resolved.ready := true.B
           resolved.value := io.completion.bits.value
-        }.elsewhen(retainedValue) {
+        }.elsewhen(mappingReady) {
           resolved.ready := true.B
-          resolved.value := producer.value
+          resolved.value := mappingValue
         }.otherwise {
           resolved.ready := false.B
           resolved.value := 0.U
@@ -247,18 +257,8 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
   when(io.retire.valid) {
     val retiring = io.retire.bits.uop
-    val retiringRd = retiring.decoded.rd
     val retiringProducer = retiring.producerTag
     val producer = producers(retiringProducer.id)
-
-    when(
-      retiring.decoded.writesRd &&
-        retiringRd =/= 0.U &&
-        rename(retiringRd).valid &&
-        sameProducer(rename(retiringRd).producerTag, retiringProducer)
-    ) {
-      rename(retiringRd).valid := false.B
-    }
 
     when(producer.valid && sameProducer(producer.producerTag, retiringProducer)) {
       producers(retiringProducer.id).valid := false.B
@@ -288,13 +288,10 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
     producers(allocated.producerTag.id).valid := createsProducer
     producers(allocated.producerTag.id).producerTag := allocated.producerTag
+    producers(allocated.producerTag.id).rd := allocated.decoded.rd
     producers(allocated.producerTag.id).ready := false.B
     producers(allocated.producerTag.id).value := 0.U
 
-    when(createsProducer) {
-      rename(allocated.decoded.rd).valid := true.B
-      rename(allocated.decoded.rd).producerTag := allocated.producerTag
-    }
   }
 
   // Normal branch recovery keeps the surviving head producer/link value.
@@ -308,9 +305,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
       survivor.decoded.rd =/= 0.U &&
       survivor.producesValue
 
-    for (register <- 0 until 32) {
-      rename(register).valid := false.B
-    }
     for (index <- 0 until Entries) {
       when(index.U =/= survivor.robToken.index) {
         dependencies(index).valid := false.B
@@ -323,12 +317,9 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
     producers(survivor.producerTag.id).valid := survivorCreatesProducer
     producers(survivor.producerTag.id).producerTag := survivor.producerTag
+    producers(survivor.producerTag.id).rd := survivor.decoded.rd
     producers(survivor.producerTag.id).ready := survivorCreatesProducer && io.recovery.bits.hasValue
     producers(survivor.producerTag.id).value := io.recovery.bits.value
-    when(survivorCreatesProducer) {
-      rename(survivor.decoded.rd).valid := true.B
-      rename(survivor.decoded.rd).producerTag := survivor.producerTag
-    }
   }
 
   // Trap/xRET recovery has no speculative survivor dependency: the head is
@@ -339,9 +330,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
     assert(sameRobToken(io.head.bits.robToken, io.privilegedRecovery.bits.robToken),
       "privileged recovery must name the surviving ROB head")
 
-    for (register <- 0 until 32) {
-      rename(register).valid := false.B
-    }
     for (index <- 0 until Entries) {
       dependencies(index).valid := false.B
       producers(index).valid := false.B
