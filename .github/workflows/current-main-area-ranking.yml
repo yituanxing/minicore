@@ -71,6 +71,9 @@ jobs:
           map_top "$AREA_OUT/core" TinyLoadQueueMemoryBackend memory_backend
           map_top "$AREA_OUT/core" TinyDualReplaySafeLoadUnit loadq2_unit
           map_top "$AREA_OUT/core" TinyBlockingLsu parent_lsu
+          map_top "$AREA_OUT/core" DataPathAdapter data_path_adapter
+          map_top "$AREA_OUT/core" TranslationUnit translation_unit
+          map_top "$AREA_OUT/core" TranslationTlb translation_tlb
           map_top "$AREA_OUT/core" TinySelectiveExecutionCluster execution_cluster
           map_top "$AREA_OUT/core" TinyRob rob
           map_top "$AREA_OUT/core" MachineCsrFile csr
