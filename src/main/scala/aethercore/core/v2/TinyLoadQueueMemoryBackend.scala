@@ -140,29 +140,19 @@ class TinyLoadQueueMemoryBackend(
   private val selectedPteValid = parentPte || loadPte
   private val selectedPteAddress = Mux(selectParentPte, lsu.io.pteAddress, loadUnit.io.pteAddress)
 
-  ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
-  ptwPmp.io.address := selectedPteAddress
-  ptwPmp.io.bytes := geometry.pteBytes.U
-  ptwPmp.io.write := false.B
-  ptwPmp.io.execute := false.B
-  ptwPmp.io.config := csrFile.io.pmpConfig
-  ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
-  private val selectedPtePmpFault = selectedPteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
-
-  io.pteValid := selectedPteValid && !selectedPtePmpFault
+  // PMP ownership has moved to TinyPagedCore after fetch/data PTW
+  // arbitration. This backend owns only the parent-vs-LoadQ2 selection and
+  // routes the single external ready/data/fault result back to that owner.
+  io.pteValid := selectedPteValid
   io.pteAddress := selectedPteAddress
 
-  lsu.io.pteReady := selectParentPte &&
-    Mux(selectedPtePmpFault, true.B, io.pteReady)
+  lsu.io.pteReady := selectParentPte && io.pteReady
   lsu.io.pteData := io.pteData
-  lsu.io.pteFault := selectParentPte &&
-    (selectedPtePmpFault || (io.pteValid && io.pteFault))
+  lsu.io.pteFault := selectParentPte && io.pteValid && io.pteFault
 
-  loadUnit.io.pteReady := !selectParentPte && loadPte &&
-    Mux(selectedPtePmpFault, true.B, io.pteReady)
+  loadUnit.io.pteReady := !selectParentPte && loadPte && io.pteReady
   loadUnit.io.pteData := io.pteData
-  loadUnit.io.pteFault := !selectParentPte && loadPte &&
-    (selectedPtePmpFault || (io.pteValid && io.pteFault))
+  loadUnit.io.pteFault := !selectParentPte && loadPte && io.pteValid && io.pteFault
 
   // --------------------------------------------------------------------------
   // Shared PMA lookup. Exact-head Store/Atomic gets priority; otherwise the

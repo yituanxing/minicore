@@ -21,6 +21,8 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private val RootPteAddress = BigInt("00001000", 16)
   private val LeafPteAddress = BigInt("00002010", 16)
   private val SupervisorPa = BigInt("00003000", 16)
+  private val DataVa = BigInt("00005000", 16)
+  private val DataLeafPteAddress = BigInt("00002014", 16)
 
   private def initialize(dut: TinyPagedCore): Unit = {
     dut.io.imem.inst.poke("h00000013".U)
@@ -82,6 +84,37 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       (if (read) BigInt(1) << 1 else BigInt(0)) |
       (if (execute) BigInt(1) << 3 else BigInt(0)) |
       (if (accessed) BigInt(1) << 6 else BigInt(0))
+
+  /**
+    * PMP entry0 denies exactly the data leaf PTE at 0x2014 (NA4), while
+    * entry1 is an allow-all NAPOT fallback. Instruction translation therefore
+    * succeeds through root 0x1000 / leaf 0x2010, but the later data walk must
+    * be consumed locally when it reaches leaf 0x2014.
+    */
+  private def machineProgramDenyDataLeafPtw(): Map[BigInt, BigInt] = {
+    val setup = Seq(
+      BigInt("000010b7", 16), // lui  x1,1
+      BigInt("80508093", 16), // addi x1,x1,-2043 -> 0x805 = 0x2014 >> 2
+      BigInt("3b009073", 16), // csrw pmpaddr0,x1
+      BigInt("fff00093", 16), // addi x1,x0,-1
+      BigInt("3b109073", 16), // csrw pmpaddr1,x1
+      BigInt("000020b7", 16), // lui  x1,2
+      BigInt("f1008093", 16), // addi x1,x1,-240 -> 0x1f10
+      BigInt("3a009073", 16), // pmpcfg0: entry0 NA4 deny, entry1 NAPOT RWX
+      BigInt("800000b7", 16), // lui  x1,0x80000
+      BigInt("00108093", 16), // addi x1,x1,1 -> Sv32 MODE | root PPN 1
+      BigInt("18009073", 16), // csrw satp,x1
+      BigInt("000040b7", 16), // lui  x1,4 -> S-mode PC 0x4000
+      BigInt("34109073", 16), // csrw mepc,x1
+      BigInt("000010b7", 16), // lui  x1,1
+      BigInt("80008093", 16), // addi x1,x1,-2048 -> MPP=S
+      BigInt("30009073", 16), // csrw mstatus,x1
+      BigInt("30200073", 16)  // mret
+    )
+    setup.zipWithIndex.map { case (inst, index) =>
+      (Reset + index * 4) -> inst
+    }.toMap
+  }
 
   private def driveExternal(
       dut: TinyPagedCore,
@@ -195,6 +228,61 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       seenPtw should contain (LeafPteAddress)
       withClue("page-faulting target emitted a physical instruction request: ") {
         seenImem should not contain (SupervisorPa)
+      }
+    }
+  }
+
+  it should "consume a data-walk PMP denial at the shared PTW owner without external denied PTE traffic" in {
+    simulate(new TinyPagedCore(Config, Geometry)) { dut =>
+      initialize(dut)
+
+      val instructions = machineProgramDenyDataLeafPtw() ++ Map(
+        SupervisorPa -> BigInt("00005137", 16),       // lui x2,5 -> VA 0x5000
+        (SupervisorPa + 4) -> BigInt("00012183", 16) // lw  x3,0(x2)
+      )
+      val pageTable = Map(
+        RootPteAddress -> pte(Level0Ppn, read = false, execute = false, accessed = false),
+        LeafPteAddress -> pte(LeafPpn, read = true, execute = true, accessed = true),
+        DataLeafPteAddress -> pte(BigInt(4), read = true, execute = false, accessed = true)
+      )
+      val seenImem = mutable.ArrayBuffer.empty[BigInt]
+      val seenPtw = mutable.ArrayBuffer.empty[BigInt]
+      val seenData = mutable.ArrayBuffer.empty[BigInt]
+
+      var cycles = 0
+      var faultCommit = false
+      while (cycles < 900 && !faultCommit) {
+        driveExternal(dut, instructions, pageTable, seenImem, seenPtw)
+
+        if (dut.io.memoryRequest.valid.peek().litToBoolean) {
+          seenData += dut.io.memoryRequest.bits.paddr.peek().litValue
+        }
+
+        if (dut.io.commit.valid.peek().litToBoolean &&
+            dut.io.commit.pc.peek().litValue == SupervisorVa + 4 &&
+            dut.io.commit.exception.peek().litToBoolean) {
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.LoadAccessFault.U)
+          dut.io.commit.exceptionValue.expect(DataVa.U)
+          dut.io.commit.rdWrite.expect(false.B)
+          dut.io.currentPrivilege.expect(PrivilegeMode.Supervisor.U)
+          faultCommit = true
+        }
+
+        dut.clock.step()
+        cycles += 1
+      }
+
+      withClue("data PTW PMP denial did not retire as precise LoadAccessFault: ") {
+        faultCommit shouldBe true
+      }
+      withClue("instruction PTW path should still be externally visible: ") {
+        seenPtw should contain (LeafPteAddress)
+      }
+      withClue("PMP-denied data leaf PTE escaped to the external PTW port: ") {
+        seenPtw should not contain (DataLeafPteAddress)
+      }
+      withClue("translation-faulting Load escaped to external data memory: ") {
+        seenData shouldBe empty
       }
     }
   }

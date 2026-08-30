@@ -99,15 +99,15 @@ class TinyPreHeadMemoryBackend(
   // A younger TLB miss may occupy internal translation state, but the first
   // slice never externalizes speculative page-table traffic. Once the Load is
   // exact head, the existing walker resumes with no added replay structure.
-  val preHeadPtwPmpFault = lsu.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
-  io.pteValid := lsu.io.pteValid && !preHeadPtwPmpFault && safetyGate.io.ptePermit
+  // The pre-head gate still prevents speculative PTW traffic from
+  // externalizing. Once the request is permitted, PMP is owned by the parent
+  // TinyPagedCore after fetch/data arbitration and any denial returns through
+  // the ordinary io.pteFault path.
+  io.pteValid := lsu.io.pteValid && safetyGate.io.ptePermit
   io.pteAddress := lsu.io.pteAddress
-  lsu.io.pteReady := safetyGate.io.ptePermit &&
-    Mux(preHeadPtwPmpFault, true.B, io.pteReady)
+  lsu.io.pteReady := safetyGate.io.ptePermit && io.pteReady
   lsu.io.pteData := io.pteData
-  lsu.io.pteFault := safetyGate.io.ptePermit && (
-    preHeadPtwPmpFault || (io.pteValid && io.pteFault)
-  )
+  lsu.io.pteFault := safetyGate.io.ptePermit && io.pteValid && io.pteFault
 
   // PMA comes from the already-resolved physical address. A younger physical
   // read may externalize only when replay-safe; MMIO/ordered/side-effecting
