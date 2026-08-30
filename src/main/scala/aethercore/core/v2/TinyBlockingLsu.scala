@@ -254,8 +254,13 @@ class TinyBlockingLsu(
   adapter.io.pteFault := io.pteFault
 
   if (externalTranslation) {
-    io.translationRequest.get <> adapter.io.translationRequest.get
-    adapter.io.translationResponse.get <> io.translationResponse.get
+    io.translationRequest.get.valid := adapter.io.translationRequest.get.valid
+    io.translationRequest.get.bits := adapter.io.translationRequest.get.bits
+    adapter.io.translationRequest.get.ready := io.translationRequest.get.ready
+
+    adapter.io.translationResponse.get.valid := io.translationResponse.get.valid
+    adapter.io.translationResponse.get.bits := io.translationResponse.get.bits
+    io.translationResponse.get.ready := adapter.io.translationResponse.get.ready
   }
 
   val pmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
