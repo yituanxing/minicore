@@ -29,6 +29,10 @@ trait V2P8PreHeadLoadExceptionChecks {
     dut.io.translationFlush.poke(false.B)
 
     dut.io.pmpEnabled.poke(false.B)
+    dut.io.auxPmpValid.poke(false.B)
+    dut.io.auxPmpAddress.poke(0.U)
+    dut.io.auxPmpSize.poke(MemSize.Word)
+    dut.io.auxPmpWrite.poke(false.B)
     for (index <- 0 until PmpConstants.MaxEntries) {
       dut.io.pmpConfig(index).poke(0.U)
       dut.io.pmpAddress(index).poke(0.U)
