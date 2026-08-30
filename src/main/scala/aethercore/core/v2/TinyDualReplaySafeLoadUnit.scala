@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, MemSize}
 import aethercore.config.PageTableGeometry
-import aethercore.core.{PmpChecker, PmpConstants, PmpGeometry}
+import aethercore.core.{DataTranslationRequest, DataTranslationResponse, PmpChecker, PmpConstants, PmpGeometry}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -33,7 +33,8 @@ class TinyDualReplaySafeLoadUnit(
     val geometry: PageTableGeometry,
     val paddrBits: Int = -1,
     val tlbEntries: Int = 8,
-    val txnIdBits: Int = 2
+    val txnIdBits: Int = 2,
+    val externalTranslation: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val IdentityBits = TinyRobGeometry.IndexBits
@@ -73,6 +74,11 @@ class TinyDualReplaySafeLoadUnit(
     val pteData = Input(UInt(geometry.pteBits.W))
     val pteFault = Input(Bool())
 
+    val translationRequests =
+      if (externalTranslation) Some(Vec(Slots, Decoupled(new DataTranslationRequest(geometry)))) else None
+    val translationResponses =
+      if (externalTranslation) Some(Vec(Slots, Flipped(Decoupled(new DataTranslationResponse(geometry))))) else None
+
     // One shared PMA lookup seam. Slots are time-multiplexed through it before
     // physical launch; once launched they no longer consume this lookup port.
     val resolvedPhysicalValid = Output(Bool())
@@ -98,8 +104,21 @@ class TinyDualReplaySafeLoadUnit(
     paddrBits = PhysicalBits,
     tlbEntries = tlbEntries,
     txnIdBits = txnIdBits,
-    allowAtomics = false
+    allowAtomics = false,
+    externalTranslation = externalTranslation
   )))
+
+  if (externalTranslation) {
+    for ((slot, index) <- slots.zipWithIndex) {
+      io.translationRequests.get(index).valid := slot.io.translationRequest.get.valid
+      io.translationRequests.get(index).bits := slot.io.translationRequest.get.bits
+      slot.io.translationRequest.get.ready := io.translationRequests.get(index).ready
+
+      slot.io.translationResponse.get.valid := io.translationResponses.get(index).valid
+      slot.io.translationResponse.get.bits := io.translationResponses.get(index).bits
+      io.translationResponses.get(index).ready := slot.io.translationResponse.get.ready
+    }
+  }
 
   for (slot <- slots) {
     slot.io.storePermit.valid := false.B
