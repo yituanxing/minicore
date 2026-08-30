@@ -2,9 +2,9 @@ package aethercore.core.v2
 
 import chisel3._
 import chisel3.util._
-import aethercore.common.AtomicOp
+import aethercore.common.{AtomicOp, MemSize}
 import aethercore.config.PageTableGeometry
-import aethercore.core.{PmpConstants, PmpGeometry}
+import aethercore.core.{PmpChecker, PmpConstants, PmpGeometry}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -110,7 +110,11 @@ class TinyDualReplaySafeLoadUnit(
     slot.io.supervisorSum := io.supervisorSum
     slot.io.supervisorMxr := io.supervisorMxr
     slot.io.translationFlush := io.translationFlush
-    slot.io.pmpEnabled := io.pmpEnabled
+    // Dual-Load physical launch is already single-lane at the wrapper. Keep
+    // the child's qualified translation/lifetime machinery, but move PMP
+    // ownership to one shared checker at that existing arbitration point.
+    // The false constant lets synthesis remove each child's private checker.
+    slot.io.pmpEnabled := false.B
     slot.io.pmpConfig := io.pmpConfig
     slot.io.pmpAddress := io.pmpAddress
     slot.io.resolvedAttributes := io.resolvedAttributes
@@ -214,7 +218,34 @@ class TinyDualReplaySafeLoadUnit(
     slots.map(_.io.memoryRequest.bits)
   )
   val selectedIsHead = Mux1H(UIntToOH(pmaSelect, Slots), slotHead)
-  val selectedPermit = pmaSelectValid && selectedMemoryValid && (selectedIsHead || replaySafe)
+
+  // One shared PMP checker is sufficient because this wrapper already launches
+  // at most one physical request per cycle. A second resolved Load may retain
+  // its translated lifetime while the selected slot consumes this combinational
+  // permission lane; no external memory bandwidth is removed.
+  val selectedAccessBytes = WireDefault((Xlen / 8).U(4.W))
+  switch(selectedMemoryBits.size) {
+    is(MemSize.Byte)  { selectedAccessBytes := 1.U }
+    is(MemSize.Half)  { selectedAccessBytes := 2.U }
+    is(MemSize.Word)  { selectedAccessBytes := 4.U }
+    is(MemSize.DWord) { selectedAccessBytes := 8.U }
+  }
+
+  val sharedPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
+  sharedPmp.io.privilege := io.effectivePrivilege
+  sharedPmp.io.address := io.resolvedPhysicalAddress
+  sharedPmp.io.bytes := selectedAccessBytes
+  sharedPmp.io.write := false.B
+  sharedPmp.io.execute := false.B
+  sharedPmp.io.config := io.pmpConfig
+  sharedPmp.io.pmpAddress := io.pmpAddress
+
+  val selectedPmpDenied =
+    pmaSelectValid && selectedMemoryValid && io.pmpEnabled && !sharedPmp.io.allow
+  val selectedPmpAllowed = !io.pmpEnabled || sharedPmp.io.allow
+  val selectedPermit =
+    pmaSelectValid && selectedMemoryValid && selectedPmpAllowed &&
+      (selectedIsHead || replaySafe)
 
   io.memoryRequest.valid := selectedPermit
   io.memoryRequest.bits := selectedMemoryBits
@@ -223,26 +254,41 @@ class TinyDualReplaySafeLoadUnit(
   io.memoryRequest.bits.txnId := pmaSelect
 
   val childTxn = Reg(Vec(Slots, UInt(txnIdBits.W)))
+  val localPmpFaultPending = RegInit(VecInit(Seq.fill(Slots)(false.B)))
   val bypassableValid = RegInit(VecInit(Seq.fill(Slots)(false.B)))
   val bypassableToken = Reg(Vec(Slots, new RobToken(IdentityBits, GenerationBits)))
 
   for ((slot, index) <- slots.zipWithIndex) {
     val selected = pmaSelectValid && pmaSelect === index.U
-    slot.io.memoryRequest.ready := selected && selectedPermit && io.memoryRequest.ready
+    val localPmpDeny = selected && selectedPmpDenied
 
-    // A newly allocated child lifetime must never inherit launch state from an
-    // older token that previously occupied this fixed slot.
+    // A denied access still handshakes the child's private physical-request
+    // lifetime locally. The wrapper then returns a synthetic fault response on
+    // the following cycle, so the already-qualified child constructs the exact
+    // same LoadAccessFault/completion shape without touching external memory.
+    slot.io.memoryRequest.ready :=
+      selected && Mux(localPmpDeny, true.B, selectedPermit && io.memoryRequest.ready)
+
+    // A newly allocated child lifetime must never inherit launch/fault state
+    // from an older token that previously occupied this fixed slot.
     when(slot.io.request.fire) {
       physicalLaunched(index) := false.B
+      localPmpFaultPending(index) := false.B
     }
     when(slot.io.memoryRequest.fire) {
       physicalLaunched(index) := true.B
       childTxn(index) := slot.io.memoryRequest.bits.txnId
-      bypassableValid(index) := replaySafe
-      bypassableToken(index) := slot.io.lifetimeStatus.robToken
+      when(localPmpDeny) {
+        localPmpFaultPending(index) := true.B
+        bypassableValid(index) := false.B
+      }.otherwise {
+        bypassableValid(index) := replaySafe
+        bypassableToken(index) := slot.io.lifetimeStatus.robToken
+      }
     }
     when(slot.io.completion.fire) {
       physicalLaunched(index) := false.B
+      localPmpFaultPending(index) := false.B
       bypassableValid(index) := false.B
     }
 
@@ -263,16 +309,28 @@ class TinyDualReplaySafeLoadUnit(
   val responseOwnerValid = io.memoryResponse.bits.txnId < Slots.U
 
   for ((slot, index) <- slots.zipWithIndex) {
-    val selected = io.memoryResponse.valid && responseOwnerValid && responseSlot === index.U
-    slot.io.memoryResponse.valid := selected
+    val externalSelected =
+      io.memoryResponse.valid && responseOwnerValid && responseSlot === index.U
+    val localFault = localPmpFaultPending(index)
+
+    slot.io.memoryResponse.valid := localFault || externalSelected
     slot.io.memoryResponse.bits := io.memoryResponse.bits
     slot.io.memoryResponse.bits.txnId := childTxn(index)
+    when(localFault) {
+      slot.io.memoryResponse.bits.rdata := 0.U
+      slot.io.memoryResponse.bits.fault := true.B
+      slot.io.memoryResponse.bits.last := true.B
+    }
+
+    when(localFault && slot.io.memoryResponse.fire) {
+      localPmpFaultPending(index) := false.B
+    }
   }
 
   io.memoryResponse.ready := responseOwnerValid && Mux(
     responseSlot === 0.U,
-    slots(0).io.memoryResponse.ready,
-    slots(1).io.memoryResponse.ready
+    slots(0).io.memoryResponse.ready && !localPmpFaultPending(0),
+    slots(1).io.memoryResponse.ready && !localPmpFaultPending(1)
   )
 
   when(io.memoryResponse.fire) {
