@@ -79,11 +79,20 @@ These can form optimistic cycle-speedup caps directly.
 ### Capacity-pressure counters
 
 - `rob_full_dispatch_pressure`: real dispatch wants to enter while ROB4 is full.
+- `rob_full_no_launchable`: the same full-ROB blocked cycle **and** the current ROB4 exposes
+  no fresh launchable Branch/Compute/Store/Load work. This is the stricter ROB8 admission
+  signal: extra window entries can only expose immediately useful work on cycles where the
+  current bounded window has run out of launchable work.
+- `rob_full_no_launchable_load_head` / `rob_full_no_launchable_store_atomic_head`: split
+  that starvation by the architectural memory-head owner so a larger window is not credited
+  for stalls that are fundamentally a serialized memory-response problem.
 - `loadq_full_ready_load`: LoadQ2 is full while a ready ordinary Load exists in the current
   scheduling window.
 
 These indicate whether ROB8 / LoadQ4 deserve a trace-shadow study. They are not direct
-speedup predictions because a larger queue changes future overlap.
+speedup predictions because a larger queue changes future overlap. In particular,
+`rob_full_dispatch_pressure` alone is never sufficient evidence for ROB8; the
+full-and-no-launchable intersection must also be material.
 
 ### Critical-path ownership caps
 
