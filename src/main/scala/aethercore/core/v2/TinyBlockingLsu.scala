@@ -125,6 +125,8 @@ class TinyBlockingLsu(
       if (externalTranslation) Some(Decoupled(new DataTranslationRequest(geometry))) else None
     val translationResponse =
       if (externalTranslation) Some(Flipped(Decoupled(new DataTranslationResponse(geometry)))) else None
+    val translationToken =
+      if (externalTranslation) Some(Output(new RobToken(IdentityBits, GenerationBits))) else None
 
     // PMA/attribute policy remains outside the LSU. The LSU exposes the
     // resolved physical address and consumes the resolved attributes.
@@ -231,6 +233,10 @@ class TinyBlockingLsu(
   val misaligned = workingValid && supportedKind && sizeSupported &&
     ((effectiveAddress & alignmentMask) =/= 0.U)
   val localFault = unsupported || misaligned
+
+  if (externalTranslation) {
+    io.translationToken.get := workingRequest.robToken
+  }
 
   val adapter = Module(new DataPathAdapter(geometry, PhysicalBits, tlbEntries, externalTranslation))
   adapter.io.requestValid := workingValid && !localFault && !completionHeldValid
