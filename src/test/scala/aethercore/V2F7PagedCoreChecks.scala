@@ -271,7 +271,7 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
         }
 
         if (dut.io.commit.valid.peek().litToBoolean &&
-            dut.io.commit.pc.peek().litValue == DataVa + 8 &&
+            dut.io.commit.pc.peek().litValue == SupervisorVa + 8 &&
             dut.io.commit.exception.peek().litToBoolean) {
           dut.io.commit.exceptionCause.expect(MachineExceptionCode.StoreAccessFault.U)
           dut.io.commit.exceptionValue.expect(DataVa.U)
