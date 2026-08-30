@@ -102,6 +102,16 @@ jobs:
                   "RAM32M","RAM64M","RAM64M8"
               )
               lutram=sum(types[k] for k in lutram_names)
+              residual_user_modules=[
+                  name for name in types
+                  if name.startswith("Aether") or name.startswith("Tiny")
+              ]
+              if residual_user_modules:
+                  raise SystemExit(
+                      f"{name}: residual user hierarchy after XC7 mapping: {residual_user_modules[:12]}"
+                  )
+              if luts <= 0:
+                  raise SystemExit(f"{name}: XC7 mapping produced no LUT primitives")
               return {
                   "cells":sum(types.values()),
                   "lut_primitives":luts,
