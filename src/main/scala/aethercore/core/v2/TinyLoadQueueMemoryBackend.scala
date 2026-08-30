@@ -5,7 +5,7 @@ import chisel3.util._
 import aethercore.common.{AtomicOp, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
 import aethercore.core.PmpConstants
-import aethercore.memory.{AetherMemRequest, AetherMemResponse}
+import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
 
 /**
   * P8 bounded non-blocking-memory experiment.
@@ -129,6 +129,12 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.pmpConfig := csrFile.io.pmpConfig
   loadUnit.io.pmpAddress := csrFile.io.pmpAddress
 
+  // The exact-head parent and LoadQ2 already serialize through one physical
+  // PMA/request lane below. Reuse LoadQ2's productized shared data-PMP checker
+  // for the parent too; the parent's private checker is therefore disabled.
+  // Translation, PTW PMP, storePermit and atomic/PMA checks remain in the parent.
+  lsu.io.pmpEnabled := false.B
+
   // --------------------------------------------------------------------------
   // Shared PTW seam. Only an exact-head lifetime can request a walk.
   // Parent Store/Atomic gets deterministic priority, although architectural
@@ -189,14 +195,38 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.resolvedAttributes := io.resolvedAttributes
 
   // --------------------------------------------------------------------------
+  // One unified data-PMP lane for exact-head parent Store/Atomic and LoadQ2.
+  //
+  // Parent already owns the PMA/physical lane whenever parentNeedsPma is true,
+  // so feeding its candidate into the LoadQ2 shared checker cannot reduce
+  // physical issue width. LR is read-only; Store/SC/other AMOs need write PMP.
+  // --------------------------------------------------------------------------
+  private val parentPmpCandidate = selectParentPma && lsu.io.memoryRequest.valid
+  private val parentPmpWrite =
+    lsu.io.memoryRequest.bits.op === AetherMemOp.Write ||
+      (lsu.io.memoryRequest.bits.op === AetherMemOp.Atomic &&
+        lsu.io.memoryRequest.bits.atomicOp =/= AtomicOp.Lr)
+
+  loadUnit.io.auxPmpValid := parentPmpCandidate
+  loadUnit.io.auxPmpAddress := lsu.io.resolvedPhysicalAddress
+  loadUnit.io.auxPmpSize := lsu.io.memoryRequest.bits.size
+  loadUnit.io.auxPmpWrite := parentPmpWrite
+
+  private val parentPmpDenied =
+    parentPmpCandidate && isaLocal.hasPmp.B && !loadUnit.io.auxPmpAllow
+  private val parentPmpAllowed =
+    parentPmpCandidate && (!isaLocal.hasPmp.B || loadUnit.io.auxPmpAllow)
+
+  // --------------------------------------------------------------------------
   // Physical request namespace + response demux.
   //
   // 0/1: dual Load slot identities
   // 2:   original exact-head LSU
   // --------------------------------------------------------------------------
-  private val parentPhysicalValid = selectParentPma && lsu.io.memoryRequest.valid
+  private val parentPhysicalValid = parentPmpAllowed
   private val loadPhysicalValid = !selectParentPma && loadUnit.io.memoryRequest.valid
   private val parentPrivateTxn = Reg(UInt(txnIdBits.W))
+  private val parentPmpFaultPending = RegInit(false.B)
 
   io.memoryRequest.valid := parentPhysicalValid || loadPhysicalValid
   io.memoryRequest.bits := Mux(parentPhysicalValid, lsu.io.memoryRequest.bits, loadUnit.io.memoryRequest.bits)
@@ -204,11 +234,22 @@ class TinyLoadQueueMemoryBackend(
     io.memoryRequest.bits.txnId := 2.U
   }
 
-  lsu.io.memoryRequest.ready := parentPhysicalValid && io.memoryRequest.ready
+  // A denied parent access completes the child's request lifetime locally but
+  // never externalizes memory. A synthetic fault response on the following
+  // cycle lets the already-qualified TinyBlockingLsu construct the exact same
+  // Store/Load/AMO access-fault completion through its existing adapter path.
+  lsu.io.memoryRequest.ready :=
+    Mux(parentPmpDenied, true.B, parentPhysicalValid && io.memoryRequest.ready)
   loadUnit.io.memoryRequest.ready := loadPhysicalValid && io.memoryRequest.ready
 
   when(lsu.io.memoryRequest.fire) {
     parentPrivateTxn := lsu.io.memoryRequest.bits.txnId
+    when(parentPmpDenied) {
+      parentPmpFaultPending := true.B
+    }
+  }
+  when(lsu.io.completion.fire) {
+    parentPmpFaultPending := false.B
   }
 
   private val responseIsLoad = io.memoryResponse.bits.txnId < 2.U
@@ -217,14 +258,27 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.memoryResponse.valid := io.memoryResponse.valid && responseIsLoad
   loadUnit.io.memoryResponse.bits := io.memoryResponse.bits
 
-  lsu.io.memoryResponse.valid := io.memoryResponse.valid && responseIsParent
+  private val externalParentResponse = io.memoryResponse.valid && responseIsParent
+  lsu.io.memoryResponse.valid := parentPmpFaultPending || externalParentResponse
   lsu.io.memoryResponse.bits := io.memoryResponse.bits
   lsu.io.memoryResponse.bits.txnId := parentPrivateTxn
+  when(parentPmpFaultPending) {
+    lsu.io.memoryResponse.bits.rdata := 0.U
+    lsu.io.memoryResponse.bits.fault := true.B
+    lsu.io.memoryResponse.bits.last := true.B
+  }
+  when(parentPmpFaultPending && lsu.io.memoryResponse.fire) {
+    parentPmpFaultPending := false.B
+  }
 
   io.memoryResponse.ready := Mux(
     responseIsLoad,
     loadUnit.io.memoryResponse.ready,
-    Mux(responseIsParent, lsu.io.memoryResponse.ready, false.B)
+    Mux(
+      responseIsParent,
+      lsu.io.memoryResponse.ready && !parentPmpFaultPending,
+      false.B
+    )
   )
 
   when(io.memoryResponse.valid) {
