@@ -1,0 +1,165 @@
+name: Current Main Area Heatmap
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/current-area-heatmap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  map:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+
+      - name: Elaborate exact current-main CPU and SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "15f8a754acb7b6b3bd7ebf9b85a6dfa14002d8be"
+          chmod +x mill
+          out="$RUNNER_TEMP/area-heatmap"
+          rm -rf "$out"
+          mkdir -p "$out/cpu-rtl" "$out/soc-rtl"
+          ./mill aethercore.runMain aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/cpu-rtl"
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 --target-dir "$out/soc-rtl"
+          echo "HEATMAP_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Map exact CPU and SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          map_one() {
+            local dir="$1"
+            local top="$2"
+            local tag="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            local read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $HEATMAP_OUT/$tag.json; stat -top $top" \
+              2>&1 | tee "$HEATMAP_OUT/$tag.log"
+          }
+          map_one "$HEATMAP_OUT/cpu-rtl" TinyPagedCore cpu
+          map_one "$HEATMAP_OUT/soc-rtl" AetherCoreV2FpgaSoC soc
+
+      - name: Attribute mapped primitives back to hierarchy names
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          root=Path(os.environ["HEATMAP_OUT"])
+
+          def clean_name(name):
+              n=name.replace("\\", "")
+              n=n.replace("$flatten", "")
+              n=n.replace("$auto", "auto")
+              n=re.sub(r"^\.+", "", n)
+              return n
+
+          def path_key(name, depth):
+              n=clean_name(name)
+              # Yosys flattened names preserve logical prefixes separated by dots.
+              parts=[p for p in n.split(".") if p and not p.startswith("$") and not p.startswith("auto")]
+              if not parts:
+                  return "<auto/unattributed>"
+              return ".".join(parts[:depth])
+
+          def report(tag, top):
+              net=json.loads((root/f"{tag}.json").read_text())
+              mod=net["modules"][top]
+              cells=mod["cells"]
+              total=Counter()
+              by1=defaultdict(Counter)
+              by2=defaultdict(Counter)
+              by3=defaultdict(Counter)
+              src=defaultdict(Counter)
+              for name,cell in cells.items():
+                  typ=cell["type"]
+                  total[typ]+=1
+                  for d,out in ((1,by1),(2,by2),(3,by3)):
+                      out[path_key(name,d)][typ]+=1
+                  s=(cell.get("attributes") or {}).get("src","")
+                  # Generated source often contains semicolon-separated provenance.
+                  source=s.split(";")[0].split(":")[0] if s else "<no-src>"
+                  src[source][typ]+=1
+
+              def row(counter):
+                  return {
+                      "cells":sum(counter.values()),
+                      "lut4":counter["LUT4"],
+                      "ff":counter["TRELLIS_FF"],
+                      "pfumx":counter["PFUMX"],
+                      "l6mux21":counter["L6MUX21"],
+                      "ccu2c":counter["CCU2C"],
+                      "dpr16x4":counter["TRELLIS_DPR16X4"],
+                      "dp16kd":counter["DP16KD"],
+                      "mult":counter["MULT18X18D"],
+                  }
+
+              def ranked(groups, limit=80):
+                  out=[]
+                  for name,cnt in groups.items():
+                      r=row(cnt)
+                      r["name"]=name
+                      out.append(r)
+                  out.sort(key=lambda x:(x["lut4"],x["cells"]),reverse=True)
+                  return out[:limit]
+
+              data={
+                  "top":top,
+                  "total":row(total),
+                  "hierarchy_depth1":ranked(by1),
+                  "hierarchy_depth2":ranked(by2),
+                  "hierarchy_depth3":ranked(by3),
+                  "source_rank":ranked(src),
+                  "note":"Mapped ECP5 attribution by preserved flattened cell-name/source prefixes. Groups are diagnostic and non-additive with respect to architectural ownership; use them to rank candidates, then validate each candidate by whole-design A/B."
+              }
+              (root/f"{tag}-heatmap.json").write_text(json.dumps(data,indent=2)+"\n")
+              print(f"\n=== {tag.upper()} TOTAL ===")
+              print(json.dumps(data["total"],indent=2))
+              for level in ("hierarchy_depth1","hierarchy_depth2","hierarchy_depth3","source_rank"):
+                  print(f"\n=== {tag.upper()} {level} TOP20 ===")
+                  for x in data[level][:20]:
+                      print(f'{x["lut4"]:6d} LUT4 {x["cells"]:7d} cells {x["ff"]:6d} FF  {x["name"]}')
+
+          report("cpu","TinyPagedCore")
+          report("soc","AetherCoreV2FpgaSoC")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: current-area-heatmap-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.HEATMAP_OUT }}/cpu-heatmap.json
+            ${{ env.HEATMAP_OUT }}/soc-heatmap.json
+            ${{ env.HEATMAP_OUT }}/cpu.log
+            ${{ env.HEATMAP_OUT }}/soc.log
