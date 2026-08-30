@@ -1,4 +1,5 @@
 name: AetherSoC FPGA Synthesis Proxy
+# measurement trigger: unified data-PMP full-SoC A/B
 
 on:
   pull_request:
