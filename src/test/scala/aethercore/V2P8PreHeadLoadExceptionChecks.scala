@@ -127,6 +127,49 @@ trait V2P8PreHeadLoadExceptionChecks {
     }
   }
 
+  it should "convert shared-PMP denial into an exact-head LoadAccessFault without external memory" in {
+    simulate(new TinyDualReplaySafeLoadUnit(PageTableGeometry.Sv39)) { dut =>
+      pokeEnvironment(dut)
+
+      // S-mode with PMP enabled and every entry OFF has no matching permission:
+      // the shared checker must deny the aligned ordinary Load locally.
+      dut.io.effectivePrivilege.poke(PrivilegeMode.Supervisor.U)
+      dut.io.pmpEnabled.poke(true.B)
+      dispatchLoad(dut, base = 0x5000, index = 3, generation = 11)
+
+      // Keep the token speculative first. The wrapper may resolve/PMP-check it,
+      // but denial must never become an external physical request and the
+      // synchronous fault must remain owned until exact architectural head.
+      for (_ <- 0 until 4) {
+        dut.io.memoryRequest.valid.expect(false.B)
+        dut.io.completion.valid.expect(false.B)
+        dut.clock.step()
+      }
+      dut.io.busy.expect(true.B)
+
+      dut.io.head.valid.poke(true.B)
+      dut.io.head.bits.index.poke(3.U)
+      dut.io.head.bits.generation.poke(11.U)
+
+      stepUntil() {
+        dut.io.completion.valid.peek().litValue == 1
+      } {
+        dut.io.memoryRequest.valid.expect(false.B)
+        dut.clock.step()
+      }
+
+      dut.io.memoryRequest.valid.expect(false.B)
+      dut.io.completion.bits.robToken.index.expect(3.U)
+      dut.io.completion.bits.robToken.generation.expect(11.U)
+      dut.io.completion.bits.exception.valid.expect(true.B)
+      dut.io.completion.bits.exception.cause.expect(MachineExceptionCode.LoadAccessFault.U)
+      dut.io.completion.bits.exception.value.expect(0x5000.U)
+
+      dut.clock.step()
+      dut.io.busy.expect(false.B)
+    }
+  }
+
   it should "preserve successful replay-safe pre-head Load completion" in {
     simulate(new TinyDualReplaySafeLoadUnit(PageTableGeometry.Sv39)) { dut =>
       pokeEnvironment(dut)
