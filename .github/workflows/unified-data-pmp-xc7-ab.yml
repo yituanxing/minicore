@@ -1,0 +1,162 @@
+name: Unified Data-PMP XC7 Resource Proxy
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/v2/TinyDualReplaySafeLoadUnit.scala'
+      - '.github/workflows/unified-data-pmp-xc7-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+          yosys -Q -p 'help synth_xilinx' | grep -q -- '-family'
+
+      - name: Create exact RF-LUTRAM baseline worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/xc7-baseline"
+          rm -rf "$base"
+          git worktree add --detach "$base" 15f8a754acb7b6b3bd7ebf9b85a6dfa14002d8be
+          echo "BASE_TREE=$base" >> "$GITHUB_ENV"
+
+      - name: Elaborate baseline and candidate FPGA SoCs
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          chmod +x "$BASE_TREE/mill"
+          out="$RUNNER_TEMP/unified-data-pmp-xc7"
+          rm -rf "$out"
+          mkdir -p "$out/baseline" "$out/candidate"
+          (
+            cd "$BASE_TREE"
+            ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64               --target-dir "$out/baseline"
+          )
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64             --target-dir "$out/candidate"
+          echo "XC7_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Map exact A/B with Yosys 7-series primitives
+        shell: bash
+        run: |
+          set -euo pipefail
+          map_one() {
+            local dir="$1"
+            local tag="$2"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            local read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_xilinx -family xc7 -top AetherCoreV2FpgaSoC; write_json $XC7_OUT/$tag.json; stat -top AetherCoreV2FpgaSoC"               2>&1 | tee "$XC7_OUT/$tag.log"
+          }
+          map_one "$XC7_OUT/baseline" baseline
+          map_one "$XC7_OUT/candidate" candidate
+
+      - name: Summarize XC7 proxy resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+
+          root=Path(os.environ["XC7_OUT"])
+
+          def final_stat(name):
+              text=(root/f"{name}.log").read_text(errors="replace")
+              # The final hierarchical `stat -top AetherCoreV2FpgaSoC` block is
+              # authoritative for this proxy. It already recursively totals the
+              # retained user hierarchy even when synthesis intentionally keeps
+              # AetherCoreV2Axi4SoC/UART module boundaries.
+              blocks=list(re.finditer(
+                  r"Number of cells:\s+([0-9]+)\n(?P<body>(?:\s+[A-Za-z0-9_$\\.]+\s+[0-9]+\n)+)",
+                  text
+              ))
+              if not blocks:
+                  raise SystemExit(f"{name}: no Yosys stat cell block")
+              m=blocks[-1]
+              cells=int(m.group(1))
+              types={}
+              for line in m.group("body").splitlines():
+                  parts=line.split()
+                  if len(parts)==2 and parts[1].isdigit():
+                      types[parts[0]]=int(parts[1])
+              luts=sum(types.get(f"LUT{i}",0) for i in range(1,7))
+              if luts <= 0:
+                  raise SystemExit(f"{name}: final XC7 stat found no LUT primitives")
+              ffs=sum(types.get(k,0) for k in ("FDRE","FDSE","FDCE","FDPE"))
+              lutram=sum(types.get(k,0) for k in (
+                  "RAM16X1S","RAM32X1S","RAM64X1S","RAM128X1S","RAM256X1S",
+                  "RAM32X1D","RAM64X1D","RAM128X1D","RAM32M","RAM64M","RAM64M8"
+              ))
+              return {
+                  "cells":cells,
+                  "lut_primitives":luts,
+                  "ff_primitives":ffs,
+                  "muxf7":types.get("MUXF7",0),
+                  "muxf8":types.get("MUXF8",0),
+                  "carry4":types.get("CARRY4",0),
+                  "lutram_primitives":lutram,
+                  "ramb18e1":types.get("RAMB18E1",0),
+                  "ramb36e1":types.get("RAMB36E1",0),
+                  "dsp48e1":types.get("DSP48E1",0),
+                  "cell_types":dict(sorted(types.items())),
+              }
+
+          data={"baseline":final_stat("baseline"),"candidate":final_stat("candidate")}
+          keys=[k for k in data["baseline"] if k!="cell_types"]
+          data["delta"]={k:data["candidate"][k]-data["baseline"][k] for k in keys}
+          data["delta_pct"]={
+              k:(
+                  100.0*(data["candidate"][k]/data["baseline"][k]-1.0)
+                  if data["baseline"][k] else None
+              )
+              for k in keys
+          }
+          data["note"]=(
+              "Yosys synth_xilinx -family xc7 final hierarchical stat proxy only. "
+              "LUT1..LUT6 primitive sum is not Vivado placed LUT utilization and "
+              "does not include device placement/routing or an Fmax claim."
+          )
+          (root/"summary.json").write_text(json.dumps(data,indent=2)+"\n")
+          print(json.dumps(data,indent=2))
+          PY
+
+      - name: Upload XC7 proxy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unified-data-pmp-xc7-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.XC7_OUT }}/summary.json
+            ${{ env.XC7_OUT }}/baseline.log
+            ${{ env.XC7_OUT }}/candidate.log
