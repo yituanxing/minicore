@@ -14,6 +14,8 @@ jobs:
   compare:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      TARGET_SHA: e33e153bb2abd88868c6458e123fd9f51e520437
     steps:
       - name: Checkout candidate
         uses: actions/checkout@v4
@@ -38,21 +40,27 @@ jobs:
           yosys -V
           yosys -Q -p 'help synth_xilinx' | grep -q -- '-family'
 
-      - name: Create exact RF-LUTRAM baseline worktree
+      - name: Create exact baseline and target worktrees
         shell: bash
         run: |
           set -euo pipefail
           base="$RUNNER_TEMP/xc7-baseline"
-          rm -rf "$base"
+          target="$RUNNER_TEMP/xc7-target"
+          rm -rf "$base" "$target"
+          git cat-file -e "$TARGET_SHA^{commit}"
           git worktree add --detach "$base" 15f8a754acb7b6b3bd7ebf9b85a6dfa14002d8be
+          git worktree add --detach "$target" "$TARGET_SHA"
+          test "$(git -C "$target" rev-parse HEAD)" = "$TARGET_SHA"
+          chmod +x "$base/mill" "$target/mill"
           echo "BASE_TREE=$base" >> "$GITHUB_ENV"
+          echo "TARGET_TREE=$target" >> "$GITHUB_ENV"
 
       - name: Elaborate baseline and candidate FPGA SoCs
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x mill
           chmod +x "$BASE_TREE/mill"
+          chmod +x "$TARGET_TREE/mill"
           out="$RUNNER_TEMP/unified-data-pmp-xc7"
           rm -rf "$out"
           mkdir -p "$out/baseline" "$out/candidate"
