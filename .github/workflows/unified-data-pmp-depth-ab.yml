@@ -1,0 +1,130 @@
+name: Unified Data-PMP Exact Depth A/B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/unified-data-pmp-depth-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASELINE_SHA: 15f8a754acb7b6b3bd7ebf9b85a6dfa14002d8be
+      TARGET_SHA: e33e153bb2abd88868c6458e123fd9f51e520437
+    steps:
+      - name: Checkout measurement carrier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+
+      - name: Create exact baseline and target worktrees
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/depth-base"
+          target="$RUNNER_TEMP/depth-target"
+          rm -rf "$base" "$target"
+          git worktree add --detach "$base" "$BASELINE_SHA"
+          git worktree add --detach "$target" "$TARGET_SHA"
+          chmod +x "$base/mill" "$target/mill"
+          echo "BASE_TREE=$base" >> "$GITHUB_ENV"
+          echo "TARGET_TREE=$target" >> "$GITHUB_ENV"
+
+      - name: Elaborate exact CPU A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/unified-data-pmp-depth"
+          rm -rf "$out"
+          mkdir -p "$out/base-rtl" "$out/target-rtl"
+          (
+            cd "$BASE_TREE"
+            ./mill aethercore.runMain aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/base-rtl"
+          )
+          (
+            cd "$TARGET_TREE"
+            ./mill aethercore.runMain aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/target-rtl"
+          )
+          echo "DEPTH_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Map and measure exact structural depth
+        shell: bash
+        run: |
+          set -euo pipefail
+          measure() {
+            local tag="$1"
+            local dir="$DEPTH_OUT/$tag-rtl"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            local read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top TinyPagedCore; synth_ecp5 -top TinyPagedCore -json $DEPTH_OUT/$tag.json; stat -top TinyPagedCore; flatten; ltp -noff TinyPagedCore" \
+              2>&1 | tee "$DEPTH_OUT/$tag.log"
+          }
+          measure base
+          measure target
+
+      - name: Summarize exact depth and mux shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          from collections import Counter
+          from pathlib import Path
+          root=Path(os.environ["DEPTH_OUT"])
+          def one(tag):
+              net=json.loads((root/f"{tag}.json").read_text())
+              t=Counter(c["type"] for c in net["modules"]["TinyPagedCore"]["cells"].values())
+              log=(root/f"{tag}.log").read_text(errors="replace")
+              m=re.findall(r"Longest topological path in TinyPagedCore \(length=([0-9]+)\)",log)
+              if not m: raise SystemExit(f"missing ltp depth for {tag}")
+              return {
+                  "depth":int(m[-1]),
+                  "cells":sum(t.values()),
+                  "lut4":t["LUT4"],
+                  "ff":t["TRELLIS_FF"],
+                  "pfumx":t["PFUMX"],
+                  "l6mux21":t["L6MUX21"],
+                  "dpr16x4":t["TRELLIS_DPR16X4"],
+                  "mult18x18d":t["MULT18X18D"],
+              }
+          data={"baseline":one("base"),"candidate":one("target")}
+          data["delta"]={k:data["candidate"][k]-data["baseline"][k] for k in data["baseline"]}
+          data["note"]="Exact same-job Yosys/ECP5 structural proxy only; depth is not Fmax."
+          (root/"summary.json").write_text(json.dumps(data,indent=2)+"\n")
+          print(json.dumps(data,indent=2))
+          PY
+
+      - name: Upload exact depth evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unified-data-pmp-depth-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.DEPTH_OUT }}/summary.json
+            ${{ env.DEPTH_OUT }}/base.log
+            ${{ env.DEPTH_OUT }}/target.log
