@@ -84,7 +84,7 @@ class TinyLoadQueueMemoryBackend(
   // --------------------------------------------------------------------------
   // Two-slot ordinary Load owner + ROB4 selector.
   // --------------------------------------------------------------------------
-  val loadUnit = Module(new TinyDualReplaySafeLoadUnit(
+  val loadUnit = Module(new TinySharedTranslationLoadUnit(
     geometry,
     paddrBits = PhysicalBitsLocal,
     tlbEntries = tlbEntries,
