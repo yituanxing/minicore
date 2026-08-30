@@ -91,9 +91,24 @@ jobs:
           root=Path(os.environ["XC7_OUT"])
           top="AetherCoreV2FpgaSoC"
 
+          def expanded_types(net, module_name, stack=()):
+              if module_name in stack:
+                  raise SystemExit(
+                      f"recursive module hierarchy while expanding {module_name}: {stack}"
+                  )
+              out=Counter()
+              module=net["modules"][module_name]
+              for cell in module.get("cells", {}).values():
+                  typ=cell["type"]
+                  if typ in net["modules"]:
+                      out.update(expanded_types(net, typ, stack + (module_name,)))
+                  else:
+                      out[typ] += 1
+              return out
+
           def one(name):
               net=json.loads((root/f"{name}.json").read_text())
-              types=Counter(c["type"] for c in net["modules"][top]["cells"].values())
+              types=expanded_types(net, top)
               luts=sum(types[f"LUT{i}"] for i in range(1,7))
               ffs=sum(types[k] for k in ("FDRE","FDSE","FDCE","FDPE"))
               lutram_names=(
@@ -102,16 +117,8 @@ jobs:
                   "RAM32M","RAM64M","RAM64M8"
               )
               lutram=sum(types[k] for k in lutram_names)
-              residual_user_modules=[
-                  name for name in types
-                  if name.startswith("Aether") or name.startswith("Tiny")
-              ]
-              if residual_user_modules:
-                  raise SystemExit(
-                      f"{name}: residual user hierarchy after XC7 mapping: {residual_user_modules[:12]}"
-                  )
               if luts <= 0:
-                  raise SystemExit(f"{name}: XC7 mapping produced no LUT primitives")
+                  raise SystemExit(f"{name}: recursive XC7 accounting found no LUT primitives")
               return {
                   "cells":sum(types.values()),
                   "lut_primitives":luts,
