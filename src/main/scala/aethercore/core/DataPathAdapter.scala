@@ -108,7 +108,16 @@ class DataPathAdapter(
     val request = io.translationRequest.get
     val response = io.translationResponse.get
 
-    request.valid := io.requestValid
+    // A tiny per-lifetime translated-PA hold is deliberately retained outside
+    // the shared TLB/PTW.  The shared TranslationUnit may therefore accept the
+    // second Load as soon as the first translation resolves, without waiting
+    // for that first physical read response.
+    val heldValid = RegInit(false.B)
+    val heldPhysicalAddress = Reg(UInt(ArchitecturalPhysicalBits.W))
+    val heldPageFault = RegInit(false.B)
+    val heldAccessFault = RegInit(false.B)
+
+    request.valid := io.requestValid && !heldValid
     request.bits.virtualAddress := io.virtualAddress
     request.bits.privilege := io.privilege
     request.bits.write := io.translateWrite
@@ -117,10 +126,31 @@ class DataPathAdapter(
     request.bits.sum := io.sum
     request.bits.mxr := io.mxr
 
-    translationResponseValid := response.valid
-    translationPhysicalAddress := response.bits.physicalAddress
-    translationPageFault := response.bits.pageFault
-    translationAccessFault := response.bits.accessFault
+    translationResponseValid := heldValid || response.valid
+    translationPhysicalAddress := Mux(
+      heldValid, heldPhysicalAddress, response.bits.physicalAddress
+    )
+    translationPageFault := Mux(
+      heldValid, heldPageFault, response.bits.pageFault
+    )
+    translationAccessFault := Mux(
+      heldValid, heldAccessFault, response.bits.accessFault
+    )
+
+    // Consume the shared translation result immediately.  If the physical/fault
+    // path also completes on this cycle there is no reason to retain it.
+    response.ready := !heldValid
+    when(io.requestComplete) {
+      heldValid := false.B
+    }.elsewhen(response.fire) {
+      heldValid := true.B
+      heldPhysicalAddress := response.bits.physicalAddress
+      heldPageFault := response.bits.pageFault
+      heldAccessFault := response.bits.accessFault
+    }
+    when(io.flush) {
+      heldValid := false.B
+    }
 
     io.pteValid := false.B
     io.pteAddress := 0.U
@@ -163,10 +193,6 @@ class DataPathAdapter(
   val physicalComplete = io.dataValid && io.dataReady
   val faultComplete = io.requestValid && translationResponseValid && translationFault
   io.requestComplete := physicalComplete || faultComplete
-
-  if (externalTranslation) {
-    io.translationResponse.get.ready := io.requestComplete
-  }
 
   io.physicalAddress := translationPhysicalAddress.pad(PhysicalBits)
   io.readData := io.dataRdata
