@@ -81,7 +81,7 @@ class TinySchedulingEntry(val xlen: Int) extends Bundle {
   * F4 normal recovery keeps the surviving head producer because JAL/JALR may
   * still publish a link value. F5 privileged recovery is different: the head
   * is already complete and will trap/return at the next retirement boundary,
-  * so all speculative RAT, producer and dependency state can be discarded.
+  * so all speculative producer-ownership and dependency state can be discarded.
   */
 class TinyDependencyState(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64, s"tiny-dependency XLEN must be 32 or 64, got $xlen")
