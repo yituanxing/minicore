@@ -1,4 +1,5 @@
 name: AetherSoC FPGA Synthesis Proxy
+# Measurement-only trigger for RF-LUTRAM + bounded-producer dependency A/B.
 
 on:
   pull_request:
