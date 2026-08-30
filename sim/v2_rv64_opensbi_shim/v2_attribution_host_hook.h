@@ -85,6 +85,15 @@ void emitSnapshot(const Top& top, const char* reason) {
       << " memory_terminal_valid=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalValid)
       << " memory_terminal_fire=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalFire)
       << " memory_terminal_hold=" << static_cast<std::uint64_t>(top.ioV11MemoryTerminalHold)
+      << "\nAETHERCORE_V2_ARCH_OPP"
+      << " dual_domain_pairable=" << static_cast<std::uint64_t>(top.ioArchDualDomainPairable)
+      << " rob_full_dispatch_pressure=" << static_cast<std::uint64_t>(top.ioArchRobFullDispatchPressure)
+      << " loadq_full_ready_load=" << static_cast<std::uint64_t>(top.ioArchLoadQueueFullReadyLoad)
+      << " critical_load_head=" << static_cast<std::uint64_t>(top.ioArchCriticalLoadHead)
+      << " critical_store_atomic_head=" << static_cast<std::uint64_t>(top.ioArchCriticalStoreAtomicHead)
+      << " rob_full_no_launchable=" << static_cast<std::uint64_t>(top.ioArchRobFullNoLaunchable)
+      << " rob_full_no_launchable_load_head=" << static_cast<std::uint64_t>(top.ioArchRobFullNoLaunchableLoadHead)
+      << " rob_full_no_launchable_store_atomic_head=" << static_cast<std::uint64_t>(top.ioArchRobFullNoLaunchableStoreAtomicHead)
       << "\n";
 }
 

@@ -29,6 +29,22 @@ class V2AttributionV11Events extends Bundle {
 
   val memoryTerminalValid = Bool()
   val memoryTerminalReady = Bool()
+
+  // Architecture pre-decision opportunities. These are observation-only:
+  // no production scheduling decision consumes them.
+  val dualDomainPairable = Bool()
+  val robFullDispatchPressure = Bool()
+  val loadQueueFullReadyLoad = Bool()
+  val criticalLoadHead = Bool()
+  val criticalStoreAtomicHead = Bool()
+
+  // ROB8 admission refinement: a larger window can only expose useful extra
+  // work on a full-ROB cycle if the current bounded window has no launchable
+  // work left. Track that intersection rather than treating every full cycle
+  // as potential ROB8 benefit.
+  val robFullNoLaunchable = Bool()
+  val robFullNoLaunchableLoadHead = Bool()
+  val robFullNoLaunchableStoreAtomicHead = Bool()
 }
 
 class V2AttributionV11Counters extends Bundle {
@@ -52,6 +68,15 @@ class V2AttributionV11Counters extends Bundle {
   val memoryTerminalValid = UInt(64.W)
   val memoryTerminalFire = UInt(64.W)
   val memoryTerminalHold = UInt(64.W)
+
+  val dualDomainPairable = UInt(64.W)
+  val robFullDispatchPressure = UInt(64.W)
+  val loadQueueFullReadyLoad = UInt(64.W)
+  val criticalLoadHead = UInt(64.W)
+  val criticalStoreAtomicHead = UInt(64.W)
+  val robFullNoLaunchable = UInt(64.W)
+  val robFullNoLaunchableLoadHead = UInt(64.W)
+  val robFullNoLaunchableStoreAtomicHead = UInt(64.W)
 }
 
 /** Small independently-testable accumulator for P8 attribution v1.1. */
@@ -136,6 +161,17 @@ class V2AttributionV11CounterBank extends Module {
   io.counters.memoryTerminalValid := count(io.events.memoryTerminalValid)
   io.counters.memoryTerminalFire := count(memoryTerminalFire)
   io.counters.memoryTerminalHold := count(memoryTerminalHold)
+
+  io.counters.dualDomainPairable := count(io.events.dualDomainPairable)
+  io.counters.robFullDispatchPressure := count(io.events.robFullDispatchPressure)
+  io.counters.loadQueueFullReadyLoad := count(io.events.loadQueueFullReadyLoad)
+  io.counters.criticalLoadHead := count(io.events.criticalLoadHead)
+  io.counters.criticalStoreAtomicHead := count(io.events.criticalStoreAtomicHead)
+  io.counters.robFullNoLaunchable := count(io.events.robFullNoLaunchable)
+  io.counters.robFullNoLaunchableLoadHead := count(io.events.robFullNoLaunchableLoadHead)
+  io.counters.robFullNoLaunchableStoreAtomicHead := count(
+    io.events.robFullNoLaunchableStoreAtomicHead
+  )
 }
 
 /**
@@ -190,14 +226,20 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
     BoringUtils.tapAndRead(core.backend.selectiveIssue.io.request.bits.robToken.generation)
   private val lsuRequestValid = BoringUtils.tapAndRead(core.backend.lsu.io.request.valid)
   private val lsuRequestReady = BoringUtils.tapAndRead(core.backend.lsu.io.request.ready)
+  private val loadIssueRequestValid =
+    BoringUtils.tapAndRead(core.backend.loadIssue.io.request.valid)
+  private val loadIssueRequestReady =
+    BoringUtils.tapAndRead(core.backend.loadIssue.io.request.ready)
 
   private val branchFire = branchRequestValid && branchRequestReady
   private val computeFire = computeRequestValid && computeRequestReady
   private val lsuFire = lsuRequestValid && lsuRequestReady
+  private val loadFire = loadIssueRequestValid && loadIssueRequestReady
 
   events.robNonEmpty := observedOccupancy =/= 0.U
-  events.issueLaunch := branchFire || computeFire || lsuFire
-  events.issueRequestVisible := branchRequestValid || computeRequestValid || lsuRequestValid
+  events.issueLaunch := branchFire || computeFire || lsuFire || loadFire
+  events.issueRequestVisible :=
+    branchRequestValid || computeRequestValid || lsuRequestValid || loadIssueRequestValid
 
   // Mirror only the production compute selector's once-only lifetime bit. The
   // ROB/dependency/uOp data themselves remain read-only views from production.
@@ -277,6 +319,65 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   }
   events.shadowComputeReadyCount := PopCount(shadowEligible)
 
+  // Pre-decision shadow for allowing one ordinary Load and one Compute launch
+  // in the same cycle. Production currently gives Load issue priority by
+  // including loadIssue.request.valid in selectiveIssue.block. Recompute only
+  // the compute side with that single issue-width conflict removed; branch,
+  // recovery and exact-head Store/Atomic remain architectural/resource barriers.
+  private val acceptedPrivilegedRecoveryValid =
+    BoringUtils.tapAndRead(core.backend.dependencyBackend.io.acceptedPrivilegedRecovery.valid)
+  private val loadUnitFull =
+    BoringUtils.tapAndRead(core.backend.loadUnit.io.full)
+
+  private val nonLoadComputeBlock =
+    branchRequestValid ||
+      acceptedRecoveryValid ||
+      acceptedPrivilegedRecoveryValid ||
+      lsuRequestValid
+
+  private val shadowComputeIgnoringLoad = Wire(Vec(Entries, Bool()))
+  for (age <- 0 until Entries) {
+    val entry = window(age)
+    val token = entry.uop.robToken
+    val alreadyIssued = shadowIssuedValid(token.index) &&
+      shadowIssuedGeneration(token.index) === token.generation
+    val safeClass = entry.uop.executionClass === ExecutionClass.Integer ||
+      entry.uop.executionClass === ExecutionClass.MulDiv
+    val op = entry.uop.decoded.aluOp
+    val resourceReady =
+      (entry.uop.executionClass === ExecutionClass.Integer && availability.integer) ||
+      (entry.uop.executionClass === ExecutionClass.MulDiv && isMultiply(op) && availability.multiply) ||
+      (entry.uop.executionClass === ExecutionClass.MulDiv && isDivide(op) && availability.divide)
+
+    shadowComputeIgnoringLoad(age) := !nonLoadComputeBlock && bypassOpen(age) &&
+      entry.valid &&
+      !entry.complete &&
+      entry.dependenciesValid &&
+      entry.operandsReady &&
+      !entry.uop.decoded.exception.valid &&
+      entry.uop.decoded.ordering === OrderingClass.Normal &&
+      safeClass &&
+      resourceReady &&
+      !alreadyIssued
+  }
+  events.dualDomainPairable :=
+    loadIssueRequestValid && shadowComputeIgnoringLoad.asUInt.orR
+
+  // Capacity-pressure proxies. They intentionally do not predict speedup by
+  // themselves; the host-side gate treats them as a reason to consider a
+  // larger structure only when the affected cycles are material.
+  private val anyReadyOrdinaryLoad = window.map { entry =>
+    entry.valid &&
+      !entry.complete &&
+      entry.dependenciesValid &&
+      entry.operandsReady &&
+      entry.uop.executionClass === ExecutionClass.Memory &&
+      entry.uop.decoded.memory.kind === MemoryOperationKind.Load &&
+      entry.uop.decoded.ordering === OrderingClass.Normal &&
+      !entry.uop.decoded.exception.valid
+  }.reduce(_ || _)
+  events.loadQueueFullReadyLoad := loadUnitFull && anyReadyOrdinaryLoad
+
   private val fetchRequestValid = BoringUtils.tapAndRead(core.fetch.io.requestValid)
   private val secondParcel = core.parcel match {
     case Some(parcelController) =>
@@ -294,6 +395,37 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   private val dispatchValid = BoringUtils.tapAndRead(core.backend.io.dispatch.valid)
   private val dispatchReady = BoringUtils.tapAndRead(core.backend.io.dispatch.ready)
   events.frontendBound := !dispatchValid && dispatchReady
+  events.robFullDispatchPressure :=
+    dispatchValid && !dispatchReady && observedOccupancy === Entries.U
+
+  private val observedCommitValid = BoringUtils.tapAndRead(core.io.commit.valid)
+  private val headEntry = window(0)
+  private val criticalHead = !observedCommitValid && headEntry.valid
+  events.criticalLoadHead :=
+    criticalHead &&
+      headEntry.uop.executionClass === ExecutionClass.Memory &&
+      headEntry.uop.decoded.memory.kind === MemoryOperationKind.Load
+  events.criticalStoreAtomicHead :=
+    criticalHead &&
+      headEntry.uop.executionClass === ExecutionClass.Memory &&
+      headEntry.uop.decoded.memory.kind =/= MemoryOperationKind.Load
+
+  private val currentWindowLaunchable =
+    branchRequestValid ||
+      computeRequestValid ||
+      lsuRequestValid ||
+      loadIssueRequestValid ||
+      shadowEligible.asUInt.orR
+  events.robFullNoLaunchable :=
+    events.robFullDispatchPressure && !currentWindowLaunchable
+  events.robFullNoLaunchableLoadHead :=
+    events.robFullNoLaunchable &&
+      headEntry.uop.executionClass === ExecutionClass.Memory &&
+      headEntry.uop.decoded.memory.kind === MemoryOperationKind.Load
+  events.robFullNoLaunchableStoreAtomicHead :=
+    events.robFullNoLaunchable &&
+      headEntry.uop.executionClass === ExecutionClass.Memory &&
+      headEntry.uop.decoded.memory.kind =/= MemoryOperationKind.Load
 
   private val terminalValid = BoringUtils.tapAndRead(core.backend.lsu.io.completion.valid)
   private val terminalReady = BoringUtils.tapAndRead(core.backend.lsu.io.completion.ready)
@@ -322,6 +454,15 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   val ioV11MemoryTerminalFire = IO(Output(UInt(64.W)))
   val ioV11MemoryTerminalHold = IO(Output(UInt(64.W)))
 
+  val ioArchDualDomainPairable = IO(Output(UInt(64.W)))
+  val ioArchRobFullDispatchPressure = IO(Output(UInt(64.W)))
+  val ioArchLoadQueueFullReadyLoad = IO(Output(UInt(64.W)))
+  val ioArchCriticalLoadHead = IO(Output(UInt(64.W)))
+  val ioArchCriticalStoreAtomicHead = IO(Output(UInt(64.W)))
+  val ioArchRobFullNoLaunchable = IO(Output(UInt(64.W)))
+  val ioArchRobFullNoLaunchableLoadHead = IO(Output(UInt(64.W)))
+  val ioArchRobFullNoLaunchableStoreAtomicHead = IO(Output(UInt(64.W)))
+
   ioV11Cycles := bank.io.counters.cycles
   ioV11BranchResolved := bank.io.counters.branchResolved
   ioV11BranchTaken := bank.io.counters.branchTaken
@@ -341,4 +482,14 @@ class AetherCoreV2MeasuredOpenSbiRV64SimTopHostVisibleAttributionV11
   ioV11MemoryTerminalValid := bank.io.counters.memoryTerminalValid
   ioV11MemoryTerminalFire := bank.io.counters.memoryTerminalFire
   ioV11MemoryTerminalHold := bank.io.counters.memoryTerminalHold
+
+  ioArchDualDomainPairable := bank.io.counters.dualDomainPairable
+  ioArchRobFullDispatchPressure := bank.io.counters.robFullDispatchPressure
+  ioArchLoadQueueFullReadyLoad := bank.io.counters.loadQueueFullReadyLoad
+  ioArchCriticalLoadHead := bank.io.counters.criticalLoadHead
+  ioArchCriticalStoreAtomicHead := bank.io.counters.criticalStoreAtomicHead
+  ioArchRobFullNoLaunchable := bank.io.counters.robFullNoLaunchable
+  ioArchRobFullNoLaunchableLoadHead := bank.io.counters.robFullNoLaunchableLoadHead
+  ioArchRobFullNoLaunchableStoreAtomicHead :=
+    bank.io.counters.robFullNoLaunchableStoreAtomicHead
 }
