@@ -69,15 +69,27 @@ def main() -> int:
     args = ap.parse_args()
 
     lines = args.log.read_text(encoding="utf-8", errors="replace").splitlines()
-    # Use the last marker/exit snapshot family. Periodic snapshots occur before
-    # it, so walking from the end gives the qualified terminal observation.
-    tail_start = 0
-    for idx, line in enumerate(lines):
-        if line.startswith("AETHERCORE_V2_TOPDOWN reason=marker") or line.startswith(
-            "AETHERCORE_V2_TOPDOWN reason=exit"
-        ):
-            tail_start = idx
-    data = parse_snapshot(lines[tail_start:])
+
+    # Architecture-opportunity counters may use a different terminal marker
+    # from the workload runner (for example clocksource vs PID1). Anchor on the
+    # last ARCH_OPP line actually emitted, then pair it with the immediately
+    # preceding attribution/top-down snapshot. This avoids accidentally mixing
+    # a later PERF-only marker cycle count with older opportunity counters.
+    arch_indices = [
+        idx for idx, line in enumerate(lines)
+        if line.startswith("AETHERCORE_V2_ARCH_OPP")
+    ]
+    if not arch_indices:
+        raise SystemExit("no AETHERCORE_V2_ARCH_OPP snapshot found in log")
+    arch_idx = arch_indices[-1]
+
+    start = arch_idx
+    while start > 0 and not lines[start].startswith("AETHERCORE_V2_TOPDOWN"):
+        start -= 1
+    if not lines[start].startswith("AETHERCORE_V2_TOPDOWN"):
+        raise SystemExit("no TOPDOWN snapshot preceding final ARCH_OPP line")
+
+    data = parse_snapshot(lines[start : arch_idx + 1])
 
     cycles = data.get("cycles", 0)
     if cycles <= 0:
