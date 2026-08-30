@@ -26,7 +26,7 @@ import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, Memo
   * ROB head may start a page-table walk, preserving the frozen speculative-PTW
   * rule.
   */
-private class TinySharedLoadTranslator(
+class TinySharedLoadTranslator(
     val geometry: PageTableGeometry,
     val paddrBits: Int,
     val tlbEntries: Int,
