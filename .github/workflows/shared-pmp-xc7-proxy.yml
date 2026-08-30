@@ -84,63 +84,66 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os
-          from collections import Counter
+          import json, os, re
           from pathlib import Path
 
           root=Path(os.environ["XC7_OUT"])
-          top="AetherCoreV2FpgaSoC"
 
-          def expanded_types(net, module_name, stack=()):
-              if module_name in stack:
-                  raise SystemExit(
-                      f"recursive module hierarchy while expanding {module_name}: {stack}"
-                  )
-              out=Counter()
-              module=net["modules"][module_name]
-              for cell in module.get("cells", {}).values():
-                  typ=cell["type"]
-                  if typ in net["modules"]:
-                      out.update(expanded_types(net, typ, stack + (module_name,)))
-                  else:
-                      out[typ] += 1
-              return out
-
-          def one(name):
-              net=json.loads((root/f"{name}.json").read_text())
-              types=expanded_types(net, top)
-              luts=sum(types[f"LUT{i}"] for i in range(1,7))
-              ffs=sum(types[k] for k in ("FDRE","FDSE","FDCE","FDPE"))
-              lutram_names=(
-                  "RAM16X1S","RAM32X1S","RAM64X1S","RAM128X1S","RAM256X1S",
-                  "RAM32X1D","RAM64X1D","RAM128X1D",
-                  "RAM32M","RAM64M","RAM64M8"
-              )
-              lutram=sum(types[k] for k in lutram_names)
+          def final_stat(name):
+              text=(root/f"{name}.log").read_text(errors="replace")
+              # The final hierarchical `stat -top AetherCoreV2FpgaSoC` block is
+              # authoritative for this proxy. It already recursively totals the
+              # retained user hierarchy even when synthesis intentionally keeps
+              # AetherCoreV2Axi4SoC/UART module boundaries.
+              blocks=list(re.finditer(
+                  r"Number of cells:\s+([0-9]+)\n(?P<body>(?:\s+[A-Za-z0-9_$\\.]+\s+[0-9]+\n)+)",
+                  text
+              ))
+              if not blocks:
+                  raise SystemExit(f"{name}: no Yosys stat cell block")
+              m=blocks[-1]
+              cells=int(m.group(1))
+              types={}
+              for line in m.group("body").splitlines():
+                  parts=line.split()
+                  if len(parts)==2 and parts[1].isdigit():
+                      types[parts[0]]=int(parts[1])
+              luts=sum(types.get(f"LUT{i}",0) for i in range(1,7))
               if luts <= 0:
-                  raise SystemExit(f"{name}: recursive XC7 accounting found no LUT primitives")
+                  raise SystemExit(f"{name}: final XC7 stat found no LUT primitives")
+              ffs=sum(types.get(k,0) for k in ("FDRE","FDSE","FDCE","FDPE"))
+              lutram=sum(types.get(k,0) for k in (
+                  "RAM16X1S","RAM32X1S","RAM64X1S","RAM128X1S","RAM256X1S",
+                  "RAM32X1D","RAM64X1D","RAM128X1D","RAM32M","RAM64M","RAM64M8"
+              ))
               return {
-                  "cells":sum(types.values()),
+                  "cells":cells,
                   "lut_primitives":luts,
                   "ff_primitives":ffs,
-                  "muxf7":types["MUXF7"],
-                  "muxf8":types["MUXF8"],
+                  "muxf7":types.get("MUXF7",0),
+                  "muxf8":types.get("MUXF8",0),
+                  "carry4":types.get("CARRY4",0),
                   "lutram_primitives":lutram,
-                  "ramb18e1":types["RAMB18E1"],
-                  "ramb36e1":types["RAMB36E1"],
-                  "dsp48e1":types["DSP48E1"],
-                  "srl16e":types["SRL16E"],
-                  "srlc32e":types["SRLC32E"],
+                  "ramb18e1":types.get("RAMB18E1",0),
+                  "ramb36e1":types.get("RAMB36E1",0),
+                  "dsp48e1":types.get("DSP48E1",0),
                   "cell_types":dict(sorted(types.items())),
               }
 
-          data={"baseline":one("baseline"),"candidate":one("candidate")}
+          data={"baseline":final_stat("baseline"),"candidate":final_stat("candidate")}
           keys=[k for k in data["baseline"] if k!="cell_types"]
           data["delta"]={k:data["candidate"][k]-data["baseline"][k] for k in keys}
+          data["delta_pct"]={
+              k:(
+                  100.0*(data["candidate"][k]/data["baseline"][k]-1.0)
+                  if data["baseline"][k] else None
+              )
+              for k in keys
+          }
           data["note"]=(
-              "Yosys synth_xilinx -family xc7 primitive proxy only. "
-              "LUT primitive counts are not Vivado placed LUT utilization; "
-              "no device placement, routing, constraints or Fmax claim."
+              "Yosys synth_xilinx -family xc7 final hierarchical stat proxy only. "
+              "LUT1..LUT6 primitive sum is not Vivado placed LUT utilization and "
+              "does not include device placement/routing or an Fmax claim."
           )
           (root/"summary.json").write_text(json.dumps(data,indent=2)+"\n")
           print(json.dumps(data,indent=2))
