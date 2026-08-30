@@ -78,6 +78,8 @@ class TinyDualReplaySafeLoadUnit(
       if (externalTranslation) Some(Vec(Slots, Decoupled(new DataTranslationRequest(geometry)))) else None
     val translationResponses =
       if (externalTranslation) Some(Vec(Slots, Flipped(Decoupled(new DataTranslationResponse(geometry))))) else None
+    val translationTokens =
+      if (externalTranslation) Some(Output(Vec(Slots, new RobToken(IdentityBits, GenerationBits)))) else None
 
     // One shared PMA lookup seam. Slots are time-multiplexed through it before
     // physical launch; once launched they no longer consume this lookup port.
@@ -117,6 +119,7 @@ class TinyDualReplaySafeLoadUnit(
       slot.io.translationResponse.get.valid := io.translationResponses.get(index).valid
       slot.io.translationResponse.get.bits := io.translationResponses.get(index).bits
       io.translationResponses.get(index).ready := slot.io.translationResponse.get.ready
+      io.translationTokens.get(index) := slot.io.translationToken.get
     }
   }
 
