@@ -66,6 +66,16 @@ class TinyDualReplaySafeLoadUnit(
     val pmpConfig = Input(Vec(PmpConstants.MaxEntries, UInt(8.W)))
     val pmpAddress = Input(Vec(PmpConstants.MaxEntries, UInt(PmpAddressBits.W)))
 
+    // Narrow auxiliary data-PMP query used by the exact-head parent
+    // Store/Atomic LSU. The backend already serializes parent and Load physical
+    // launch through one PMA/request lane, so this does not add or remove a
+    // memory port; it only reuses this unit's already-productized checker.
+    val auxPmpValid = Input(Bool())
+    val auxPmpAddress = Input(UInt(PhysicalBits.W))
+    val auxPmpSize = Input(MemSize())
+    val auxPmpWrite = Input(Bool())
+    val auxPmpAllow = Output(Bool())
+
     // One shared PTW seam. Only the exact-head slot may use it.
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PhysicalBits.W))
@@ -231,18 +241,34 @@ class TinyDualReplaySafeLoadUnit(
     is(MemSize.DWord) { selectedAccessBytes := 8.U }
   }
 
+  val auxAccessBytes = WireDefault((Xlen / 8).U(4.W))
+  switch(io.auxPmpSize) {
+    is(MemSize.Byte)  { auxAccessBytes := 1.U }
+    is(MemSize.Half)  { auxAccessBytes := 2.U }
+    is(MemSize.Word)  { auxAccessBytes := 4.U }
+    is(MemSize.DWord) { auxAccessBytes := 8.U }
+  }
+
   val sharedPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
   sharedPmp.io.privilege := io.effectivePrivilege
-  sharedPmp.io.address := io.resolvedPhysicalAddress
-  sharedPmp.io.bytes := selectedAccessBytes
-  sharedPmp.io.write := false.B
+  sharedPmp.io.address := Mux(io.auxPmpValid, io.auxPmpAddress, io.resolvedPhysicalAddress)
+  sharedPmp.io.bytes := Mux(io.auxPmpValid, auxAccessBytes, selectedAccessBytes)
+  sharedPmp.io.write := io.auxPmpValid && io.auxPmpWrite
   sharedPmp.io.execute := false.B
   sharedPmp.io.config := io.pmpConfig
   sharedPmp.io.pmpAddress := io.pmpAddress
 
+  io.auxPmpAllow := !io.pmpEnabled || sharedPmp.io.allow
+
+  // Parent owns the wrapper's physical lane whenever auxPmpValid is asserted.
+  // Stall a simultaneously resolved Load rather than interpreting the parent's
+  // permission result as the Load's result. This matches the existing backend
+  // parent-priority PMA arbitration.
   val selectedPmpDenied =
-    pmaSelectValid && selectedMemoryValid && io.pmpEnabled && !sharedPmp.io.allow
-  val selectedPmpAllowed = !io.pmpEnabled || sharedPmp.io.allow
+    !io.auxPmpValid && pmaSelectValid && selectedMemoryValid &&
+      io.pmpEnabled && !sharedPmp.io.allow
+  val selectedPmpAllowed =
+    !io.auxPmpValid && (!io.pmpEnabled || sharedPmp.io.allow)
   val selectedPermit =
     pmaSelectValid && selectedMemoryValid && selectedPmpAllowed &&
       (selectedIsHead || replaySafe)
