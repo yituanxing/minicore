@@ -68,6 +68,25 @@ class TinyRobWindowEntry(val xlen: Int) extends Bundle {
   )
 }
 
+
+/**
+  * Read-only ROB projection in physical-slot order.
+  *
+  * Wide uOps stay attached to their storage slot. Only the tiny age field moves
+  * with head, allowing schedulers to compare age without a 4x4 BackendUop
+  * reorder crossbar.
+  */
+class TinyRobPhysicalSlotEntry(val xlen: Int) extends Bundle {
+  val valid = Bool()
+  val complete = Bool()
+  val age = UInt(TinyRobGeometry.IndexBits.W)
+  val uop = new BackendUop(
+    xlen,
+    TinyRobGeometry.IndexBits,
+    TinyRobGeometry.GenerationBits
+  )
+}
+
 private class TinyRobEntry(val xlen: Int) extends Bundle {
   val valid = Bool()
   val complete = Bool()
@@ -108,6 +127,7 @@ class TinyRob(val xlen: Int) extends Module {
     val acceptedPrivilegedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val headView = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val window = Output(Vec(Entries, new TinyRobWindowEntry(xlen)))
+    val physicalWindow = Output(Vec(Entries, new TinyRobPhysicalSlotEntry(xlen)))
     val retire = Decoupled(new RobRetirement(xlen))
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
   })
@@ -135,6 +155,20 @@ class TinyRob(val xlen: Int) extends Module {
     io.window(age).valid := live
     io.window(age).complete := live && entry.complete
     io.window(age).uop := entry.uop
+  }
+
+
+  // FPGA-friendly scheduling projection: never move the wide BackendUop across
+  // ROB slots. Each static slot exports only a 2-bit relative age.
+  for (slot <- 0 until Entries) {
+    val entry = entries(slot)
+    val age = (slot.U(IndexBits.W) - head)(IndexBits - 1, 0)
+    val live = age < count && entry.valid
+    io.physicalWindow(slot) := 0.U.asTypeOf(new TinyRobPhysicalSlotEntry(xlen))
+    io.physicalWindow(slot).valid := live
+    io.physicalWindow(slot).complete := live && entry.complete
+    io.physicalWindow(slot).age := age
+    io.physicalWindow(slot).uop := entry.uop
   }
 
   io.retire.valid := retireHead.valid && retireHead.complete
