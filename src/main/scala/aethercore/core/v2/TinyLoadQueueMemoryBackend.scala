@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{PmpConstants, TranslationUnit}
+import aethercore.core.{PhysicalAddressNarrowing, PmpConstants, TranslationUnit}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse}
 
 /**
@@ -314,24 +314,33 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.pteFault := false.B
 
   // One PTW + one Supervisor PMP qualification now serves all three data
-  // lifetimes. PTW traffic itself remains exact-head-only by walkAllowed.
+  // lifetimes.  The walker still computes the architectural Sv39 PA56 address;
+  // narrow it exactly once before the implemented physical/PMP domain.  A high
+  // architectural bit is a terminal access fault and never aliases a low PTE.
+  private val (sharedPteAddress, sharedPteOutOfRange) =
+    PhysicalAddressNarrowing(sharedTranslation.io.pteAddress, PhysicalBitsLocal)
+  private val sharedPteRangeFault =
+    sharedTranslation.io.pteValid && sharedPteOutOfRange
+
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
-  ptwPmp.io.address := sharedTranslation.io.pteAddress.pad(PhysicalBitsLocal)
+  ptwPmp.io.address := sharedPteAddress
   ptwPmp.io.bytes := geometry.pteBytes.U
   ptwPmp.io.write := false.B
   ptwPmp.io.execute := false.B
   ptwPmp.io.config := csrFile.io.pmpConfig
   ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
   private val sharedPtePmpFault =
-    sharedTranslation.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
+    sharedTranslation.io.pteValid && !sharedPteOutOfRange &&
+      isaLocal.hasPmp.B && !ptwPmp.io.allow
 
-  io.pteValid := sharedTranslation.io.pteValid && !sharedPtePmpFault
-  io.pteAddress := sharedTranslation.io.pteAddress.pad(PhysicalBitsLocal)
+  io.pteValid :=
+    sharedTranslation.io.pteValid && !sharedPteRangeFault && !sharedPtePmpFault
+  io.pteAddress := sharedPteAddress
   sharedTranslation.io.pteReady :=
-    Mux(sharedPtePmpFault, true.B, io.pteReady)
+    Mux(sharedPteRangeFault || sharedPtePmpFault, true.B, io.pteReady)
   sharedTranslation.io.pteData := io.pteData
   sharedTranslation.io.pteFault :=
-    sharedPtePmpFault || (io.pteValid && io.pteFault)
+    sharedPteRangeFault || sharedPtePmpFault || (io.pteValid && io.pteFault)
 
   // --------------------------------------------------------------------------
   // Shared PMA lookup. Exact-head Store/Atomic gets priority; otherwise the
