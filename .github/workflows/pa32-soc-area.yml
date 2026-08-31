@@ -1,0 +1,156 @@
+name: AetherSoC PA32 Area A/B
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/config/CoreConfig.scala'
+      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
+      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
+      - 'src/main/scala/aethercore/core/PtwArbiter.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyBlockingLsu.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2Axi4SoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
+      - 'src/main/scala/aethercore/ElaborateV2FpgaSoCPA32.scala'
+      - '.github/workflows/pa32-soc-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-pa32-area-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synth:
+    name: Measure PA32 Full SoC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+
+      - name: Elaborate PA32 production SoC
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/pa32-soc-area
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCPA32RV64 \
+            --target-dir build/pa32-soc-area
+          find build/pa32-soc-area -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Map PA32 SoC with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethersoc-pa32"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          mapfile -t svs < <(find build/pa32-soc-area -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do
+            read_cmd+=" $sv"
+          done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_ecp5 -top AetherCoreV2FpgaSoC -json $out/fpga.json; stat -top AetherCoreV2FpgaSoC; flatten; ltp -noff AetherCoreV2FpgaSoC" \
+            2>&1 | tee "$out/yosys.log"
+
+          depth=$(sed -n 's/.*Longest topological path in AetherCoreV2FpgaSoC (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
+          test -n "$depth"
+
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[]] | length' "$out/fpga.json" > "$out/cells"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
+          printf '%s\n' "$depth" > "$out/depth"
+          echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Summarize PA56 vs PA32
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["SYNTH_OUT"])
+          def n(name):
+              return int((root / name).read_text().strip())
+
+          baseline = {
+              "paddr_bits": 56,
+              "lut4": 54965,
+              "ff": 14412,
+              "distributed_ram_dpr16x4": 438,
+              "mult18x18d": 39,
+          }
+          target = {
+              "paddr_bits": 32,
+              "cells": n("cells"),
+              "lut4": n("lut4"),
+              "ff": n("ff"),
+              "bram_dp16kd": n("bram"),
+              "distributed_ram_dpr16x4": n("dpr"),
+              "mult18x18d": n("mult"),
+              "logic_depth": n("depth"),
+          }
+          summary = {
+              "baseline_sha": "4a9d34832b0af06540bda8d35d9a6512ea97a59c",
+              "baseline": baseline,
+              "target": target,
+              "delta_lut4": target["lut4"] - baseline["lut4"],
+              "delta_ff": target["ff"] - baseline["ff"],
+              "note": "Sv39 remains architectural PA56 internally; PA32 is a fail-closed implemented physical boundary."
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## AetherSoC implemented-PA A/B\n\n")
+              f.write(f"- PA56 baseline: **{baseline['lut4']:,} LUT4 / {baseline['ff']:,} FF**\n")
+              f.write(f"- PA32 target: **{target['lut4']:,} LUT4 / {target['ff']:,} FF**\n")
+              f.write(f"- LUT4 delta: **{summary['delta_lut4']:+,}**\n")
+              f.write(f"- FF delta: **{summary['delta_ff']:+,}**\n")
+              f.write(f"- DPR16X4: {target['distributed_ram_dpr16x4']}\n")
+              f.write(f"- MULT18X18D: {target['mult18x18d']}\n")
+              f.write(f"- structural depth: {target['logic_depth']}\n")
+          PY
+
+      - name: Upload PA32 area evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-pa32-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethersoc-pa32/summary.json
+            ${{ runner.temp }}/aethersoc-pa32/yosys.log
