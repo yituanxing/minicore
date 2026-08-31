@@ -1,0 +1,97 @@
+name: ROB4 Physical Slot SoC Area
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/v2/TinyRobCommit.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyDependency.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyPhysicalIssue.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
+      - '.github/workflows/rob4-physical-slot-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synth:
+    name: Measure ROB4 physical-slot Full SoC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+
+      - name: Elaborate target Full SoC
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/rob4-physical-slot-area
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64             --target-dir build/rob4-physical-slot-area
+
+      - name: Map target Full SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rob4-physical-slot-area"
+          rm -rf "$out"
+          mkdir -p "$out"
+          mapfile -t svs < <(find build/rob4-physical-slot-area -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_ecp5 -top AetherCoreV2FpgaSoC -json $out/fpga.json; stat -top AetherCoreV2FpgaSoC"             2>&1 | tee "$out/yosys.log"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[]] | length' "$out/fpga.json" > "$out/cells"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])/"rob4-physical-slot-area"
+          n=lambda x:int((root/x).read_text().strip())
+          baseline=58914
+          target=n("lut4")
+          data={
+            "baseline_head":"d018527a4abed3212ffc89b90990492eb7c3fdff",
+            "baseline_lut4":baseline,
+            "target_lut4":target,
+            "delta_lut4":target-baseline,
+            "delta_percent":(target-baseline)*100.0/baseline,
+            "cells":n("cells"),
+            "ff":n("ff"),
+            "distributed_ram_dpr16x4":n("dpr"),
+          }
+          (root/"summary.json").write_text(json.dumps(data,indent=2)+"\n")
+          print(json.dumps(data,indent=2))
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rob4-physical-slot-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/rob4-physical-slot-area/summary.json
+            ${{ runner.temp }}/rob4-physical-slot-area/yosys.log

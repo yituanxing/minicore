@@ -92,9 +92,10 @@ class TinyLoadQueueMemoryBackend(
     txnIdBits = txnIdBits,
     externalTranslation = true
   ))
-  val loadIssue = Module(new TinyLoadQueueIssue(xlenLocal))
+  val loadIssue = Module(new TinyPhysicalLoadQueueIssue(xlenLocal))
 
-  loadIssue.io.window := dependencyBackend.io.schedulingWindow
+  loadIssue.io.slots := dependencyBackend.io.physicalSchedulingSlots
+  loadIssue.io.headIndex := dependencyBackend.io.headIndex
   loadIssue.io.allocated := dependencyBackend.io.allocated
   loadIssue.io.available := !loadUnit.io.full
   loadIssue.io.bypassable := loadUnit.io.bypassable

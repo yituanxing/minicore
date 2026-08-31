@@ -371,7 +371,9 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
     val retiring = Valid(new RobRetirement(xlen))
     val commit = Output(new CommitTrace(xlen = xlen))
     val head = Valid(new BackendUop(xlen, IdentityBits, GenerationBits))
+    val headIndex = Output(UInt(TinyRobGeometry.IndexBits.W))
     val schedulingWindow = Output(Vec(Entries, new TinySchedulingEntry(xlen)))
+    val physicalSchedulingSlots = Output(Vec(Entries, new TinySchedulingEntry(xlen)))
     val headDependenciesValid = Output(Bool())
     val headRs1 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
     val headRs2 = Output(new OperandState(xlen, IdentityBits, GenerationBits))
@@ -400,6 +402,7 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   io.commit := commitStage.io.commit
   io.occupancy := rob.io.occupancy
   io.head := rob.io.headView
+  io.headIndex := rob.io.headIndex
 
   registerFile.io.writeEnable := commitStage.io.rfWriteEnable
   registerFile.io.rdAddr := commitStage.io.rfWriteAddress
@@ -416,6 +419,32 @@ class TinyDependencyBackend(val xlen: Int) extends Module {
   dependencyState.io.retire.valid := rob.io.retire.valid && rob.io.retire.ready
   dependencyState.io.retire.bits := rob.io.retire.bits
   dependencyState.io.head := rob.io.headView
+
+  // Product FPGA path: compose ROB and dependency state by the same physical
+  // slot index.  This avoids a second dynamic dependency lookup after the ROB's
+  // wide age reorder.  Age-sensitive consumers derive age from (slot-head) in
+  // the fixed modulo-4 domain.
+  for (index <- 0 until Entries) {
+    val robEntry = rob.io.physicalWindow(index)
+    val dependencyEntry = dependencyState.io.slotView(index)
+    val dependencyMatches = robEntry.valid &&
+      dependencyEntry.valid &&
+      dependencyEntry.robToken.index === robEntry.uop.robToken.index &&
+      dependencyEntry.robToken.generation === robEntry.uop.robToken.generation
+
+    io.physicalSchedulingSlots(index) :=
+      0.U.asTypeOf(new TinySchedulingEntry(xlen))
+    io.physicalSchedulingSlots(index).valid := robEntry.valid
+    io.physicalSchedulingSlots(index).complete := robEntry.complete
+    io.physicalSchedulingSlots(index).uop := robEntry.uop
+    io.physicalSchedulingSlots(index).dependenciesValid := dependencyMatches
+    when(dependencyMatches) {
+      io.physicalSchedulingSlots(index).rs1 := dependencyEntry.rs1
+      io.physicalSchedulingSlots(index).rs2 := dependencyEntry.rs2
+    }
+    io.physicalSchedulingSlots(index).operandsReady := dependencyMatches &&
+      dependencyEntry.rs1.ready && dependencyEntry.rs2.ready
+  }
 
   // Compose order and readiness only at this read-only seam. The dependency
   // slot is accepted only when it names the exact ROB lifetime currently shown

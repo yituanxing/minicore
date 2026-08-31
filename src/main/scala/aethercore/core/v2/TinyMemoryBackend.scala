@@ -126,7 +126,7 @@ class TinyMemoryBackend(
 
   val dependencyBackend = Module(new TinyDependencyBackend(xlen))
   val branchIssue = Module(new TinyOldestIssue(xlen))
-  val selectiveIssue = Module(new TinySelectiveComputeIssue(xlen))
+  val selectiveIssue = Module(new TinyPhysicalSelectiveComputeIssue(xlen))
   val execution = Module(new TinySelectiveExecutionCluster(xlen, isa.hasC))
   val system = Module(new TinySystemCompletion(
     isa,
@@ -271,7 +271,8 @@ class TinyMemoryBackend(
   branchIssue.io.headRs2 := dependencyBackend.io.headRs2
   branchIssue.io.headOperandsReady := dependencyBackend.io.headOperandsReady
 
-  selectiveIssue.io.window := dependencyBackend.io.schedulingWindow
+  selectiveIssue.io.slots := dependencyBackend.io.physicalSchedulingSlots
+  selectiveIssue.io.headIndex := dependencyBackend.io.headIndex
   selectiveIssue.io.allocated := dependencyBackend.io.allocated
   selectiveIssue.io.availability := execution.io.computeAvailability
   // Branch owns the sole execution launch whenever the exact head request is
