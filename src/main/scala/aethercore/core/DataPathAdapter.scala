@@ -165,9 +165,9 @@ class DataPathAdapter(
     translation.io.sum := io.sum
     translation.io.mxr := io.mxr
 
-    private val (narrowPteAddress, pteOutOfRange) =
+    val (narrowPteAddress, pteOutOfRange) =
       PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
-    private val pteRangeFault = translation.io.pteValid && pteOutOfRange
+    val pteRangeFault = translation.io.pteValid && pteOutOfRange
 
     translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
     translation.io.pteData := io.pteData
