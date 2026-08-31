@@ -10,7 +10,7 @@ UNIFIED = ROOT / "src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.sca
 class V2Axi4SoCSourceContract(unittest.TestCase):
     def test_axi_top_composes_unified_soc_and_bridge(self):
         source = TOP.read_text(encoding="utf-8")
-        self.assertIn("class AetherCoreV2Axi4SoC extends Module", source)
+        self.assertIn("class AetherCoreV2Axi4SoC(", source)
         self.assertIn("new AetherCoreV2UnifiedMemorySoC", source)
         self.assertIn("new AetherMemToAxi4Bridge", source)
         self.assertIn("bridge.io.request <> soc.io.memoryRequest", source)
