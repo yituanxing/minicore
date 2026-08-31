@@ -23,10 +23,13 @@ import chisel3.util._
 class TranslationUnit(
     val geometry: PageTableGeometry,
     val tlbEntries: Int = 8,
-    val externalWalkGate: Boolean = false
+    val externalWalkGate: Boolean = false,
+    val implementedPaddrBits: Int = -1
 ) extends Module {
   private val Xlen = geometry.xlen
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
+  private val PhysicalBits =
+    if (implementedPaddrBits > 0) implementedPaddrBits else PaddrBits
   private val PpnBits = geometry.ppnBits
   private val LevelBits = math.max(1, log2Ceil(geometry.levels))
 
@@ -77,7 +80,11 @@ class TranslationUnit(
   val requestMxr = Reg(Bool())
 
   val walker = Module(new PageTableWalker(geometry))
-  val tlb = Module(new TranslationTlb(geometry, tlbEntries))
+  val tlb = Module(new TranslationTlb(
+    geometry,
+    tlbEntries,
+    implementedPaddrBits = PhysicalBits
+  ))
   val abort = io.kill || io.flush
   val translationRequired =
     io.satpTranslationEnabled && io.privilege =/= PrivilegeMode.Machine.U
@@ -145,6 +152,9 @@ class TranslationUnit(
   when(lookupActive && tlb.io.hit) {
     io.responseValid := true.B
     io.physicalAddress := tlb.io.physicalAddress
+    if (PhysicalBits < PaddrBits) {
+      io.accessFault := tlb.io.physicalOutOfRange
+    }
     io.leafLevel := tlb.io.leafLevel
     io.global := tlb.io.global
   }.elsewhen(state === walking) {
