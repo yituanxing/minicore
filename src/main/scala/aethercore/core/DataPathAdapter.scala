@@ -152,7 +152,11 @@ class DataPathAdapter(
     io.pteValid := false.B
     io.pteAddress := 0.U
   } else {
-    val translation = Module(new TranslationUnit(geometry, tlbEntries))
+    val translation = Module(new TranslationUnit(
+      geometry,
+      tlbEntries,
+      implementedPaddrBits = PhysicalBits
+    ))
     translation.io.requestValid := io.requestValid
     translation.io.kill := false.B
     translation.io.flush := io.flush
