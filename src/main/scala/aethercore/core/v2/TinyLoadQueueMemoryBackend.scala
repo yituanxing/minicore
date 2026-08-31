@@ -148,7 +148,8 @@ class TinyLoadQueueMemoryBackend(
   private val sharedTranslation = Module(new TranslationUnit(
     geometry,
     tlbEntries = tlbEntries,
-    externalWalkGate = true
+    externalWalkGate = true,
+    implementedPaddrBits = PhysicalBitsLocal
   ))
 
   private val parentTranslation = lsu.io.translationRequest.get
