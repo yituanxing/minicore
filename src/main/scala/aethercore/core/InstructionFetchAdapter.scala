@@ -43,7 +43,11 @@ class InstructionFetchAdapter(
     val accessFault = Output(Bool())
   })
 
-  val translation = Module(new TranslationUnit(geometry, tlbEntries))
+  val translation = Module(new TranslationUnit(
+    geometry,
+    tlbEntries,
+    implementedPaddrBits = PhysicalBits
+  ))
   translation.io.requestValid := io.requestValid
   translation.io.kill := io.kill
   translation.io.flush := io.flush
