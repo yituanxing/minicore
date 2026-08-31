@@ -55,30 +55,39 @@ class InstructionFetchAdapter(
   translation.io.satpRootPpn := io.satpRootPpn
   translation.io.sum := false.B
   translation.io.mxr := io.mxr
-  // Sv39 keeps its architectural PA56/PTE geometry internally.  The concrete
-  // FPGA may implement a narrower physical address domain.  Narrow only at this
-  // explicit boundary and convert every discarded high bit into an access fault;
-  // never permit a wider architectural address to alias a low physical address.
-  private val (narrowPteAddress, pteOutOfRange) =
-    PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
-  private val pteRangeFault = translation.io.pteValid && pteOutOfRange
-
-  translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
   translation.io.pteData := io.pteData
-  translation.io.pteFault := pteRangeFault || (io.pteValid && io.pteFault)
   translation.io.responseReady := io.responseReady
-
-  private val (narrowPhysicalAddress, responseOutOfRange) =
-    PhysicalAddressNarrowing(translation.io.physicalAddress, PhysicalBits)
-  private val responseRangeFault =
-    translation.io.responseValid && !translation.io.pageFault &&
-      !translation.io.accessFault && responseOutOfRange
-
   io.requestReady := translation.io.requestReady
-  io.pteValid := translation.io.pteValid && !pteOutOfRange
-  io.pteAddress := narrowPteAddress
   io.responseValid := translation.io.responseValid
-  io.physicalAddress := narrowPhysicalAddress
   io.pageFault := translation.io.pageFault
-  io.accessFault := translation.io.accessFault || responseRangeFault
+
+  // Preserve the qualified PA56 datapath byte-for-byte at Scala elaboration
+  // time.  Only narrower implemented platforms pay for fail-closed range
+  // checks; the normal PA56 product does not carry dead narrowing logic.
+  if (PhysicalBits >= geometry.architecturalPhysicalAddressBits) {
+    translation.io.pteReady := io.pteReady
+    translation.io.pteFault := io.pteFault
+    io.pteValid := translation.io.pteValid
+    io.pteAddress := translation.io.pteAddress.pad(PhysicalBits)
+    io.physicalAddress := translation.io.physicalAddress.pad(PhysicalBits)
+    io.accessFault := translation.io.accessFault
+  } else {
+    val (narrowPteAddress, pteOutOfRange) =
+      PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
+    val pteRangeFault = translation.io.pteValid && pteOutOfRange
+
+    translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
+    translation.io.pteFault := pteRangeFault || (io.pteValid && io.pteFault)
+    io.pteValid := translation.io.pteValid && !pteOutOfRange
+    io.pteAddress := narrowPteAddress
+
+    val (narrowPhysicalAddress, responseOutOfRange) =
+      PhysicalAddressNarrowing(translation.io.physicalAddress, PhysicalBits)
+    val responseRangeFault =
+      translation.io.responseValid && !translation.io.pageFault &&
+        !translation.io.accessFault && responseOutOfRange
+
+    io.physicalAddress := narrowPhysicalAddress
+    io.accessFault := translation.io.accessFault || responseRangeFault
+  }
 }
