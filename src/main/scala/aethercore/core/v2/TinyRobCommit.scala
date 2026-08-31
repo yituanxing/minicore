@@ -108,6 +108,8 @@ class TinyRob(val xlen: Int) extends Module {
     val acceptedPrivilegedRecovery = Valid(new ExecutionResponse(xlen, IndexBits, GenerationBits))
     val headView = Valid(new BackendUop(xlen, IndexBits, GenerationBits))
     val window = Output(Vec(Entries, new TinyRobWindowEntry(xlen)))
+    val physicalWindow = Output(Vec(Entries, new TinyRobWindowEntry(xlen)))
+    val headIndex = Output(UInt(IndexBits.W))
     val retire = Decoupled(new RobRetirement(xlen))
     val occupancy = Output(UInt(log2Ceil(Entries + 1).W))
   })
@@ -119,10 +121,23 @@ class TinyRob(val xlen: Int) extends Module {
   val count = RegInit(0.U(log2Ceil(Entries + 1).W))
 
   io.occupancy := count
+  io.headIndex := head
 
   private val retireHead = entries(head)
   io.headView.valid := retireHead.valid
   io.headView.bits := retireHead.uop
+
+  // FPGA product path: expose the exact same ROB storage in physical-slot
+  // order.  Consumers that only need age policy can move the tiny 2-bit age
+  // metadata instead of dynamically reordering the several-hundred-bit uOp.
+  // This is a read-only view; TinyRob remains the sole state/order owner.
+  for (index <- 0 until Entries) {
+    val entry = entries(index)
+    io.physicalWindow(index) := 0.U.asTypeOf(new TinyRobWindowEntry(xlen))
+    io.physicalWindow(index).valid := entry.valid
+    io.physicalWindow(index).complete := entry.valid && entry.complete
+    io.physicalWindow(index).uop := entry.uop
+  }
 
   // A8.3 exports the live ROB as an age-ordered read-only window. Dynamic
   // indexing wraps naturally in the fixed two-bit slot domain; age<count is
