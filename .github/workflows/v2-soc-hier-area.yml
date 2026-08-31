@@ -1,0 +1,159 @@
+name: AetherSoC Hierarchical FPGA Area Attribution
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/**'
+      - '.github/workflows/v2-soc-hier-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-hier-area-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Attribute mapped ECP5 area by hierarchy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help synth_ecp5' | grep -q -- '-noflatten'
+
+      - name: Elaborate production FPGA SoC
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/hier-area
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 \
+            --target-dir build/hier-area
+          find build/hier-area -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Map without flattening
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethersoc-hier-area"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          mapfile -t svs < <(find build/hier-area -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do
+            read_cmd+=" $sv"
+          done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_ecp5 -noflatten -top AetherCoreV2FpgaSoC -json $out/hier.json; stat" \
+            2>&1 | tee "$out/yosys.log"
+
+          echo "AREA_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Summarize mapped hierarchy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ["AREA_OUT"])
+          net = json.loads((root / "hier.json").read_text())
+
+          leaf_primitives = {
+              "LUT4", "TRELLIS_FF", "TRELLIS_DPR16X4", "DP16KD",
+              "MULT18X18D", "CCU2C", "PFUMX", "L6MUX21"
+          }
+
+          direct = {}
+          children = {}
+          for module_name, module in net["modules"].items():
+              counts = Counter()
+              child_counts = Counter()
+              for cell in module.get("cells", {}).values():
+                  t = cell["type"]
+                  if t in leaf_primitives:
+                      counts[t] += 1
+                  elif t in net["modules"]:
+                      child_counts[t] += 1
+              direct[module_name] = counts
+              children[module_name] = child_counts
+
+          memo = {}
+          visiting = set()
+          def total(module_name):
+              if module_name in memo:
+                  return memo[module_name]
+              if module_name in visiting:
+                  return Counter()
+              visiting.add(module_name)
+              out = Counter(direct[module_name])
+              for child, mult in children[module_name].items():
+                  c = total(child)
+                  for k, v in c.items():
+                      out[k] += v * mult
+              visiting.remove(module_name)
+              memo[module_name] = out
+              return out
+
+          rows = []
+          for module_name in net["modules"]:
+              t = total(module_name)
+              rows.append({
+                  "module": module_name,
+                  "lut4": t["LUT4"],
+                  "ff": t["TRELLIS_FF"],
+                  "dpr16x4": t["TRELLIS_DPR16X4"],
+                  "bram": t["DP16KD"],
+                  "mult18x18d": t["MULT18X18D"],
+                  "ccu2c": t["CCU2C"],
+                  "pfumx": t["PFUMX"],
+                  "l6mux21": t["L6MUX21"],
+              })
+
+          rows.sort(key=lambda r: r["lut4"], reverse=True)
+          summary = {
+              "top": "AetherCoreV2FpgaSoC",
+              "top_totals": rows[0] if rows and rows[0]["module"] == "AetherCoreV2FpgaSoC" else next(r for r in rows if r["module"] == "AetherCoreV2FpgaSoC"),
+              "largest_modules_by_inclusive_lut4": rows[:40],
+              "note": "Inclusive hierarchy totals: a parent includes all mapped primitive resources under its child instances."
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload hierarchy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-hier-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethersoc-hier-area/summary.json
+            ${{ runner.temp }}/aethersoc-hier-area/yosys.log
