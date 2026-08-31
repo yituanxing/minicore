@@ -19,10 +19,11 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   * or the internal SoC fabric about AXI channel semantics.
   */
 class AetherCoreV2UnifiedMemorySoC(
-    val externalPhysicalSeams: Boolean = false
+    val externalPhysicalSeams: Boolean = false,
+    val implementedPaddrBits: Int = 56
 ) extends Module {
   private val xlen = 64
-  private val paddrBits = 56
+  private val paddrBits = implementedPaddrBits
   private val dataBits = 64
   private val clientTxnIdBits = 2
   private val clientCount = 3
@@ -73,7 +74,8 @@ class AetherCoreV2UnifiedMemorySoC(
     enableInstructionBackpressure = true,
     exposeExternalMemoryAttributes = false,
     externalPhysicalSeams = externalPhysicalSeams,
-    externalSemanticMemory = true
+    externalSemanticMemory = true,
+    implementedPaddrBits = implementedPaddrBits
   ))
   val ptwAdapter = Module(new AetherSoCPtwReadAdapter(
     addrBits = paddrBits,
