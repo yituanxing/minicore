@@ -18,12 +18,15 @@ import chisel3.util._
   * component. The same rule covers Sv32 megapages, Sv39 super/gigapages and the
   * additional Sv48 terapage level without mode-specific data paths.
   *
-  * 共享 TLB 只依赖 PageTableGeometry。不同虚拟内存模式不复制 tag、refill、
-  * superpage 命中和物理地址重建逻辑。
+  * A narrower implemented PA may compact only cached physical state. The TLB
+  * retains one overflow bit so a high architectural PA still returns an access
+  * fault rather than aliasing its low implemented address. The full-width
+  * architectural configuration elaborates the historical entry shape.
   */
 class TranslationTlb(
     val geometry: PageTableGeometry,
-    val entries: Int = 8
+    val entries: Int = 8,
+    val implementedPaddrBits: Int = -1
 ) extends Module {
   require(entries >= 2 && isPow2(entries), s"translation TLB entries must be a power of two >= 2, got $entries")
 
@@ -31,14 +34,29 @@ class TranslationTlb(
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
   private val PpnBits = geometry.ppnBits
   private val VpnBits = geometry.vpnBits
+  private val PhysicalBits =
+    if (implementedPaddrBits > 0) implementedPaddrBits else PaddrBits
+  private val CompactPhysical = PhysicalBits < PaddrBits
+  private val PhysicalPpnBits = math.max(1, PhysicalBits - geometry.pageOffsetBits)
+  private val RootTagBits = if (CompactPhysical) math.min(PpnBits, PhysicalPpnBits) else PpnBits
+  private val MaxLeafPageBits =
+    geometry.pageOffsetBits + (geometry.levels - 1) * geometry.vpnBitsPerLevel
   private val LevelBits = math.max(1, log2Ceil(geometry.levels))
   private val IndexBits = log2Ceil(entries)
 
+  require(PhysicalBits > 0 && PhysicalBits <= PaddrBits,
+    s"implemented TLB PA width must be 1..$PaddrBits, got $PhysicalBits")
+  require(
+    !CompactPhysical || PhysicalBits >= MaxLeafPageBits,
+    s"compact ${geometry.name} TLB requires PA width >= largest leaf offset $MaxLeafPageBits, got $PhysicalBits"
+  )
+
   class Entry extends Bundle {
     val valid = Bool()
-    val rootPpn = UInt(PpnBits.W)
+    val rootPpn = UInt(RootTagBits.W)
     val vpn = UInt(VpnBits.W)
-    val physicalBase = UInt(PaddrBits.W)
+    val physicalBase = UInt(PhysicalBits.W)
+    val physicalOutOfRange = if (CompactPhysical) Some(Bool()) else None
     val privilege = UInt(2.W)
     val write = Bool()
     val execute = Bool()
@@ -60,6 +78,7 @@ class TranslationTlb(
 
     val hit = Output(Bool())
     val physicalAddress = Output(UInt(PaddrBits.W))
+    val physicalOutOfRange = Output(Bool())
     val leafLevel = Output(UInt(LevelBits.W))
     val global = Output(Bool())
 
@@ -99,8 +118,18 @@ class TranslationTlb(
       }
     }
 
+    val rootMatch =
+      if (CompactPhysical) {
+        val rootOutOfRange =
+          if (RootTagBits < PpnBits) io.rootPpn(PpnBits - 1, RootTagBits).orR else false.B
+        !rootOutOfRange &&
+          entry.rootPpn === io.rootPpn(RootTagBits - 1, 0)
+      } else {
+        entry.rootPpn === io.rootPpn
+      }
+
     matches(i) := io.lookupValid && entry.valid &&
-      entry.rootPpn === io.rootPpn && vpnMatch &&
+      rootMatch && vpnMatch &&
       entry.privilege === io.privilege &&
       entry.write === io.write && entry.execute === io.execute &&
       entry.sum === io.sum && entry.mxr === io.mxr
@@ -112,49 +141,99 @@ class TranslationTlb(
   io.leafLevel := Mux(io.hit, hitEntry.leafLevel, 0.U)
   io.global := io.hit && hitEntry.global
 
-  val hitPhysicalAddress = WireDefault(0.U(PaddrBits.W))
-  for (leaf <- 0 until geometry.levels) {
-    val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
-    when(hitEntry.leafLevel === leaf.U) {
-      hitPhysicalAddress := Cat(
-        hitEntry.physicalBase(PaddrBits - 1, pageBits),
-        io.virtualAddress(pageBits - 1, 0)
-      )
+  if (CompactPhysical) {
+    val hitPhysicalAddress = WireDefault(0.U(PhysicalBits.W))
+    for (leaf <- 0 until geometry.levels) {
+      val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
+      when(hitEntry.leafLevel === leaf.U) {
+        hitPhysicalAddress := Cat(
+          hitEntry.physicalBase(PhysicalBits - 1, pageBits),
+          io.virtualAddress(pageBits - 1, 0)
+        )
+      }
     }
+    io.physicalAddress := Mux(io.hit, hitPhysicalAddress.pad(PaddrBits), 0.U)
+    io.physicalOutOfRange := io.hit && hitEntry.physicalOutOfRange.get
+  } else {
+    val hitPhysicalAddress = WireDefault(0.U(PaddrBits.W))
+    for (leaf <- 0 until geometry.levels) {
+      val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
+      when(hitEntry.leafLevel === leaf.U) {
+        hitPhysicalAddress := Cat(
+          hitEntry.physicalBase(PaddrBits - 1, pageBits),
+          io.virtualAddress(pageBits - 1, 0)
+        )
+      }
+    }
+    io.physicalAddress := Mux(io.hit, hitPhysicalAddress, 0.U)
+    io.physicalOutOfRange := false.B
   }
-  io.physicalAddress := Mux(io.hit, hitPhysicalAddress, 0.U)
 
   val invalidMask = VecInit(table.map(entry => !entry.valid)).asUInt
   val hasInvalid = invalidMask.orR
   val refillIndex = Mux(hasInvalid, PriorityEncoder(invalidMask), replacement)
 
-  val refillBase = WireDefault(0.U(PaddrBits.W))
-  for (leaf <- 0 until geometry.levels) {
-    val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
-    when(io.refillLeafLevel === leaf.U) {
-      refillBase := Cat(
-        io.refillPhysicalAddress(PaddrBits - 1, pageBits),
-        0.U(pageBits.W)
-      )
+  if (CompactPhysical) {
+    val refillBase = WireDefault(0.U(PhysicalBits.W))
+    for (leaf <- 0 until geometry.levels) {
+      val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
+      when(io.refillLeafLevel === leaf.U) {
+        refillBase := Cat(
+          io.refillPhysicalAddress(PhysicalBits - 1, pageBits),
+          0.U(pageBits.W)
+        )
+      }
     }
-  }
 
-  when(io.flush) {
-    for (i <- 0 until entries) table(i).valid := false.B
-    replacement := 0.U
-  }.elsewhen(io.refillValid) {
-    val entry = table(refillIndex)
-    entry.valid := true.B
-    entry.rootPpn := io.refillRootPpn
-    entry.vpn := io.refillVirtualAddress(geometry.vaBits - 1, geometry.pageOffsetBits)
-    entry.physicalBase := refillBase
-    entry.privilege := io.refillPrivilege
-    entry.write := io.refillWrite
-    entry.execute := io.refillExecute
-    entry.sum := io.refillSum
-    entry.mxr := io.refillMxr
-    entry.leafLevel := io.refillLeafLevel
-    entry.global := io.refillGlobal
-    replacement := refillIndex + 1.U
+    when(io.flush) {
+      for (i <- 0 until entries) table(i).valid := false.B
+      replacement := 0.U
+    }.elsewhen(io.refillValid) {
+      val entry = table(refillIndex)
+      entry.valid := true.B
+      entry.rootPpn := io.refillRootPpn(RootTagBits - 1, 0)
+      entry.vpn := io.refillVirtualAddress(geometry.vaBits - 1, geometry.pageOffsetBits)
+      entry.physicalBase := refillBase
+      entry.physicalOutOfRange.get :=
+        io.refillPhysicalAddress(PaddrBits - 1, PhysicalBits).orR
+      entry.privilege := io.refillPrivilege
+      entry.write := io.refillWrite
+      entry.execute := io.refillExecute
+      entry.sum := io.refillSum
+      entry.mxr := io.refillMxr
+      entry.leafLevel := io.refillLeafLevel
+      entry.global := io.refillGlobal
+      replacement := refillIndex + 1.U
+    }
+  } else {
+    val refillBase = WireDefault(0.U(PaddrBits.W))
+    for (leaf <- 0 until geometry.levels) {
+      val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
+      when(io.refillLeafLevel === leaf.U) {
+        refillBase := Cat(
+          io.refillPhysicalAddress(PaddrBits - 1, pageBits),
+          0.U(pageBits.W)
+        )
+      }
+    }
+
+    when(io.flush) {
+      for (i <- 0 until entries) table(i).valid := false.B
+      replacement := 0.U
+    }.elsewhen(io.refillValid) {
+      val entry = table(refillIndex)
+      entry.valid := true.B
+      entry.rootPpn := io.refillRootPpn
+      entry.vpn := io.refillVirtualAddress(geometry.vaBits - 1, geometry.pageOffsetBits)
+      entry.physicalBase := refillBase
+      entry.privilege := io.refillPrivilege
+      entry.write := io.refillWrite
+      entry.execute := io.refillExecute
+      entry.sum := io.refillSum
+      entry.mxr := io.refillMxr
+      entry.leafLevel := io.refillLeafLevel
+      entry.global := io.refillGlobal
+      replacement := refillIndex + 1.U
+    }
   }
 }
