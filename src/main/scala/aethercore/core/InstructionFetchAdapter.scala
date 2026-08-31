@@ -17,10 +17,7 @@ class InstructionFetchAdapter(
 ) extends Module {
   private val PhysicalBits =
     if (paddrBits > 0) paddrBits else geometry.architecturalPhysicalAddressBits
-  require(
-    PhysicalBits >= geometry.architecturalPhysicalAddressBits,
-    s"${geometry.name} instruction translation requires PA>=${geometry.architecturalPhysicalAddressBits}, got $PhysicalBits"
-  )
+  require(PhysicalBits > 0, s"implemented instruction PA width must be positive, got $PhysicalBits")
 
   val io = IO(new Bundle {
     val requestValid = Input(Bool())
@@ -58,16 +55,30 @@ class InstructionFetchAdapter(
   translation.io.satpRootPpn := io.satpRootPpn
   translation.io.sum := false.B
   translation.io.mxr := io.mxr
-  translation.io.pteReady := io.pteReady
+  // Sv39 keeps its architectural PA56/PTE geometry internally.  The concrete
+  // FPGA may implement a narrower physical address domain.  Narrow only at this
+  // explicit boundary and convert every discarded high bit into an access fault;
+  // never permit a wider architectural address to alias a low physical address.
+  private val (narrowPteAddress, pteOutOfRange) =
+    PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
+  private val pteRangeFault = translation.io.pteValid && pteOutOfRange
+
+  translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
   translation.io.pteData := io.pteData
-  translation.io.pteFault := io.pteFault
+  translation.io.pteFault := pteRangeFault || (io.pteValid && io.pteFault)
   translation.io.responseReady := io.responseReady
 
+  private val (narrowPhysicalAddress, responseOutOfRange) =
+    PhysicalAddressNarrowing(translation.io.physicalAddress, PhysicalBits)
+  private val responseRangeFault =
+    translation.io.responseValid && !translation.io.pageFault &&
+      !translation.io.accessFault && responseOutOfRange
+
   io.requestReady := translation.io.requestReady
-  io.pteValid := translation.io.pteValid
-  io.pteAddress := translation.io.pteAddress.pad(PhysicalBits)
+  io.pteValid := translation.io.pteValid && !pteOutOfRange
+  io.pteAddress := narrowPteAddress
   io.responseValid := translation.io.responseValid
-  io.physicalAddress := translation.io.physicalAddress.pad(PhysicalBits)
+  io.physicalAddress := narrowPhysicalAddress
   io.pageFault := translation.io.pageFault
-  io.accessFault := translation.io.accessFault
+  io.accessFault := translation.io.accessFault || responseRangeFault
 }
