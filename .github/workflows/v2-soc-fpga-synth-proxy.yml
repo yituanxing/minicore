@@ -1,4 +1,5 @@
 name: AetherSoC FPGA Synthesis Proxy
+# Post-PMP exact mainline full-SoC area measurement.
 
 on:
   pull_request:
