@@ -89,7 +89,7 @@ class TinyBlockingLsu(
   private val PmpAddressBits = PmpGeometry(Xlen, PhysicalBits).encodedAddressBits
 
   require(Xlen == 32 || Xlen == 64)
-  require(PhysicalBits >= geometry.architecturalPhysicalAddressBits)
+  require(PhysicalBits > 0)
   require(txnIdBits > 0)
 
   val io = IO(new Bundle {
