@@ -1,0 +1,149 @@
+name: AetherSoC Physical-Top Area A/B
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaPhysicalSoC.scala'
+      - 'src/main/scala/aethercore/ElaborateV2FpgaPhysicalSoC.scala'
+      - '.github/workflows/fpga-physical-top-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-physical-top-area-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synth:
+    name: Measure physical-only FPGA top
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+
+      - name: Elaborate physical-only FPGA top
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/fpga-physical-top-area
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaPhysicalSoCRV64 \
+            --target-dir build/fpga-physical-top-area
+          find build/fpga-physical-top-area -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Map physical-only top with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethersoc-physical-top"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          mapfile -t svs < <(find build/fpga-physical-top-area -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do
+            read_cmd+=" $sv"
+          done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaPhysicalSoC; synth_ecp5 -top AetherCoreV2FpgaPhysicalSoC -json $out/fpga.json; stat -top AetherCoreV2FpgaPhysicalSoC; flatten; ltp -noff AetherCoreV2FpgaPhysicalSoC" \
+            2>&1 | tee "$out/yosys.log"
+
+          depth=$(sed -n 's/.*Longest topological path in AetherCoreV2FpgaPhysicalSoC (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
+          test -n "$depth"
+
+          jq '[.modules["AetherCoreV2FpgaPhysicalSoC"].cells[]] | length' "$out/fpga.json" > "$out/cells"
+          jq '[.modules["AetherCoreV2FpgaPhysicalSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
+          jq '[.modules["AetherCoreV2FpgaPhysicalSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
+          jq '[.modules["AetherCoreV2FpgaPhysicalSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
+          jq '[.modules["AetherCoreV2FpgaPhysicalSoC"].cells[] | select(.type == "DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          jq '[.modules["AetherCoreV2FpgaPhysicalSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
+          printf '%s\n' "$depth" > "$out/depth"
+          echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Summarize exact A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["SYNTH_OUT"])
+          def n(name):
+              return int((root / name).read_text().strip())
+
+          baseline = {
+              "lut4": 54965,
+              "ff": 14412,
+              "distributed_ram_dpr16x4": 438,
+              "mult18x18d": 39,
+          }
+          target = {
+              "cells": n("cells"),
+              "lut4": n("lut4"),
+              "ff": n("ff"),
+              "bram_dp16kd": n("bram"),
+              "distributed_ram_dpr16x4": n("dpr"),
+              "mult18x18d": n("mult"),
+              "logic_depth": n("depth"),
+          }
+          summary = {
+              "baseline_sha": "4a9d34832b0af06540bda8d35d9a6512ea97a59c",
+              "baseline_top": "AetherCoreV2FpgaSoC",
+              "target_top": "AetherCoreV2FpgaPhysicalSoC",
+              "baseline": baseline,
+              "target": target,
+              "delta_lut4": target["lut4"] - baseline["lut4"],
+              "delta_ff": target["ff"] - baseline["ff"],
+              "note": "Same functional SoC; target removes only top-level observability. Board-neutral Yosys ECP5 proxy."
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Physical-only FPGA top A/B\n\n")
+              f.write(f"- exact product baseline: **{baseline['lut4']:,} LUT4 / {baseline['ff']:,} FF**\n")
+              f.write(f"- physical-only target: **{target['lut4']:,} LUT4 / {target['ff']:,} FF**\n")
+              f.write(f"- LUT4 delta: **{summary['delta_lut4']:+,}**\n")
+              f.write(f"- FF delta: **{summary['delta_ff']:+,}**\n")
+              f.write(f"- DPR16X4: {target['distributed_ram_dpr16x4']}\n")
+              f.write(f"- MULT18X18D: {target['mult18x18d']}\n")
+              f.write(f"- structural depth: {target['logic_depth']}\n\n")
+              f.write("No CPU/SoC behavior or performance path is changed by this wrapper.\n")
+          PY
+
+      - name: Upload area evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-physical-top-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethersoc-physical-top/summary.json
+            ${{ runner.temp }}/aethersoc-physical-top/yosys.log
