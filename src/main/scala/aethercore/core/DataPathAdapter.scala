@@ -50,10 +50,7 @@ class DataPathAdapter(
     if (paddrBits > 0) paddrBits else ArchitecturalPhysicalBits
   private val BusBytes = Xlen / 8
 
-  require(
-    PhysicalBits >= ArchitecturalPhysicalBits,
-    s"GEOM data path physical width is too small"
-  )
+  require(PhysicalBits > 0, s"implemented data PA width must be positive, got $PhysicalBits")
 
   val io = IO(new Bundle {
     val requestValid = Input(Bool())
@@ -168,11 +165,15 @@ class DataPathAdapter(
     translation.io.sum := io.sum
     translation.io.mxr := io.mxr
 
-    translation.io.pteReady := io.pteReady
+    private val (narrowPteAddress, pteOutOfRange) =
+      PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
+    private val pteRangeFault = translation.io.pteValid && pteOutOfRange
+
+    translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
     translation.io.pteData := io.pteData
-    translation.io.pteFault := io.pteFault
-    io.pteValid := translation.io.pteValid
-    io.pteAddress := translation.io.pteAddress.pad(PhysicalBits)
+    translation.io.pteFault := pteRangeFault || (io.pteValid && io.pteFault)
+    io.pteValid := translation.io.pteValid && !pteOutOfRange
+    io.pteAddress := narrowPteAddress
 
     translationResponseValid := translation.io.responseValid
     translationPhysicalAddress := translation.io.physicalAddress
@@ -182,10 +183,20 @@ class DataPathAdapter(
     translation.io.responseReady := io.requestComplete
   }
 
-  val translationFault = translationPageFault || translationAccessFault
+  // Architectural translation remains full-width.  The platform-facing data
+  // path is narrower only after an explicit checked boundary, so discarded PA
+  // bits become an access fault rather than an address alias.
+  private val (implementedPhysicalAddress, translationOutOfRange) =
+    PhysicalAddressNarrowing(translationPhysicalAddress, PhysicalBits)
+  private val translationRangeFault =
+    translationResponseValid && !translationPageFault &&
+      !translationAccessFault && translationOutOfRange
+
+  val translationFault =
+    translationPageFault || translationAccessFault || translationRangeFault
   io.dataValid := io.requestValid && translationResponseValid && !translationFault
   io.dataWrite := io.write
-  io.dataAddress := translationPhysicalAddress.pad(PhysicalBits)
+  io.dataAddress := implementedPhysicalAddress
   io.dataWdata := io.wdata
   io.dataWmask := io.wmask
   io.dataSize := io.size
@@ -194,10 +205,10 @@ class DataPathAdapter(
   val faultComplete = io.requestValid && translationResponseValid && translationFault
   io.requestComplete := physicalComplete || faultComplete
 
-  io.physicalAddress := translationPhysicalAddress.pad(PhysicalBits)
+  io.physicalAddress := implementedPhysicalAddress
   io.readData := io.dataRdata
   io.pageFault := faultComplete && translationPageFault
   io.accessFault :=
-    (faultComplete && translationAccessFault) ||
+    (faultComplete && (translationAccessFault || translationRangeFault)) ||
       (physicalComplete && io.dataFault)
 }
