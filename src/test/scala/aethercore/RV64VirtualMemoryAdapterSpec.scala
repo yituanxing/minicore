@@ -258,6 +258,18 @@ class RV64VirtualMemoryAdapterSpec extends AnyFlatSpec with Matchers with Chisel
       dut.io.accessFault.expect(true.B)
       dut.clock.step()
       dut.io.requestValid.poke(false.B)
+
+      // The high translation may now reside in the compact TLB. A second
+      // request must hit without another walk but remain fail-closed: the
+      // cached overflow bit converts the hit directly into AccessFault.
+      dut.io.requestValid.poke(true.B)
+      dut.io.pteValid.expect(false.B)
+      dut.io.dataValid.expect(false.B)
+      dut.io.requestComplete.expect(true.B)
+      dut.io.pageFault.expect(false.B)
+      dut.io.accessFault.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
     }
   }
 
