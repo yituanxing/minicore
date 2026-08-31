@@ -1,4 +1,5 @@
 name: AetherSoC FPGA Synthesis Proxy
+# post-PMP full-area rerun
 
 on:
   pull_request:
