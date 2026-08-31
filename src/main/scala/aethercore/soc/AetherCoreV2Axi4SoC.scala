@@ -14,9 +14,11 @@ import aethercore.common.CommitTrace
   * Board-specific clock/reset generation, DDR-controller instances, pin
   * constraints and serial UART PHY remain outside this reusable logical SoC.
   */
-class AetherCoreV2Axi4SoC extends Module {
+class AetherCoreV2Axi4SoC(
+    val implementedPaddrBits: Int = 56
+) extends Module {
   private val Xlen = 64
-  private val PaddrBits = 56
+  private val PaddrBits = implementedPaddrBits
   private val DataBits = 64
   private val TxnIdBits = 4
 
@@ -57,7 +59,8 @@ class AetherCoreV2Axi4SoC extends Module {
   })
 
   val soc = Module(new AetherCoreV2UnifiedMemorySoC(
-    externalPhysicalSeams = true
+    externalPhysicalSeams = true,
+    implementedPaddrBits = implementedPaddrBits
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = PaddrBits,
