@@ -1,0 +1,72 @@
+name: ROB4 Physical Slot Area Baseline
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/ElaborateRobArea.scala'
+      - '.github/workflows/rob4-physical-slot-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+
+      - name: Elaborate standalone ROB and dependency backend
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/rob-area build/dependency-area
+          ./mill aethercore.runMain aethercore.ElaborateTinyRobAreaRV64 --target-dir build/rob-area
+          ./mill aethercore.runMain aethercore.ElaborateTinyDependencyBackendAreaRV64 --target-dir build/dependency-area
+
+      - name: Map ECP5
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rob4-area"
+          mkdir -p "$out"
+          map_one() {
+            local dir="$1"
+            local top="$2"
+            local tag="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $out/$tag.json; stat -top $top"               2>&1 | tee "$out/$tag.log"
+            jq --arg top "$top" '{
+              cells: ([.modules[$top].cells[]] | length),
+              lut4: ([.modules[$top].cells[] | select(.type=="LUT4")] | length),
+              ff: ([.modules[$top].cells[] | select(.type=="TRELLIS_FF")] | length),
+              dpr16x4: ([.modules[$top].cells[] | select(.type=="TRELLIS_DPR16X4")] | length),
+              mult18x18d: ([.modules[$top].cells[] | select(.type=="MULT18X18D")] | length)
+            }' "$out/$tag.json" > "$out/$tag.summary.json"
+          }
+          map_one build/rob-area TinyRob tiny_rob
+          map_one build/dependency-area TinyDependencyBackend dependency_backend
+          jq -n             --slurpfile rob "$out/tiny_rob.summary.json"             --slurpfile dep "$out/dependency_backend.summary.json"             '{main:"d018527a4abed3212ffc89b90990492eb7c3fdff", tiny_rob:$rob[0], dependency_backend:$dep[0]}'             > "$out/summary.json"
+          cat "$out/summary.json"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: rob4-physical-slot-area-${{ github.run_id }}
+          path: ${{ runner.temp }}/rob4-area
