@@ -7,9 +7,17 @@ import aethercore.common.AluOp
 /**
   * FPGA-oriented selective compute selector over physical ROB slots.
   *
-  * Architectural age is represented only by the two-bit modulo-4 distance
-  * (slot-head). The several-hundred-bit BackendUop never passes through a
-  * physical->age reorder crossbar; only the final materialized request is muxed.
+  * Wide BackendUop data stays in physical-slot order. Architectural age is
+  * represented only by tiny metadata:
+  *
+  *   physical slot -> local 1-bit barrier/eligible flags
+  *   head rotation -> four 1-bit age-ordered flags
+  *   prefix barrier -> oldest-ready age
+  *   head + age -> one physical slot
+  *   one final wide ExecutionRequest mux
+  *
+  * This deliberately avoids both the legacy wide age-reorder crossbar and the
+  * first physical-slot experiment's O(N^2) all-to-all age-comparison network.
   */
 class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64)
@@ -47,38 +55,6 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
       (executionClass === ExecutionClass.MulDiv && isDivide(op) && io.availability.divide)
   }
 
-  private val age = Wire(Vec(Entries, UInt(IndexBits.W)))
-  for (index <- 0 until Entries) {
-    age(index) := (index.U(IndexBits.W) - io.headIndex)(IndexBits - 1, 0)
-  }
-
-  private def olderBlocksBypass(entry: TinySchedulingEntry, entryAge: UInt): Bool = {
-    val olderIsMemory = entry.valid &&
-      entry.uop.executionClass === ExecutionClass.Memory
-    val olderMemoryLaunched =
-      entryAge === 0.U &&
-        entry.dependenciesValid && entry.operandsReady && !io.block
-    entry.valid && (
-      entry.uop.executionClass === ExecutionClass.System ||
-      entry.uop.decoded.ordering =/= OrderingClass.Normal ||
-      entry.uop.decoded.exception.valid ||
-      (olderIsMemory && !olderMemoryLaunched)
-    )
-  }
-
-  private val bypassOpen = Wire(Vec(Entries, Bool()))
-  for (candidate <- 0 until Entries) {
-    val blockers = (0 until Entries).map { older =>
-      val isOlder = age(older) < age(candidate)
-      isOlder && olderBlocksBypass(io.slots(older), age(older))
-    }
-    bypassOpen(candidate) := !blockers.reduce(_ || _)
-  }
-
-  private val eligible = Wire(Vec(Entries, Bool()))
-  private val candidates =
-    Wire(Vec(Entries, new ExecutionRequest(xlen, IndexBits, GenerationBits)))
-
   private def materializeSource(
       entry: TinySchedulingEntry,
       kind: OperandSourceKind.Type
@@ -94,16 +70,36 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
     value
   }
 
+  // All expensive decode/readiness work is evaluated once per physical slot.
+  private val slotBarrier = Wire(Vec(Entries, Bool()))
+  private val slotEligibleBase = Wire(Vec(Entries, Bool()))
+  private val candidates =
+    Wire(Vec(Entries, new ExecutionRequest(xlen, IndexBits, GenerationBits)))
+
   for (index <- 0 until Entries) {
     val entry = io.slots(index)
     val token = entry.uop.robToken
+    val isHead = io.headIndex === index.U
+
+    val isMemory =
+      entry.valid && entry.uop.executionClass === ExecutionClass.Memory
+    val headMemoryLaunched =
+      isHead && entry.dependenciesValid && entry.operandsReady && !io.block
+
+    slotBarrier(index) := entry.valid && (
+      entry.uop.executionClass === ExecutionClass.System ||
+      entry.uop.decoded.ordering =/= OrderingClass.Normal ||
+      entry.uop.decoded.exception.valid ||
+      (isMemory && !headMemoryLaunched)
+    )
+
     val alreadyIssued =
       issuedValid(index) && sameRobToken(issuedToken(index), token)
     val safeClass =
       entry.uop.executionClass === ExecutionClass.Integer ||
         entry.uop.executionClass === ExecutionClass.MulDiv
 
-    eligible(index) := bypassOpen(index) &&
+    slotEligibleBase(index) :=
       entry.valid &&
       !entry.complete &&
       entry.dependenciesValid &&
@@ -132,20 +128,33 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
     candidates(index) := candidate
   }
 
-  // Iterate youngest age to oldest age so the final connect leaves age0 as the
-  // winner. Age compares are only two bits; the sole wide mux is the final
-  // ExecutionRequest selection.
-  private val selectedValid = WireDefault(false.B)
-  private val selectedRequest =
-    WireDefault(0.U.asTypeOf(new ExecutionRequest(xlen, IndexBits, GenerationBits)))
-  for (wantedAge <- (Entries - 1) to 0 by -1) {
-    for (index <- 0 until Entries) {
-      when(eligible(index) && age(index) === wantedAge.U) {
-        selectedValid := true.B
-        selectedRequest := candidates(index)
-      }
-    }
+  // Rotate only one-bit metadata into age order.
+  private val ageBarrier = Wire(Vec(Entries, Bool()))
+  private val ageEligibleBase = Wire(Vec(Entries, Bool()))
+  private val agePhysical = Wire(Vec(Entries, UInt(IndexBits.W)))
+  for (age <- 0 until Entries) {
+    agePhysical(age) := (io.headIndex + age.U)(IndexBits - 1, 0)
+    ageBarrier(age) := slotBarrier(agePhysical(age))
+    ageEligibleBase(age) := slotEligibleBase(agePhysical(age))
   }
+
+  private val bypassOpen = Wire(Vec(Entries, Bool()))
+  bypassOpen(0) := true.B
+  for (age <- 1 until Entries) {
+    bypassOpen(age) := bypassOpen(age - 1) && !ageBarrier(age - 1)
+  }
+
+  private val ageEligible = Wire(Vec(Entries, Bool()))
+  for (age <- 0 until Entries) {
+    ageEligible(age) := bypassOpen(age) && ageEligibleBase(age)
+  }
+
+  private val selectedValid = ageEligible.asUInt.orR
+  private val selectedAge = PriorityEncoder(ageEligible.asUInt)
+  private val selectedPhysical =
+    (io.headIndex + selectedAge)(IndexBits - 1, 0)
+  private val selectedRequest =
+    Mux1H(UIntToOH(selectedPhysical, Entries), candidates)
 
   io.request.valid := selectedValid && !io.block
   io.request.bits := selectedRequest
@@ -161,10 +170,11 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
 }
 
 /**
-  * Physical-slot equivalent of TinyLoadQueueIssue.
+  * Compact-metadata physical-slot equivalent of TinyLoadQueueIssue.
   *
-  * Bypass legality is unchanged; only the representation of age changes from a
-  * wide reordered window to the two-bit modulo-4 physical-slot distance.
+  * Like compute issue, only 1-bit barrier/eligibility metadata is rotated into
+  * age order. The wide TinyMemoryRequest is muxed exactly once after the oldest
+  * eligible age has been selected.
   */
 class TinyPhysicalLoadQueueIssue(val xlen: Int) extends Module {
   require(xlen == 32 || xlen == 64)
@@ -221,22 +231,8 @@ class TinyPhysicalLoadQueueIssue(val xlen: Int) extends Module {
     pureCompute || safeOlderLoad || completedNormalBranch
   }
 
-  private val age = Wire(Vec(Entries, UInt(IndexBits.W)))
-  for (index <- 0 until Entries) {
-    age(index) := (index.U(IndexBits.W) - io.headIndex)(IndexBits - 1, 0)
-  }
-
-  private val bypassOpen = Wire(Vec(Entries, Bool()))
-  for (candidate <- 0 until Entries) {
-    val blockers = (0 until Entries).map { older =>
-      (age(older) < age(candidate)) &&
-        io.slots(older).valid &&
-        !olderMayBeCrossed(io.slots(older))
-    }
-    bypassOpen(candidate) := !blockers.reduce(_ || _)
-  }
-
-  private val eligible = Wire(Vec(Entries, Bool()))
+  private val slotBarrier = Wire(Vec(Entries, Bool()))
+  private val slotEligibleBase = Wire(Vec(Entries, Bool()))
   private val candidates =
     Wire(Vec(Entries, new TinyMemoryRequest(xlen, IndexBits, GenerationBits)))
 
@@ -246,7 +242,9 @@ class TinyPhysicalLoadQueueIssue(val xlen: Int) extends Module {
     val alreadyIssued =
       issuedValid(index) && sameToken(issuedToken(index), token)
 
-    eligible(index) := bypassOpen(index) &&
+    slotBarrier(index) := entry.valid && !olderMayBeCrossed(entry)
+
+    slotEligibleBase(index) :=
       ordinaryNormalLoad(entry) &&
       !entry.complete &&
       entry.dependenciesValid &&
@@ -269,20 +267,32 @@ class TinyPhysicalLoadQueueIssue(val xlen: Int) extends Module {
     candidates(index) := candidate
   }
 
-  private val selectedValid = WireDefault(false.B)
-  private val selectedAge = WireDefault(0.U(IndexBits.W))
-  private val selectedRequest =
-    WireDefault(0.U.asTypeOf(new TinyMemoryRequest(xlen, IndexBits, GenerationBits)))
-
-  for (wantedAge <- (Entries - 1) to 0 by -1) {
-    for (index <- 0 until Entries) {
-      when(eligible(index) && age(index) === wantedAge.U) {
-        selectedValid := true.B
-        selectedAge := age(index)
-        selectedRequest := candidates(index)
-      }
-    }
+  private val ageBarrier = Wire(Vec(Entries, Bool()))
+  private val ageEligibleBase = Wire(Vec(Entries, Bool()))
+  private val agePhysical = Wire(Vec(Entries, UInt(IndexBits.W)))
+  for (age <- 0 until Entries) {
+    agePhysical(age) := (io.headIndex + age.U)(IndexBits - 1, 0)
+    ageBarrier(age) := slotBarrier(agePhysical(age))
+    ageEligibleBase(age) := slotEligibleBase(agePhysical(age))
   }
+
+  private val bypassOpen = Wire(Vec(Entries, Bool()))
+  bypassOpen(0) := true.B
+  for (age <- 1 until Entries) {
+    bypassOpen(age) := bypassOpen(age - 1) && !ageBarrier(age - 1)
+  }
+
+  private val ageEligible = Wire(Vec(Entries, Bool()))
+  for (age <- 0 until Entries) {
+    ageEligible(age) := bypassOpen(age) && ageEligibleBase(age)
+  }
+
+  private val selectedValid = ageEligible.asUInt.orR
+  private val selectedAge = PriorityEncoder(ageEligible.asUInt)
+  private val selectedPhysical =
+    (io.headIndex + selectedAge)(IndexBits - 1, 0)
+  private val selectedRequest =
+    Mux1H(UIntToOH(selectedPhysical, Entries), candidates)
 
   io.request.valid := selectedValid && io.available && !io.block
   io.request.bits := selectedRequest
