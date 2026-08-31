@@ -79,6 +79,7 @@ class AetherCoreV2Complex(
   private val core = Module(new TinyPagedCore(
     config,
     geometry,
+    tlbEntries = 4,
     txnIdBits = txnIdBits,
     enableInstructionBackpressure = enableInstructionBackpressure,
     enableAsyncInterrupts = true,
