@@ -23,7 +23,8 @@ import chisel3.util._
 class TranslationUnit(
     val geometry: PageTableGeometry,
     val tlbEntries: Int = 8,
-    val externalWalkGate: Boolean = false
+    val externalWalkGate: Boolean = false,
+    val implementedPaddrBits: Int = -1
 ) extends Module {
   private val Xlen = geometry.xlen
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
@@ -77,7 +78,11 @@ class TranslationUnit(
   val requestMxr = Reg(Bool())
 
   val walker = Module(new PageTableWalker(geometry))
-  val tlb = Module(new TranslationTlb(geometry, tlbEntries))
+  val tlb = Module(new TranslationTlb(
+    geometry,
+    tlbEntries,
+    implementedPaddrBits = implementedPaddrBits
+  ))
   val abort = io.kill || io.flush
   val translationRequired =
     io.satpTranslationEnabled && io.privilege =/= PrivilegeMode.Machine.U
