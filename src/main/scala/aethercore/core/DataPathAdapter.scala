@@ -165,15 +165,22 @@ class DataPathAdapter(
     translation.io.sum := io.sum
     translation.io.mxr := io.mxr
 
-    val (narrowPteAddress, pteOutOfRange) =
-      PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
-    val pteRangeFault = translation.io.pteValid && pteOutOfRange
-
-    translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
     translation.io.pteData := io.pteData
-    translation.io.pteFault := pteRangeFault || (io.pteValid && io.pteFault)
-    io.pteValid := translation.io.pteValid && !pteOutOfRange
-    io.pteAddress := narrowPteAddress
+    if (PhysicalBits >= ArchitecturalPhysicalBits) {
+      translation.io.pteReady := io.pteReady
+      translation.io.pteFault := io.pteFault
+      io.pteValid := translation.io.pteValid
+      io.pteAddress := translation.io.pteAddress.pad(PhysicalBits)
+    } else {
+      val (narrowPteAddress, pteOutOfRange) =
+        PhysicalAddressNarrowing(translation.io.pteAddress, PhysicalBits)
+      val pteRangeFault = translation.io.pteValid && pteOutOfRange
+
+      translation.io.pteReady := Mux(pteRangeFault, true.B, io.pteReady)
+      translation.io.pteFault := pteRangeFault || (io.pteValid && io.pteFault)
+      io.pteValid := translation.io.pteValid && !pteOutOfRange
+      io.pteAddress := narrowPteAddress
+    }
 
     translationResponseValid := translation.io.responseValid
     translationPhysicalAddress := translation.io.physicalAddress
@@ -183,14 +190,19 @@ class DataPathAdapter(
     translation.io.responseReady := io.requestComplete
   }
 
-  // Architectural translation remains full-width.  The platform-facing data
-  // path is narrower only after an explicit checked boundary, so discarded PA
-  // bits become an access fault rather than an address alias.
-  private val (implementedPhysicalAddress, translationOutOfRange) =
-    PhysicalAddressNarrowing(translationPhysicalAddress, PhysicalBits)
-  private val translationRangeFault =
-    translationResponseValid && !translationPageFault &&
-      !translationAccessFault && translationOutOfRange
+  // Keep the qualified architectural-width path structurally identical.  Only
+  // a genuinely narrower implemented PA domain instantiates the range check.
+  private val (implementedPhysicalAddress, translationRangeFault) =
+    if (PhysicalBits >= ArchitecturalPhysicalBits) {
+      (translationPhysicalAddress.pad(PhysicalBits), false.B)
+    } else {
+      val (narrowPhysicalAddress, translationOutOfRange) =
+        PhysicalAddressNarrowing(translationPhysicalAddress, PhysicalBits)
+      val rangeFault =
+        translationResponseValid && !translationPageFault &&
+          !translationAccessFault && translationOutOfRange
+      (narrowPhysicalAddress, rangeFault)
+    }
 
   val translationFault =
     translationPageFault || translationAccessFault || translationRangeFault
