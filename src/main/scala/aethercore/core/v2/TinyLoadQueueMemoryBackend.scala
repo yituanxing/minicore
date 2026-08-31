@@ -313,34 +313,49 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.pteData := io.pteData
   loadUnit.io.pteFault := false.B
 
-  // One PTW + one Supervisor PMP qualification now serves all three data
-  // lifetimes.  The walker still computes the architectural Sv39 PA56 address;
-  // narrow it exactly once before the implemented physical/PMP domain.  A high
-  // architectural bit is a terminal access fault and never aliases a low PTE.
-  private val (sharedPteAddress, sharedPteOutOfRange) =
-    PhysicalAddressNarrowing(sharedTranslation.io.pteAddress, PhysicalBitsLocal)
-  private val sharedPteRangeFault =
-    sharedTranslation.io.pteValid && sharedPteOutOfRange
-
+  // One PTW + one Supervisor PMP qualification serves all three data
+  // lifetimes. Preserve the qualified PA56 wiring exactly; only a narrower
+  // implemented platform inserts the fail-closed architectural-PA boundary.
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
-  ptwPmp.io.address := sharedPteAddress
   ptwPmp.io.bytes := geometry.pteBytes.U
   ptwPmp.io.write := false.B
   ptwPmp.io.execute := false.B
   ptwPmp.io.config := csrFile.io.pmpConfig
   ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
-  private val sharedPtePmpFault =
-    sharedTranslation.io.pteValid && !sharedPteOutOfRange &&
-      isaLocal.hasPmp.B && !ptwPmp.io.allow
-
-  io.pteValid :=
-    sharedTranslation.io.pteValid && !sharedPteRangeFault && !sharedPtePmpFault
-  io.pteAddress := sharedPteAddress
-  sharedTranslation.io.pteReady :=
-    Mux(sharedPteRangeFault || sharedPtePmpFault, true.B, io.pteReady)
   sharedTranslation.io.pteData := io.pteData
-  sharedTranslation.io.pteFault :=
-    sharedPteRangeFault || sharedPtePmpFault || (io.pteValid && io.pteFault)
+
+  if (PhysicalBitsLocal >= geometry.architecturalPhysicalAddressBits) {
+    val sharedPteAddress =
+      sharedTranslation.io.pteAddress.pad(PhysicalBitsLocal)
+    ptwPmp.io.address := sharedPteAddress
+    val sharedPtePmpFault =
+      sharedTranslation.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
+
+    io.pteValid := sharedTranslation.io.pteValid && !sharedPtePmpFault
+    io.pteAddress := sharedPteAddress
+    sharedTranslation.io.pteReady :=
+      Mux(sharedPtePmpFault, true.B, io.pteReady)
+    sharedTranslation.io.pteFault :=
+      sharedPtePmpFault || (io.pteValid && io.pteFault)
+  } else {
+    val (sharedPteAddress, sharedPteOutOfRange) =
+      PhysicalAddressNarrowing(sharedTranslation.io.pteAddress, PhysicalBitsLocal)
+    val sharedPteRangeFault =
+      sharedTranslation.io.pteValid && sharedPteOutOfRange
+
+    ptwPmp.io.address := sharedPteAddress
+    val sharedPtePmpFault =
+      sharedTranslation.io.pteValid && !sharedPteOutOfRange &&
+        isaLocal.hasPmp.B && !ptwPmp.io.allow
+
+    io.pteValid :=
+      sharedTranslation.io.pteValid && !sharedPteRangeFault && !sharedPtePmpFault
+    io.pteAddress := sharedPteAddress
+    sharedTranslation.io.pteReady :=
+      Mux(sharedPteRangeFault || sharedPtePmpFault, true.B, io.pteReady)
+    sharedTranslation.io.pteFault :=
+      sharedPteRangeFault || sharedPtePmpFault || (io.pteValid && io.pteFault)
+  }
 
   // --------------------------------------------------------------------------
   // Shared PMA lookup. Exact-head Store/Atomic gets priority; otherwise the
