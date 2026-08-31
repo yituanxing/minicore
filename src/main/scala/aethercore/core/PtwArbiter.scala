@@ -20,10 +20,7 @@ class PtwArbiter(
 ) extends Module {
   private val PhysicalBits =
     if (paddrBits > 0) paddrBits else geometry.architecturalPhysicalAddressBits
-  require(
-    PhysicalBits >= geometry.architecturalPhysicalAddressBits,
-    s"${geometry.name} PTW arbitration requires PA>=${geometry.architecturalPhysicalAddressBits}, got $PhysicalBits"
-  )
+  require(PhysicalBits > 0, s"implemented PTW PA width must be positive, got $PhysicalBits")
 
   val io = IO(new Bundle {
     val dataValid = Input(Bool())
