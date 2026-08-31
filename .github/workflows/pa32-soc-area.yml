@@ -6,6 +6,8 @@ on:
       - 'src/main/scala/aethercore/config/CoreConfig.scala'
       - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
       - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
+      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
+      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
       - 'src/main/scala/aethercore/core/PtwArbiter.scala'
       - 'src/main/scala/aethercore/core/v2/TinyBlockingLsu.scala'
       - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
@@ -87,7 +89,7 @@ jobs:
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
-          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
           printf '%s\n' "$depth" > "$out/depth"
           echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
@@ -106,10 +108,10 @@ jobs:
               return int((root / name).read_text().strip())
 
           baseline = {
-              "paddr_bits": 56,
-              "lut4": 54965,
-              "ff": 14412,
-              "distributed_ram_dpr16x4": 438,
+              "paddr_bits": 32,
+              "lut4": 50643,
+              "ff": 13596,
+              "distributed_ram_dpr16x4": 336,
               "mult18x18d": 39,
           }
           target = {
@@ -123,19 +125,19 @@ jobs:
               "logic_depth": n("depth"),
           }
           summary = {
-              "baseline_sha": "4a9d34832b0af06540bda8d35d9a6512ea97a59c",
+              "baseline_sha": "b48f6978ea46b9283d03d8dd3cd3866ef8d08819",
               "baseline": baseline,
               "target": target,
               "delta_lut4": target["lut4"] - baseline["lut4"],
               "delta_ff": target["ff"] - baseline["ff"],
-              "note": "Sv39 remains architectural PA56 internally; PA32 is a fail-closed implemented physical boundary."
+              "note": "Stage-1 PA32 baseline; target additionally narrows cached TLB physical payload while the walker remains architectural PA56."
           }
           (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
           print(json.dumps(summary, indent=2))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("## AetherSoC implemented-PA A/B\n\n")
-              f.write(f"- PA56 baseline: **{baseline['lut4']:,} LUT4 / {baseline['ff']:,} FF**\n")
-              f.write(f"- PA32 target: **{target['lut4']:,} LUT4 / {target['ff']:,} FF**\n")
+              f.write(f"- PA32 stage-1 baseline: **{baseline['lut4']:,} LUT4 / {baseline['ff']:,} FF**\n")
+              f.write(f"- PA32 + compact TLB target: **{target['lut4']:,} LUT4 / {target['ff']:,} FF**\n")
               f.write(f"- LUT4 delta: **{summary['delta_lut4']:+,}**\n")
               f.write(f"- FF delta: **{summary['delta_ff']:+,}**\n")
               f.write(f"- DPR16X4: {target['distributed_ram_dpr16x4']}\n")
