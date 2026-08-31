@@ -136,8 +136,8 @@ final case class CoreConfig(
   )
   isa.pageTableGeometries.foreach { geometry =>
     require(
-      platform.paddrBits >= geometry.architecturalPhysicalAddressBits,
-      s"${geometry.name} requires at least ${geometry.architecturalPhysicalAddressBits} physical address bits, got ${platform.paddrBits}"
+      platform.paddrBits >= geometry.pageOffsetBits,
+      s"${geometry.name} implemented PA width must retain the page offset (${geometry.pageOffsetBits} bits), got ${platform.paddrBits}"
     )
   }
   require(
