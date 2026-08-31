@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, PrivilegeMode}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.PmpConstants
+import aethercore.core.{PmpConstants, TranslationUnit}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse}
 
 /**
@@ -32,7 +32,8 @@ class TinyLoadQueueMemoryBackend(
       enableAsyncInterrupts = enableAsyncInterrupts,
       withMachineExternalInterrupt = withMachineExternalInterrupt,
       withSupervisorExternalInterrupt = withSupervisorExternalInterrupt,
-      allowAtomics = allowAtomics
+      allowAtomics = allowAtomics,
+      externalDataTranslation = true
     ) {
   private val isaLocal = config.isa
   private val xlenLocal = isaLocal.xlen
@@ -88,7 +89,8 @@ class TinyLoadQueueMemoryBackend(
     geometry,
     paddrBits = PhysicalBitsLocal,
     tlbEntries = tlbEntries,
-    txnIdBits = txnIdBits
+    txnIdBits = txnIdBits,
+    externalTranslation = true
   ))
   val loadIssue = Module(new TinyLoadQueueIssue(xlenLocal))
 
@@ -130,39 +132,205 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.pmpAddress := csrFile.io.pmpAddress
 
   // --------------------------------------------------------------------------
-  // Shared PTW seam. Only an exact-head lifetime can request a walk.
-  // Parent Store/Atomic gets deterministic priority, although architectural
-  // head ownership normally makes the two candidates mutually exclusive.
+  // One shared data TranslationUnit for parent Store/Atomic + Load slot0/slot1.
+  //
+  // Owner encoding:
+  //   0 = exact-head parent LSU
+  //   1 = LoadQ2 slot0
+  //   2 = LoadQ2 slot1
+  //
+  // Exact-head translation has priority. Younger Loads may probe the shared TLB,
+  // but a miss is not accepted unless that exact token owns ROB head. This
+  // preserves the frozen no-speculative-PTW rule while still allowing pre-head
+  // TLB hits to launch replay-safe physical reads.
   // --------------------------------------------------------------------------
-  private val parentPte = lsu.io.pteValid
-  private val loadPte = loadUnit.io.pteValid
-  private val selectParentPte = parentPte
-  private val selectedPteValid = parentPte || loadPte
-  private val selectedPteAddress = Mux(selectParentPte, lsu.io.pteAddress, loadUnit.io.pteAddress)
+  private val sharedTranslation = Module(new TranslationUnit(
+    geometry,
+    tlbEntries = tlbEntries,
+    externalWalkGate = true
+  ))
 
+  private val parentTranslation = lsu.io.translationRequest.get
+  private val loadTranslations = loadUnit.io.translationRequests.get
+  private val parentTranslationToken = lsu.io.translationToken.get
+  private val loadTranslationTokens = loadUnit.io.translationTokens.get
+
+  private val parentTranslationHead =
+    parentTranslation.valid && head.valid &&
+      sameToken(parentTranslationToken, head.bits.robToken)
+  private val load0TranslationHead =
+    loadTranslations(0).valid && head.valid &&
+      sameToken(loadTranslationTokens(0), head.bits.robToken)
+  private val load1TranslationHead =
+    loadTranslations(1).valid && head.valid &&
+      sameToken(loadTranslationTokens(1), head.bits.robToken)
+
+  private val loadTranslationRoundRobin = RegInit(false.B)
+  private val activeTranslationOwnerValid = RegInit(false.B)
+  private val activeTranslationOwner = RegInit(0.U(2.W))
+
+  private val selectedTranslationOwner = WireDefault(0.U(2.W))
+  private val selectedTranslationValid = WireDefault(false.B)
+  private val selectedTranslationIsHead = WireDefault(false.B)
+
+  when(parentTranslationHead) {
+    selectedTranslationOwner := 0.U
+    selectedTranslationValid := true.B
+    selectedTranslationIsHead := true.B
+  }.elsewhen(load0TranslationHead) {
+    selectedTranslationOwner := 1.U
+    selectedTranslationValid := true.B
+    selectedTranslationIsHead := true.B
+  }.elsewhen(load1TranslationHead) {
+    selectedTranslationOwner := 2.U
+    selectedTranslationValid := true.B
+    selectedTranslationIsHead := true.B
+  }.elsewhen(parentTranslation.valid) {
+    // Parent policy should make this exact-head already; keep a fail-safe path
+    // rather than silently dropping a live inherited LSU request.
+    selectedTranslationOwner := 0.U
+    selectedTranslationValid := true.B
+  }.elsewhen(loadTranslations(0).valid && loadTranslations(1).valid) {
+    selectedTranslationOwner := Mux(loadTranslationRoundRobin, 2.U, 1.U)
+    selectedTranslationValid := true.B
+  }.elsewhen(loadTranslations(0).valid) {
+    selectedTranslationOwner := 1.U
+    selectedTranslationValid := true.B
+  }.elsewhen(loadTranslations(1).valid) {
+    selectedTranslationOwner := 2.U
+    selectedTranslationValid := true.B
+  }
+
+  private val selectedTranslationBits = Mux(
+    selectedTranslationOwner === 0.U,
+    parentTranslation.bits,
+    Mux(
+      selectedTranslationOwner === 1.U,
+      loadTranslations(0).bits,
+      loadTranslations(1).bits
+    )
+  )
+
+  sharedTranslation.io.requestValid :=
+    selectedTranslationValid && !activeTranslationOwnerValid
+  sharedTranslation.io.kill := false.B
+  sharedTranslation.io.flush := io.translationFence
+  sharedTranslation.io.virtualAddress := selectedTranslationBits.virtualAddress
+  sharedTranslation.io.privilege := selectedTranslationBits.privilege
+  sharedTranslation.io.write := selectedTranslationBits.write
+  sharedTranslation.io.execute := false.B
+  sharedTranslation.io.satpTranslationEnabled :=
+    selectedTranslationBits.satpTranslationEnabled
+  sharedTranslation.io.satpRootPpn := selectedTranslationBits.satpRootPpn
+  sharedTranslation.io.sum := selectedTranslationBits.sum
+  sharedTranslation.io.mxr := selectedTranslationBits.mxr
+  sharedTranslation.io.walkAllowed.get := selectedTranslationIsHead
+
+  parentTranslation.ready := false.B
+  loadTranslations(0).ready := false.B
+  loadTranslations(1).ready := false.B
+  when(!activeTranslationOwnerValid && selectedTranslationValid) {
+    when(selectedTranslationOwner === 0.U) {
+      parentTranslation.ready := sharedTranslation.io.requestReady
+    }.elsewhen(selectedTranslationOwner === 1.U) {
+      loadTranslations(0).ready := sharedTranslation.io.requestReady
+    }.otherwise {
+      loadTranslations(1).ready := sharedTranslation.io.requestReady
+    }
+  }
+
+  // Rotate only among speculative Load probes. A miss with walkAllowed=false
+  // therefore cannot permanently starve the other slot's potential TLB hit.
+  when(!activeTranslationOwnerValid &&
+       selectedTranslationValid &&
+       !selectedTranslationIsHead &&
+       selectedTranslationOwner =/= 0.U) {
+    loadTranslationRoundRobin := selectedTranslationOwner === 1.U
+  }
+
+  private val responseOwner = Mux(
+    activeTranslationOwnerValid,
+    activeTranslationOwner,
+    selectedTranslationOwner
+  )
+
+  private val parentTranslationResponse = lsu.io.translationResponse.get
+  private val loadTranslationResponses = loadUnit.io.translationResponses.get
+
+  parentTranslationResponse.valid :=
+    sharedTranslation.io.responseValid && responseOwner === 0.U
+  loadTranslationResponses(0).valid :=
+    sharedTranslation.io.responseValid && responseOwner === 1.U
+  loadTranslationResponses(1).valid :=
+    sharedTranslation.io.responseValid && responseOwner === 2.U
+
+  parentTranslationResponse.bits.physicalAddress :=
+    sharedTranslation.io.physicalAddress
+  parentTranslationResponse.bits.pageFault := sharedTranslation.io.pageFault
+  parentTranslationResponse.bits.accessFault := sharedTranslation.io.accessFault
+
+  for (index <- 0 until 2) {
+    loadTranslationResponses(index).bits.physicalAddress :=
+      sharedTranslation.io.physicalAddress
+    loadTranslationResponses(index).bits.pageFault := sharedTranslation.io.pageFault
+    loadTranslationResponses(index).bits.accessFault := sharedTranslation.io.accessFault
+  }
+
+  sharedTranslation.io.responseReady := Mux(
+    responseOwner === 0.U,
+    parentTranslationResponse.ready,
+    Mux(
+      responseOwner === 1.U,
+      loadTranslationResponses(0).ready,
+      loadTranslationResponses(1).ready
+    )
+  )
+
+  private val translationRequestFire =
+    sharedTranslation.io.requestValid && sharedTranslation.io.requestReady
+  private val translationResponseFire =
+    sharedTranslation.io.responseValid && sharedTranslation.io.responseReady
+  private val sameCycleTranslationCompletion =
+    translationRequestFire && translationResponseFire
+
+  when(translationRequestFire) {
+    activeTranslationOwner := selectedTranslationOwner
+    activeTranslationOwnerValid := !sameCycleTranslationCompletion
+  }
+  when(activeTranslationOwnerValid && translationResponseFire) {
+    activeTranslationOwnerValid := false.B
+  }
+  when(io.translationFence) {
+    activeTranslationOwnerValid := false.B
+  }
+
+  // The child/private PTW seams disappear in external-translation mode.
+  lsu.io.pteReady := false.B
+  lsu.io.pteData := io.pteData
+  lsu.io.pteFault := false.B
+  loadUnit.io.pteReady := false.B
+  loadUnit.io.pteData := io.pteData
+  loadUnit.io.pteFault := false.B
+
+  // One PTW + one Supervisor PMP qualification now serves all three data
+  // lifetimes. PTW traffic itself remains exact-head-only by walkAllowed.
   ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
-  ptwPmp.io.address := selectedPteAddress
+  ptwPmp.io.address := sharedTranslation.io.pteAddress.pad(PhysicalBitsLocal)
   ptwPmp.io.bytes := geometry.pteBytes.U
   ptwPmp.io.write := false.B
   ptwPmp.io.execute := false.B
   ptwPmp.io.config := csrFile.io.pmpConfig
   ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
-  private val selectedPtePmpFault = selectedPteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
+  private val sharedPtePmpFault =
+    sharedTranslation.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
 
-  io.pteValid := selectedPteValid && !selectedPtePmpFault
-  io.pteAddress := selectedPteAddress
-
-  lsu.io.pteReady := selectParentPte &&
-    Mux(selectedPtePmpFault, true.B, io.pteReady)
-  lsu.io.pteData := io.pteData
-  lsu.io.pteFault := selectParentPte &&
-    (selectedPtePmpFault || (io.pteValid && io.pteFault))
-
-  loadUnit.io.pteReady := !selectParentPte && loadPte &&
-    Mux(selectedPtePmpFault, true.B, io.pteReady)
-  loadUnit.io.pteData := io.pteData
-  loadUnit.io.pteFault := !selectParentPte && loadPte &&
-    (selectedPtePmpFault || (io.pteValid && io.pteFault))
+  io.pteValid := sharedTranslation.io.pteValid && !sharedPtePmpFault
+  io.pteAddress := sharedTranslation.io.pteAddress.pad(PhysicalBitsLocal)
+  sharedTranslation.io.pteReady :=
+    Mux(sharedPtePmpFault, true.B, io.pteReady)
+  sharedTranslation.io.pteData := io.pteData
+  sharedTranslation.io.pteFault :=
+    sharedPtePmpFault || (io.pteValid && io.pteFault)
 
   // --------------------------------------------------------------------------
   // Shared PMA lookup. Exact-head Store/Atomic gets priority; otherwise the

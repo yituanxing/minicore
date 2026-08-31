@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, MachineExceptionCode, MemSize}
 import aethercore.config.PageTableGeometry
-import aethercore.core.{DataPathAdapter, PmpChecker, PmpConstants, PmpGeometry}
+import aethercore.core.{DataPathAdapter, DataTranslationRequest, DataTranslationResponse, PmpChecker, PmpConstants, PmpGeometry}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -77,7 +77,8 @@ class TinyBlockingLsu(
     val paddrBits: Int = -1,
     val tlbEntries: Int = 8,
     val txnIdBits: Int = 2,
-    val allowAtomics: Boolean = false
+    val allowAtomics: Boolean = false,
+    val externalTranslation: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val IdentityBits = TinyRobGeometry.IndexBits
@@ -119,6 +120,13 @@ class TinyBlockingLsu(
     val pteReady = Input(Bool())
     val pteData = Input(UInt(geometry.pteBits.W))
     val pteFault = Input(Bool())
+
+    val translationRequest =
+      if (externalTranslation) Some(Decoupled(new DataTranslationRequest(geometry))) else None
+    val translationResponse =
+      if (externalTranslation) Some(Flipped(Decoupled(new DataTranslationResponse(geometry)))) else None
+    val translationToken =
+      if (externalTranslation) Some(Output(new RobToken(IdentityBits, GenerationBits))) else None
 
     // PMA/attribute policy remains outside the LSU. The LSU exposes the
     // resolved physical address and consumes the resolved attributes.
@@ -226,7 +234,11 @@ class TinyBlockingLsu(
     ((effectiveAddress & alignmentMask) =/= 0.U)
   val localFault = unsupported || misaligned
 
-  val adapter = Module(new DataPathAdapter(geometry, PhysicalBits, tlbEntries))
+  if (externalTranslation) {
+    io.translationToken.get := workingRequest.robToken
+  }
+
+  val adapter = Module(new DataPathAdapter(geometry, PhysicalBits, tlbEntries, externalTranslation))
   adapter.io.requestValid := workingValid && !localFault && !completionHeldValid
   adapter.io.flush := io.translationFlush
   adapter.io.virtualAddress := effectiveAddress
@@ -246,6 +258,16 @@ class TinyBlockingLsu(
   adapter.io.pteReady := io.pteReady
   adapter.io.pteData := io.pteData
   adapter.io.pteFault := io.pteFault
+
+  if (externalTranslation) {
+    io.translationRequest.get.valid := adapter.io.translationRequest.get.valid
+    io.translationRequest.get.bits := adapter.io.translationRequest.get.bits
+    adapter.io.translationRequest.get.ready := io.translationRequest.get.ready
+
+    adapter.io.translationResponse.get.valid := io.translationResponse.get.valid
+    adapter.io.translationResponse.get.bits := io.translationResponse.get.bits
+    io.translationResponse.get.ready := adapter.io.translationResponse.get.ready
+  }
 
   val pmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
   pmp.io.privilege := io.effectivePrivilege

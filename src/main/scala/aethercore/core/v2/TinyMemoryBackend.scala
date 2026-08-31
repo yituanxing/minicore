@@ -24,7 +24,8 @@ class TinyMemoryBackend(
     val enableAsyncInterrupts: Boolean = false,
     val withMachineExternalInterrupt: Boolean = false,
     val withSupervisorExternalInterrupt: Boolean = false,
-    val allowAtomics: Boolean = false
+    val allowAtomics: Boolean = false,
+    val externalDataTranslation: Boolean = false
 ) extends Module {
   private val isa = config.isa
   private val xlen = isa.xlen
@@ -143,7 +144,8 @@ class TinyMemoryBackend(
     paddrBits = PhysicalBits,
     tlbEntries = tlbEntries,
     txnIdBits = txnIdBits,
-    allowAtomics = allowAtomics
+    allowAtomics = allowAtomics,
+    externalTranslation = externalDataTranslation
   ))
   val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
 
