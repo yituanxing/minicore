@@ -1,0 +1,98 @@
+name: ROB4 Wide Mux Cost
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/RobMuxCost.scala'
+      - '.github/workflows/rob4-wide-mux-cost.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+      - name: Elaborate cost harnesses
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/rob4-wide-mux-cost"
+          rm -rf "$out"
+          mkdir -p "$out/reorder" "$out/dep" "$out/current" "$out/physical"
+          ./mill aethercore.runMain aethercore.ElaborateTinyRobAgeReorderCostRV64 --target-dir "$out/reorder"
+          ./mill aethercore.runMain aethercore.ElaborateTinyDependencyAgeComposeCostRV64 --target-dir "$out/dep"
+          ./mill aethercore.runMain aethercore.ElaborateTinyCurrentSchedulingSeamCostRV64 --target-dir "$out/current"
+          ./mill aethercore.runMain aethercore.ElaborateTinyPhysicalSchedulingSeamCostRV64 --target-dir "$out/physical"
+          echo "AREA_OUT=$out" >> "$GITHUB_ENV"
+      - name: Map harnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          map_one() {
+            dir="$1"
+            top="$2"
+            out="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $out.json; stat -top $top"               2>&1 | tee "$out.log"
+          }
+          map_one "$AREA_OUT/reorder" TinyRobAgeReorderCost "$AREA_OUT/reorder"
+          map_one "$AREA_OUT/dep" TinyDependencyAgeComposeCost "$AREA_OUT/dep"
+          map_one "$AREA_OUT/current" TinyCurrentSchedulingSeamCost "$AREA_OUT/current"
+          map_one "$AREA_OUT/physical" TinyPhysicalSchedulingSeamCost "$AREA_OUT/physical"
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          root=Path(os.environ["AREA_OUT"])
+          def one(stem, top):
+              net=json.loads((root/f"{stem}.json").read_text())
+              t=Counter(c["type"] for c in net["modules"][top]["cells"].values())
+              return {
+                "cells":sum(t.values()),
+                "lut4":t["LUT4"],
+                "ff":t["TRELLIS_FF"],
+                "pfumx":t["PFUMX"],
+                "l6mux21":t["L6MUX21"],
+              }
+          data={
+            "reorder":one("reorder","TinyRobAgeReorderCost"),
+            "dependency_compose":one("dep","TinyDependencyAgeComposeCost"),
+            "current_seam":one("current","TinyCurrentSchedulingSeamCost"),
+            "physical_seam":one("physical","TinyPhysicalSchedulingSeamCost"),
+          }
+          data["physical_minus_current"]={
+            k:data["physical_seam"][k]-data["current_seam"][k]
+            for k in data["current_seam"]
+          }
+          (root/"summary.json").write_text(json.dumps(data,indent=2)+"\n")
+          print(json.dumps(data,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rob4-wide-mux-cost-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            ${{ env.AREA_OUT }}/summary.json
+            ${{ env.AREA_OUT }}/*.log
