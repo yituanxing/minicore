@@ -14,7 +14,7 @@ class V2FpgaSynthesisProxyContract(unittest.TestCase):
         fpga = FPGA.read_text(encoding="utf-8")
         elab = ELAB.read_text(encoding="utf-8")
 
-        self.assertIn("class AetherCoreV2FpgaSoC extends Module", fpga)
+        self.assertIn("class AetherCoreV2FpgaSoC(", fpga)
         self.assertIn("new AetherCoreV2FpgaSoC", elab)
         self.assertIn("aethercore.ElaborateV2FpgaSoCRV64", workflow)
         self.assertIn("hierarchy -check -top AetherCoreV2FpgaSoC", workflow)
