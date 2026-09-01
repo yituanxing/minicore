@@ -28,7 +28,8 @@ class AetherCoreV2Complex(
     val geometry: PageTableGeometry,
     val txnIdBits: Int = 2,
     val dcacheEntries: Int = 64,
-    val enableInstructionBackpressure: Boolean = false
+    val enableInstructionBackpressure: Boolean = false,
+    val enableCacheCounters: Boolean = true
 ) extends Module {
   private val xlen = config.isa.xlen
   private val paddrBits = config.platform.paddrBits
@@ -126,7 +127,8 @@ class AetherCoreV2Complex(
     paddrBits,
     dataBits,
     txnIdBits,
-    entries = dcacheEntries
+    entries = dcacheEntries,
+    enableCounters = enableCacheCounters
   ))
   dcache.io.upstreamRequest <> core.io.memoryRequest
   core.io.memoryResponse <> dcache.io.upstreamResponse
