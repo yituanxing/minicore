@@ -35,6 +35,7 @@ object AetherPlicMap {
 class AetherPlic(
     val sourceCount: Int = 52,
     val priorityBits: Int = 3,
+    val implementedSourceMask: Option[BigInt] = None,
     val addressBits: Int = 24,
     val enableBase: Int = AetherPlicMap.SupervisorEnable,
     val thresholdOffset: Int = AetherPlicMap.SupervisorThreshold,
@@ -93,7 +94,8 @@ class AetherPlic(
       Mux(mask(byte), newValue(high, low), oldValue(high, low))
     })
 
-  private val plic = Module(new MachinePlic(sourceCount, priorityBits))
+  private val plic =
+    Module(new MachinePlic(sourceCount, priorityBits, implementedSourceMask))
   plic.io.sources := io.sources
 
   plic.io.priorityWriteEnable := false.B
