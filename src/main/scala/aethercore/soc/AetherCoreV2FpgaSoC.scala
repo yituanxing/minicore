@@ -17,7 +17,8 @@ import aethercore.soc.phy.AetherUart8N1Phy
   * physical serial line rather than only simulation metadata.
   */
 class AetherCoreV2FpgaSoC(
-    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits
+    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
+    val enableCacheCounters: Boolean = false
 ) extends Module {
   private val Xlen = 64
   private val PaddrBits = implementedPaddrBits
@@ -54,7 +55,8 @@ class AetherCoreV2FpgaSoC(
   })
 
   val soc = Module(new AetherCoreV2Axi4SoC(
-    implementedPaddrBits = implementedPaddrBits
+    implementedPaddrBits = implementedPaddrBits,
+    enableCacheCounters = enableCacheCounters
   ))
   val uartPhy = Module(new AetherUart8N1Phy)
 
