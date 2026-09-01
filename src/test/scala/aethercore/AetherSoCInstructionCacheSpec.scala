@@ -59,6 +59,45 @@ class AetherSoCInstructionCacheSpec
     }
   }
 
+
+  it should "merge a second narrow miss using state captured at miss issue" in {
+    simulate(new AetherSoCInstructionCache()) { dut =>
+      dut.io.invalidateAll.poke(false.B)
+      dut.io.frontendValid.poke(true.B)
+      dut.io.frontendAddr.poke("h80005000".U)
+      dut.io.frontendBytes.poke(2.U)
+      dut.io.request.ready.poke(true.B)
+      idleResponse(dut)
+
+      // Fill bytes [1:0].
+      dut.io.request.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.response.valid.poke(true.B)
+      dut.io.response.bits.rdata.poke("h0000000000001234".U)
+      dut.clock.step()
+      idleResponse(dut)
+
+      // Fill bytes [3:2] of the same line. The old low bytes must be captured
+      // when this miss is issued, not reread through a second LUTRAM port when
+      // the response returns.
+      dut.io.frontendAddr.poke("h80005002".U)
+      dut.io.frontendBytes.poke(2.U)
+      dut.io.request.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.response.valid.poke(true.B)
+      dut.io.response.bits.rdata.poke("h000000000000abcd".U)
+      dut.clock.step()
+      idleResponse(dut)
+
+      // A 4-byte request spanning both narrow fills must now hit in one cycle.
+      dut.io.frontendAddr.poke("h80005000".U)
+      dut.io.frontendBytes.poke(4.U)
+      dut.io.frontendReady.expect(true.B)
+      dut.io.frontendInst.expect("habcd1234".U)
+      dut.io.request.valid.expect(false.B)
+    }
+  }
+
   it should "invalidate hits at FENCE.I and refuse stale redirected responses" in {
     simulate(new AetherSoCInstructionCache()) { dut =>
       dut.io.invalidateAll.poke(false.B)
