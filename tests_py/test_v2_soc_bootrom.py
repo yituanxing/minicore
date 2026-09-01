@@ -27,6 +27,14 @@ class V2SoCBootRomSourceContract(unittest.TestCase):
             platform,
         )
 
+    def test_qualified_soc_uses_predecoded_local_offset_bootrom(self):
+        rom = BOOT_ROM.read_text(encoding="utf-8")
+        unified = UNIFIED.read_text(encoding="utf-8")
+        self.assertIn("requestAlreadyDecoded: Boolean = false", rom)
+        self.assertIn("private val localOffsetBits =", rom)
+        self.assertIn("if (requestAlreadyDecoded) address", rom)
+        self.assertIn("requestAlreadyDecoded = true", unified)
+
     def test_bootrom_is_a_real_unified_memory_target_not_a_sim_wrapper(self):
         rom = BOOT_ROM.read_text(encoding="utf-8")
         unified = UNIFIED.read_text(encoding="utf-8")
