@@ -1,0 +1,171 @@
+name: Current Main FPGA Area Census
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/current-main-area-census.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact current main
+        uses: actions/checkout@v4
+        with:
+          ref: 15f8a754acb7b6b3bd7ebf9b85a6dfa14002d8be
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+
+      - name: Elaborate current product core and SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/current-main-area-census"
+          rm -rf "$out"
+          mkdir -p "$out/core" "$out/soc" "$out/results"
+          ./mill aethercore.runMain aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/core"
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 --target-dir "$out/soc"
+          echo "CENSUS_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Discover candidate modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re,json
+          from pathlib import Path
+          root=Path(os.environ["CENSUS_OUT"])
+          pats=[
+            r"^TinyDependencyBackend",
+            r"^TinyLoadQueueMemoryBackend",
+            r"^TinyMemoryBackend",
+            r"^TinyDualReplaySafeLoadUnit",
+            r"^TinyBlockingLsu",
+            r"^TinyDependencyState",
+            r"^TinySelectiveExecutionCluster",
+            r"^TinyRob",
+            r"^TinySelectiveComputeIssue",
+            r"^MachineCsrFile",
+            r"^RegisterFile",
+            r"^TranslationUnit",
+            r"^PmpChecker",
+            r"^AetherDirectMappedReadCache",
+            r"^PlatformFabric",
+            r"^Plic",
+            r"^Aether.*Axi",
+            r"^AetherCoreV2FpgaSoC$",
+            r"^TinyPagedCore$",
+          ]
+          seen={}
+          for domain in ("core","soc"):
+            for sv in (root/domain).glob("*.sv"):
+              text=sv.read_text(errors="replace")
+              for m in re.finditer(r"(?m)^module\s+([A-Za-z_][A-Za-z0-9_$]*)\b",text):
+                name=m.group(1)
+                if any(re.search(p,name) for p in pats):
+                  seen.setdefault(name,set()).add(domain)
+          rows=[{"module":k,"domains":sorted(v)} for k,v in sorted(seen.items())]
+          (root/"candidates.json").write_text(json.dumps(rows,indent=2)+"\n")
+          print(json.dumps(rows,indent=2))
+          if not rows:
+            raise SystemExit("no candidate modules discovered")
+          PY
+
+      - name: Map candidate modules independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,subprocess,shlex
+          from pathlib import Path
+          root=Path(os.environ["CENSUS_OUT"])
+          candidates=json.loads((root/"candidates.json").read_text())
+          rows=[]
+          for item in candidates:
+            name=item["module"]
+            domain="core" if "core" in item["domains"] else "soc"
+            svs=sorted(str(p) for p in (root/domain).glob("*.sv"))
+            read_cmd="read_verilog -sv -DSYNTHESIS "+" ".join(shlex.quote(x) for x in svs)
+            out=root/"results"/name
+            out.mkdir(parents=True,exist_ok=True)
+            cmd=f"{read_cmd}; hierarchy -check -top {name}; synth_ecp5 -top {name} -json {out/'net.json'}; stat -top {name}"
+            p=subprocess.run(["yosys","-Q","-p",cmd],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+            (out/"yosys.log").write_text(p.stdout)
+            if p.returncode!=0:
+              rows.append({"module":name,"domain":domain,"status":"FAIL","error":p.stdout[-2000:]})
+              continue
+            net=json.loads((out/"net.json").read_text())
+            mod=net["modules"].get(name)
+            if mod is None:
+              rows.append({"module":name,"domain":domain,"status":"FAIL","error":"top missing from json"})
+              continue
+            from collections import Counter
+            t=Counter(c["type"] for c in mod["cells"].values())
+            rows.append({
+              "module":name,
+              "domain":domain,
+              "status":"PASS",
+              "cells":sum(t.values()),
+              "lut4":t["LUT4"],
+              "ff":t["TRELLIS_FF"],
+              "dpr16x4":t["TRELLIS_DPR16X4"],
+              "bram":t["DP16KD"],
+              "mult18x18d":t["MULT18X18D"],
+              "pfumx":t["PFUMX"],
+              "l6mux21":t["L6MUX21"],
+            })
+          passed=sorted((r for r in rows if r["status"]=="PASS"),key=lambda r:r["lut4"],reverse=True)
+          failed=[r for r in rows if r["status"]!="PASS"]
+          summary={"note":"Standalone inclusive candidate ranking on exact current main. Non-additive; candidate discovery only. Any optimization still requires exact whole-SoC A/B.","passed":passed,"failed":failed}
+          (root/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - name: Publish ranking
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ["CENSUS_OUT"])
+          d=json.loads((root/"summary.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+            f.write("## Exact current-main area census\n\n")
+            f.write("| module | LUT4 | FF | PFUMX | L6MUX21 | DPR16X4 |\n")
+            f.write("|---|---:|---:|---:|---:|---:|\n")
+            for r in d["passed"]:
+              f.write(f"| {r['module']} | {r['lut4']} | {r['ff']} | {r['pfumx']} | {r['l6mux21']} | {r['dpr16x4']} |\n")
+            f.write("\nStandalone inclusive counts are non-additive and are used only to rank candidates.\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: current-main-area-census-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.CENSUS_OUT }}/summary.json
+            ${{ env.CENSUS_OUT }}/candidates.json
+            ${{ env.CENSUS_OUT }}/results/*/yosys.log
