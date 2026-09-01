@@ -75,8 +75,8 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
     val icacheMissCount = Output(UInt(64.W))
 
     // Simulation-only observability for same-source AXI read concurrency.
-    // MemoryHub encodes source in AXI ID[3:2]: 0=Data, 1=PTW, 2=I-cache.
-    // These counters must never feed production request/response control.
+    // Qualified compact IDs reserve 0/1/2 for Data, 3 for PTW and 4 for
+    // I-cache. These counters must never feed production request/response control.
     val axiDataReadRequestCount = Output(UInt(64.W))
     val axiDataReadResponseCount = Output(UInt(64.W))
     val axiDataReadOverlapIssueCount = Output(UInt(64.W))
@@ -91,8 +91,9 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
   val hostMemory = Module(new AetherSoCAxi4HostMemoryAdapter(
     addrBits = paddrBits,
     dataBits = busDataBits,
-    idBits = 4,
-    localTxnIdBits = 2
+    idBits = 3,
+    localTxnIdBits = 2,
+    compactQualifiedTxnIds = true
   ))
 
   hostMemory.io.axi.aw.valid := soc.io.axi.aw.valid
@@ -118,12 +119,11 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
   // Observe the production AXI boundary after every upstream cache/fabric/hub
   // policy decision. Source 0 is the Data client and its low two ID bits retain
   // the CPU-complex transaction identity. This is observation only.
-  private val dataSource = 0.U(2.W)
   private val dataArFire =
-    soc.io.axi.ar.fire && soc.io.axi.ar.bits.id(3, 2) === dataSource
+    soc.io.axi.ar.fire && soc.io.axi.ar.bits.id <= 2.U
   private val dataRFire =
     soc.io.axi.r.fire && soc.io.axi.r.bits.last &&
-      soc.io.axi.r.bits.id(3, 2) === dataSource
+      soc.io.axi.r.bits.id <= 2.U
 
   private val dataReadOutstanding = RegInit(0.U(3.W))
   private val dataReadRequestCount = RegInit(0.U(64.W))
