@@ -23,7 +23,8 @@ class AetherDirectMappedReadCache(
     val addrBits: Int,
     val dataBits: Int,
     val txnIdBits: Int,
-    val entries: Int = 64
+    val entries: Int = 64,
+    val enableCounters: Boolean = true
 ) extends Module {
   require(addrBits > 0, s"cache address width must be positive, got $addrBits")
   require(dataBits == 32 || dataBits == 64,
@@ -178,23 +179,29 @@ class AetherDirectMappedReadCache(
     hitResponseValid := false.B
   }
 
-  private val hitCounter = RegInit(0.U(64.W))
-  private val missCounter = RegInit(0.U(64.W))
-  private val bypassCounter = RegInit(0.U(64.W))
+  if (enableCounters) {
+    private val hitCounter = RegInit(0.U(64.W))
+    private val missCounter = RegInit(0.U(64.W))
+    private val bypassCounter = RegInit(0.U(64.W))
 
-  when(hitRequestFire) {
-    hitCounter := hitCounter + 1.U
-  }
-  when(forwardedRequestFire && ordinaryCacheableRead) {
-    missCounter := missCounter + 1.U
-  }
-  when(forwardedRequestFire && !ordinaryCacheableRead) {
-    bypassCounter := bypassCounter + 1.U
-  }
+    when(hitRequestFire) {
+      hitCounter := hitCounter + 1.U
+    }
+    when(forwardedRequestFire && ordinaryCacheableRead) {
+      missCounter := missCounter + 1.U
+    }
+    when(forwardedRequestFire && !ordinaryCacheableRead) {
+      bypassCounter := bypassCounter + 1.U
+    }
 
-  io.hitCount := hitCounter
-  io.missCount := missCounter
-  io.bypassCount := bypassCounter
+    io.hitCount := hitCounter
+    io.missCount := missCounter
+    io.bypassCount := bypassCounter
+  } else {
+    io.hitCount := 0.U
+    io.missCount := 0.U
+    io.bypassCount := 0.U
+  }
 
   when(forwardedRequestFire) {
     val txn = req.txnId
