@@ -20,7 +20,8 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   */
 class AetherCoreV2UnifiedMemorySoC(
     val externalPhysicalSeams: Boolean = false,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val enableSimulationExit: Boolean = true
 ) extends Module {
   private val xlen = 64
   private val paddrBits = implementedPaddrBits
@@ -75,7 +76,8 @@ class AetherCoreV2UnifiedMemorySoC(
     exposeExternalMemoryAttributes = false,
     externalPhysicalSeams = externalPhysicalSeams,
     externalSemanticMemory = true,
-    implementedPaddrBits = implementedPaddrBits
+    implementedPaddrBits = implementedPaddrBits,
+    enableSimulationExit = enableSimulationExit
   ))
   val ptwAdapter = Module(new AetherSoCPtwReadAdapter(
     addrBits = paddrBits,
