@@ -28,15 +28,24 @@ import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
 class AetherMemToAxi4Bridge(
     val addrBits: Int = 56,
     val dataBits: Int = 64,
-    val txnIdBits: Int = 4
+    val txnIdBits: Int = 4,
+    val normalReadTxnIds: Option[Seq[Int]] = None
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 AXI bridge currently targets a 64-bit data bus")
   require(txnIdBits > 0)
 
   private val BusBytes = dataBits / 8
   private val ByteOffsetBits = log2Ceil(BusBytes)
-  private val ReadSlotCount = 1 << txnIdBits
-  private val ReadCountBits = log2Ceil(ReadSlotCount + 1)
+  private val DenseReadSlotCount = 1 << txnIdBits
+  private val trackedReadIds =
+    normalReadTxnIds.getOrElse((0 until DenseReadSlotCount).toSeq)
+  require(trackedReadIds.nonEmpty,
+    "AXI bridge must track at least one normal-read transaction ID")
+  require(trackedReadIds.distinct.size == trackedReadIds.size,
+    s"AXI bridge normal-read transaction IDs must be unique: $trackedReadIds")
+  require(trackedReadIds.forall(id => id >= 0 && id < DenseReadSlotCount),
+    s"AXI bridge normal-read transaction IDs must fit txnIdBits=$txnIdBits: $trackedReadIds")
+  private val ReadCountBits = log2Ceil(trackedReadIds.size + 1)
 
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(
@@ -70,10 +79,31 @@ class AetherMemToAxi4Bridge(
   // key, so responses may return out of request order without losing the
   // original AetherMem byte-lane alignment.
   private val normalReadValid =
-    RegInit(VecInit(Seq.fill(ReadSlotCount)(false.B)))
+    RegInit(VecInit(Seq.fill(trackedReadIds.size)(false.B)))
   private val normalReadByteOffset =
-    RegInit(VecInit(Seq.fill(ReadSlotCount)(0.U(ByteOffsetBits.W))))
+    RegInit(VecInit(Seq.fill(trackedReadIds.size)(0.U(ByteOffsetBits.W))))
   private val normalReadCount = RegInit(0.U(ReadCountBits.W))
+
+  private def trackedReadIdSupported(id: UInt): Bool =
+    trackedReadIds
+      .map(value => id === value.U(txnIdBits.W))
+      .reduce(_ || _)
+
+  private def trackedReadOutstanding(id: UInt): Bool =
+    MuxCase(
+      false.B,
+      trackedReadIds.zipWithIndex.map { case (value, index) =>
+        (id === value.U(txnIdBits.W)) -> normalReadValid(index)
+      }
+    )
+
+  private def trackedReadByteOffset(id: UInt): UInt =
+    MuxCase(
+      0.U(ByteOffsetBits.W),
+      trackedReadIds.zipWithIndex.map { case (value, index) =>
+        (id === value.U(txnIdBits.W)) -> normalReadByteOffset(index)
+      }
+    )
   private val readPurpose = RegInit(ReadNormal)
   private val writePurpose = RegInit(WriteNormal)
 
@@ -98,7 +128,14 @@ class AetherMemToAxi4Bridge(
       !io.request.bits.attributes.ordered
 
   private val incomingReadId = io.request.bits.txnId
-  private val incomingReadSlotFree = !normalReadValid(incomingReadId)
+  private val incomingReadIdSupported = trackedReadIdSupported(incomingReadId)
+  private val incomingReadSlotFree =
+    incomingReadIdSupported && !trackedReadOutstanding(incomingReadId)
+
+  when(io.request.valid && incomingNormalRead) {
+    assert(incomingReadIdSupported,
+      "AXI bridge received a normal read outside its qualified transaction-ID set")
+  }
 
   private val incomingAxiSize = WireDefault(3.U(3.W))
   switch(io.request.bits.size) {
@@ -128,9 +165,13 @@ class AetherMemToAxi4Bridge(
   }
 
   when(fastReadIssue) {
-    normalReadValid(incomingReadId) := true.B
-    normalReadByteOffset(incomingReadId) :=
-      io.request.bits.paddr(ByteOffsetBits - 1, 0)
+    for ((value, index) <- trackedReadIds.zipWithIndex) {
+      when(incomingReadId === value.U(txnIdBits.W)) {
+        normalReadValid(index) := true.B
+        normalReadByteOffset(index) :=
+          io.request.bits.paddr(ByteOffsetBits - 1, 0)
+      }
+    }
   }
 
   private val axiSize = WireDefault(3.U(3.W))
@@ -197,9 +238,9 @@ class AetherMemToAxi4Bridge(
       fastReadResponseActive && io.response.ready)
 
   private val returningReadId = io.axi.r.bits.id
-  private val returningReadKnown = normalReadValid(returningReadId)
+  private val returningReadKnown = trackedReadOutstanding(returningReadId)
   private val returningBitShift =
-    normalReadByteOffset(returningReadId) << 3
+    trackedReadByteOffset(returningReadId) << 3
   private val returningReadData =
     io.axi.r.bits.data >> returningBitShift
   private val returningReadOkay =
@@ -224,7 +265,11 @@ class AetherMemToAxi4Bridge(
   when(fastReadRetire) {
     assert(returningReadKnown,
       "AXI returned an ID with no concurrent AetherMem read lifetime")
-    normalReadValid(returningReadId) := false.B
+    for ((value, index) <- trackedReadIds.zipWithIndex) {
+      when(returningReadId === value.U(txnIdBits.W)) {
+        normalReadValid(index) := false.B
+      }
+    }
   }
 
   switch(Cat(fastReadIssue, fastReadRetire)) {
