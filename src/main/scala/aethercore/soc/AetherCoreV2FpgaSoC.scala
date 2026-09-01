@@ -17,7 +17,7 @@ import aethercore.soc.phy.AetherUart8N1Phy
   * physical serial line rather than only simulation metadata.
   */
 class AetherCoreV2FpgaSoC(
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits
 ) extends Module {
   private val Xlen = 64
   private val PaddrBits = implementedPaddrBits
