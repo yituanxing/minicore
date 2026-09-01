@@ -29,6 +29,11 @@ class V2VirtualFpgaBoardContract(unittest.TestCase):
         self.assertIn("ElaborateV2VirtualFpgaBoardPA32RV64", elab)
         self.assertIn("implementedPaddrBits = 32", elab)
 
+    def test_virtual_ddr_decodes_the_compact_product_axi_ids(self):
+        source = TOP.read_text(encoding="utf-8")
+        self.assertIn("idBits = 3", source)
+        self.assertIn("compactQualifiedTxnIds = true", source)
+
     def test_linux_console_must_cross_the_serial_pins(self):
         source = TOP.read_text(encoding="utf-8")
         self.assertIn("hostUart.io.serialRx := fpga.io.serialTx", source)
