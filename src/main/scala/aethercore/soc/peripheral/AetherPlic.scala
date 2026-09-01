@@ -109,17 +109,21 @@ class AetherPlic(
 
   private val priorityZeroHit =
     io.address === AetherPlicMap.PriorityBase.U(addressBits.W)
-  private val priorityHit = WireDefault(false.B)
-  private val priorityId = WireDefault(0.U(sourceIdBits.W))
-  private val priorityReadData = WireDefault(0.U(32.W))
-  for (index <- 0 until sourceCount) {
-    val sourceId = index + 1
-    when(io.address === AetherPlicMap.priority(sourceId).U(addressBits.W)) {
-      priorityHit := true.B
-      priorityId := sourceId.U
-      priorityReadData := extendTo32(plic.io.priorities(index), priorityBits)
-    }
-  }
+  private val sourceIndexBits = math.max(1, log2Ceil(sourceCount))
+  private val priorityId =
+    io.address(sourceIdBits + 1, 2)
+  private val priorityHighZero =
+    if (addressBits > sourceIdBits + 2)
+      io.address(addressBits - 1, sourceIdBits + 2) === 0.U
+    else true.B
+  private val priorityHit =
+    priorityHighZero &&
+      priorityId > 0.U &&
+      priorityId <= sourceCount.U
+  private val priorityIndex =
+    (priorityId - 1.U)(sourceIndexBits - 1, 0)
+  private val priorityReadData =
+    extendTo32(plic.io.priorities(priorityIndex), priorityBits)
 
   private val pendingHits = (0 until wordCount).map { word =>
     io.address === AetherPlicMap.pendingWord(word).U(addressBits.W)
