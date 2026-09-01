@@ -77,12 +77,19 @@ class AetherSoCBootRom(
   when(size === MemSize.DWord) { byteCount := 8.U }
 
   private val base = baseAddress.U(addrBits.W)
-  private val limit = (baseAddress + apertureBytes).U((addrBits + 1).W)
-  private val requestEnd = address +& byteCount
-  private val inWindow =
-    address >= base && requestEnd <= limit
+  private val offset =
+    if (requestAlreadyDecoded) address
+    else address - base
 
-  private val offset = address - base
+  private val inWindow =
+    if (requestAlreadyDecoded) {
+      val requestEnd = offset +& byteCount
+      requestEnd <= apertureBytes.U
+    } else {
+      val limit = (baseAddress + apertureBytes).U((addrBits + 1).W)
+      val requestEnd = address +& byteCount
+      address >= base && requestEnd <= limit
+    }
 
   private def imageByte(index: UInt): UInt =
     MuxLookup(
