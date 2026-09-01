@@ -21,6 +21,11 @@ class V2FpgaSynthesisProxyContract(unittest.TestCase):
         self.assertIn("hierarchy -check -top AetherCoreV2FpgaSoC", workflow)
         self.assertIn("synth_ecp5 -top AetherCoreV2FpgaSoC", workflow)
 
+    def test_physical_fpga_default_disables_cache_counters(self):
+        fpga = FPGA.read_text(encoding="utf-8")
+        self.assertIn("enableCacheCounters: Boolean = false", fpga)
+        self.assertIn("enableCacheCounters = enableCacheCounters", fpga)
+
     def test_product_fpga_profile_is_frozen_to_pa32(self):
         fpga = FPGA.read_text(encoding="utf-8")
         board = BOARD.read_text(encoding="utf-8")
