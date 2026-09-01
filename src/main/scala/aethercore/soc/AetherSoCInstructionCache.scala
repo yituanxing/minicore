@@ -177,9 +177,9 @@ class AetherSoCInstructionCache(
   }
 
   if (enableCounters) {
-    private val hitCounter = RegInit(0.U(64.W))
-    private val missCounter = RegInit(0.U(64.W))
-    private val observedHit = hit && io.frontendReady
+    val hitCounter = RegInit(0.U(64.W))
+    val missCounter = RegInit(0.U(64.W))
+    val observedHit = hit && io.frontendReady
     when(observedHit) {
       hitCounter := hitCounter + 1.U
     }
