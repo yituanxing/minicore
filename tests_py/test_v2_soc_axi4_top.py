@@ -17,6 +17,16 @@ class V2Axi4SoCSourceContract(unittest.TestCase):
         self.assertIn("soc.io.memoryResponse <> bridge.io.response", source)
         self.assertIn("soc.externalTxnIdBits == TxnIdBits", source)
 
+    def test_product_axi_uses_compact_three_bit_transaction_ids(self):
+        source = TOP.read_text(encoding="utf-8")
+        unified = UNIFIED.read_text(encoding="utf-8")
+        self.assertIn(
+            "TxnIdBits = AetherCoreV2UnifiedMemorySoC.QualifiedCompactTxnIdBits",
+            source,
+        )
+        self.assertIn("compactQualifiedTxnIds = true", source)
+        self.assertIn("QualifiedCompactTxnIdBits: Int = 3", unified)
+
     def test_axi_is_the_only_external_memory_protocol(self):
         source = TOP.read_text(encoding="utf-8")
         self.assertIn("val axi = new Axi4MasterIO", source)
