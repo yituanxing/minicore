@@ -21,6 +21,8 @@ jobs:
     name: Measure board-neutral FPGA structural cost
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      PRODUCT_IMPLEMENTED_PADDR_BITS: '32'
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
@@ -83,9 +85,21 @@ jobs:
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
-          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
           echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Enforce qualified FPGA product area budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          lut4="$(cat "$SYNTH_OUT/lut4")"
+          echo "product_implemented_paddr_bits=$PRODUCT_IMPLEMENTED_PADDR_BITS"
+          echo "product_lut4=$lut4"
+          if (( lut4 >= 50000 )); then
+            echo "ERROR: qualified PA32 FPGA product regressed above the <50,000 LUT4 budget: $lut4" >&2
+            exit 1
+          fi
 
       - name: Summarize board-less structural cost
         shell: bash
@@ -103,6 +117,7 @@ jobs:
           summary = {
               "proxy": "Yosys synth_ecp5 mapped netlist + flatten + ltp -noff",
               "top": "AetherCoreV2FpgaSoC",
+              "implemented_paddr_bits": int(os.environ["PRODUCT_IMPLEMENTED_PADDR_BITS"]),
               "cells": n("cells"),
               "lut4": n("lut4"),
               "ff": n("ff"),
@@ -116,7 +131,7 @@ jobs:
           print(json.dumps(summary, indent=2))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("## AetherSoC board-neutral FPGA synthesis proxy\n\n")
-              for key in ("cells", "lut4", "ff", "bram_dp16kd", "distributed_ram_dpr16x4", "mult18x18d", "logic_depth"):
+              for key in ("implemented_paddr_bits", "cells", "lut4", "ff", "bram_dp16kd", "distributed_ram_dpr16x4", "mult18x18d", "logic_depth"):
                   f.write(f"- {key}: {summary[key]}\n")
               f.write("\nNo board frequency claim is made without a concrete device, constraints and place-and-route.\n")
           PY
