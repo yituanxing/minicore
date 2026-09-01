@@ -23,12 +23,21 @@ import chisel3.util._
   */
 class TranslationTlb(
     val geometry: PageTableGeometry,
-    val entries: Int = 8
+    val entries: Int = 8,
+    val implementedPaddrBits: Int = -1
 ) extends Module {
   require(entries >= 2 && isPow2(entries), s"translation TLB entries must be a power of two >= 2, got $entries")
 
   private val Xlen = geometry.xlen
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
+  private val StoredPaddrBits =
+    if (implementedPaddrBits > 0) math.min(implementedPaddrBits, PaddrBits) else PaddrBits
+  private val MaxPageBits =
+    geometry.pageOffsetBits + (geometry.levels - 1) * geometry.vpnBitsPerLevel
+  require(
+    StoredPaddrBits > MaxPageBits,
+    s"stored TLB PA width must exceed largest page offset ($MaxPageBits), got $StoredPaddrBits"
+  )
   private val PpnBits = geometry.ppnBits
   private val VpnBits = geometry.vpnBits
   private val LevelBits = math.max(1, log2Ceil(geometry.levels))
@@ -38,7 +47,7 @@ class TranslationTlb(
     val valid = Bool()
     val rootPpn = UInt(PpnBits.W)
     val vpn = UInt(VpnBits.W)
-    val physicalBase = UInt(PaddrBits.W)
+    val physicalBase = UInt(StoredPaddrBits.W)
     val privilege = UInt(2.W)
     val write = Bool()
     val execute = Bool()
@@ -116,10 +125,11 @@ class TranslationTlb(
   for (leaf <- 0 until geometry.levels) {
     val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
     when(hitEntry.leafLevel === leaf.U) {
-      hitPhysicalAddress := Cat(
-        hitEntry.physicalBase(PaddrBits - 1, pageBits),
+      val storedPhysicalAddress = Cat(
+        hitEntry.physicalBase(StoredPaddrBits - 1, pageBits),
         io.virtualAddress(pageBits - 1, 0)
       )
+      hitPhysicalAddress := storedPhysicalAddress.pad(PaddrBits)
     }
   }
   io.physicalAddress := Mux(io.hit, hitPhysicalAddress, 0.U)
@@ -128,12 +138,20 @@ class TranslationTlb(
   val hasInvalid = invalidMask.orR
   val refillIndex = Mux(hasInvalid, PriorityEncoder(invalidMask), replacement)
 
-  val refillBase = WireDefault(0.U(PaddrBits.W))
+  // A narrower platform never caches an architectural PA that would be
+  // rejected at the implementation boundary.  Such a translation remains a
+  // miss, so the walker response reaches the existing fail-closed range check
+  // without ever aliasing into the compact TLB payload.
+  val refillOutOfRange =
+    if (StoredPaddrBits >= PaddrBits) false.B
+    else io.refillPhysicalAddress(PaddrBits - 1, StoredPaddrBits).orR
+
+  val refillBase = WireDefault(0.U(StoredPaddrBits.W))
   for (leaf <- 0 until geometry.levels) {
     val pageBits = geometry.pageOffsetBits + leaf * geometry.vpnBitsPerLevel
     when(io.refillLeafLevel === leaf.U) {
       refillBase := Cat(
-        io.refillPhysicalAddress(PaddrBits - 1, pageBits),
+        io.refillPhysicalAddress(StoredPaddrBits - 1, pageBits),
         0.U(pageBits.W)
       )
     }
@@ -142,7 +160,7 @@ class TranslationTlb(
   when(io.flush) {
     for (i <- 0 until entries) table(i).valid := false.B
     replacement := 0.U
-  }.elsewhen(io.refillValid) {
+  }.elsewhen(io.refillValid && !refillOutOfRange) {
     val entry = table(refillIndex)
     entry.valid := true.B
     entry.rootPpn := io.refillRootPpn

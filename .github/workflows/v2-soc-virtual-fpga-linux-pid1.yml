@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
+      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
+      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
+      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
+      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
+      - 'src/main/scala/aethercore/config/CoreConfig.scala'
       - 'src/main/scala/aethercore/soc/phy/**'
       - 'src/main/scala/aethercore/sim/AetherCoreV2VirtualFpgaBoardSimTop.scala'
       - 'src/main/scala/aethercore/sim/AetherSoCAxi4HostMemoryAdapter.scala'
@@ -30,7 +36,7 @@ jobs:
     uses: ./.github/workflows/hosted-verilator-cache.yml
 
   qualify:
-    name: Boot real PID1 through virtual FPGA pins
+    name: Boot real PID1 through PA32 virtual FPGA pins
     needs: verilator-tool
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -115,7 +121,7 @@ jobs:
           python3 -m unittest tests_py.test_v2_virtual_fpga_board -v
           ./mill aethercore.test.testOnly aethercore.AetherFractionalTickGeneratorSpec
           ./mill aethercore.test.testOnly aethercore.AetherUart8N1PhySpec
-          ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardRV64 \
+          ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
             --target-dir build/v2-virtual-fpga-linux-pid1-smoke
           find build/v2-virtual-fpga-linux-pid1-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
 
@@ -144,7 +150,7 @@ jobs:
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$HOME/.cache/aethercore/v2-virtual-fpga-linux-pid1/$TARGET_SHA" \
             TOP=AetherCoreV2OpenSbiRV64SimTop \
-            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardRV64 \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
             FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=950000000 \

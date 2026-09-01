@@ -23,7 +23,8 @@ import aethercore.soc.phy.{AetherFractionalTickGenerator, AetherUart8N1Phy}
   */
 class AetherCoreV2VirtualFpgaBoardSimTop(
     val virtualClockFrequencyHz: Long = 20_000_000L,
-    val powerOnResetCycles: Int = 16
+    val powerOnResetCycles: Int = 16,
+    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits
 ) extends Module {
   override def desiredName: String = "AetherCoreV2OpenSbiRV64SimTop"
 
@@ -31,11 +32,14 @@ class AetherCoreV2VirtualFpgaBoardSimTop(
   require(powerOnResetCycles >= 1)
 
   private val xlen = 64
-  private val paddrBits = 56
+  private val paddrBits = implementedPaddrBits
   private val busDataBits = 64
   private val busBytes = busDataBits / 8
+  require(paddrBits >= 32 && paddrBits <= 56, s"virtual FPGA implemented PA must be 32..56, got $paddrBits")
   private val boardSpec =
-    AetherSoCBoardSpec.qualifiedLinux(CoreProfiles.rv64imasuSv39PmpSoftware.platform)
+    AetherSoCBoardSpec.qualifiedLinux(
+      CoreProfiles.rv64imasuSv39PmpSoftware.platform.copy(paddrBits = paddrBits)
+    )
 
   val io = IO(new Bundle {
     // Historical host RAM seams retained only outside the virtual DDR model.
@@ -122,7 +126,7 @@ class AetherCoreV2VirtualFpgaBoardSimTop(
   io.timebaseTick := timebaseTickGenerator.io.tick
 
   private val fpga = withReset(boardReset) {
-    Module(new AetherCoreV2FpgaSoC)
+    Module(new AetherCoreV2FpgaSoC(implementedPaddrBits = paddrBits))
   }
   private val virtualDdr = withReset(boardReset) {
     Module(new AetherSoCAxi4HostMemoryAdapter(

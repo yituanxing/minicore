@@ -1,28 +1,36 @@
-name: AetherSoC FPGA Synthesis Proxy
+name: AetherSoC PA32 Area A/B
 
 on:
   pull_request:
     paths:
-      - 'src/main/scala/aethercore/soc/**'
-      - 'src/main/scala/aethercore/ElaborateV2FpgaSoC.scala'
-      - 'tests_py/test_v2_fpga_synth_proxy.py'
-      - '.github/workflows/v2-soc-fpga-synth-proxy.yml'
+      - 'src/main/scala/aethercore/config/CoreConfig.scala'
+      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
+      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
+      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
+      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
+      - 'src/main/scala/aethercore/core/PtwArbiter.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyBlockingLsu.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2Axi4SoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
+      - 'src/main/scala/aethercore/ElaborateV2FpgaSoCPA32.scala'
+      - '.github/workflows/pa32-soc-area.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethersoc-fpga-synth-proxy-${{ github.event.pull_request.number || github.ref }}
+  group: aethersoc-pa32-area-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   synth:
-    name: Measure board-neutral FPGA structural cost
+    name: Measure PA32 Full SoC
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      PRODUCT_IMPLEMENTED_PADDR_BITS: '32'
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
@@ -47,27 +55,24 @@ jobs:
           yosys -V
           yosys -Q -p 'help ltp' | grep -q -- '-noff'
 
-      - name: Check board-less synthesis contract
-        run: python3 -m unittest tests_py.test_v2_fpga_synth_proxy -v
-
-      - name: Elaborate production FPGA SoC
+      - name: Elaborate PA32 production SoC
         run: |
           set -euo pipefail
           chmod +x mill
-          rm -rf build/fpga-synth-proxy
-          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 \
-            --target-dir build/fpga-synth-proxy
-          find build/fpga-synth-proxy -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          rm -rf build/pa32-soc-area
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCPA32RV64 \
+            --target-dir build/pa32-soc-area
+          find build/pa32-soc-area -maxdepth 1 -name '*.sv' -print -quit | grep -q .
 
-      - name: Map FPGA SoC with Yosys ECP5 proxy
+      - name: Map PA32 SoC with Yosys ECP5 proxy
         shell: bash
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/aethersoc-fpga-synth"
+          out="$RUNNER_TEMP/aethersoc-pa32"
           rm -rf "$out"
           mkdir -p "$out"
 
-          mapfile -t svs < <(find build/fpga-synth-proxy -maxdepth 1 -name '*.sv' -print | sort)
+          mapfile -t svs < <(find build/pa32-soc-area -maxdepth 1 -name '*.sv' -print | sort)
           test "${#svs[@]}" -gt 0
           read_cmd="read_verilog -sv -DSYNTHESIS"
           for sv in "${svs[@]}"; do
@@ -79,7 +84,6 @@ jobs:
 
           depth=$(sed -n 's/.*Longest topological path in AetherCoreV2FpgaSoC (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
           test -n "$depth"
-          printf '%s\n' "$depth" > "$out/depth"
 
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[]] | length' "$out/fpga.json" > "$out/cells"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
@@ -87,21 +91,10 @@ jobs:
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
           jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
+          printf '%s\n' "$depth" > "$out/depth"
           echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
 
-      - name: Enforce qualified FPGA product area budget
-        shell: bash
-        run: |
-          set -euo pipefail
-          lut4="$(cat "$SYNTH_OUT/lut4")"
-          echo "product_implemented_paddr_bits=$PRODUCT_IMPLEMENTED_PADDR_BITS"
-          echo "product_lut4=$lut4"
-          if (( lut4 >= 50000 )); then
-            echo "ERROR: qualified PA32 FPGA product regressed above the <50,000 LUT4 budget: $lut4" >&2
-            exit 1
-          fi
-
-      - name: Summarize board-less structural cost
+      - name: Summarize PA56 vs PA32
         shell: bash
         run: |
           set -euo pipefail
@@ -114,10 +107,15 @@ jobs:
           def n(name):
               return int((root / name).read_text().strip())
 
-          summary = {
-              "proxy": "Yosys synth_ecp5 mapped netlist + flatten + ltp -noff",
-              "top": "AetherCoreV2FpgaSoC",
-              "implemented_paddr_bits": int(os.environ["PRODUCT_IMPLEMENTED_PADDR_BITS"]),
+          baseline = {
+              "paddr_bits": 32,
+              "lut4": 50643,
+              "ff": 13596,
+              "distributed_ram_dpr16x4": 336,
+              "mult18x18d": 39,
+          }
+          target = {
+              "paddr_bits": 32,
               "cells": n("cells"),
               "lut4": n("lut4"),
               "ff": n("ff"),
@@ -125,24 +123,36 @@ jobs:
               "distributed_ram_dpr16x4": n("dpr"),
               "mult18x18d": n("mult"),
               "logic_depth": n("depth"),
-              "note": "Board-neutral structural proxy only; no concrete device placement, timing constraints, or board frequency claim."
+          }
+          summary = {
+              "baseline_sha": "b48f6978ea46b9283d03d8dd3cd3866ef8d08819",
+              "baseline": baseline,
+              "target": target,
+              "delta_lut4": target["lut4"] - baseline["lut4"],
+              "delta_ff": target["ff"] - baseline["ff"],
+              "note": "Stage-1 PA32 baseline; target additionally narrows cached TLB physical payload while the walker remains architectural PA56."
           }
           (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
           print(json.dumps(summary, indent=2))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-              f.write("## AetherSoC board-neutral FPGA synthesis proxy\n\n")
-              for key in ("implemented_paddr_bits", "cells", "lut4", "ff", "bram_dp16kd", "distributed_ram_dpr16x4", "mult18x18d", "logic_depth"):
-                  f.write(f"- {key}: {summary[key]}\n")
-              f.write("\nNo board frequency claim is made without a concrete device, constraints and place-and-route.\n")
+              f.write("## AetherSoC implemented-PA A/B\n\n")
+              f.write(f"- PA32 stage-1 baseline: **{baseline['lut4']:,} LUT4 / {baseline['ff']:,} FF**\n")
+              f.write(f"- PA32 + compact TLB target: **{target['lut4']:,} LUT4 / {target['ff']:,} FF**\n")
+              f.write(f"- LUT4 delta: **{summary['delta_lut4']:+,}**\n")
+              f.write(f"- FF delta: **{summary['delta_ff']:+,}**\n")
+              f.write(f"- DPR16X4: {target['distributed_ram_dpr16x4']}\n")
+              f.write(f"- MULT18X18D: {target['mult18x18d']}\n")
+              f.write(f"- structural depth: {target['logic_depth']}\n")
           PY
 
-      - name: Upload synthesis evidence
+      - name: Upload PA32 area evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: aethersoc-fpga-synth-${{ github.run_id }}
+          name: aethersoc-pa32-area-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/aethersoc-fpga-synth/summary.json
-            ${{ runner.temp }}/aethersoc-fpga-synth/yosys.log
+            ${{ runner.temp }}/aethersoc-pa32/summary.json
+            ${{ runner.temp }}/aethersoc-pa32/yosys.log

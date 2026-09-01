@@ -95,6 +95,12 @@ final case class AetherSoCBoardSpec(
 }
 
 object AetherSoCBoardSpec {
+  // The qualified FPGA product implements a 32-bit physical address seam.
+  // Sv39 remains architecturally PA56 inside the translation machinery; any
+  // architectural PA outside this implemented window fails closed before it
+  // can reach the board-facing memory fabric.
+  val FpgaImplementedPaddrBits: Int = 32
+
   def qualifiedLinux(platform: PlatformConfig): AetherSoCBoardSpec =
     AetherSoCBoardSpec(
       addressMap = AetherSoCAddressMap.qualifiedLinux(platform),

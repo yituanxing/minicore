@@ -330,18 +330,30 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
       privilegeModes = Set('M', 'S'),
       virtualMemoryModes = Set("Sv32")
     )
+    val narrowedSv32Platform = PlatformConfig(
+      resetVector = BigInt("80000000", 16),
+      paddrBits = 32,
+      busDataBits = 32,
+      uartAddress = BigInt("10000000", 16),
+      exitAddress = BigInt("10000008", 16),
+      mtimeAddress = BigInt("0200bff8", 16),
+      mtimecmpAddress = BigInt("02004000", 16)
+    )
+    CoreConfig("supported-sv32-pa32", sv32Isa, narrowedSv32Platform)
+      .platform.paddrBits shouldBe 32
+
     an[IllegalArgumentException] should be thrownBy
       CoreConfig(
-        "bad-sv32-pa",
+        "bad-sv32-pa11",
         sv32Isa,
         PlatformConfig(
-          resetVector = BigInt("80000000", 16),
-          paddrBits = 32,
+          resetVector = 0,
+          paddrBits = 11,
           busDataBits = 32,
-          uartAddress = BigInt("10000000", 16),
-          exitAddress = BigInt("10000008", 16),
-          mtimeAddress = BigInt("0200bff8", 16),
-          mtimecmpAddress = BigInt("02004000", 16)
+          uartAddress = 0x100,
+          exitAddress = 0x108,
+          mtimeAddress = 0x200,
+          mtimecmpAddress = 0x208
         )
       )
 

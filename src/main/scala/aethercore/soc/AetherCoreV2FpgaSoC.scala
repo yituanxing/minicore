@@ -16,9 +16,11 @@ import aethercore.soc.phy.AetherUart8N1Phy
   * block into the 8N1 PHY, so Linux/OpenSBI baud programming controls the
   * physical serial line rather than only simulation metadata.
   */
-class AetherCoreV2FpgaSoC extends Module {
+class AetherCoreV2FpgaSoC(
+    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits
+) extends Module {
   private val Xlen = 64
-  private val PaddrBits = 56
+  private val PaddrBits = implementedPaddrBits
   private val DataBits = 64
   private val TxnIdBits = 4
 
@@ -51,7 +53,9 @@ class AetherCoreV2FpgaSoC extends Module {
     val halted = Output(Bool())
   })
 
-  val soc = Module(new AetherCoreV2Axi4SoC)
+  val soc = Module(new AetherCoreV2Axi4SoC(
+    implementedPaddrBits = implementedPaddrBits
+  ))
   val uartPhy = Module(new AetherUart8N1Phy)
 
   io.axi.aw.valid := soc.io.axi.aw.valid

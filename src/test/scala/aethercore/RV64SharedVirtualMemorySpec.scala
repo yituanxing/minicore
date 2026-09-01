@@ -305,6 +305,31 @@ class RV64SharedVirtualMemorySpec extends AnyFlatSpec with Matchers with ChiselS
     dut.io.lookupValid.poke(true.B)
   }
 
+  it should "store only in-range PA32 translations in the compact Sv39 TLB" in {
+    val geometry = PageTableGeometry.Sv39
+    simulate(new TranslationTlb(geometry, entries = 4, implementedPaddrBits = 32)) { dut =>
+      initializeTlb(dut)
+      val root = BigInt("10000", 16)
+      val lowVa = BigInt("0000001234500456", 16)
+      val lowPaBase = BigInt("81234000", 16)
+
+      refillTlb(dut, lowVa, lowPaBase, root, leafLevel = 0)
+      lookupTlb(dut, lowVa, root)
+      dut.io.hit.expect(true.B)
+      dut.io.physicalAddress.expect((lowPaBase | (lowVa & 0xfff)).U)
+
+      dut.io.lookupValid.poke(false.B)
+      val highVa = lowVa + BigInt("2000", 16)
+      val highPa = (BigInt(1) << 32) | BigInt("81236000", 16)
+      refillTlb(dut, highVa, highPa, root, leafLevel = 0)
+      lookupTlb(dut, highVa, root)
+
+      // High architectural PAs must stay misses rather than truncating to PA32
+      // and aliasing an otherwise valid low physical translation.
+      dut.io.hit.expect(false.B)
+    }
+  }
+
   it should "reconstruct Sv39 gigapage and Sv48 terapage offsets from one shared TLB" in {
     val sv39 = PageTableGeometry.Sv39
     simulate(new TranslationTlb(sv39, entries = 4)) { dut =>

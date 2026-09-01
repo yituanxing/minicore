@@ -18,7 +18,8 @@ class AetherCoreV2LinuxSoC(
     val enableInstructionBackpressure: Boolean = false,
     val exposeExternalMemoryAttributes: Boolean = false,
     val externalPhysicalSeams: Boolean = false,
-    val externalSemanticMemory: Boolean = false
+    val externalSemanticMemory: Boolean = false,
+    val implementedPaddrBits: Int = 56
 ) extends Module {
   private val config = CoreProfiles.rv64imasuSv39PmpSoftware.copy(
     name = "rv64imasu-sv39-pmp-opensbi-v2",
@@ -28,7 +29,8 @@ class AetherCoreV2LinuxSoC(
       timeCounter = true
     ),
     platform = CoreProfiles.rv64imasuSv39PmpSoftware.platform.copy(
-      resetVector = AetherSoCAddressMap.QualifiedBootRomBase
+      resetVector = AetherSoCAddressMap.QualifiedBootRomBase,
+      paddrBits = implementedPaddrBits
     )
   )
   private val geometry = PageTableGeometry.Sv39

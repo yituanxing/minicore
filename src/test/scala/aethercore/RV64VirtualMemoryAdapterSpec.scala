@@ -160,6 +160,107 @@ class RV64VirtualMemoryAdapterSpec extends AnyFlatSpec with Matchers with Chisel
     }
   }
 
+  it should "fault a PA32 instruction walk whose root PPN is outside the implemented domain" in {
+    simulate(new InstructionFetchAdapter(PageTableGeometry.Sv39, paddrBits = 32, tlbEntries = 4)) { dut =>
+      dut.io.requestValid.poke(false.B)
+      dut.io.kill.poke(false.B)
+      dut.io.flush.poke(false.B)
+      dut.io.virtualAddress.poke(BigInt("0000002040302020", 16).U)
+      dut.io.privilege.poke(PrivilegeMode.Supervisor.U)
+      dut.io.satpTranslationEnabled.poke(true.B)
+      // PPN 2^20 starts at PA 0x1_0000_0000, immediately outside PA32.
+      dut.io.satpRootPpn.poke((BigInt(1) << 20).U)
+      dut.io.mxr.poke(false.B)
+      dut.io.pteReady.poke(false.B)
+      dut.io.pteData.poke(0.U)
+      dut.io.pteFault.poke(false.B)
+      dut.io.responseReady.poke(false.B)
+
+      dut.io.requestValid.poke(true.B)
+      dut.io.requestReady.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+
+      // The architectural walker is live internally, but the out-of-range PTE
+      // address must never be externalized on the implemented PA32 bus.
+      dut.io.pteValid.expect(false.B)
+      dut.clock.step()
+
+      dut.io.responseValid.expect(true.B)
+      dut.io.pageFault.expect(false.B)
+      dut.io.accessFault.expect(true.B)
+      dut.io.responseReady.poke(true.B)
+      dut.clock.step()
+    }
+  }
+
+  it should "fault a PA32 data translation instead of aliasing a high Sv39 leaf" in {
+    simulate(new DataPathAdapter(PageTableGeometry.Sv39, paddrBits = 32, tlbEntries = 4)) { dut =>
+      dut.io.requestValid.poke(false.B)
+      dut.io.flush.poke(false.B)
+      dut.io.virtualAddress.poke(0.U)
+      dut.io.privilege.poke(PrivilegeMode.Supervisor.U)
+      dut.io.translateWrite.poke(false.B)
+      dut.io.write.poke(false.B)
+      dut.io.wdata.poke(0.U)
+      dut.io.wmask.poke(0.U)
+      dut.io.size.poke(MemSize.DWord)
+      dut.io.satpTranslationEnabled.poke(true.B)
+      dut.io.satpRootPpn.poke(0.U)
+      dut.io.sum.poke(false.B)
+      dut.io.mxr.poke(false.B)
+      dut.io.pteReady.poke(false.B)
+      dut.io.pteData.poke(0.U)
+      dut.io.pteFault.poke(false.B)
+      dut.io.dataReady.poke(false.B)
+      dut.io.dataRdata.poke(0.U)
+      dut.io.dataFault.poke(false.B)
+
+      val va = BigInt("0000002040302040", 16)
+      val root = BigInt("20000", 16)
+      val level1 = BigInt("21000", 16)
+      val level0 = BigInt("22000", 16)
+      val highLeaf = (BigInt(1) << 20) | BigInt("123", 16)
+      val vpn2 = (va >> 30) & 0x1ff
+      val vpn1 = (va >> 21) & 0x1ff
+      val vpn0 = (va >> 12) & 0x1ff
+
+      dut.io.virtualAddress.poke(va.U)
+      dut.io.satpRootPpn.poke(root.U)
+      dut.io.requestValid.poke(true.B)
+      dut.clock.step()
+
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteAddress.expect(((root << 12) + (vpn2 << 3)).U)
+      dut.io.pteData.poke(pte(level1).U)
+      dut.io.pteReady.poke(true.B)
+      dut.clock.step()
+      dut.io.pteReady.poke(false.B)
+
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteAddress.expect(((level1 << 12) + (vpn1 << 3)).U)
+      dut.io.pteData.poke(pte(level0).U)
+      dut.io.pteReady.poke(true.B)
+      dut.clock.step()
+      dut.io.pteReady.poke(false.B)
+
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteAddress.expect(((level0 << 12) + (vpn0 << 3)).U)
+      dut.io.pteData.poke(pte(highLeaf, read = true, accessed = true).U)
+      dut.io.pteReady.poke(true.B)
+      dut.clock.step()
+      dut.io.pteReady.poke(false.B)
+
+      // Low 32 bits of the high leaf must never appear as a real memory request.
+      dut.io.dataValid.expect(false.B)
+      dut.io.requestComplete.expect(true.B)
+      dut.io.pageFault.expect(false.B)
+      dut.io.accessFault.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+    }
+  }
+
   it should "arbitrate full 64-bit PTE responses with data walk priority" in {
     simulate(new PtwArbiter(PageTableGeometry.Sv39, paddrBits = 56)) { dut =>
       val dataAddress = BigInt("00000123456000", 16)

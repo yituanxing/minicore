@@ -371,6 +371,9 @@ jobs:
             aethercore.Sv32InstructionFetchCoreSpec \
             aethercore.Sv32TlbSpec \
             aethercore.Sv32TranslationUnitTlbSpec \
+            aethercore.RV64SharedVirtualMemorySpec \
+            aethercore.TranslationUnitSpec \
+            aethercore.RV64VirtualMemoryAdapterSpec \
             aethercore.Sv32SfenceCoreSpec \
             aethercore.Sv32PageFaultDelegationSpec \
             aethercore.MachineCsrFileSpec \

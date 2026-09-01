@@ -12,3 +12,14 @@ object ElaborateV2VirtualFpgaBoardRV64 extends App {
     )
   )
 }
+
+
+object ElaborateV2VirtualFpgaBoardPA32RV64 extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreV2VirtualFpgaBoardSimTop(implementedPaddrBits = 32),
+    args,
+    Array(
+      "--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket"
+    )
+  )
+}

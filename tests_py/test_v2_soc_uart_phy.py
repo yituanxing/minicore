@@ -48,7 +48,7 @@ class V2SoCUartPhyContract(unittest.TestCase):
 
     def test_board_neutral_fpga_top_composes_axi_soc_and_uart_phy(self):
         source = FPGA.read_text(encoding="utf-8")
-        self.assertIn("class AetherCoreV2FpgaSoC extends Module", source)
+        self.assertIn("class AetherCoreV2FpgaSoC(", source)
         self.assertIn("new AetherCoreV2Axi4SoC", source)
         self.assertIn("new AetherUart8N1Phy", source)
         self.assertIn("uartPhy.io.baudDivisor := soc.io.uartBaudDivisor", source)
