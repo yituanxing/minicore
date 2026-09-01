@@ -120,6 +120,44 @@ class AetherPlicSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+
+  it should "specialize state to physically wired sources without renumbering IRQ IDs" in {
+    val uartSourceMask = BigInt(1) << 9
+    simulate(new AetherPlic(
+      sourceCount = 16,
+      addressBits = 22,
+      implementedSourceMask = Some(uartSourceMask)
+    )) { dut =>
+      initialize(dut)
+
+      // Unwired source 5 remains legal MMIO space but is WARL-zero.
+      write(dut, AetherPlicMap.priority(5), 3)
+      read(dut, AetherPlicMap.priority(5)) shouldBe 0
+
+      // Wired UART source 10 retains its architectural priority and ID.
+      write(dut, AetherPlicMap.priority(10), 3)
+      read(dut, AetherPlicMap.priority(10)) shouldBe 3
+
+      write(
+        dut,
+        AetherPlicMap.SupervisorEnable,
+        (BigInt(1) << 5) | (BigInt(1) << 10)
+      )
+      read(dut, AetherPlicMap.SupervisorEnable) shouldBe (BigInt(1) << 10)
+
+      // An unwired input bit cannot become pending/interrupting.
+      dut.io.sources.poke((BigInt(1) << 4).U)
+      dut.clock.step()
+      dut.io.interrupt.expect(false.B)
+
+      // The physical UART input still claims as source ID 10.
+      dut.io.sources.poke((BigInt(1) << 9).U)
+      dut.clock.step()
+      dut.io.interrupt.expect(true.B)
+      read(dut, AetherPlicMap.SupervisorClaimComplete) shouldBe 10
+    }
+  }
+
   it should "retain the qualified QEMU-virt supervisor context and absent machine aperture" in {
     simulate(new AetherPlic(sourceCount = 52)) { dut =>
       initialize(dut)
