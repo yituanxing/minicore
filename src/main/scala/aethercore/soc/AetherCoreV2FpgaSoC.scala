@@ -22,7 +22,7 @@ class AetherCoreV2FpgaSoC(
   private val Xlen = 64
   private val PaddrBits = implementedPaddrBits
   private val DataBits = 64
-  private val TxnIdBits = 4
+  private val TxnIdBits = AetherCoreV2UnifiedMemorySoC.QualifiedCompactTxnIdBits
 
   val io = IO(new Bundle {
     val axi = new Axi4MasterIO(PaddrBits, DataBits, TxnIdBits)
