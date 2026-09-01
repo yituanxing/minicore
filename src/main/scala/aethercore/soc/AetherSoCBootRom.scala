@@ -22,7 +22,8 @@ class AetherSoCBootRom(
     val dataBits: Int,
     val txnIdBits: Int,
     val baseAddress: BigInt,
-    val apertureBytes: BigInt
+    val apertureBytes: BigInt,
+    val requestAlreadyDecoded: Boolean = false
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 BootROM uses the RV64 memory beat")
   require(txnIdBits > 0)
