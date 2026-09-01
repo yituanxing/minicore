@@ -166,7 +166,7 @@ class AetherSoCPlatformFabric(
 
   private val plic = Module(new AetherPlic(
     sourceCount = plicSourceCount,
-    addressBits = 24,
+    addressBits = 22,
     enableBase = AetherPlicMap.SupervisorEnable,
     thresholdOffset = AetherPlicMap.SupervisorThreshold,
     claimCompleteOffset = AetherPlicMap.SupervisorClaimComplete
@@ -176,7 +176,7 @@ class AetherSoCPlatformFabric(
     (uart.io.interrupt.asUInt << (uartPlicSourceId - 1)).pad(plicSourceCount)
   plic.io.request := pendingPlic
   plic.io.write := pendingWrite
-  plic.io.address := (pending.paddr - plicBase)(23, 0)
+  plic.io.address := (pending.paddr - plicBase)(21, 0)
   plic.io.wdata := pending.wdata(31, 0)
   plic.io.wmask := pending.wmask(3, 0)
   plic.io.complete := plicComplete

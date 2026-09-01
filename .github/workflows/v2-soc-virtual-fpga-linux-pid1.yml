@@ -3,6 +3,10 @@ name: AetherSoC Virtual FPGA Linux PID1
 on:
   pull_request:
     paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCDts.scala'
+      - 'src/main/scala/aethercore/soc/peripheral/AetherPlic.scala'
       - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
       - 'src/main/scala/aethercore/core/TranslationTlb.scala'
       - 'src/main/scala/aethercore/core/TranslationUnit.scala'

@@ -100,11 +100,12 @@ object AetherSoCBoardSpec {
   // architectural PA outside this implemented window fails closed before it
   // can reach the board-facing memory fabric.
   val FpgaImplementedPaddrBits: Int = 32
+  val QualifiedPlicSourceCount: Int = 16
 
   def qualifiedLinux(platform: PlatformConfig): AetherSoCBoardSpec =
     AetherSoCBoardSpec(
       addressMap = AetherSoCAddressMap.qualifiedLinux(platform),
-      plicSourceCount = 52,
+      plicSourceCount = QualifiedPlicSourceCount,
       uartPlicSourceId = 10,
       supervisorExternalInterruptId = 9,
       machineTimerInterruptId = 7,

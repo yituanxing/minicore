@@ -3,6 +3,10 @@ name: AetherCore V2 P8 Linux Performance Gate
 on:
   pull_request:
     paths:
+      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCDts.scala'
+      - 'src/main/scala/aethercore/soc/peripheral/AetherPlic.scala'
       - '.github/workflows/v2-p8-linux-performance.yml'
       - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
