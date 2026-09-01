@@ -16,13 +16,20 @@ import chisel3.util._
   */
 class MachinePlic(
     val sourceCount: Int = 8,
-    val priorityBits: Int = 3
+    val priorityBits: Int = 3,
+    val implementedSourceMask: Option[BigInt] = None
 ) extends Module {
   require(sourceCount > 0, s"PLIC must expose at least one source, got $sourceCount")
   require(priorityBits > 0, s"PLIC priority width must be positive, got $priorityBits")
 
+  private val activeSourceMask =
+    implementedSourceMask.getOrElse((BigInt(1) << sourceCount) - 1)
+  require(activeSourceMask >= 0 && (activeSourceMask >> sourceCount) == 0,
+    s"PLIC implemented-source mask 0x${activeSourceMask.toString(16)} exceeds sourceCount=$sourceCount")
+
   private val sourceIdBits = log2Ceil(sourceCount + 1)
-  private val sourceIndexBits = math.max(1, log2Ceil(sourceCount))
+  private def sourceImplemented(index: Int): Boolean =
+    ((activeSourceMask >> index) & 1) != 0
 
   val io = IO(new Bundle {
     val sources = Input(UInt(sourceCount.W))
@@ -51,25 +58,40 @@ class MachinePlic(
     val inService = Output(UInt(sourceCount.W))
   })
 
-  val priorities = RegInit(VecInit(Seq.fill(sourceCount)(0.U(priorityBits.W))))
+  val priorities = Wire(Vec(sourceCount, UInt(priorityBits.W)))
+  for (index <- 0 until sourceCount) {
+    if (sourceImplemented(index)) {
+      val priority = RegInit(0.U(priorityBits.W))
+      when(io.priorityWriteEnable && io.priorityWriteId === (index + 1).U) {
+        priority := io.priorityWriteData
+      }
+      priorities(index) := priority
+    } else {
+      priorities(index) := 0.U
+    }
+  }
+
   val enabled = RegInit(0.U(sourceCount.W))
   val threshold = RegInit(0.U(priorityBits.W))
   val inService = RegInit(0.U(sourceCount.W))
+  private val activeMask = activeSourceMask.U(sourceCount.W)
 
-  val pending = io.sources & ~inService
+  val pending = io.sources & activeMask & ~inService
 
   var selectedId = 0.U(sourceIdBits.W)
   var selectedPriority = 0.U(priorityBits.W)
   for (index <- 0 until sourceCount) {
-    val priority = priorities(index)
-    val eligible = pending(index) && enabled(index) &&
-      priority =/= 0.U && priority > threshold
+    if (sourceImplemented(index)) {
+      val priority = priorities(index)
+      val eligible = pending(index) && enabled(index) &&
+        priority =/= 0.U && priority > threshold
 
-    // Sources are visited in ascending ID order. Equal priority therefore keeps
-    // the earlier (lower numbered) source, matching the PLIC tie-break rule.
-    val wins = eligible && priority > selectedPriority
-    selectedId = Mux(wins, (index + 1).U(sourceIdBits.W), selectedId)
-    selectedPriority = Mux(wins, priority, selectedPriority)
+      // Sources are visited in ascending ID order. Equal priority therefore keeps
+      // the earlier (lower numbered) source, matching the PLIC tie-break rule.
+      val wins = eligible && priority > selectedPriority
+      selectedId = Mux(wins, (index + 1).U(sourceIdBits.W), selectedId)
+      selectedPriority = Mux(wins, priority, selectedPriority)
+    }
   }
 
   io.claim := selectedId
@@ -80,15 +102,8 @@ class MachinePlic(
   io.threshold := threshold
   io.inService := inService
 
-  val priorityWriteIdValid = io.priorityWriteId > 0.U &&
-    io.priorityWriteId <= sourceCount.U
-  val priorityWriteIndex = (io.priorityWriteId - 1.U)(sourceIndexBits - 1, 0)
-  when(io.priorityWriteEnable && priorityWriteIdValid) {
-    priorities(priorityWriteIndex) := io.priorityWriteData
-  }
-
   when(io.enableWrite) {
-    enabled := io.enableWriteData
+    enabled := io.enableWriteData & activeMask
   }
 
   when(io.thresholdWrite) {
@@ -96,20 +111,24 @@ class MachinePlic(
   }
 
   val claimMask = WireDefault(0.U(sourceCount.W))
-  when(io.claimRead && selectedId =/= 0.U) {
-    claimMask := (1.U(sourceCount.W) << (selectedId - 1.U))(sourceCount - 1, 0)
-  }
-
-  val completeIdValid = io.completeId > 0.U && io.completeId <= sourceCount.U
   val completeMask = WireDefault(0.U(sourceCount.W))
-  when(io.completeWrite && completeIdValid) {
-    completeMask := (1.U(sourceCount.W) << (io.completeId - 1.U))(sourceCount - 1, 0)
+  for (index <- 0 until sourceCount) {
+    if (sourceImplemented(index)) {
+      val sourceId = index + 1
+      val sourceMask = (BigInt(1) << index).U(sourceCount.W)
+      when(io.claimRead && selectedId === sourceId.U) {
+        claimMask := sourceMask
+      }
+      when(io.completeWrite && io.completeId === sourceId.U) {
+        completeMask := sourceMask
+      }
+    }
   }
 
   // Completion is applied before a same-cycle claim. Real MMIO accesses are
   // serialized, but this ordering keeps the state deterministic under direct
   // module-level verification as well.
   when(claimMask =/= 0.U || completeMask =/= 0.U) {
-    inService := (inService & ~completeMask) | claimMask
+    inService := ((inService & ~completeMask) | claimMask) & activeMask
   }
 }
