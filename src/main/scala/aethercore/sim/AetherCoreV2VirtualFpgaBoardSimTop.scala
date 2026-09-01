@@ -126,7 +126,10 @@ class AetherCoreV2VirtualFpgaBoardSimTop(
   io.timebaseTick := timebaseTickGenerator.io.tick
 
   private val fpga = withReset(boardReset) {
-    Module(new AetherCoreV2FpgaSoC(implementedPaddrBits = paddrBits))
+    Module(new AetherCoreV2FpgaSoC(
+      implementedPaddrBits = paddrBits,
+      enableCacheCounters = true
+    ))
   }
   private val virtualDdr = withReset(boardReset) {
     Module(new AetherSoCAxi4HostMemoryAdapter(
