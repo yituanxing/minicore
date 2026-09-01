@@ -166,6 +166,7 @@ class AetherSoCPlatformFabric(
 
   private val plic = Module(new AetherPlic(
     sourceCount = plicSourceCount,
+    implementedSourceMask = Some(BigInt(1) << (uartPlicSourceId - 1)),
     addressBits = 22,
     enableBase = AetherPlicMap.SupervisorEnable,
     thresholdOffset = AetherPlicMap.SupervisorThreshold,
