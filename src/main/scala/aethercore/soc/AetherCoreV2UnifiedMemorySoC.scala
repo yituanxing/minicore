@@ -101,7 +101,8 @@ class AetherCoreV2UnifiedMemorySoC(
     dataBits = dataBits,
     txnIdBits = externalTxnIdBits,
     baseAddress = addressMap.bootRomBase,
-    apertureBytes = addressMap.bootRomBytes
+    apertureBytes = addressMap.bootRomBytes,
+    requestAlreadyDecoded = true
   ))
   val responseArbiter = Module(new RRArbiter(
     new AetherMemResponse(dataBits, externalTxnIdBits),
