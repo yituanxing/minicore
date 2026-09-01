@@ -120,6 +120,31 @@ class AetherPlicSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+
+  it should "decode the full priority register range from the source ID bits" in {
+    simulate(new AetherPlic(sourceCount = 16, addressBits = 22)) { dut =>
+      initialize(dut)
+
+      write(dut, AetherPlicMap.priority(1), 1)
+      write(dut, AetherPlicMap.priority(10), 2)
+      write(dut, AetherPlicMap.priority(16), 3)
+
+      read(dut, AetherPlicMap.priority(1)) shouldBe 1
+      read(dut, AetherPlicMap.priority(10)) shouldBe 2
+      read(dut, AetherPlicMap.priority(16)) shouldBe 3
+
+      dut.io.request.poke(true.B)
+      dut.io.write.poke(false.B)
+      dut.io.address.poke(AetherPlicMap.priority(17).U)
+      dut.io.complete.poke(true.B)
+      dut.io.ready.expect(true.B)
+      dut.io.fault.expect(true.B)
+      dut.clock.step()
+      dut.io.request.poke(false.B)
+      dut.io.complete.poke(false.B)
+    }
+  }
+
   it should "retain the qualified QEMU-virt supervisor context and absent machine aperture" in {
     simulate(new AetherPlic(sourceCount = 52)) { dut =>
       initialize(dut)
