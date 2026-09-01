@@ -139,6 +139,61 @@ class AetherSoCAxi4HostMemoryAdapterSpec
     }
   }
 
+
+  it should "decode compact qualified Data PTW and instruction IDs" in {
+    simulate(new AetherSoCAxi4HostMemoryAdapter(
+      idBits = 3,
+      localTxnIdBits = 2,
+      compactQualifiedTxnIds = true
+    )) { dut =>
+      initialize(dut)
+
+      // Compact product IDs: 0/1/2=Data, 3=PTW, 4=instruction.
+      presentRead(dut, id = 2, address = BigInt("80000008", 16))
+      dut.io.axi.ar.ready.expect(true.B)
+      dut.clock.step()
+
+      presentRead(dut, id = 3, address = BigInt("80001000", 16))
+      dut.io.axi.ar.ready.expect(true.B)
+      dut.clock.step()
+
+      presentRead(dut, id = 4, address = BigInt("80002000", 16), size = 2)
+      dut.io.axi.ar.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.axi.ar.valid.poke(false.B)
+
+      dut.io.memValid.expect(true.B)
+      dut.io.memAddr.expect(BigInt("80000008", 16).U)
+      dut.io.ptwValid.expect(true.B)
+      dut.io.imemValid.expect(true.B)
+
+      // Instruction can retire before the other two sources.
+      dut.io.imemInst.poke("h12345678".U)
+      dut.io.axi.r.valid.expect(true.B)
+      dut.io.axi.r.bits.id.expect(4.U)
+      dut.clock.step()
+
+      dut.io.ptwRdata.poke("h0102030405060708".U)
+      dut.io.ptwReady.poke(true.B)
+      dut.io.axi.r.valid.expect(true.B)
+      dut.io.axi.r.bits.id.expect(3.U)
+      dut.clock.step()
+      dut.io.ptwReady.poke(false.B)
+
+      dut.io.memRdata.poke("h8877665544332211".U)
+      dut.io.memReady.poke(true.B)
+      dut.io.axi.r.valid.expect(true.B)
+      dut.io.axi.r.bits.id.expect(2.U)
+      dut.io.axi.r.bits.data.expect("h8877665544332211".U)
+      dut.clock.step()
+      dut.io.memReady.poke(false.B)
+
+      dut.io.memValid.expect(false.B)
+      dut.io.ptwValid.expect(false.B)
+      dut.io.imemValid.expect(false.B)
+    }
+  }
+
   it should "preserve lane placement for an out-of-order narrow response" in {
     simulate(new AetherSoCAxi4HostMemoryAdapter()) { dut =>
       initialize(dut)
