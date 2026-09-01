@@ -15,7 +15,9 @@ import chisel3.util._
   * midpoint, samples eight data bits LSB-first, validates the stop bit, and
   * holds the recovered byte until the register block accepts it.
   */
-class AetherUart8N1Phy extends Module {
+class AetherUart8N1Phy(
+    val countdownTiming: Boolean = false
+) extends Module {
   private val DivisorBits = 16
   private val TickCounterBits = DivisorBits + 4
 
@@ -51,21 +53,41 @@ class AetherUart8N1Phy extends Module {
   io.txReady := !txActive
   io.serialTx := Mux(txActive, txFrame(txBitIndex), true.B)
 
-  when(io.txValid && io.txReady) {
-    txActive := true.B
-    txFrame := Cat(1.U(1.W), io.txByte, 0.U(1.W))
-    txBitIndex := 0.U
-    txTickCount := 0.U
-  }.elsewhen(txActive && io.uartClockTick) {
-    when(txTickCount === ticksPerBit - 1.U) {
-      txTickCount := 0.U
-      when(txBitIndex === 9.U) {
-        txActive := false.B
+  if (countdownTiming) {
+    when(io.txValid && io.txReady) {
+      txActive := true.B
+      txFrame := Cat(1.U(1.W), io.txByte, 0.U(1.W))
+      txBitIndex := 0.U
+      txTickCount := ticksPerBit - 1.U
+    }.elsewhen(txActive && io.uartClockTick) {
+      when(txTickCount === 0.U) {
+        when(txBitIndex === 9.U) {
+          txActive := false.B
+        }.otherwise {
+          txBitIndex := txBitIndex + 1.U
+          txTickCount := ticksPerBit - 1.U
+        }
       }.otherwise {
-        txBitIndex := txBitIndex + 1.U
+        txTickCount := txTickCount - 1.U
       }
-    }.otherwise {
-      txTickCount := txTickCount + 1.U
+    }
+  } else {
+    when(io.txValid && io.txReady) {
+      txActive := true.B
+      txFrame := Cat(1.U(1.W), io.txByte, 0.U(1.W))
+      txBitIndex := 0.U
+      txTickCount := 0.U
+    }.elsewhen(txActive && io.uartClockTick) {
+      when(txTickCount === ticksPerBit - 1.U) {
+        txTickCount := 0.U
+        when(txBitIndex === 9.U) {
+          txActive := false.B
+        }.otherwise {
+          txBitIndex := txBitIndex + 1.U
+        }
+      }.otherwise {
+        txTickCount := txTickCount + 1.U
+      }
     }
   }
 
@@ -92,62 +114,126 @@ class AetherUart8N1Phy extends Module {
     rxPendingValid := false.B
   }
 
-  switch(rxState) {
-    is(sIdle) {
-      rxTickCount := 0.U
-      when(!rxPendingValid && !rxSync) {
-        rxState := sStart
+  if (countdownTiming) {
+    switch(rxState) {
+      is(sIdle) {
         rxTickCount := 0.U
-        rxBitIndex := 0.U
-        rxShift := 0.U
+        when(!rxPendingValid && !rxSync) {
+          rxState := sStart
+          rxTickCount := halfBitTicks - 1.U
+          rxBitIndex := 0.U
+          rxShift := 0.U
+        }
       }
-    }
 
-    is(sStart) {
-      when(io.uartClockTick) {
-        when(rxTickCount === halfBitTicks - 1.U) {
-          rxTickCount := 0.U
-          when(!rxSync) {
-            rxState := sData
+      is(sStart) {
+        when(io.uartClockTick) {
+          when(rxTickCount === 0.U) {
+            when(!rxSync) {
+              rxState := sData
+              rxTickCount := ticksPerBit - 1.U
+            }.otherwise {
+              rxState := sIdle
+              rxTickCount := 0.U
+            }
           }.otherwise {
+            rxTickCount := rxTickCount - 1.U
+          }
+        }
+      }
+
+      is(sData) {
+        when(io.uartClockTick) {
+          when(rxTickCount === 0.U) {
+            when(rxSync) {
+              val bitMask = (1.U(8.W) << rxBitIndex)(7, 0)
+              rxShift := rxShift | bitMask
+            }
+            rxTickCount := ticksPerBit - 1.U
+            when(rxBitIndex === 7.U) {
+              rxState := sStop
+            }.otherwise {
+              rxBitIndex := rxBitIndex + 1.U
+            }
+          }.otherwise {
+            rxTickCount := rxTickCount - 1.U
+          }
+        }
+      }
+
+      is(sStop) {
+        when(io.uartClockTick) {
+          when(rxTickCount === 0.U) {
+            rxTickCount := 0.U
+            when(rxSync) {
+              rxPendingByte := rxShift
+              rxPendingValid := true.B
+            }
             rxState := sIdle
-          }
-        }.otherwise {
-          rxTickCount := rxTickCount + 1.U
-        }
-      }
-    }
-
-    is(sData) {
-      when(io.uartClockTick) {
-        when(rxTickCount === ticksPerBit - 1.U) {
-          rxTickCount := 0.U
-          when(rxSync) {
-            val bitMask = (1.U(8.W) << rxBitIndex)(7, 0)
-            rxShift := rxShift | bitMask
-          }
-          when(rxBitIndex === 7.U) {
-            rxState := sStop
           }.otherwise {
-            rxBitIndex := rxBitIndex + 1.U
+            rxTickCount := rxTickCount - 1.U
           }
-        }.otherwise {
-          rxTickCount := rxTickCount + 1.U
         }
       }
     }
-
-    is(sStop) {
-      when(io.uartClockTick) {
-        when(rxTickCount === ticksPerBit - 1.U) {
+  } else {
+    switch(rxState) {
+      is(sIdle) {
+        rxTickCount := 0.U
+        when(!rxPendingValid && !rxSync) {
+          rxState := sStart
           rxTickCount := 0.U
-          when(rxSync) {
-            rxPendingByte := rxShift
-            rxPendingValid := true.B
+          rxBitIndex := 0.U
+          rxShift := 0.U
+        }
+      }
+
+      is(sStart) {
+        when(io.uartClockTick) {
+          when(rxTickCount === halfBitTicks - 1.U) {
+            rxTickCount := 0.U
+            when(!rxSync) {
+              rxState := sData
+            }.otherwise {
+              rxState := sIdle
+            }
+          }.otherwise {
+            rxTickCount := rxTickCount + 1.U
           }
-          rxState := sIdle
-        }.otherwise {
-          rxTickCount := rxTickCount + 1.U
+        }
+      }
+
+      is(sData) {
+        when(io.uartClockTick) {
+          when(rxTickCount === ticksPerBit - 1.U) {
+            rxTickCount := 0.U
+            when(rxSync) {
+              val bitMask = (1.U(8.W) << rxBitIndex)(7, 0)
+              rxShift := rxShift | bitMask
+            }
+            when(rxBitIndex === 7.U) {
+              rxState := sStop
+            }.otherwise {
+              rxBitIndex := rxBitIndex + 1.U
+            }
+          }.otherwise {
+            rxTickCount := rxTickCount + 1.U
+          }
+        }
+      }
+
+      is(sStop) {
+        when(io.uartClockTick) {
+          when(rxTickCount === ticksPerBit - 1.U) {
+            rxTickCount := 0.U
+            when(rxSync) {
+              rxPendingByte := rxShift
+              rxPendingValid := true.B
+            }
+            rxState := sIdle
+          }.otherwise {
+            rxTickCount := rxTickCount + 1.U
+          }
         }
       }
     }
