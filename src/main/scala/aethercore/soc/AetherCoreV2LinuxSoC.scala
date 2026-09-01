@@ -19,7 +19,8 @@ class AetherCoreV2LinuxSoC(
     val exposeExternalMemoryAttributes: Boolean = false,
     val externalPhysicalSeams: Boolean = false,
     val externalSemanticMemory: Boolean = false,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val enableCacheCounters: Boolean = true
 ) extends Module {
   private val config = CoreProfiles.rv64imasuSv39PmpSoftware.copy(
     name = "rv64imasu-sv39-pmp-opensbi-v2",
@@ -116,7 +117,8 @@ class AetherCoreV2LinuxSoC(
     geometry,
     txnIdBits = txnIdBits,
     dcacheEntries = 64,
-    enableInstructionBackpressure = enableInstructionBackpressure
+    enableInstructionBackpressure = enableInstructionBackpressure,
+    enableCacheCounters = enableCacheCounters
   ))
 
   // Instruction and PTW transport remain direct read-only host-memory ports
