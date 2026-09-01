@@ -100,20 +100,37 @@ class AetherSoCPlatformFabric(
     val mtimecmp = Output(UInt(64.W))
   })
 
+  private def alignedPowerOfTwoHit(address: UInt, base: BigInt, bytes: BigInt): Bool = {
+    require(bytes > 0 && (bytes & (bytes - 1)) == 0,
+      s"AetherSoC decode aperture must be a power of two, got $bytes")
+    require((base & (bytes - 1)) == 0,
+      s"AetherSoC decode aperture must be naturally aligned: base=$base bytes=$bytes")
+    val offsetBits = bytes.bitLength - 1
+    require(offsetBits < paddrBits,
+      s"AetherSoC decode aperture $bytes exceeds paddrBits=$paddrBits")
+    if (offsetBits == 0) {
+      address === base.U(paddrBits.W)
+    } else {
+      address(paddrBits - 1, offsetBits) ===
+        (base >> offsetBits).U((paddrBits - offsetBits).W)
+    }
+  }
+
   private val ramBase = addressMap.ramBase.U(paddrBits.W)
-  private val ramLimit = addressMap.ramLimit.U(paddrBits.W)
   private val uartBase = addressMap.uartBase.U(paddrBits.W)
-  private val uartLimit = addressMap.uartLimit.U(paddrBits.W)
   private val exitAddress = addressMap.exitAddress.U(paddrBits.W)
   private val mtimeAddress = addressMap.mtimeAddress.U(paddrBits.W)
   private val mtimecmpAddress = addressMap.mtimecmpAddress.U(paddrBits.W)
   private val plicBase = addressMap.plicBase.U(paddrBits.W)
-  private val plicLimit = addressMap.plicLimit.U(paddrBits.W)
 
   // PMA policy is now fabric-owned. RAM is the only first-stage region that is
   // cacheable/idempotent/executable and advertises atomic support.
   private val resolvedRam =
-    io.resolvedPhysicalAddress >= ramBase && io.resolvedPhysicalAddress < ramLimit
+    alignedPowerOfTwoHit(
+      io.resolvedPhysicalAddress,
+      addressMap.ramBase,
+      addressMap.ramBytes
+    )
   io.resolvedAttributes.cacheable := resolvedRam
   io.resolvedAttributes.idempotent := resolvedRam
   io.resolvedAttributes.sideEffecting := !resolvedRam
@@ -136,13 +153,21 @@ class AetherSoCPlatformFabric(
   private val pendingAtomic = pending.op === AetherMemOp.Atomic
 
   private val pendingUart =
-    pendingValid && pending.paddr >= uartBase && pending.paddr < uartLimit
+    pendingValid && alignedPowerOfTwoHit(
+      pending.paddr,
+      addressMap.uartBase,
+      addressMap.uartBytes
+    )
   private val pendingExit =
     pendingValid && pending.paddr === exitAddress
   private val pendingTimer =
     pendingValid && (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
   private val pendingPlic =
-    pendingValid && pending.paddr >= plicBase && pending.paddr < plicLimit
+    pendingValid && alignedPowerOfTwoHit(
+      pending.paddr,
+      addressMap.plicBase,
+      addressMap.plicBytes
+    )
   private val pendingMmio =
     pendingUart || pendingExit || pendingTimer || pendingPlic
   private val pendingExternal =
