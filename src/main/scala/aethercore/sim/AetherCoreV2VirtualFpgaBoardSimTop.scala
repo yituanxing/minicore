@@ -24,7 +24,7 @@ import aethercore.soc.phy.{AetherFractionalTickGenerator, AetherUart8N1Phy}
 class AetherCoreV2VirtualFpgaBoardSimTop(
     val virtualClockFrequencyHz: Long = 20_000_000L,
     val powerOnResetCycles: Int = 16,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits
 ) extends Module {
   override def desiredName: String = "AetherCoreV2OpenSbiRV64SimTop"
 
