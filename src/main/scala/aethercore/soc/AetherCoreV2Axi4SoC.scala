@@ -14,6 +14,14 @@ import aethercore.common.CommitTrace
   * Board-specific clock/reset generation, DDR-controller instances, pin
   * constraints and serial UART PHY remain outside this reusable logical SoC.
   */
+object AetherCoreV2Axi4SoC {
+  // MemoryHub client/source encoding remains 4-bit end-to-end, but the
+  // qualified product can only emit normal-read IDs 0/1/2 (data), 4 (PTW),
+  // and 8 (I-cache). The AXI bridge may therefore specialize metadata storage
+  // without changing the architectural AXI ID width or response routing.
+  val QualifiedNormalReadTxnIds: Seq[Int] = Seq(0, 1, 2, 4, 8)
+}
+
 class AetherCoreV2Axi4SoC(
     val implementedPaddrBits: Int = 56
 ) extends Module {
@@ -65,7 +73,8 @@ class AetherCoreV2Axi4SoC(
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = PaddrBits,
     dataBits = DataBits,
-    txnIdBits = TxnIdBits
+    txnIdBits = TxnIdBits,
+    normalReadTxnIds = Some(AetherCoreV2Axi4SoC.QualifiedNormalReadTxnIds)
   ))
   require(
     soc.externalTxnIdBits == TxnIdBits,
