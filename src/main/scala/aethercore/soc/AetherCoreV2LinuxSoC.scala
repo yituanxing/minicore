@@ -19,7 +19,8 @@ class AetherCoreV2LinuxSoC(
     val exposeExternalMemoryAttributes: Boolean = false,
     val externalPhysicalSeams: Boolean = false,
     val externalSemanticMemory: Boolean = false,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val enableSimulationExit: Boolean = true
 ) extends Module {
   private val config = CoreProfiles.rv64imasuSv39PmpSoftware.copy(
     name = "rv64imasu-sv39-pmp-opensbi-v2",
@@ -144,7 +145,8 @@ class AetherCoreV2LinuxSoC(
     plicSourceCount = board.plicSourceCount,
     uartPlicSourceId = board.uartPlicSourceId,
     uartResetDivisor = board.uartDefaultDivisor,
-    externalSemanticMemory = externalSemanticMemory
+    externalSemanticMemory = externalSemanticMemory,
+    enableSimulationExit = enableSimulationExit
   ))
 
   // CPU-complex semantic memory and PMA seam.
