@@ -110,16 +110,16 @@ class AetherPlic(
   private val priorityZeroHit =
     io.address === AetherPlicMap.PriorityBase.U(addressBits.W)
   private val sourceIndexBits = math.max(1, log2Ceil(sourceCount))
-  private val priorityId =
-    io.address(sourceIdBits + 1, 2)
-  private val priorityHighZero =
-    if (addressBits > sourceIdBits + 2)
-      io.address(addressBits - 1, sourceIdBits + 2) === 0.U
-    else true.B
+  private val priorityFirstAddress =
+    AetherPlicMap.priority(1).U(addressBits.W)
+  private val priorityLastAddress =
+    AetherPlicMap.priority(sourceCount).U(addressBits.W)
   private val priorityHit =
-    priorityHighZero &&
-      priorityId > 0.U &&
-      priorityId <= sourceCount.U
+    io.address(1, 0) === 0.U &&
+      io.address >= priorityFirstAddress &&
+      io.address <= priorityLastAddress
+  private val priorityId =
+    (io.address >> 2)(sourceIdBits - 1, 0)
   private val priorityIndex =
     (priorityId - 1.U)(sourceIndexBits - 1, 0)
   private val priorityReadData =
