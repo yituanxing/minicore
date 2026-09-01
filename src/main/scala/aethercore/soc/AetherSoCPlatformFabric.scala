@@ -101,7 +101,6 @@ class AetherSoCPlatformFabric(
   })
 
   private val ramBase = addressMap.ramBase.U(paddrBits.W)
-  private val ramLimit = addressMap.ramLimit.U(paddrBits.W)
   private val uartBase = addressMap.uartBase.U(paddrBits.W)
   private val uartLimit = addressMap.uartLimit.U(paddrBits.W)
   private val exitAddress = addressMap.exitAddress.U(paddrBits.W)
@@ -113,7 +112,8 @@ class AetherSoCPlatformFabric(
   // PMA policy is now fabric-owned. RAM is the only first-stage region that is
   // cacheable/idempotent/executable and advertises atomic support.
   private val resolvedRam =
-    io.resolvedPhysicalAddress >= ramBase && io.resolvedPhysicalAddress < ramLimit
+    io.resolvedPhysicalAddress(paddrBits - 1, 28) ===
+      (addressMap.ramBase >> 28).U((paddrBits - 28).W)
   io.resolvedAttributes.cacheable := resolvedRam
   io.resolvedAttributes.idempotent := resolvedRam
   io.resolvedAttributes.sideEffecting := !resolvedRam
