@@ -28,7 +28,8 @@ class AetherSoCPlatformFabric(
     val plicSourceCount: Int = 52,
     val uartPlicSourceId: Int = 10,
     val uartResetDivisor: Int = 1,
-    val externalSemanticMemory: Boolean = false
+    val externalSemanticMemory: Boolean = false,
+    val enableSimulationExit: Boolean = true
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 platform fabric currently targets RV64")
   require(txnIdBits > 0)
@@ -138,7 +139,10 @@ class AetherSoCPlatformFabric(
   private val pendingUart =
     pendingValid && pending.paddr >= uartBase && pending.paddr < uartLimit
   private val pendingExit =
-    pendingValid && pending.paddr === exitAddress
+    if (enableSimulationExit)
+      pendingValid && pending.paddr === exitAddress
+    else
+      false.B
   private val pendingTimer =
     pendingValid && (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
   private val pendingPlic =
@@ -337,9 +341,6 @@ class AetherSoCPlatformFabric(
     timerComplete := mmioResponseFire
     plicComplete := mmioResponseFire
 
-    io.exitValid := mmioResponseFire && pendingExit && pendingWrite
-    io.exitCode := pending.wdata
-
     assert(!(pendingMmio && pendingAtomic),
       "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
     when(serializedExternalActive) {
@@ -382,9 +383,6 @@ class AetherSoCPlatformFabric(
 
     io.memValid := pendingExternal
 
-    io.exitValid := responseFire && pendingExit && pendingWrite
-    io.exitCode := pending.wdata
-
     assert(!(pendingMmio && pendingAtomic),
       "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
   }
@@ -402,8 +400,13 @@ class AetherSoCPlatformFabric(
   io.mtime := timer.io.mtime
   io.mtimecmp := timer.io.mtimecmp
 
-  io.exitValid := responseFire && pendingExit && pendingWrite
-  io.exitCode := pending.wdata
+  if (enableSimulationExit) {
+    io.exitValid := responseFire && pendingExit && pendingWrite
+    io.exitCode := pending.wdata
+  } else {
+    io.exitValid := false.B
+    io.exitCode := 0.U
+  }
 
   assert(!(pendingMmio && pendingAtomic),
     "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
