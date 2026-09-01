@@ -20,7 +20,7 @@ class AetherCoreV2Axi4SoC(
   private val Xlen = 64
   private val PaddrBits = implementedPaddrBits
   private val DataBits = 64
-  private val TxnIdBits = 4
+  private val TxnIdBits = AetherCoreV2UnifiedMemorySoC.QualifiedCompactTxnIdBits
 
   val io = IO(new Bundle {
     val axi = new Axi4MasterIO(PaddrBits, DataBits, TxnIdBits)
@@ -60,7 +60,8 @@ class AetherCoreV2Axi4SoC(
 
   val soc = Module(new AetherCoreV2UnifiedMemorySoC(
     externalPhysicalSeams = true,
-    implementedPaddrBits = implementedPaddrBits
+    implementedPaddrBits = implementedPaddrBits,
+    compactQualifiedTxnIds = true
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = PaddrBits,
