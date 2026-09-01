@@ -18,9 +18,14 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   * A later adapter may translate this boundary to AXI4 without teaching the CPU
   * or the internal SoC fabric about AXI channel semantics.
   */
+object AetherCoreV2UnifiedMemorySoC {
+  val QualifiedCompactTxnIdBits: Int = 3
+}
+
 class AetherCoreV2UnifiedMemorySoC(
     val externalPhysicalSeams: Boolean = false,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val compactQualifiedTxnIds: Boolean = false
 ) extends Module {
   private val xlen = 64
   private val paddrBits = implementedPaddrBits
@@ -28,7 +33,11 @@ class AetherCoreV2UnifiedMemorySoC(
   private val clientTxnIdBits = 2
   private val clientCount = 3
   private val sourceBits = log2Ceil(clientCount)
-  val externalTxnIdBits: Int = clientTxnIdBits + sourceBits
+  val externalTxnIdBits: Int =
+    if (compactQualifiedTxnIds)
+      AetherCoreV2UnifiedMemorySoC.QualifiedCompactTxnIdBits
+    else
+      clientTxnIdBits + sourceBits
   private val board =
     AetherSoCBoardSpec.qualifiedLinux(CoreProfiles.rv64imasuSv39PmpSoftware.platform)
   private val addressMap = board.addressMap
@@ -93,7 +102,8 @@ class AetherCoreV2UnifiedMemorySoC(
     addrBits = paddrBits,
     dataBits = dataBits,
     clientTxnIdBits = clientTxnIdBits,
-    clientCount = clientCount
+    clientCount = clientCount,
+    compactQualifiedTxnIds = compactQualifiedTxnIds
   ))
 
   val bootRom = Module(new AetherSoCBootRom(
