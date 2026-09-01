@@ -56,7 +56,9 @@ class AetherCoreV2FpgaSoC(
   val soc = Module(new AetherCoreV2Axi4SoC(
     implementedPaddrBits = implementedPaddrBits
   ))
-  val uartPhy = Module(new AetherUart8N1Phy)
+  val uartPhy = Module(new AetherUart8N1Phy(
+    countdownTiming = true
+  ))
 
   io.axi.aw.valid := soc.io.axi.aw.valid
   io.axi.aw.bits := soc.io.axi.aw.bits
