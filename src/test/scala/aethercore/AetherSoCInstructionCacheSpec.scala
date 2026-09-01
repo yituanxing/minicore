@@ -59,6 +59,40 @@ class AetherSoCInstructionCacheSpec
     }
   }
 
+
+  it should "merge a second narrow miss with captured tag and byte-valid state" in {
+    simulate(new AetherSoCInstructionCache()) { dut =>
+      dut.io.invalidateAll.poke(false.B)
+      dut.io.frontendValid.poke(true.B)
+      dut.io.frontendAddr.poke("h80005000".U)
+      dut.io.frontendBytes.poke(2.U)
+      dut.io.request.ready.poke(true.B)
+      idleResponse(dut)
+
+      dut.io.request.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.response.valid.poke(true.B)
+      dut.io.response.bits.rdata.poke("h0000000000001234".U)
+      dut.clock.step()
+      idleResponse(dut)
+
+      dut.io.frontendAddr.poke("h80005002".U)
+      dut.io.frontendBytes.poke(2.U)
+      dut.io.request.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.response.valid.poke(true.B)
+      dut.io.response.bits.rdata.poke("h000000000000abcd".U)
+      dut.clock.step()
+      idleResponse(dut)
+
+      dut.io.frontendAddr.poke("h80005000".U)
+      dut.io.frontendBytes.poke(4.U)
+      dut.io.frontendReady.expect(true.B)
+      dut.io.frontendInst.expect("habcd1234".U)
+      dut.io.request.valid.expect(false.B)
+    }
+  }
+
   it should "invalidate hits at FENCE.I and refuse stale redirected responses" in {
     simulate(new AetherSoCInstructionCache()) { dut =>
       dut.io.invalidateAll.poke(false.B)
