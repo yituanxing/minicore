@@ -73,6 +73,9 @@ class AetherSoCInstructionCache(
   private val missTag = Reg(UInt(TagBits.W))
   private val missOffset = Reg(UInt(OffsetBits.W))
   private val missMask = Reg(UInt(BeatBytes.W))
+  private val missSameLine = RegInit(false.B)
+  private val missOldData = Reg(UInt(dataBits.W))
+  private val missOldMask = Reg(UInt(BeatBytes.W))
   private val missFillValid = RegInit(false.B)
 
   private val reqOffset = io.frontendAddr(OffsetBits - 1, 0)
@@ -140,6 +143,9 @@ class AetherSoCInstructionCache(
     missTag := reqTag
     missOffset := reqOffset
     missMask := reqMask
+    missSameLine := tagHit
+    missOldData := Mux(tagHit, lineData(reqIndex), 0.U)
+    missOldMask := Mux(tagHit, lineByteValid(reqIndex), 0.U)
     missFillValid := reqFitsLine
   }
 
@@ -150,16 +156,19 @@ class AetherSoCInstructionCache(
       "I-cache requires one terminal response per instruction miss")
 
     when(missFillValid && !io.response.bits.fault && !io.invalidateAll) {
-      val sameLine = lineValid(missIndex) && lineTag(missIndex) === missTag
-      val oldData = Mux(sameLine, lineData(missIndex), 0.U)
-      val oldMask = Mux(sameLine, lineByteValid(missIndex), 0.U)
       val shifted =
         (io.response.bits.rdata << (missOffset << 3))(dataBits - 1, 0)
 
       lineValid(missIndex) := true.B
       lineTag.write(missIndex, missTag)
-      lineData.write(missIndex, mergeBytes(oldData, shifted, missMask))
-      lineByteValid.write(missIndex, oldMask | missMask)
+      lineData.write(
+        missIndex,
+        mergeBytes(Mux(missSameLine, missOldData, 0.U), shifted, missMask)
+      )
+      lineByteValid.write(
+        missIndex,
+        Mux(missSameLine, missOldMask, 0.U) | missMask
+      )
     }
 
     active := false.B
