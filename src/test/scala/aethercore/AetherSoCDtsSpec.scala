@@ -27,7 +27,7 @@ class AetherSoCDtsSpec extends AnyFlatSpec with Matchers {
     dts should include(s"mtimer@${map.mtimeAddress.toString(16)}")
 
     board.plicSourceCount shouldBe AetherSoCBoardSpec.QualifiedPlicSourceCount
-    board.plicSourceCount shouldBe 16
+    board.plicSourceCount shouldBe 15
     board.uartPlicSourceId should be <= board.plicSourceCount
     dts should include(s"riscv,ndev = <${board.plicSourceCount}>;")
     dts should include(s"interrupts = <${board.uartPlicSourceId}>;")
