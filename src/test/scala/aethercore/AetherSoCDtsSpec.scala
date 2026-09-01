@@ -47,6 +47,21 @@ class AetherSoCDtsSpec extends AnyFlatSpec with Matchers {
     dts should not include "phandle = <2>;"
   }
 
+  it should "fit the qualified FPGA software map inside the implemented PA32 window" in {
+    AetherSoCBoardSpec.FpgaImplementedPaddrBits shouldBe 32
+    val map = board.addressMap
+    val limit = BigInt(1) << AetherSoCBoardSpec.FpgaImplementedPaddrBits
+    Seq(
+      map.bootRomLimit,
+      map.ramLimit,
+      map.uartLimit,
+      map.exitAddress + 8,
+      map.mtimeAddress + 8,
+      map.mtimecmpAddress + 8,
+      map.plicLimit
+    ).foreach(_ should be < limit)
+  }
+
   it should "fail closed for a non-RV64 or non-Sv39 software profile" in {
     an[IllegalArgumentException] should be thrownBy {
       AetherSoCDts.render(board, isa = "rv32ima_zicsr", mmu = "sv39")
