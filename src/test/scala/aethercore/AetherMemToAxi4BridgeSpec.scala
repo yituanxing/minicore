@@ -223,6 +223,64 @@ class AetherMemToAxi4BridgeSpec extends AnyFlatSpec with Matchers with ChiselSim
     }
   }
 
+
+  it should "track only the qualified sparse normal-read transaction IDs" in {
+    simulate(new AetherMemToAxi4Bridge(
+      normalReadTxnIds = Some(Seq(0, 4, 8))
+    )) { dut =>
+      initialize(dut)
+
+      val ids = Seq(0, 4, 8)
+      val addresses = Seq(
+        BigInt("80004000", 16),
+        BigInt("80005001", 16),
+        BigInt("80006006", 16)
+      )
+      val sizes = Seq(MemSize.DWord, MemSize.Byte, MemSize.Half)
+
+      dut.io.request.valid.poke(true.B)
+      dut.io.request.bits.op.poke(AetherMemOp.Read)
+      for (((id, address), size) <- ids.zip(addresses).zip(sizes)) {
+        dut.io.request.bits.txnId.poke(id.U)
+        dut.io.request.bits.paddr.poke(address.U)
+        dut.io.request.bits.size.poke(size)
+        dut.io.request.ready.expect(true.B)
+        dut.io.axi.ar.valid.expect(true.B)
+        dut.io.axi.ar.bits.id.expect(id.U)
+        dut.clock.step()
+      }
+      dut.io.request.valid.poke(false.B)
+
+      // Return all three in a different order and prove each sparse metadata
+      // slot preserves the original byte-lane alignment.
+      dut.io.axi.r.valid.poke(true.B)
+
+      dut.io.axi.r.bits.id.poke(8.U)
+      dut.io.axi.r.bits.data.poke(BigInt("beef000000000000", 16).U)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(8.U)
+      dut.io.response.bits.rdata.expect(0xbeef.U)
+      dut.clock.step()
+
+      dut.io.axi.r.bits.id.poke(0.U)
+      dut.io.axi.r.bits.data.poke(BigInt("1122334455667788", 16).U)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(0.U)
+      dut.io.response.bits.rdata.expect(BigInt("1122334455667788", 16).U)
+      dut.clock.step()
+
+      dut.io.axi.r.bits.id.poke(4.U)
+      dut.io.axi.r.bits.data.poke(BigInt("000000000000aa00", 16).U)
+      dut.io.response.valid.expect(true.B)
+      dut.io.response.bits.txnId.expect(4.U)
+      dut.io.response.bits.rdata.expect(0xaa.U)
+      dut.clock.step()
+
+      dut.io.axi.r.valid.poke(false.B)
+      dut.io.request.ready.expect(true.B)
+    }
+  }
+
   it should "hold writes behind the concurrent read drain barrier" in {
     simulate(new AetherMemToAxi4Bridge()) { dut =>
       initialize(dut)
