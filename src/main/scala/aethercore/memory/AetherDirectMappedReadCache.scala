@@ -180,9 +180,9 @@ class AetherDirectMappedReadCache(
   }
 
   if (enableCounters) {
-    private val hitCounter = RegInit(0.U(64.W))
-    private val missCounter = RegInit(0.U(64.W))
-    private val bypassCounter = RegInit(0.U(64.W))
+    val hitCounter = RegInit(0.U(64.W))
+    val missCounter = RegInit(0.U(64.W))
+    val bypassCounter = RegInit(0.U(64.W))
 
     when(hitRequestFire) {
       hitCounter := hitCounter + 1.U
