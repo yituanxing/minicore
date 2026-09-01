@@ -38,7 +38,8 @@ class AetherSoCMemoryHub(
     val addrBits: Int,
     val dataBits: Int,
     val clientTxnIdBits: Int = 2,
-    val clientCount: Int = 3
+    val clientCount: Int = 3,
+    val compactQualifiedTxnIds: Boolean = false
 ) extends Module {
   require(addrBits > 0)
   require(dataBits > 0 && dataBits % 8 == 0)
@@ -46,7 +47,10 @@ class AetherSoCMemoryHub(
   require(clientCount >= 2)
 
   private val sourceBits = log2Ceil(clientCount)
-  val downstreamTxnIdBits: Int = clientTxnIdBits + sourceBits
+  require(!compactQualifiedTxnIds || (clientCount == 3 && clientTxnIdBits == 2),
+    "compact qualified transaction IDs require the 3-client / 2-bit-local product shape")
+  val downstreamTxnIdBits: Int =
+    if (compactQualifiedTxnIds) 3 else clientTxnIdBits + sourceBits
 
   val io = IO(new Bundle {
     val clients = Vec(clientCount, new AetherMemClientPort(addrBits, dataBits, clientTxnIdBits))
@@ -72,8 +76,30 @@ class AetherSoCMemoryHub(
   io.downstreamRequest.valid := requestArbiter.io.out.valid
   requestArbiter.io.out.ready := io.downstreamRequest.ready
 
-  io.downstreamRequest.bits.txnId :=
-    Cat(requestArbiter.io.chosen, requestArbiter.io.out.bits.txnId)
+  if (compactQualifiedTxnIds) {
+    val chosen = requestArbiter.io.chosen
+    val localTxn = requestArbiter.io.out.bits.txnId
+    when(requestArbiter.io.out.valid) {
+      when(chosen === 0.U) {
+        assert(localTxn <= 2.U,
+          "compact Data client transaction ID must be 0, 1 or 2")
+      }.otherwise {
+        assert(localTxn === 0.U,
+          "compact PTW/I-cache clients must use local transaction ID zero")
+      }
+    }
+    io.downstreamRequest.bits.txnId :=
+      MuxLookup(chosen, 0.U(downstreamTxnIdBits.W))(
+        Seq(
+          0.U -> localTxn,
+          1.U -> 3.U(downstreamTxnIdBits.W),
+          2.U -> 4.U(downstreamTxnIdBits.W)
+        )
+      )
+  } else {
+    io.downstreamRequest.bits.txnId :=
+      Cat(requestArbiter.io.chosen, requestArbiter.io.out.bits.txnId)
+  }
   io.downstreamRequest.bits.op := requestArbiter.io.out.bits.op
   io.downstreamRequest.bits.paddr := requestArbiter.io.out.bits.paddr
   io.downstreamRequest.bits.size := requestArbiter.io.out.bits.size
@@ -95,29 +121,65 @@ class AetherSoCMemoryHub(
   io.downstreamRequest.bits.attributes.supportsPartial :=
     requestArbiter.io.out.bits.attributes.supportsPartial
 
+  // Generic source-tag decode remains the default contract.
   private val responseSource =
-    io.downstreamResponse.bits.txnId(downstreamTxnIdBits - 1, clientTxnIdBits)
+    if (compactQualifiedTxnIds) 0.U(sourceBits.W)
+    else io.downstreamResponse.bits.txnId(downstreamTxnIdBits - 1, clientTxnIdBits)
   private val responseLocalTxnId =
-    io.downstreamResponse.bits.txnId(clientTxnIdBits - 1, 0)
+    if (compactQualifiedTxnIds) 0.U(clientTxnIdBits.W)
+    else io.downstreamResponse.bits.txnId(clientTxnIdBits - 1, 0)
 
-  for (client <- 0 until clientCount) {
-    val selected = responseSource === client.U
-    io.clients(client).response.valid := io.downstreamResponse.valid && selected
-    io.clients(client).response.bits.txnId := responseLocalTxnId
-    io.clients(client).response.bits.rdata := io.downstreamResponse.bits.rdata
-    io.clients(client).response.bits.fault := io.downstreamResponse.bits.fault
-    io.clients(client).response.bits.last := io.downstreamResponse.bits.last
-  }
+  if (compactQualifiedTxnIds) {
+    val compactId = io.downstreamResponse.bits.txnId
+    val compactValid = compactId <= 4.U
+    val compactSource = Mux(
+      compactId <= 2.U,
+      0.U(sourceBits.W),
+      Mux(compactId === 3.U, 1.U(sourceBits.W), 2.U(sourceBits.W))
+    )
+    val compactLocalTxn =
+      Mux(compactId <= 2.U, compactId(clientTxnIdBits - 1, 0), 0.U)
 
-  io.downstreamResponse.ready := MuxCase(
-    false.B,
-    (0 until clientCount).map { client =>
-      (responseSource === client.U) -> io.clients(client).response.ready
+    for (client <- 0 until clientCount) {
+      val selected = compactValid && compactSource === client.U
+      io.clients(client).response.valid := io.downstreamResponse.valid && selected
+      io.clients(client).response.bits.txnId := compactLocalTxn
+      io.clients(client).response.bits.rdata := io.downstreamResponse.bits.rdata
+      io.clients(client).response.bits.fault := io.downstreamResponse.bits.fault
+      io.clients(client).response.bits.last := io.downstreamResponse.bits.last
     }
-  )
 
-  when(io.downstreamResponse.valid) {
-    assert(responseSource < clientCount.U,
-      "SoC memory hub received a response with an invalid source tag")
+    io.downstreamResponse.ready := MuxCase(
+      false.B,
+      (0 until clientCount).map { client =>
+        (compactValid && compactSource === client.U) -> io.clients(client).response.ready
+      }
+    )
+
+    when(io.downstreamResponse.valid) {
+      assert(compactValid,
+        "SoC memory hub received an invalid compact transaction ID")
+    }
+  } else {
+    for (client <- 0 until clientCount) {
+      val selected = responseSource === client.U
+      io.clients(client).response.valid := io.downstreamResponse.valid && selected
+      io.clients(client).response.bits.txnId := responseLocalTxnId
+      io.clients(client).response.bits.rdata := io.downstreamResponse.bits.rdata
+      io.clients(client).response.bits.fault := io.downstreamResponse.bits.fault
+      io.clients(client).response.bits.last := io.downstreamResponse.bits.last
+    }
+
+    io.downstreamResponse.ready := MuxCase(
+      false.B,
+      (0 until clientCount).map { client =>
+        (responseSource === client.U) -> io.clients(client).response.ready
+      }
+    )
+
+    when(io.downstreamResponse.valid) {
+      assert(responseSource < clientCount.U,
+        "SoC memory hub received a response with an invalid source tag")
+    }
   }
 }
