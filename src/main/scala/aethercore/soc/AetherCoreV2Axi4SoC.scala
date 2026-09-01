@@ -15,7 +15,8 @@ import aethercore.common.CommitTrace
   * constraints and serial UART PHY remain outside this reusable logical SoC.
   */
 class AetherCoreV2Axi4SoC(
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val enableSimulationExit: Boolean = true
 ) extends Module {
   private val Xlen = 64
   private val PaddrBits = implementedPaddrBits
@@ -60,7 +61,8 @@ class AetherCoreV2Axi4SoC(
 
   val soc = Module(new AetherCoreV2UnifiedMemorySoC(
     externalPhysicalSeams = true,
-    implementedPaddrBits = implementedPaddrBits
+    implementedPaddrBits = implementedPaddrBits,
+    enableSimulationExit = enableSimulationExit
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = PaddrBits,
