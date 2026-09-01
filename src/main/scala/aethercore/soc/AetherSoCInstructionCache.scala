@@ -27,7 +27,8 @@ class AetherSoCInstructionCache(
     val addrBits: Int = 56,
     val dataBits: Int = 64,
     val txnIdBits: Int = 2,
-    val entries: Int = 64
+    val entries: Int = 64,
+    val enableCounters: Boolean = true
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 I-cache currently targets a 64-bit memory beat")
   require(txnIdBits > 0)
@@ -175,17 +176,22 @@ class AetherSoCInstructionCache(
     missFillValid := false.B
   }
 
-  private val hitCounter = RegInit(0.U(64.W))
-  private val missCounter = RegInit(0.U(64.W))
-  private val observedHit = hit && io.frontendReady
-  when(observedHit) {
-    hitCounter := hitCounter + 1.U
+  if (enableCounters) {
+    private val hitCounter = RegInit(0.U(64.W))
+    private val missCounter = RegInit(0.U(64.W))
+    private val observedHit = hit && io.frontendReady
+    when(observedHit) {
+      hitCounter := hitCounter + 1.U
+    }
+    when(io.request.fire) {
+      missCounter := missCounter + 1.U
+    }
+    io.hitCount := hitCounter
+    io.missCount := missCounter
+  } else {
+    io.hitCount := 0.U
+    io.missCount := 0.U
   }
-  when(io.request.fire) {
-    missCounter := missCounter + 1.U
-  }
-  io.hitCount := hitCounter
-  io.missCount := missCounter
 
   when(io.frontendValid && !active) {
     assert(io.frontendBytes === 2.U || io.frontendBytes === 4.U,
