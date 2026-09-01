@@ -23,10 +23,13 @@ class AetherSoCAxi4HostMemoryAdapter(
     val addrBits: Int = 56,
     val dataBits: Int = 64,
     val idBits: Int = 4,
-    val localTxnIdBits: Int = 2
+    val localTxnIdBits: Int = 2,
+    val compactQualifiedTxnIds: Boolean = false
 ) extends Module {
   require(dataBits == 64)
   require(idBits > localTxnIdBits)
+  require(!compactQualifiedTxnIds || (idBits == 3 && localTxnIdBits == 2),
+    "compact qualified AXI IDs require a 3-bit external / 2-bit local shape")
 
   private val BusBytes = dataBits / 8
   private val SourceBits = idBits - localTxnIdBits
@@ -102,12 +105,27 @@ class AetherSoCAxi4HostMemoryAdapter(
   private val instructionReadAddr = Reg(UInt(addrBits.W))
   private val instructionReadSize = Reg(UInt(3.W))
 
-  private val incomingReadSource =
-    io.axi.ar.bits.id(idBits - 1, localTxnIdBits)
-  private val incomingReadLocalTxn =
-    io.axi.ar.bits.id(localTxnIdBits - 1, 0)
-  private val incomingReadSourceKnown =
-    incomingReadSource <= InstructionSource.U
+  private val incomingReadSource = Wire(UInt(2.W))
+  private val incomingReadLocalTxn = Wire(UInt(localTxnIdBits.W))
+  private val incomingReadSourceKnown = Wire(Bool())
+
+  if (compactQualifiedTxnIds) {
+    val compactId = io.axi.ar.bits.id
+    incomingReadSource :=
+      Mux(compactId <= 2.U, DataSource.U,
+        Mux(compactId === 3.U, PtwSource.U, InstructionSource.U))
+    incomingReadLocalTxn :=
+      Mux(compactId <= 2.U, compactId(localTxnIdBits - 1, 0), 0.U)
+    incomingReadSourceKnown := compactId <= 4.U
+  } else {
+    incomingReadSource :=
+      io.axi.ar.bits.id(idBits - 1, localTxnIdBits).pad(2)
+    incomingReadLocalTxn :=
+      io.axi.ar.bits.id(localTxnIdBits - 1, 0)
+    incomingReadSourceKnown :=
+      incomingReadSource <= InstructionSource.U
+  }
+
   private val incomingDataSlotFree =
     !dataReadActive(incomingReadLocalTxn)
 
@@ -265,10 +283,17 @@ class AetherSoCAxi4HostMemoryAdapter(
     assert(io.axi.aw.bits.len === 0.U, "AXI host adapter accepts one-beat writes only")
     assert(io.axi.aw.bits.burst === Axi4Burst.Incr,
       "AXI host adapter expects incrementing single-beat writes")
-    assert(
-      io.axi.aw.bits.id(idBits - 1, localTxnIdBits) === DataSource.U,
-      "only data/D-cache traffic may issue AXI writes"
-    )
+    if (compactQualifiedTxnIds) {
+      assert(
+        io.axi.aw.bits.id <= 2.U,
+        "only compact data/D-cache transaction IDs may issue AXI writes"
+      )
+    } else {
+      assert(
+        io.axi.aw.bits.id(idBits - 1, localTxnIdBits) === DataSource.U,
+        "only data/D-cache traffic may issue AXI writes"
+      )
+    }
     awActive := true.B
     awId := io.axi.aw.bits.id
     awAddr := io.axi.aw.bits.addr
