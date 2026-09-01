@@ -1,0 +1,146 @@
+name: Current Main SoC Hierarchy Area
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/current-main-hierarchy-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rank:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+
+      - name: Elaborate exact product SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/current-main-hierarchy"
+          rm -rf "$out"
+          mkdir -p "$out/rtl"
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 --target-dir "$out/rtl"
+          echo "HIER_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Synthesize while preserving module hierarchy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t svs < <(find "$HIER_OUT/rtl" -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_ecp5 -top AetherCoreV2FpgaSoC -json $HIER_OUT/soc.json; stat -top AetherCoreV2FpgaSoC"             2>&1 | tee "$HIER_OUT/yosys.log"
+
+      - name: Rank integrated hierarchy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from functools import lru_cache
+          from pathlib import Path
+
+          root=Path(os.environ["HIER_OUT"])
+          net=json.loads((root/"soc.json").read_text())
+          modules=net["modules"]
+
+          primitive_keys=(
+              "LUT4","TRELLIS_FF","TRELLIS_DPR16X4","DP16KD",
+              "MULT18X18D","PFUMX","L6MUX21","CCU2C"
+          )
+
+          def direct(module_name):
+              m=modules[module_name]
+              types=Counter(c["type"] for c in m.get("cells",{}).values())
+              return types
+
+          @lru_cache(None)
+          def inclusive(module_name):
+              total=Counter()
+              for cell in modules[module_name].get("cells",{}).values():
+                  typ=cell["type"]
+                  if typ in modules and not modules[typ].get("attributes",{}).get("blackbox"):
+                      total += inclusive(typ)
+                  else:
+                      total[typ] += 1
+              return total
+
+          rows=[]
+          for name in modules:
+              attrs=modules[name].get("attributes",{})
+              if attrs.get("blackbox"):
+                  continue
+              inc=inclusive(name)
+              dr=direct(name)
+              rows.append({
+                  "module":name,
+                  "inclusive_cells":sum(inc.values()),
+                  "inclusive_lut4":inc["LUT4"],
+                  "inclusive_ff":inc["TRELLIS_FF"],
+                  "inclusive_dpr16x4":inc["TRELLIS_DPR16X4"],
+                  "inclusive_bram":inc["DP16KD"],
+                  "inclusive_mult":inc["MULT18X18D"],
+                  "inclusive_pfumx":inc["PFUMX"],
+                  "inclusive_l6mux21":inc["L6MUX21"],
+                  "inclusive_ccu2c":inc["CCU2C"],
+                  "direct_lut4":dr["LUT4"],
+                  "direct_ff":dr["TRELLIS_FF"],
+                  "direct_pfumx":dr["PFUMX"],
+                  "direct_l6mux21":dr["L6MUX21"],
+              })
+
+          rows.sort(key=lambda r:r["inclusive_lut4"], reverse=True)
+          top=rows[:60]
+          out={
+              "head":"15f8a754acb7b6b3bd7ebf9b85a6dfa14002d8be",
+              "note":"Inclusive hierarchy counts are non-additive. Use for candidate ranking only; do not subtract overlapping module totals.",
+              "top":top
+          }
+          (root/"hierarchy.json").write_text(json.dumps(out,indent=2)+"\n")
+
+          print("module,inclusive_lut4,direct_lut4,inclusive_ff,pfumx,l6mux21,dpr16x4,mult")
+          for r in top:
+              print(",".join(map(str,[
+                  r["module"],r["inclusive_lut4"],r["direct_lut4"],
+                  r["inclusive_ff"],r["inclusive_pfumx"],r["inclusive_l6mux21"],
+                  r["inclusive_dpr16x4"],r["inclusive_mult"]
+              ])))
+
+          topmod=inclusive("AetherCoreV2FpgaSoC")
+          if topmod["LUT4"] <= 0:
+              raise SystemExit("invalid hierarchy measurement: top has no LUT4")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: current-main-hierarchy-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.HIER_OUT }}/hierarchy.json
+            ${{ env.HIER_OUT }}/yosys.log
