@@ -119,6 +119,40 @@ class AetherUart8N1PhySpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+
+  it should "preserve TX and RX cadence in countdown timing mode" in {
+    simulate(new AetherUart8N1Phy(countdownTiming = true)) { dut =>
+      initialize(dut, divisor = 2)
+
+      val txValue = 0x01
+      dut.io.txByte.poke(txValue.U)
+      dut.io.txValid.poke(true.B)
+      dut.clock.step()
+      dut.io.txValid.poke(false.B)
+
+      expectSerialFor(dut, level = false, cycles = 32)
+      expectSerialFor(dut, level = true, cycles = 32)
+      expectSerialFor(dut, level = false, cycles = 32)
+
+      // Let TX drain before exercising RX on the same PHY.
+      dut.clock.step(7 * 32)
+
+      val rxValue = 0x5a
+      driveRxFor(dut, level = false, cycles = 32)
+      for (bit <- 0 until 8) {
+        driveRxFor(
+          dut,
+          level = ((rxValue >> bit) & 1) != 0,
+          cycles = 32
+        )
+      }
+      driveRxFor(dut, level = true, cycles = 48)
+
+      dut.io.rxValid.expect(true.B)
+      dut.io.rxByte.expect(rxValue.U)
+    }
+  }
+
   it should "drop a frame whose stop bit is low" in {
     simulate(new AetherUart8N1Phy) { dut =>
       initialize(dut, divisor = 1)
