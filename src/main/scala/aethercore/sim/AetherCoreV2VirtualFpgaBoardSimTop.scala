@@ -132,8 +132,9 @@ class AetherCoreV2VirtualFpgaBoardSimTop(
     Module(new AetherSoCAxi4HostMemoryAdapter(
       addrBits = paddrBits,
       dataBits = busDataBits,
-      idBits = 4,
-      localTxnIdBits = 2
+      idBits = 3,
+      localTxnIdBits = 2,
+      compactQualifiedTxnIds = true
     ))
   }
   private val hostUart = withReset(boardReset) {
