@@ -103,7 +103,6 @@ class AetherSoCPlatformFabric(
   private val ramBase = addressMap.ramBase.U(paddrBits.W)
   private val ramLimit = addressMap.ramLimit.U(paddrBits.W)
   private val uartBase = addressMap.uartBase.U(paddrBits.W)
-  private val uartLimit = addressMap.uartLimit.U(paddrBits.W)
   private val exitAddress = addressMap.exitAddress.U(paddrBits.W)
   private val mtimeAddress = addressMap.mtimeAddress.U(paddrBits.W)
   private val mtimecmpAddress = addressMap.mtimecmpAddress.U(paddrBits.W)
@@ -136,7 +135,9 @@ class AetherSoCPlatformFabric(
   private val pendingAtomic = pending.op === AetherMemOp.Atomic
 
   private val pendingUart =
-    pendingValid && pending.paddr >= uartBase && pending.paddr < uartLimit
+    pendingValid &&
+      pending.paddr(paddrBits - 1, 3) ===
+        (addressMap.uartBase >> 3).U((paddrBits - 3).W)
   private val pendingExit =
     pendingValid && pending.paddr === exitAddress
   private val pendingTimer =
