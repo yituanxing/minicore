@@ -20,7 +20,10 @@ class V2VirtualFpgaBoardContract(unittest.TestCase):
     def test_virtual_board_can_instantiate_the_fail_closed_pa32_fpga_path(self):
         source = TOP.read_text(encoding="utf-8")
         elab = (ROOT / "src/main/scala/aethercore/ElaborateV2VirtualFpgaBoard.scala").read_text(encoding="utf-8")
-        self.assertIn("implementedPaddrBits: Int = 56", source)
+        self.assertIn(
+            "implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits",
+            source,
+        )
         self.assertIn("private val paddrBits = implementedPaddrBits", source)
         self.assertIn("platform.copy(paddrBits = paddrBits)", source)
         self.assertIn("ElaborateV2VirtualFpgaBoardPA32RV64", elab)
