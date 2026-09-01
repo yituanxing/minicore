@@ -145,9 +145,21 @@ class AetherCoreV2UnifiedMemorySoC(
   // Requests outside its aperture remain the single exported external-memory
   // master. Responses from ROM and external memory share one backpressured
   // return path, so transaction/source identity remains unchanged.
+  private val bootRomOffsetBits = log2Ceil(addressMap.bootRomBytes.toInt)
+  require(
+    addressMap.bootRomBytes == (BigInt(1) << bootRomOffsetBits),
+    "qualified BootROM aperture must be a power of two"
+  )
+  require(
+    addressMap.bootRomBase % addressMap.bootRomBytes == 0,
+    "qualified BootROM base must align to its aperture"
+  )
+  private val bootRomPrefixBits = paddrBits - bootRomOffsetBits
+  private val bootRomPrefix =
+    (addressMap.bootRomBase >> bootRomOffsetBits).U(bootRomPrefixBits.W)
   val bootRomHit =
-    hub.io.downstreamRequest.bits.paddr >= addressMap.bootRomBase.U &&
-      hub.io.downstreamRequest.bits.paddr < addressMap.bootRomLimit.U
+    hub.io.downstreamRequest.bits.paddr(paddrBits - 1, bootRomOffsetBits) ===
+      bootRomPrefix
 
   bootRom.io.request.valid := hub.io.downstreamRequest.valid && bootRomHit
   bootRom.io.request.bits := hub.io.downstreamRequest.bits
