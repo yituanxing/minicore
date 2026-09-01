@@ -28,6 +28,15 @@ class AetherSoCBootRom(
   require(dataBits == 64, "AetherSoC v0 BootROM uses the RV64 memory beat")
   require(txnIdBits > 0)
   require(apertureBytes >= 12)
+  private val localOffsetBits = math.max(1, (apertureBytes - 1).bitLength)
+  require(
+    !requestAlreadyDecoded || apertureBytes == (BigInt(1) << localOffsetBits),
+    "predecoded BootROM aperture must be a power of two"
+  )
+  require(
+    !requestAlreadyDecoded || baseAddress % apertureBytes == 0,
+    "predecoded BootROM base must be aligned to its aperture"
+  )
 
   private val beatBytes = dataBits / 8
   private val image = Seq(
@@ -44,7 +53,9 @@ class AetherSoCBootRom(
   private val active = RegInit(false.B)
   private val txnId = Reg(UInt(txnIdBits.W))
   private val op = Reg(AetherMemOp())
-  private val address = Reg(UInt(addrBits.W))
+  private val storedAddressBits =
+    if (requestAlreadyDecoded) localOffsetBits else addrBits
+  private val address = Reg(UInt(storedAddressBits.W))
   private val size = Reg(MemSize())
 
   io.request.ready := !active
@@ -52,7 +63,11 @@ class AetherSoCBootRom(
     active := true.B
     txnId := io.request.bits.txnId
     op := io.request.bits.op
-    address := io.request.bits.paddr
+    address :=
+      (if (requestAlreadyDecoded)
+        io.request.bits.paddr(localOffsetBits - 1, 0)
+      else
+        io.request.bits.paddr)
     size := io.request.bits.size
   }
 
