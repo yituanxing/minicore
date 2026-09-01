@@ -12,10 +12,19 @@ class V2VirtualFpgaBoardContract(unittest.TestCase):
     def test_virtual_board_instantiates_the_real_fpga_top(self):
         source = TOP.read_text(encoding="utf-8")
         self.assertIn("class AetherCoreV2VirtualFpgaBoardSimTop(", source)
-        self.assertIn("Module(new AetherCoreV2FpgaSoC)", source)
+        self.assertIn("Module(new AetherCoreV2FpgaSoC(implementedPaddrBits = paddrBits))", source)
         self.assertIn("AetherSoCAxi4HostMemoryAdapter", source)
         self.assertIn("AetherUart8N1Phy", source)
         self.assertNotIn("new AetherCoreV2Axi4SoC", source)
+
+    def test_virtual_board_can_instantiate_the_fail_closed_pa32_fpga_path(self):
+        source = TOP.read_text(encoding="utf-8")
+        elab = (ROOT / "src/main/scala/aethercore/ElaborateV2VirtualFpgaBoard.scala").read_text(encoding="utf-8")
+        self.assertIn("implementedPaddrBits: Int = 56", source)
+        self.assertIn("private val paddrBits = implementedPaddrBits", source)
+        self.assertIn("platform.copy(paddrBits = paddrBits)", source)
+        self.assertIn("ElaborateV2VirtualFpgaBoardPA32RV64", elab)
+        self.assertIn("implementedPaddrBits = 32", elab)
 
     def test_linux_console_must_cross_the_serial_pins(self):
         source = TOP.read_text(encoding="utf-8")
