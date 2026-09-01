@@ -108,7 +108,6 @@ class AetherSoCPlatformFabric(
   private val mtimeAddress = addressMap.mtimeAddress.U(paddrBits.W)
   private val mtimecmpAddress = addressMap.mtimecmpAddress.U(paddrBits.W)
   private val plicBase = addressMap.plicBase.U(paddrBits.W)
-  private val plicLimit = addressMap.plicLimit.U(paddrBits.W)
 
   // PMA policy is now fabric-owned. RAM is the only first-stage region that is
   // cacheable/idempotent/executable and advertises atomic support.
@@ -142,7 +141,9 @@ class AetherSoCPlatformFabric(
   private val pendingTimer =
     pendingValid && (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
   private val pendingPlic =
-    pendingValid && pending.paddr >= plicBase && pending.paddr < plicLimit
+    pendingValid &&
+      pending.paddr(paddrBits - 1, 22) ===
+        (addressMap.plicBase >> 22).U((paddrBits - 22).W)
   private val pendingMmio =
     pendingUart || pendingExit || pendingTimer || pendingPlic
   private val pendingExternal =
