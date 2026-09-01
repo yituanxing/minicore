@@ -12,7 +12,9 @@ class V2VirtualFpgaBoardContract(unittest.TestCase):
     def test_virtual_board_instantiates_the_real_fpga_top(self):
         source = TOP.read_text(encoding="utf-8")
         self.assertIn("class AetherCoreV2VirtualFpgaBoardSimTop(", source)
-        self.assertIn("Module(new AetherCoreV2FpgaSoC(implementedPaddrBits = paddrBits))", source)
+        self.assertIn("Module(new AetherCoreV2FpgaSoC(", source)
+        self.assertIn("implementedPaddrBits = paddrBits", source)
+        self.assertIn("enableCacheCounters = true", source)
         self.assertIn("AetherSoCAxi4HostMemoryAdapter", source)
         self.assertIn("AetherUart8N1Phy", source)
         self.assertNotIn("new AetherCoreV2Axi4SoC", source)
