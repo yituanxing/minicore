@@ -120,6 +120,16 @@ class AetherPlicSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+
+  it should "support the terminal priority register in the qualified 16-source profile" in {
+    simulate(new AetherPlic(sourceCount = 16, addressBits = 22)) { dut =>
+      initialize(dut)
+
+      write(dut, AetherPlicMap.priority(16), 3)
+      read(dut, AetherPlicMap.priority(16)) shouldBe 3
+    }
+  }
+
   it should "retain the qualified QEMU-virt supervisor context and absent machine aperture" in {
     simulate(new AetherPlic(sourceCount = 52)) { dut =>
       initialize(dut)
