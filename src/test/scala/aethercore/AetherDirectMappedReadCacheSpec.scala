@@ -74,6 +74,38 @@ class AetherDirectMappedReadCacheSpec extends AnyFlatSpec with Matchers with Chi
     dut.io.downstreamResponse.valid.poke(false.B)
   }
 
+  it should "ignore stale byte-valid RAM after line invalidation" in {
+    simulate(new AetherDirectMappedReadCache(56, 64, 2, entries = 64)) { dut =>
+      defaults(dut)
+
+      // First populate a full word so the underlying byte-valid RAM contains
+      // multiple valid bits.
+      driveRequest(dut, 0, AetherMemOp.Read, 0x2000, MemSize.Word, cacheable = true)
+      acceptForwarded(dut)
+      returnDownstream(dut, 0, 0x44332211L)
+
+      // A write-through request invalidates ownership of the cached line.
+      driveRequest(
+        dut, 1, AetherMemOp.Write, 0x2000, MemSize.Word, cacheable = true,
+        wdata = 0xdeadbeefL, wmask = 0xf
+      )
+      acceptForwarded(dut)
+      returnDownstream(dut, 1, 0)
+
+      // Refill just one byte. Since lineValid was cleared, the refill must
+      // rebuild byte-valid state from zero rather than reusing stale bits.
+      driveRequest(dut, 2, AetherMemOp.Read, 0x2001, MemSize.Byte, cacheable = true)
+      acceptForwarded(dut)
+      returnDownstream(dut, 2, 0xaa)
+
+      // A wider access must still miss; stale pre-invalidation byte-valid bits
+      // must never make this look like a complete word hit.
+      driveRequest(dut, 3, AetherMemOp.Read, 0x2000, MemSize.Word, cacheable = true)
+      dut.io.downstreamRequest.valid.expect(true.B)
+      dut.io.upstreamRequest.ready.expect(true.B)
+    }
+  }
+
   it should "fill only fetched bytes, hit repeated reads, and bypass/invalidate writers" in {
     simulate(new AetherDirectMappedReadCache(56, 64, 2, entries = 64)) { dut =>
       defaults(dut)

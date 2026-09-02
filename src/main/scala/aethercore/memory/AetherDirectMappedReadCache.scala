@@ -218,8 +218,11 @@ class AetherDirectMappedReadCache(
       // while the write is in flight.
       lineEpoch(reqIndex) := lineEpoch(reqIndex) + 1.U
       when(lineValid(reqIndex) && lineTag(reqIndex) === reqTag) {
+        // lineValid is the architectural ownership bit. Once cleared, stale
+        // byte-valid RAM contents are ignored; the next fill sees sameLine=false
+        // and rebuilds its mask from zero. Avoiding this redundant clear keeps
+        // lineByteValid single-write-port and FPGA RAM-mappable.
         lineValid(reqIndex) := false.B
-        lineByteValid.write(reqIndex, 0.U)
       }
     }
   }
