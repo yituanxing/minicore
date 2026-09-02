@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/main/scala/aethercore/soc/**'
+      - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/main/scala/aethercore/ElaborateV2FpgaSoC.scala'
       - 'tests_py/test_v2_fpga_synth_proxy.py'
       - '.github/workflows/v2-soc-fpga-synth-proxy.yml'
