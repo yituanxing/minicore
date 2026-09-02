@@ -74,6 +74,33 @@ class AetherDirectMappedReadCacheSpec extends AnyFlatSpec with Matchers with Chi
     dut.io.downstreamResponse.valid.poke(false.B)
   }
 
+  it should "suppress an older fill after a later writer advances the line epoch" in {
+    simulate(new AetherDirectMappedReadCache(56, 64, 2, entries = 64)) { dut =>
+      defaults(dut)
+
+      // Launch a cacheable read miss and keep its downstream response in flight.
+      driveRequest(dut, 0, AetherMemOp.Read, 0x3000, MemSize.Word, cacheable = true)
+      acceptForwarded(dut)
+
+      // A younger write to the same cache index must advance the epoch before
+      // the older read returns, making that old fill ineligible for install.
+      driveRequest(
+        dut, 1, AetherMemOp.Write, 0x3000, MemSize.Word, cacheable = true,
+        wdata = 0xdeadbeefL, wmask = 0xf
+      )
+      acceptForwarded(dut)
+
+      // Return the older read first. It still completes architecturally, but
+      // its data must not become a cache hit after the younger writer.
+      returnDownstream(dut, 0, 0x11223344L)
+      returnDownstream(dut, 1, 0)
+
+      driveRequest(dut, 2, AetherMemOp.Read, 0x3000, MemSize.Word, cacheable = true)
+      dut.io.downstreamRequest.valid.expect(true.B)
+      dut.io.upstreamRequest.ready.expect(true.B)
+    }
+  }
+
   it should "ignore stale byte-valid RAM after line invalidation" in {
     simulate(new AetherDirectMappedReadCache(56, 64, 2, entries = 64)) { dut =>
       defaults(dut)
