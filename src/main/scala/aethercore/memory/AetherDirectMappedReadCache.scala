@@ -78,8 +78,10 @@ class AetherDirectMappedReadCache(
   private val lineByteValid = Mem(entries, UInt(BeatBytes.W))
   // Incremented by write/atomic traffic to conservatively suppress an older
   // read fill from being installed after a later writer touched this index.
-  private val lineEpoch =
-    RegInit(VecInit(Seq.fill(entries)(0.U(4.W))))
+  // Epoch values have no architectural reset value: only equality between the
+  // request snapshot and the current entry matters. Keeping them in Mem avoids
+  // expanding 64 x 4 bits into resettable FFs plus dynamic-index muxes.
+  private val lineEpoch = Mem(entries, UInt(4.W))
 
   private val outstanding =
     RegInit(VecInit(Seq.fill(TxnCount)(false.B)))
@@ -97,6 +99,9 @@ class AetherDirectMappedReadCache(
   private val reqTag =
     req.paddr(addrBits - 1, OffsetBits + IndexBits)
   private val reqOffset = req.paddr(OffsetBits - 1, 0)
+  // One request-side asynchronous read port is shared by miss snapshotting and
+  // writer epoch bumps; a response-side read below supplies the second port.
+  private val reqLineEpoch = lineEpoch(reqIndex)
 
   private val reqAccessBytes = Wire(UInt(AccessBytesBits.W))
   reqAccessBytes := 1.U
@@ -209,14 +214,14 @@ class AetherDirectMappedReadCache(
       fillTag(txn) := reqTag
       fillOffset(txn) := reqOffset
       fillMask(txn) := reqMask
-      fillEpoch(txn) := lineEpoch(reqIndex)
+      fillEpoch(txn) := reqLineEpoch
     }
 
     when(req.op =/= AetherMemOp.Read) {
       // Writers/atomics remain fully owned by downstream memory. Invalidate
       // matching state immediately so no later read can consume stale bytes
       // while the write is in flight.
-      lineEpoch(reqIndex) := lineEpoch(reqIndex) + 1.U
+      lineEpoch.write(reqIndex, reqLineEpoch + 1.U)
       when(lineValid(reqIndex) && lineTag(reqIndex) === reqTag) {
         // lineValid is the architectural ownership bit. Once cleared, stale
         // byte-valid RAM contents are ignored; the next fill sees sameLine=false
@@ -234,11 +239,12 @@ class AetherDirectMappedReadCache(
       "AetherDCache received terminal response for a non-outstanding txnId")
     outstanding(responseTxn) := false.B
 
+    val responseLineEpoch = lineEpoch(fillIndex(responseTxn))
     val canFill =
       fillValid(responseTxn) &&
         io.downstreamResponse.bits.last &&
         !io.downstreamResponse.bits.fault &&
-        lineEpoch(fillIndex(responseTxn)) === fillEpoch(responseTxn)
+        responseLineEpoch === fillEpoch(responseTxn)
 
     when(canFill) {
       val index = fillIndex(responseTxn)
