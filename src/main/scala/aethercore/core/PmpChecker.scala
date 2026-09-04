@@ -51,42 +51,32 @@ object PmpAddressMode {
   * privilege. An unmatched S/U access is denied and an unmatched M access is
   * allowed, matching the privileged architecture PMP rules.
   */
-class PmpChecker(
+class PmpDecodedEntry(val paddrBits: Int) extends Bundle {
+  val active = Bool()
+  val lower = UInt((paddrBits + 1).W)
+  val upper = UInt((paddrBits + 1).W)
+  val read = Bool()
+  val write = Bool()
+  val execute = Bool()
+  val lock = Bool()
+}
+
+/** Decode the CSR-owned PMP entry geometry once so multiple request lanes can share it. */
+class PmpRangeDecoder(
     val xlen: Int,
     val entries: Int = PmpConstants.MaxEntries,
     val paddrBits: Int
 ) extends Module {
-  def this(xlen: Int) = this(xlen, PmpConstants.MaxEntries, xlen)
-  def this(xlen: Int, entries: Int) = this(xlen, entries, xlen)
-
   private val geometry = PmpGeometry(xlen, paddrBits)
   require(entries > 0 && entries <= PmpConstants.MaxEntries)
 
   private val pmpAddressBits = geometry.encodedAddressBits
-  private val entryIndexBits = math.max(1, log2Ceil(entries))
-  private val addressMask = geometry.encodedAddressMask
 
   val io = IO(new Bundle {
-    val privilege = Input(UInt(2.W))
-    val address = Input(UInt(paddrBits.W))
-    val bytes = Input(UInt(4.W))
-    val write = Input(Bool())
-    val execute = Input(Bool())
     val config = Input(Vec(entries, UInt(8.W)))
     val pmpAddress = Input(Vec(entries, UInt(pmpAddressBits.W)))
-
-    val allow = Output(Bool())
-    val matched = Output(Bool())
-    val matchedEntry = Output(UInt(entryIndexBits.W))
+    val ranges = Output(Vec(entries, new PmpDecodedEntry(paddrBits)))
   })
-
-  val start = Cat(0.U(1.W), io.address)
-  val end = Wire(UInt((paddrBits + 1).W))
-  end := start + io.bytes - 1.U
-  val invalidRange = io.bytes === 0.U || end(paddrBits)
-
-  val overlaps = Wire(Vec(entries, Bool()))
-  val entryAllows = Wire(Vec(entries, Bool()))
 
   for (entry <- 0 until entries) {
     val config = io.config(entry)
@@ -108,25 +98,7 @@ class PmpChecker(
         upper := byteAddress + 4.U
       }
       is(PmpAddressMode.Napot.U) {
-        // NAPOT size is encoded by the number of trailing one bits in pmpaddr.
-        //
-        // The previous implementation enumerated every possible trailing-one
-        // count and built one wide compare/mux candidate per size. PA56 therefore
-        // expanded 54 candidates for each PMP entry and every checker instance.
-        //
-        // For any non-all-ones x:
-        //   (x ^ (x + 1)) >> 1  = mask of the trailing one bits
-        //   (~x) & (x + 1)      = one-hot bit for the first zero above them
-        //
-        // These identities recover exactly the same NAPOT base and range size
-        // with one incrementer plus bitwise logic instead of a PA-width-sized
-        // bank of wide comparators. Keep the architectural all-ones encoding as
-        // the explicit whole-domain special case.
         val incremented = encodedAddress + 1.U
-        // Static right shift narrows a Chisel UInt. Pad back to the
-        // architectural pmpaddr width before complementing the mask; otherwise
-        // the zero-extension of ~mask would incorrectly clear the high encoded
-        // address bit for regions in the upper half of the implemented PA space.
         val trailingOnesMask =
           ((encodedAddress ^ incremented) >> 1).asUInt.pad(pmpAddressBits)
         val firstZeroOneHot = (~encodedAddress).asUInt & incremented
@@ -147,16 +119,57 @@ class PmpChecker(
       }
     }
 
-    val active = mode =/= PmpAddressMode.Off.U && upper > lower
-    overlaps(entry) := active && !invalidRange && start < upper && end >= lower
-    val fullyContained = start >= lower && end < upper
+    io.ranges(entry).active := mode =/= PmpAddressMode.Off.U && upper > lower
+    io.ranges(entry).lower := lower
+    io.ranges(entry).upper := upper
+    io.ranges(entry).read := config(PmpConstants.ConfigRead)
+    io.ranges(entry).write := config(PmpConstants.ConfigWrite)
+    io.ranges(entry).execute := config(PmpConstants.ConfigExecute)
+    io.ranges(entry).lock := config(PmpConstants.ConfigLock)
+  }
+}
+
+/** Per-request PMP compare/priority lane over already-decoded CSR entry geometry. */
+class PmpAccessChecker(
+    val entries: Int = PmpConstants.MaxEntries,
+    val paddrBits: Int
+) extends Module {
+  require(entries > 0 && entries <= PmpConstants.MaxEntries)
+  private val entryIndexBits = math.max(1, log2Ceil(entries))
+
+  val io = IO(new Bundle {
+    val privilege = Input(UInt(2.W))
+    val address = Input(UInt(paddrBits.W))
+    val bytes = Input(UInt(4.W))
+    val write = Input(Bool())
+    val execute = Input(Bool())
+    val ranges = Input(Vec(entries, new PmpDecodedEntry(paddrBits)))
+
+    val allow = Output(Bool())
+    val matched = Output(Bool())
+    val matchedEntry = Output(UInt(entryIndexBits.W))
+  })
+
+  val start = Cat(0.U(1.W), io.address)
+  val end = Wire(UInt((paddrBits + 1).W))
+  end := start + io.bytes - 1.U
+  val invalidRange = io.bytes === 0.U || end(paddrBits)
+
+  val overlaps = Wire(Vec(entries, Bool()))
+  val entryAllows = Wire(Vec(entries, Bool()))
+
+  for (entry <- 0 until entries) {
+    val range = io.ranges(entry)
+    overlaps(entry) :=
+      range.active && !invalidRange && start < range.upper && end >= range.lower
+    val fullyContained = start >= range.lower && end < range.upper
     val permission = Mux(
       io.execute,
-      config(PmpConstants.ConfigExecute),
-      Mux(io.write, config(PmpConstants.ConfigWrite), config(PmpConstants.ConfigRead))
+      range.execute,
+      Mux(io.write, range.write, range.read)
     )
     val machineBypass =
-      io.privilege === PrivilegeMode.Machine.U && !config(PmpConstants.ConfigLock)
+      io.privilege === PrivilegeMode.Machine.U && !range.lock
     entryAllows(entry) := fullyContained && (machineBypass || permission)
   }
 
@@ -164,7 +177,6 @@ class PmpChecker(
   val matchedEntry = WireDefault(0.U(entryIndexBits.W))
   val allowed = WireDefault(io.privilege === PrivilegeMode.Machine.U)
 
-  // Generate high entries first so lower-numbered entries have final priority.
   for (entry <- (0 until entries).reverse) {
     when(overlaps(entry)) {
       matched := true.B
@@ -176,4 +188,54 @@ class PmpChecker(
   io.matched := matched
   io.matchedEntry := matchedEntry
   io.allow := allowed && !invalidRange
+}
+
+/**
+  * Compatibility wrapper retaining the historical one-module PMP interface.
+  * Integrations with multiple request lanes may instead share one PmpRangeDecoder
+  * across multiple PmpAccessChecker instances.
+  */
+class PmpChecker(
+    val xlen: Int,
+    val entries: Int = PmpConstants.MaxEntries,
+    val paddrBits: Int
+) extends Module {
+  def this(xlen: Int) = this(xlen, PmpConstants.MaxEntries, xlen)
+  def this(xlen: Int, entries: Int) = this(xlen, entries, xlen)
+
+  private val geometry = PmpGeometry(xlen, paddrBits)
+  require(entries > 0 && entries <= PmpConstants.MaxEntries)
+  private val pmpAddressBits = geometry.encodedAddressBits
+  private val entryIndexBits = math.max(1, log2Ceil(entries))
+
+  val io = IO(new Bundle {
+    val privilege = Input(UInt(2.W))
+    val address = Input(UInt(paddrBits.W))
+    val bytes = Input(UInt(4.W))
+    val write = Input(Bool())
+    val execute = Input(Bool())
+    val config = Input(Vec(entries, UInt(8.W)))
+    val pmpAddress = Input(Vec(entries, UInt(pmpAddressBits.W)))
+
+    val allow = Output(Bool())
+    val matched = Output(Bool())
+    val matchedEntry = Output(UInt(entryIndexBits.W))
+  })
+
+  private val decoder = Module(new PmpRangeDecoder(xlen, entries, paddrBits))
+  private val access = Module(new PmpAccessChecker(entries, paddrBits))
+
+  decoder.io.config := io.config
+  decoder.io.pmpAddress := io.pmpAddress
+
+  access.io.privilege := io.privilege
+  access.io.address := io.address
+  access.io.bytes := io.bytes
+  access.io.write := io.write
+  access.io.execute := io.execute
+  access.io.ranges := decoder.io.ranges
+
+  io.allow := access.io.allow
+  io.matched := access.io.matched
+  io.matchedEntry := access.io.matchedEntry
 }
