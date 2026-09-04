@@ -20,11 +20,6 @@ class OperandState(val xlen: Int, val identityBits: Int, val generationBits: Int
   val producerTag = new ProducerTag(identityBits, generationBits)
 }
 
-private class TinyRenameEntry(val identityBits: Int, val generationBits: Int) extends Bundle {
-  val valid = Bool()
-  val producerTag = new ProducerTag(identityBits, generationBits)
-}
-
 private class TinyProducerState(
     val xlen: Int,
     val identityBits: Int,
@@ -32,6 +27,9 @@ private class TinyProducerState(
 ) extends Bundle {
   val valid = Bool()
   val producerTag = new ProducerTag(identityBits, generationBits)
+  // Destination identity lets an unreset/stale rename entry be validated
+  // against the producer slot after bounded ProducerTag generations wrap.
+  val rd = UInt(5.W)
   val ready = Bool()
   val value = UInt(xlen.W)
 }
@@ -114,9 +112,12 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val headOperandsReady = Output(Bool())
   })
 
-  private val rename = RegInit(
-    VecInit(Seq.fill(32)(0.U.asTypeOf(new TinyRenameEntry(IdentityBits, GenerationBits))))
-  )
+  // The rename payload has no architectural reset value.  A table entry is
+  // live only when it still names a valid producer whose destination register
+  // matches the lookup address.  Retire/recovery may therefore leave stale
+  // payload behind instead of clearing 32 resettable entries, allowing the
+  // two-read/one-write table to map into FPGA distributed RAM.
+  private val rename = Mem(32, new ProducerTag(IdentityBits, GenerationBits))
   private val producers = RegInit(
     VecInit(
       Seq.fill(Entries)(
@@ -149,17 +150,20 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
     when(used && address =/= 0.U) {
       val mapping = rename(address)
-      when(mapping.valid) {
-        val producer = producers(mapping.producerTag.id)
+      val producer = producers(mapping.id)
+      val mappingLive =
+        producer.valid &&
+          producer.rd === address &&
+          sameProducer(producer.producerTag, mapping)
+
+      when(mappingLive) {
         val completionBypass = io.completion.valid &&
           io.completion.bits.hasValue &&
           !io.completion.bits.exception.valid &&
-          sameProducer(io.completion.bits.producerTag, mapping.producerTag)
-        val retainedValue = producer.valid &&
-          producer.ready &&
-          sameProducer(producer.producerTag, mapping.producerTag)
+          sameProducer(io.completion.bits.producerTag, mapping)
+        val retainedValue = producer.ready
 
-        resolved.producerTag := mapping.producerTag
+        resolved.producerTag := mapping
         when(completionBypass) {
           resolved.ready := true.B
           resolved.value := io.completion.bits.value
@@ -171,6 +175,9 @@ class TinyDependencyState(val xlen: Int) extends Module {
           resolved.value := 0.U
         }
       }.otherwise {
+        // Stale/uninitialized rename payload is semantically invisible.  With
+        // no live older producer for this architectural register, the committed
+        // register-file value is the correct source.
         resolved.ready := true.B
         resolved.value := committedValue
       }
@@ -251,15 +258,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val retiringProducer = retiring.producerTag
     val producer = producers(retiringProducer.id)
 
-    when(
-      retiring.decoded.writesRd &&
-        retiringRd =/= 0.U &&
-        rename(retiringRd).valid &&
-        sameProducer(rename(retiringRd).producerTag, retiringProducer)
-    ) {
-      rename(retiringRd).valid := false.B
-    }
-
     when(producer.valid && sameProducer(producer.producerTag, retiringProducer)) {
       producers(retiringProducer.id).valid := false.B
       producers(retiringProducer.id).ready := false.B
@@ -288,13 +286,41 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
     producers(allocated.producerTag.id).valid := createsProducer
     producers(allocated.producerTag.id).producerTag := allocated.producerTag
+    producers(allocated.producerTag.id).rd := allocated.decoded.rd
     producers(allocated.producerTag.id).ready := false.B
     producers(allocated.producerTag.id).value := 0.U
 
-    when(createsProducer) {
-      rename(allocated.decoded.rd).valid := true.B
-      rename(allocated.decoded.rd).producerTag := allocated.producerTag
-    }
+  }
+
+  // One physical rename write port. Recovery has the same priority as the
+  // previous last-connect clear/rebuild behavior; privileged recovery suppresses
+  // allocation writes because every producer is being invalidated.
+  private val allocateCreatesProducer =
+    io.allocate.valid &&
+      io.allocate.bits.decoded.writesRd &&
+      io.allocate.bits.decoded.rd =/= 0.U &&
+      io.allocate.bits.producesValue
+  private val survivorCreatesProducer =
+    io.recovery.valid &&
+      io.head.valid &&
+      io.head.bits.decoded.writesRd &&
+      io.head.bits.decoded.rd =/= 0.U &&
+      io.head.bits.producesValue
+  private val renameWriteFromAllocate =
+    allocateCreatesProducer && !io.recovery.valid && !io.privilegedRecovery.valid
+  private val renameWriteValid = renameWriteFromAllocate || survivorCreatesProducer
+  private val renameWriteAddress = Mux(
+    survivorCreatesProducer,
+    io.head.bits.decoded.rd,
+    io.allocate.bits.decoded.rd
+  )
+  private val renameWriteTag = Mux(
+    survivorCreatesProducer,
+    io.head.bits.producerTag,
+    io.allocate.bits.producerTag
+  )
+  when(renameWriteValid) {
+    rename.write(renameWriteAddress, renameWriteTag)
   }
 
   // Normal branch recovery keeps the surviving head producer/link value.
@@ -308,9 +334,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
       survivor.decoded.rd =/= 0.U &&
       survivor.producesValue
 
-    for (register <- 0 until 32) {
-      rename(register).valid := false.B
-    }
     for (index <- 0 until Entries) {
       when(index.U =/= survivor.robToken.index) {
         dependencies(index).valid := false.B
@@ -323,12 +346,9 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
     producers(survivor.producerTag.id).valid := survivorCreatesProducer
     producers(survivor.producerTag.id).producerTag := survivor.producerTag
+    producers(survivor.producerTag.id).rd := survivor.decoded.rd
     producers(survivor.producerTag.id).ready := survivorCreatesProducer && io.recovery.bits.hasValue
     producers(survivor.producerTag.id).value := io.recovery.bits.value
-    when(survivorCreatesProducer) {
-      rename(survivor.decoded.rd).valid := true.B
-      rename(survivor.decoded.rd).producerTag := survivor.producerTag
-    }
   }
 
   // Trap/xRET recovery has no speculative survivor dependency: the head is
@@ -339,9 +359,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
     assert(sameRobToken(io.head.bits.robToken, io.privilegedRecovery.bits.robToken),
       "privileged recovery must name the surviving ROB head")
 
-    for (register <- 0 until 32) {
-      rename(register).valid := false.B
-    }
     for (index <- 0 until Entries) {
       dependencies(index).valid := false.B
       producers(index).valid := false.B
