@@ -23,7 +23,8 @@ class TinyLoadQueueMemoryBackend(
     enableAsyncInterrupts: Boolean = false,
     withMachineExternalInterrupt: Boolean = false,
     withSupervisorExternalInterrupt: Boolean = false,
-    allowAtomics: Boolean = false
+    allowAtomics: Boolean = false,
+    externalPtwPmp: Boolean = false
 ) extends TinyMemoryBackend(
       config,
       geometry,
@@ -33,7 +34,8 @@ class TinyLoadQueueMemoryBackend(
       withMachineExternalInterrupt = withMachineExternalInterrupt,
       withSupervisorExternalInterrupt = withSupervisorExternalInterrupt,
       allowAtomics = allowAtomics,
-      externalDataTranslation = true
+      externalDataTranslation = true,
+      externalPtwPmp = externalPtwPmp
     ) {
   private val isaLocal = config.isa
   private val xlenLocal = isaLocal.xlen
@@ -314,48 +316,70 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.pteData := io.pteData
   loadUnit.io.pteFault := false.B
 
-  // One PTW + one Supervisor PMP qualification serves all three data
-  // lifetimes. Preserve the qualified PA56 wiring exactly; only a narrower
-  // implemented platform inserts the fail-closed architectural-PA boundary.
-  ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
-  ptwPmp.io.bytes := geometry.pteBytes.U
-  ptwPmp.io.write := false.B
-  ptwPmp.io.execute := false.B
-  ptwPmp.io.config := csrFile.io.pmpConfig
-  ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
+  // One shared data PTW serves all three data lifetimes. Standalone LoadQ
+  // composition keeps one local Supervisor PMP owner; TinyPagedCore may move
+  // that ownership after its fetch/data PTW arbiter so the two mutually-
+  // exclusive sources share one checker. Narrow implemented-PA range rejection
+  // always stays here because the parent sees only the narrowed address.
+  if (!externalPtwPmp) {
+    val localPtwPmp = ptwPmp.get
+    localPtwPmp.io.privilege := PrivilegeMode.Supervisor.U
+    localPtwPmp.io.bytes := geometry.pteBytes.U
+    localPtwPmp.io.write := false.B
+    localPtwPmp.io.execute := false.B
+    localPtwPmp.io.config := csrFile.io.pmpConfig
+    localPtwPmp.io.pmpAddress := csrFile.io.pmpAddress
+  }
   sharedTranslation.io.pteData := io.pteData
 
   if (PhysicalBitsLocal >= geometry.architecturalPhysicalAddressBits) {
     val sharedPteAddress =
       sharedTranslation.io.pteAddress.pad(PhysicalBitsLocal)
-    ptwPmp.io.address := sharedPteAddress
-    val sharedPtePmpFault =
-      sharedTranslation.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
-
-    io.pteValid := sharedTranslation.io.pteValid && !sharedPtePmpFault
     io.pteAddress := sharedPteAddress
-    sharedTranslation.io.pteReady :=
-      Mux(sharedPtePmpFault, true.B, io.pteReady)
-    sharedTranslation.io.pteFault :=
-      sharedPtePmpFault || (io.pteValid && io.pteFault)
+
+    if (externalPtwPmp) {
+      io.pteValid := sharedTranslation.io.pteValid
+      sharedTranslation.io.pteReady := io.pteReady
+      sharedTranslation.io.pteFault := io.pteValid && io.pteFault
+    } else {
+      val localPtwPmp = ptwPmp.get
+      localPtwPmp.io.address := sharedPteAddress
+      val sharedPtePmpFault =
+        sharedTranslation.io.pteValid && isaLocal.hasPmp.B && !localPtwPmp.io.allow
+
+      io.pteValid := sharedTranslation.io.pteValid && !sharedPtePmpFault
+      sharedTranslation.io.pteReady :=
+        Mux(sharedPtePmpFault, true.B, io.pteReady)
+      sharedTranslation.io.pteFault :=
+        sharedPtePmpFault || (io.pteValid && io.pteFault)
+    }
   } else {
     val (sharedPteAddress, sharedPteOutOfRange) =
       PhysicalAddressNarrowing(sharedTranslation.io.pteAddress, PhysicalBitsLocal)
     val sharedPteRangeFault =
       sharedTranslation.io.pteValid && sharedPteOutOfRange
-
-    ptwPmp.io.address := sharedPteAddress
-    val sharedPtePmpFault =
-      sharedTranslation.io.pteValid && !sharedPteOutOfRange &&
-        isaLocal.hasPmp.B && !ptwPmp.io.allow
-
-    io.pteValid :=
-      sharedTranslation.io.pteValid && !sharedPteRangeFault && !sharedPtePmpFault
     io.pteAddress := sharedPteAddress
-    sharedTranslation.io.pteReady :=
-      Mux(sharedPteRangeFault || sharedPtePmpFault, true.B, io.pteReady)
-    sharedTranslation.io.pteFault :=
-      sharedPteRangeFault || sharedPtePmpFault || (io.pteValid && io.pteFault)
+
+    if (externalPtwPmp) {
+      io.pteValid := sharedTranslation.io.pteValid && !sharedPteRangeFault
+      sharedTranslation.io.pteReady :=
+        Mux(sharedPteRangeFault, true.B, io.pteReady)
+      sharedTranslation.io.pteFault :=
+        sharedPteRangeFault || (io.pteValid && io.pteFault)
+    } else {
+      val localPtwPmp = ptwPmp.get
+      localPtwPmp.io.address := sharedPteAddress
+      val sharedPtePmpFault =
+        sharedTranslation.io.pteValid && !sharedPteOutOfRange &&
+          isaLocal.hasPmp.B && !localPtwPmp.io.allow
+
+      io.pteValid :=
+        sharedTranslation.io.pteValid && !sharedPteRangeFault && !sharedPtePmpFault
+      sharedTranslation.io.pteReady :=
+        Mux(sharedPteRangeFault || sharedPtePmpFault, true.B, io.pteReady)
+      sharedTranslation.io.pteFault :=
+        sharedPteRangeFault || sharedPtePmpFault || (io.pteValid && io.pteFault)
+    }
   }
 
   // --------------------------------------------------------------------------
