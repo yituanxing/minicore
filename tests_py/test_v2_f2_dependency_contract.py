@@ -14,7 +14,7 @@ def test_f2_owns_only_tiny_rat_and_operand_readiness() -> None:
     assert "val ready = Bool()" in text
     assert "val value = UInt(xlen.W)" in text
     assert "val producerTag = new ProducerTag" in text
-    assert "Seq.fill(32)" in text
+    assert "Mem(32, new ProducerTag" in text
     assert "class TinyDependencyState" in text
     assert "class TinyDependencyBackend" in text
 
@@ -39,7 +39,9 @@ def test_f2_derives_rob_parallel_geometry_from_the_rob_owner() -> None:
 def test_dependency_identity_is_producer_tag_not_order_or_storage_identity() -> None:
     text = DEPENDENCY.read_text(encoding="utf-8")
     assert "sameProducer" in text
-    assert "mapping.producerTag" in text
+    assert "mappingLive" in text
+    assert "producer.rd === address" in text
+    assert "sameProducer(producer.producerTag, mapping)" in text
     assert "sameProducer(dependencies(index).rs1.producerTag" in text
     assert "sameProducer(dependencies(index).rs2.producerTag" in text
     assert "producers(allocated.producerTag.id).valid := createsProducer" in text
@@ -59,12 +61,15 @@ def test_rob_remains_the_completion_identity_authority() -> None:
     assert "dependencyState.io.completion := io.completion" not in dependency
 
 
-def test_waw_retirement_clears_only_the_matching_latest_mapping() -> None:
+def test_stale_rename_payload_is_validated_by_live_producer_and_destination() -> None:
     text = DEPENDENCY.read_text(encoding="utf-8")
-    assert "sameProducer(rename(retiringRd).producerTag, retiringProducer)" in text
-    assert "rename(retiringRd).valid := false.B" in text
-    assert "when(io.allocate.valid)" in text
-    assert "rename(allocated.decoded.rd).producerTag := allocated.producerTag" in text
+    assert "private val rename = Mem(32, new ProducerTag" in text
+    assert "producer.valid" in text
+    assert "producer.rd === address" in text
+    assert "sameProducer(producer.producerTag, mapping)" in text
+    assert "rename.write(renameWriteAddress, renameWriteTag)" in text
+    assert "rename(retiringRd).valid := false.B" not in text
+    assert "for (register <- 0 until 32)" not in text
 
 
 def test_f2_does_not_pull_future_ooo_machinery_forward() -> None:

@@ -7,6 +7,72 @@ import org.scalatest.matchers.should.Matchers
 import aethercore.common.{AluOp, AtomicOp, BranchType, CsrOp, MemSize, XRetOp}
 import aethercore.core.v2._
 
+private class V2F2StaleRenameHarness extends Module {
+  private val Xlen = 64
+  private val IdentityBits = 2
+  private val GenerationBits = 8
+
+  val io = IO(new Bundle {
+    val allocate = Input(Bool())
+    val robIndex = Input(UInt(IdentityBits.W))
+    val robGeneration = Input(UInt(GenerationBits.W))
+    val producerId = Input(UInt(IdentityBits.W))
+    val producerGeneration = Input(UInt(GenerationBits.W))
+    val rd = Input(UInt(5.W))
+    val rs1 = Input(UInt(5.W))
+    val usesRs1 = Input(Bool())
+    val producesValue = Input(Bool())
+    val committedRs1 = Input(UInt(Xlen.W))
+
+    val slot2Rs1Ready = Output(Bool())
+    val slot2Rs1Value = Output(UInt(Xlen.W))
+  })
+
+  private val state = Module(new TinyDependencyState(Xlen))
+  private val allocated =
+    WireDefault(0.U.asTypeOf(new BackendUop(Xlen, IdentityBits, GenerationBits)))
+  allocated.executionClass := ExecutionClass.Integer
+  allocated.robToken.index := io.robIndex
+  allocated.robToken.generation := io.robGeneration
+  allocated.producerTag.id := io.producerId
+  allocated.producerTag.generation := io.producerGeneration
+  allocated.valueRef.id := io.robIndex
+  allocated.valueRef.generation := io.robGeneration
+  allocated.producesValue := io.producesValue
+  allocated.decoded.rd := io.rd
+  allocated.decoded.rs1 := io.rs1
+  allocated.decoded.usesRs1 := io.usesRs1
+  allocated.decoded.usesRs2 := false.B
+  allocated.decoded.writesRd := io.producesValue
+
+  state.io.allocate.valid := io.allocate
+  state.io.allocate.bits := allocated
+  state.io.committedRs1 := io.committedRs1
+  state.io.committedRs2 := 0.U
+
+  state.io.completion.valid := false.B
+  state.io.completion.bits := 0.U.asTypeOf(
+    new ExecutionResponse(Xlen, IdentityBits, GenerationBits)
+  )
+  state.io.recovery.valid := false.B
+  state.io.recovery.bits := 0.U.asTypeOf(
+    new ExecutionResponse(Xlen, IdentityBits, GenerationBits)
+  )
+  state.io.privilegedRecovery.valid := false.B
+  state.io.privilegedRecovery.bits := 0.U.asTypeOf(
+    new ExecutionResponse(Xlen, IdentityBits, GenerationBits)
+  )
+  state.io.retire.valid := false.B
+  state.io.retire.bits := 0.U.asTypeOf(new RobRetirement(Xlen))
+  state.io.head.valid := false.B
+  state.io.head.bits := 0.U.asTypeOf(
+    new BackendUop(Xlen, IdentityBits, GenerationBits)
+  )
+
+  io.slot2Rs1Ready := state.io.slotView(2).rs1.ready
+  io.slot2Rs1Value := state.io.slotView(2).rs1.value
+}
+
 trait V2F2DependencyChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private final case class F2Identity(
       index: BigInt,
@@ -290,6 +356,51 @@ trait V2F2DependencyChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       dut.io.head.bits.decoded.rd.expect(16.U)
       dut.io.headRs1.ready.expect(true.B)
       dut.io.headRs1.value.expect(1515.U)
+    }
+  }
+
+  it should "ignore a stale rename tag reused by a producer for another architectural register" in {
+    simulate(new V2F2StaleRenameHarness) { dut =>
+      dut.io.allocate.poke(false.B)
+      dut.io.robIndex.poke(0.U)
+      dut.io.robGeneration.poke(0.U)
+      dut.io.producerId.poke(0.U)
+      dut.io.producerGeneration.poke(37.U)
+      dut.io.rd.poke(0.U)
+      dut.io.rs1.poke(0.U)
+      dut.io.usesRs1.poke(false.B)
+      dut.io.producesValue.poke(false.B)
+      dut.io.committedRs1.poke(555.U)
+
+      // First lifetime installs x5 -> ProducerTag(0, 37).
+      dut.io.allocate.poke(true.B)
+      dut.io.robIndex.poke(0.U)
+      dut.io.rd.poke(5.U)
+      dut.io.producesValue.poke(true.B)
+      dut.clock.step()
+
+      // Reuse exactly the same bounded ProducerTag for a different rd.  This
+      // models eventual generation wrap without executing hundreds of ROB
+      // lifetimes just to reach the same identity numerically.
+      dut.io.robIndex.poke(1.U)
+      dut.io.rd.poke(6.U)
+      dut.clock.step()
+
+      // x5 still contains the old RAM payload, but the live producer now owns
+      // x6. A new x5 consumer must therefore ignore the stale mapping and use
+      // the committed architectural register-file value.
+      dut.io.robIndex.poke(2.U)
+      dut.io.producerId.poke(2.U)
+      dut.io.producerGeneration.poke(9.U)
+      dut.io.rd.poke(0.U)
+      dut.io.rs1.poke(5.U)
+      dut.io.usesRs1.poke(true.B)
+      dut.io.producesValue.poke(false.B)
+      dut.clock.step()
+      dut.io.allocate.poke(false.B)
+
+      dut.io.slot2Rs1Ready.expect(true.B)
+      dut.io.slot2Rs1Value.expect(555.U)
     }
   }
 
