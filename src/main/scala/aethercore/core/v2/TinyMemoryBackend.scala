@@ -25,7 +25,8 @@ class TinyMemoryBackend(
     val withMachineExternalInterrupt: Boolean = false,
     val withSupervisorExternalInterrupt: Boolean = false,
     val allowAtomics: Boolean = false,
-    val externalDataTranslation: Boolean = false
+    val externalDataTranslation: Boolean = false,
+    val externalPtwPmp: Boolean = false
 ) extends Module {
   private val isa = config.isa
   private val xlen = isa.xlen
@@ -147,7 +148,9 @@ class TinyMemoryBackend(
     allowAtomics = allowAtomics,
     externalTranslation = externalDataTranslation
   ))
-  val ptwPmp = Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits))
+  protected val ptwPmp =
+    if (externalPtwPmp) None
+    else Some(Module(new PmpChecker(xlen, PmpConstants.MaxEntries, PhysicalBits)))
 
   private val retiring = dependencyBackend.io.retiring
   private val retiringSystem = retiring.valid &&
@@ -395,24 +398,33 @@ class TinyMemoryBackend(
       trapAtRetire || returnAtRetire || wfiAtRetire || interruptTake
   }
 
-  // Page-table reads are implicit Supervisor-mode accesses and must themselves
-  // pass PMP before leaving the core. This mirrors the qualified v1 composition:
-  // a denied PTE fetch is consumed locally and reported to the walker as an
-  // access fault; no external PTW request is emitted.
-  ptwPmp.io.privilege := PrivilegeMode.Supervisor.U
-  ptwPmp.io.address := lsu.io.pteAddress
-  ptwPmp.io.bytes := geometry.pteBytes.U
-  ptwPmp.io.write := false.B
-  ptwPmp.io.execute := false.B
-  ptwPmp.io.config := csrFile.io.pmpConfig
-  ptwPmp.io.pmpAddress := csrFile.io.pmpAddress
-  private val ptwPmpFault = lsu.io.pteValid && isa.hasPmp.B && !ptwPmp.io.allow
+  // Page-table reads are implicit Supervisor-mode accesses. Standalone
+  // TinyMemoryBackend keeps the historical local PMP owner. Product composition
+  // may move that check after a shared PTW arbiter so mutually-exclusive fetch
+  // and data walks use one checker without allowing an unchecked external read.
+  if (externalPtwPmp) {
+    io.pteValid := lsu.io.pteValid
+    io.pteAddress := lsu.io.pteAddress
+    lsu.io.pteReady := io.pteReady
+    lsu.io.pteData := io.pteData
+    lsu.io.pteFault := io.pteValid && io.pteFault
+  } else {
+    val localPtwPmp = ptwPmp.get
+    localPtwPmp.io.privilege := PrivilegeMode.Supervisor.U
+    localPtwPmp.io.address := lsu.io.pteAddress
+    localPtwPmp.io.bytes := geometry.pteBytes.U
+    localPtwPmp.io.write := false.B
+    localPtwPmp.io.execute := false.B
+    localPtwPmp.io.config := csrFile.io.pmpConfig
+    localPtwPmp.io.pmpAddress := csrFile.io.pmpAddress
+    val ptwPmpFault = lsu.io.pteValid && isa.hasPmp.B && !localPtwPmp.io.allow
 
-  io.pteValid := lsu.io.pteValid && !ptwPmpFault
-  io.pteAddress := lsu.io.pteAddress
-  lsu.io.pteReady := Mux(ptwPmpFault, true.B, io.pteReady)
-  lsu.io.pteData := io.pteData
-  lsu.io.pteFault := ptwPmpFault || (io.pteValid && io.pteFault)
+    io.pteValid := lsu.io.pteValid && !ptwPmpFault
+    io.pteAddress := lsu.io.pteAddress
+    lsu.io.pteReady := Mux(ptwPmpFault, true.B, io.pteReady)
+    lsu.io.pteData := io.pteData
+    lsu.io.pteFault := ptwPmpFault || (io.pteValid && io.pteFault)
+  }
 
   io.resolvedPhysicalValid := lsu.io.resolvedPhysicalValid
   io.resolvedPhysicalAddress := lsu.io.resolvedPhysicalAddress
