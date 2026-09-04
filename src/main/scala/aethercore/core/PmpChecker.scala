@@ -216,6 +216,9 @@ class PmpChecker(
     val execute = Input(Bool())
     val config = Input(Vec(entries, UInt(8.W)))
     val pmpAddress = Input(Vec(entries, UInt(pmpAddressBits.W)))
+    // Read-only export of the decoder result lets a parent share the expensive
+    // TOR/NA4/NAPOT geometry with another independent access-check lane.
+    val ranges = Output(Vec(entries, new PmpDecodedEntry(paddrBits)))
 
     val allow = Output(Bool())
     val matched = Output(Bool())
@@ -227,6 +230,7 @@ class PmpChecker(
 
   decoder.io.config := io.config
   decoder.io.pmpAddress := io.pmpAddress
+  io.ranges := decoder.io.ranges
 
   access.io.privilege := io.privilege
   access.io.address := io.address
