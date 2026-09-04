@@ -56,16 +56,19 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   }
 
   private def materializeSource(
-      entry: TinySchedulingEntry,
-      kind: OperandSourceKind.Type
+      kind: OperandSourceKind.Type,
+      rs1Value: UInt,
+      rs2Value: UInt,
+      pc: UInt,
+      immediate: UInt
   ): UInt = {
     val value = WireDefault(0.U(xlen.W))
     switch(kind) {
       is(OperandSourceKind.Zero)      { value := 0.U }
-      is(OperandSourceKind.Rs1)       { value := entry.rs1.value }
-      is(OperandSourceKind.Rs2)       { value := entry.rs2.value }
-      is(OperandSourceKind.Pc)        { value := entry.uop.decoded.pc }
-      is(OperandSourceKind.Immediate) { value := entry.uop.decoded.immediate }
+      is(OperandSourceKind.Rs1)       { value := rs1Value }
+      is(OperandSourceKind.Rs2)       { value := rs2Value }
+      is(OperandSourceKind.Pc)        { value := pc }
+      is(OperandSourceKind.Immediate) { value := immediate }
     }
     value
   }
@@ -120,8 +123,11 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
     candidate.wordOp := entry.uop.decoded.wordOp
     candidate.controlFlowKind := entry.uop.decoded.controlFlow.kind
     candidate.branchType := entry.uop.decoded.controlFlow.branchType
-    candidate.lhs := materializeSource(entry, entry.uop.decoded.lhsSource)
-    candidate.rhs := materializeSource(entry, entry.uop.decoded.rhsSource)
+    // Keep operand materialization out of the per-slot candidate cone. The
+    // selected physical slot is known a few lines below, so the 64-bit
+    // Rs1/Rs2/Pc/Immediate source mux only needs to exist once.
+    candidate.lhs := 0.U
+    candidate.rhs := 0.U
     candidate.pc := entry.uop.decoded.pc
     candidate.instBytes := entry.uop.decoded.instBytes
     candidate.immediate := entry.uop.decoded.immediate
@@ -153,8 +159,29 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   private val selectedAge = PriorityEncoder(ageEligible.asUInt)
   private val selectedPhysical =
     (io.headIndex + selectedAge)(IndexBits - 1, 0)
-  private val selectedRequest =
-    Mux1H(UIntToOH(selectedPhysical, Entries), candidates)
+  private val selectedOh = UIntToOH(selectedPhysical, Entries)
+  private val selectedRequestBase = Mux1H(selectedOh, candidates)
+  private val selectedRs1 = Mux1H(selectedOh, io.slots.map(_.rs1.value))
+  private val selectedRs2 = Mux1H(selectedOh, io.slots.map(_.rs2.value))
+  private val selectedLhsSource =
+    Mux1H(selectedOh, io.slots.map(_.uop.decoded.lhsSource))
+  private val selectedRhsSource =
+    Mux1H(selectedOh, io.slots.map(_.uop.decoded.rhsSource))
+  private val selectedRequest = WireDefault(selectedRequestBase)
+  selectedRequest.lhs := materializeSource(
+    selectedLhsSource,
+    selectedRs1,
+    selectedRs2,
+    selectedRequestBase.pc,
+    selectedRequestBase.immediate
+  )
+  selectedRequest.rhs := materializeSource(
+    selectedRhsSource,
+    selectedRs1,
+    selectedRs2,
+    selectedRequestBase.pc,
+    selectedRequestBase.immediate
+  )
 
   io.request.valid := selectedValid && !io.block
   io.request.bits := selectedRequest
