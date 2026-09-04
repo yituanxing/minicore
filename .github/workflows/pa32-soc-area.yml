@@ -9,6 +9,7 @@ on:
       - 'src/main/scala/aethercore/core/TranslationUnit.scala'
       - 'src/main/scala/aethercore/core/TranslationTlb.scala'
       - 'src/main/scala/aethercore/core/PtwArbiter.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyExecution.scala'
       - 'src/main/scala/aethercore/core/v2/TinyBlockingLsu.scala'
       - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
       - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
