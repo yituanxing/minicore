@@ -106,39 +106,58 @@ class V2IntegerUnit(val xlen: Int) extends Module {
   io.response.valid := responseValid
   io.response.bits := responseBits
 
+  // RV64 word operations share the same ALU datapath as full-width integer
+  // operations.  Word semantics are expressed by narrowing/normalizing the
+  // operands before the operation and sign-extending the low 32 result after
+  // it.  This avoids synthesizing a second parallel 32-bit ALU.
+  private val aluLhs = WireDefault(io.request.bits.lhs)
+  private val aluRhs = WireDefault(io.request.bits.rhs)
+  private val aluShamt = WireDefault(io.request.bits.rhs(log2Ceil(xlen) - 1, 0))
+
+  if (xlen == 64) {
+    val wordSignedLhs =
+      io.request.bits.aluOp === AluOp.Slt ||
+        io.request.bits.aluOp === AluOp.Sra
+    val wordSignedRhs = io.request.bits.aluOp === AluOp.Slt
+
+    val wordLhs = Mux(
+      wordSignedLhs,
+      Cat(Fill(32, io.request.bits.lhs(31)), io.request.bits.lhs(31, 0)),
+      Cat(0.U(32.W), io.request.bits.lhs(31, 0))
+    )
+    val wordRhs = Mux(
+      wordSignedRhs,
+      Cat(Fill(32, io.request.bits.rhs(31)), io.request.bits.rhs(31, 0)),
+      Cat(0.U(32.W), io.request.bits.rhs(31, 0))
+    )
+
+    when(io.request.bits.wordOp) {
+      aluLhs := wordLhs
+      aluRhs := wordRhs
+      aluShamt := Cat(0.U(1.W), io.request.bits.rhs(4, 0))
+    }
+  }
+
   private val fullResult = WireDefault(0.U(xlen.W))
-  private val fullShamt = io.request.bits.rhs(log2Ceil(xlen) - 1, 0)
   switch(io.request.bits.aluOp) {
-    is(AluOp.Add)  { fullResult := io.request.bits.lhs + io.request.bits.rhs }
-    is(AluOp.Sub)  { fullResult := io.request.bits.lhs - io.request.bits.rhs }
-    is(AluOp.Sll)  { fullResult := io.request.bits.lhs << fullShamt }
-    is(AluOp.Slt)  { fullResult := (io.request.bits.lhs.asSInt < io.request.bits.rhs.asSInt).asUInt }
-    is(AluOp.Sltu) { fullResult := (io.request.bits.lhs < io.request.bits.rhs).asUInt }
-    is(AluOp.Xor)  { fullResult := io.request.bits.lhs ^ io.request.bits.rhs }
-    is(AluOp.Srl)  { fullResult := io.request.bits.lhs >> fullShamt }
-    is(AluOp.Sra)  { fullResult := (io.request.bits.lhs.asSInt >> fullShamt).asUInt }
-    is(AluOp.Or)   { fullResult := io.request.bits.lhs | io.request.bits.rhs }
-    is(AluOp.And)  { fullResult := io.request.bits.lhs & io.request.bits.rhs }
+    is(AluOp.Add)  { fullResult := aluLhs + aluRhs }
+    is(AluOp.Sub)  { fullResult := aluLhs - aluRhs }
+    is(AluOp.Sll)  { fullResult := aluLhs << aluShamt }
+    is(AluOp.Slt)  { fullResult := (aluLhs.asSInt < aluRhs.asSInt).asUInt }
+    is(AluOp.Sltu) { fullResult := (aluLhs < aluRhs).asUInt }
+    is(AluOp.Xor)  { fullResult := aluLhs ^ aluRhs }
+    is(AluOp.Srl)  { fullResult := aluLhs >> aluShamt }
+    is(AluOp.Sra)  { fullResult := (aluLhs.asSInt >> aluShamt).asUInt }
+    is(AluOp.Or)   { fullResult := aluLhs | aluRhs }
+    is(AluOp.And)  { fullResult := aluLhs & aluRhs }
   }
 
   private val result = if (xlen == 64) {
-    val lhs32 = io.request.bits.lhs(31, 0)
-    val rhs32 = io.request.bits.rhs(31, 0)
-    val shamt32 = rhs32(4, 0)
-    val result32 = WireDefault(0.U(32.W))
-    switch(io.request.bits.aluOp) {
-      is(AluOp.Add)  { result32 := lhs32 + rhs32 }
-      is(AluOp.Sub)  { result32 := lhs32 - rhs32 }
-      is(AluOp.Sll)  { result32 := lhs32 << shamt32 }
-      is(AluOp.Slt)  { result32 := (lhs32.asSInt < rhs32.asSInt).asUInt }
-      is(AluOp.Sltu) { result32 := (lhs32 < rhs32).asUInt }
-      is(AluOp.Xor)  { result32 := lhs32 ^ rhs32 }
-      is(AluOp.Srl)  { result32 := lhs32 >> shamt32 }
-      is(AluOp.Sra)  { result32 := (lhs32.asSInt >> shamt32).asUInt }
-      is(AluOp.Or)   { result32 := lhs32 | rhs32 }
-      is(AluOp.And)  { result32 := lhs32 & rhs32 }
-    }
-    Mux(io.request.bits.wordOp, Cat(Fill(32, result32(31)), result32), fullResult)
+    Mux(
+      io.request.bits.wordOp,
+      Cat(Fill(32, fullResult(31)), fullResult(31, 0)),
+      fullResult
+    )
   } else {
     when(io.request.valid) {
       assert(!io.request.bits.wordOp, "RV32 execution cannot consume an RV64 word operation")
