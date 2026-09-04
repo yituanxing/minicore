@@ -56,7 +56,7 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   }
 
   private def materializeSource(
-      kind: OperandSourceKind.Type,
+      kind: UInt,
       rs1Value: UInt,
       rs2Value: UInt,
       pc: UInt,
@@ -64,11 +64,11 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   ): UInt = {
     val value = WireDefault(0.U(xlen.W))
     switch(kind) {
-      is(OperandSourceKind.Zero)      { value := 0.U }
-      is(OperandSourceKind.Rs1)       { value := rs1Value }
-      is(OperandSourceKind.Rs2)       { value := rs2Value }
-      is(OperandSourceKind.Pc)        { value := pc }
-      is(OperandSourceKind.Immediate) { value := immediate }
+      is(OperandSourceKind.Zero.asUInt)      { value := 0.U }
+      is(OperandSourceKind.Rs1.asUInt)       { value := rs1Value }
+      is(OperandSourceKind.Rs2.asUInt)       { value := rs2Value }
+      is(OperandSourceKind.Pc.asUInt)        { value := pc }
+      is(OperandSourceKind.Immediate.asUInt) { value := immediate }
     }
     value
   }
@@ -163,10 +163,13 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   private val selectedRequestBase = Mux1H(selectedOh, candidates)
   private val selectedRs1 = Mux1H(selectedOh, io.slots.map(_.rs1.value))
   private val selectedRs2 = Mux1H(selectedOh, io.slots.map(_.rs2.value))
+  // Mux the ChiselEnum source kinds as their explicit 3-bit encodings.
+  // Keeping the enum out of Mux1H avoids Verilator width-expansion warnings
+  // while preserving the exact same source-selection semantics.
   private val selectedLhsSource =
-    Mux1H(selectedOh, io.slots.map(_.uop.decoded.lhsSource))
+    Mux1H(selectedOh, io.slots.map(_.uop.decoded.lhsSource.asUInt))
   private val selectedRhsSource =
-    Mux1H(selectedOh, io.slots.map(_.uop.decoded.rhsSource))
+    Mux1H(selectedOh, io.slots.map(_.uop.decoded.rhsSource.asUInt))
   private val selectedRequest = WireDefault(selectedRequestBase)
   selectedRequest.lhs := materializeSource(
     selectedLhsSource,
