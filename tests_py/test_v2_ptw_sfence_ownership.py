@@ -5,30 +5,33 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PAGED = ROOT / "src/main/scala/aethercore/core/v2/TinyPagedCore.scala"
 BACKEND = ROOT / "src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala"
+LOADQ = ROOT / "src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala"
 FETCH = ROOT / "src/main/scala/aethercore/core/InstructionFetchAdapter.scala"
 ARBITER = ROOT / "src/main/scala/aethercore/core/PtwArbiter.scala"
 TRANSLATION = ROOT / "src/main/scala/aethercore/core/TranslationUnit.scala"
 
 
 class V2PtwSfenceOwnershipSourceContract(unittest.TestCase):
-    def test_data_ptw_is_protected_before_backend_export(self):
+    def test_standalone_backend_retains_local_ptw_pmp_owner(self):
         source = BACKEND.read_text(encoding="utf-8")
-        self.assertIn("val ptwPmp = Module(new PmpChecker", source)
-        self.assertIn("ptwPmp.io.privilege := PrivilegeMode.Supervisor.U", source)
-        self.assertIn("private val ptwPmpFault = lsu.io.pteValid", source)
+        self.assertIn("val externalPtwPmp: Boolean = false", source)
+        self.assertIn("if (externalPtwPmp) None", source)
+        self.assertIn("Some(Module(new PmpChecker", source)
+        self.assertIn("val localPtwPmp = ptwPmp.get", source)
+        self.assertIn("localPtwPmp.io.privilege := PrivilegeMode.Supervisor.U", source)
         self.assertIn("io.pteValid := lsu.io.pteValid && !ptwPmpFault", source)
-        self.assertIn("lsu.io.pteReady := Mux(ptwPmpFault, true.B, io.pteReady)", source)
-        self.assertIn("lsu.io.pteFault := ptwPmpFault ||", source)
 
-    def test_fetch_ptw_is_the_only_parent_side_pmp_check(self):
-        source = PAGED.read_text(encoding="utf-8")
-        self.assertIn("ptwArbiter.io.memoryIsFetch && isa.hasPmp.B", source)
-        self.assertIn("private val fetchPtwPmpFault =", source)
-        self.assertIn("io.ptw.valid := ptwArbiter.io.memoryValid && !fetchPtwPmpFault", source)
-        self.assertIn("ptwArbiter.io.memoryReady := Mux(fetchPtwPmpFault, true.B, io.ptw.ready)", source)
-        self.assertNotIn("ptwArbiter.io.memoryValid && !ptwArbiter.io.dataValid", source)
-        self.assertNotIn("private val selectedFetchPtw", source)
-        self.assertNotIn("private val ptwPmpFault = ptwArbiter.io.memoryValid", source)
+    def test_product_moves_data_ptw_pmp_after_shared_arbiter(self):
+        paged = PAGED.read_text(encoding="utf-8")
+        loadq = LOADQ.read_text(encoding="utf-8")
+        self.assertIn("externalPtwPmp = true", paged)
+        self.assertIn("externalPtwPmp: Boolean = false", loadq)
+        self.assertIn("if (externalPtwPmp)", loadq)
+        self.assertIn("private val ptwPmpFault =", paged)
+        self.assertIn("ptwArbiter.io.memoryValid && isa.hasPmp.B && !ptwPmp.io.allow", paged)
+        self.assertIn("io.ptw.valid := ptwArbiter.io.memoryValid && !ptwPmpFault", paged)
+        self.assertIn("ptwArbiter.io.memoryReady := Mux(ptwPmpFault, true.B, io.ptw.ready)", paged)
+        self.assertNotIn("ptwArbiter.io.memoryIsFetch && isa.hasPmp.B", paged)
 
     def test_shared_arbiter_owns_selection_and_exports_routing_fact(self):
         source = ARBITER.read_text(encoding="utf-8")
