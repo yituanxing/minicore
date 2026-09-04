@@ -99,7 +99,7 @@ class TinyPreHeadMemoryBackend(
   // A younger TLB miss may occupy internal translation state, but the first
   // slice never externalizes speculative page-table traffic. Once the Load is
   // exact head, the existing walker resumes with no added replay structure.
-  val preHeadPtwPmpFault = lsu.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.io.allow
+  val preHeadPtwPmpFault = lsu.io.pteValid && isaLocal.hasPmp.B && !ptwPmp.get.io.allow
   io.pteValid := lsu.io.pteValid && !preHeadPtwPmpFault && safetyGate.io.ptePermit
   io.pteAddress := lsu.io.pteAddress
   lsu.io.pteReady := safetyGate.io.ptePermit &&
