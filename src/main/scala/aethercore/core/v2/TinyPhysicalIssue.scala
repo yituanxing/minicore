@@ -163,13 +163,15 @@ class TinyPhysicalSelectiveComputeIssue(val xlen: Int) extends Module {
   private val selectedRequestBase = Mux1H(selectedOh, candidates)
   private val selectedRs1 = Mux1H(selectedOh, io.slots.map(_.rs1.value))
   private val selectedRs2 = Mux1H(selectedOh, io.slots.map(_.rs2.value))
-  // Mux the ChiselEnum source kinds as their explicit 3-bit encodings.
-  // Keeping the enum out of Mux1H avoids Verilator width-expansion warnings
-  // while preserving the exact same source-selection semantics.
-  private val selectedLhsSource =
-    Mux1H(selectedOh, io.slots.map(_.uop.decoded.lhsSource.asUInt))
-  private val selectedRhsSource =
-    Mux1H(selectedOh, io.slots.map(_.uop.decoded.rhsSource.asUInt))
+  // Source kinds are only three bits. Select them through an explicit Vec
+  // index instead of the generic Mux1H(UInt, Seq) overload, whose generated
+  // conditional width is widened by Chisel and rejected by strict Verilator.
+  private val lhsSourceBits =
+    VecInit(io.slots.map(_.uop.decoded.lhsSource.asUInt))
+  private val rhsSourceBits =
+    VecInit(io.slots.map(_.uop.decoded.rhsSource.asUInt))
+  private val selectedLhsSource = lhsSourceBits(selectedPhysical)
+  private val selectedRhsSource = rhsSourceBits(selectedPhysical)
   private val selectedRequest = WireDefault(selectedRequestBase)
   selectedRequest.lhs := materializeSource(
     selectedLhsSource,
