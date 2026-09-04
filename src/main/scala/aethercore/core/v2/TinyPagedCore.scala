@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{InstructionFetchAdapter, PmpChecker, PmpConstants, PtwArbiter, RvcParcelController}
+import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpRangeDecoder, PtwArbiter, RvcParcelController}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -96,9 +96,10 @@ class TinyPagedCore(
   // exact-head Linux qualification as direct core/v2 RTL changes.
   val fetch = Module(new InstructionFetchAdapter(geometry, PhysicalBits, tlbEntries))
   val parcel = if (isa.hasC) Some(Module(new RvcParcelController(Xlen))) else None
-  val instructionPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
+  val frontendPmpRanges = Module(new PmpRangeDecoder(Xlen, PmpConstants.MaxEntries, PhysicalBits))
+  val instructionPmp = Module(new PmpAccessChecker(PmpConstants.MaxEntries, PhysicalBits))
   val ptwArbiter = Module(new PtwArbiter(geometry, PhysicalBits))
-  val ptwPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
+  val ptwPmp = Module(new PmpAccessChecker(PmpConstants.MaxEntries, PhysicalBits))
 
   private val pc = RegInit(config.platform.resetVector.U(Xlen.W))
   private val serialized = RegInit(false.B)
@@ -165,8 +166,9 @@ class TinyPagedCore(
   instructionPmp.io.bytes := (if (isa.hasC) 2.U else 4.U)
   instructionPmp.io.write := false.B
   instructionPmp.io.execute := true.B
-  instructionPmp.io.config := backend.io.frontendPmpConfig
-  instructionPmp.io.pmpAddress := backend.io.frontendPmpAddress
+  frontendPmpRanges.io.config := backend.io.frontendPmpConfig
+  frontendPmpRanges.io.pmpAddress := backend.io.frontendPmpAddress
+  instructionPmp.io.ranges := frontendPmpRanges.io.ranges
 
   private val instructionPmpFault = fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && isa.hasPmp.B && !instructionPmp.io.allow
@@ -395,8 +397,7 @@ class TinyPagedCore(
   ptwPmp.io.bytes := geometry.pteBytes.U
   ptwPmp.io.write := false.B
   ptwPmp.io.execute := false.B
-  ptwPmp.io.config := backend.io.frontendPmpConfig
-  ptwPmp.io.pmpAddress := backend.io.frontendPmpAddress
+  ptwPmp.io.ranges := frontendPmpRanges.io.ranges
   private val fetchPtwPmpFault =
     ptwArbiter.io.memoryIsFetch && isa.hasPmp.B && !ptwPmp.io.allow
 
