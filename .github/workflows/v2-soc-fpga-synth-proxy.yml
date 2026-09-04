@@ -7,6 +7,8 @@ on:
       - 'src/main/scala/aethercore/core/v2/TinyDependency.scala'
       - 'src/main/scala/aethercore/core/PmpChecker.scala'
       - 'src/main/scala/aethercore/core/v2/TinyPagedCore.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyDualReplaySafeLoadUnit.scala'
       - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/main/scala/aethercore/ElaborateV2FpgaSoC.scala'
       - 'tests_py/test_v2_fpga_synth_proxy.py'
