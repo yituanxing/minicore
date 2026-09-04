@@ -21,6 +21,9 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
   private val RootPteAddress = BigInt("00001000", 16)
   private val LeafPteAddress = BigInt("00002010", 16)
   private val SupervisorPa = BigInt("00003000", 16)
+  private val DataVa = BigInt("00005000", 16)
+  private val DataLeafPteAddress = BigInt("00002014", 16)
+  private val DataPa = BigInt("00006000", 16)
 
   private def initialize(dut: TinyPagedCore): Unit = {
     dut.io.imem.inst.poke("h00000013".U)
@@ -71,6 +74,41 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       BigInt("30200073", 16)  // mret
     )
 
+    setup.zipWithIndex.map { case (inst, index) =>
+      (Reset + index * 4) -> inst
+    }.toMap
+  }
+
+  /**
+    * Product-path PMP setup for a split PTW-ownership proof:
+    *   entry 0: deny exactly the 4-byte data leaf PTE at 0x2014 (NA4);
+    *   entry 1: allow the rest of physical memory (full-domain NAPOT).
+    *
+    * Fetch translation therefore reaches root 0x1000 and instruction leaf
+    * 0x2010 normally, while the later data translation must consume the
+    * selected 0x2014 PTW request locally at the shared post-arbiter checker.
+    */
+  private def machineProgramDenyDataLeafPte: Map[BigInt, BigInt] = {
+    val setup = Seq(
+      BigInt("000010b7", 16), // lui  x1,1 -> 0x1000
+      BigInt("80508093", 16), // addi x1,x1,-2043 -> 0x805 = 0x2014 >> 2
+      BigInt("3b009073", 16), // csrw pmpaddr0,x1
+      BigInt("fff00093", 16), // addi x1,x0,-1
+      BigInt("3b109073", 16), // csrw pmpaddr1,x1
+      BigInt("000020b7", 16), // lui  x1,2 -> 0x2000
+      BigInt("f1008093", 16), // addi x1,x1,-240 -> 0x1f10
+      BigInt("3a009073", 16), // csrw pmpcfg0,x1: entry0 NA4 deny, entry1 NAPOT RWX
+      BigInt("800000b7", 16), // lui  x1,0x80000
+      BigInt("00108093", 16), // addi x1,x1,1 -> Sv32 MODE | root PPN 1
+      BigInt("18009073", 16), // csrw satp,x1
+      BigInt("000040b7", 16), // lui  x1,4 -> supervisor PC 0x4000
+      BigInt("34109073", 16), // csrw mepc,x1
+      BigInt("00005337", 16), // lui  x6,5 -> data VA 0x5000
+      BigInt("000010b7", 16), // lui  x1,1
+      BigInt("80008093", 16), // addi x1,x1,-2048 -> MPP=S
+      BigInt("30009073", 16), // csrw mstatus,x1
+      BigInt("30200073", 16)  // mret
+    )
     setup.zipWithIndex.map { case (inst, index) =>
       (Reset + index * 4) -> inst
     }.toMap
@@ -195,6 +233,62 @@ trait V2F7PagedCoreChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
       seenPtw should contain (LeafPteAddress)
       withClue("page-faulting target emitted a physical instruction request: ") {
         seenImem should not contain (SupervisorPa)
+      }
+    }
+  }
+
+  it should "route a data PTW PMP denial through the shared product checker without externalizing the denied PTE read" in {
+    simulate(new TinyPagedCore(Config, Geometry)) { dut =>
+      initialize(dut)
+
+      val instructions = machineProgramDenyDataLeafPte +
+        (SupervisorPa -> BigInt("00032283", 16)) // lw x5,0(x6), x6 = VA 0x5000
+      val pageTable = Map(
+        RootPteAddress -> pte(Level0Ppn, read = false, execute = false, accessed = false),
+        LeafPteAddress -> pte(LeafPpn, read = true, execute = true, accessed = true),
+        DataLeafPteAddress -> pte(DataPa >> 12, read = true, execute = false, accessed = true)
+      )
+      val seenImem = mutable.ArrayBuffer.empty[BigInt]
+      val seenPtw = mutable.ArrayBuffer.empty[BigInt]
+
+      var cycles = 0
+      var faultCommit = false
+      var externalDataRequests = 0
+      while (cycles < 900 && !faultCommit) {
+        driveExternal(dut, instructions, pageTable, seenImem, seenPtw)
+
+        if (dut.io.memoryRequest.valid.peek().litToBoolean) {
+          externalDataRequests += 1
+        }
+
+        if (dut.io.commit.valid.peek().litToBoolean &&
+            dut.io.commit.pc.peek().litValue == SupervisorVa &&
+            dut.io.commit.exception.peek().litToBoolean) {
+          dut.io.commit.exceptionCause.expect(MachineExceptionCode.LoadAccessFault.U)
+          dut.io.commit.exceptionValue.expect(DataVa.U)
+          dut.io.commit.rdWrite.expect(false.B)
+          dut.io.commit.memValid.expect(false.B)
+          faultCommit = true
+        }
+
+        dut.clock.step()
+        cycles += 1
+      }
+
+      withClue("shared product PTW PMP denial did not retire as a precise load access fault: ") {
+        faultCommit shouldBe true
+      }
+      withClue("instruction translation must still read the root PTE externally: ") {
+        seenPtw should contain (RootPteAddress)
+      }
+      withClue("instruction translation must still read its leaf PTE externally: ") {
+        seenPtw should contain (LeafPteAddress)
+      }
+      withClue("PMP-denied data leaf PTE escaped the shared post-arbiter checker: ") {
+        seenPtw should not contain (DataLeafPteAddress)
+      }
+      withClue("PMP-denied data translation emitted a physical data request: ") {
+        externalDataRequests shouldBe 0
       }
     }
   }
