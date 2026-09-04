@@ -90,7 +90,8 @@ class TinyLoadQueueMemoryBackend(
     paddrBits = PhysicalBitsLocal,
     tlbEntries = tlbEntries,
     txnIdBits = txnIdBits,
-    externalTranslation = true
+    externalTranslation = true,
+    externalPmpRanges = true
   ))
   val loadIssue = Module(new TinyPhysicalLoadQueueIssue(xlenLocal))
 
@@ -131,6 +132,10 @@ class TinyLoadQueueMemoryBackend(
   loadUnit.io.pmpEnabled := isaLocal.hasPmp.B
   loadUnit.io.pmpConfig := csrFile.io.pmpConfig
   loadUnit.io.pmpAddress := csrFile.io.pmpAddress
+  // Reuse the data-PTW checker's already-decoded CSR range geometry. The LoadQ
+  // keeps an independent PmpAccessChecker, so request concurrency and priority
+  // semantics are unchanged.
+  loadUnit.io.pmpRanges.get := ptwPmp.io.ranges
 
   // --------------------------------------------------------------------------
   // One shared data TranslationUnit for parent Store/Atomic + Load slot0/slot1.
