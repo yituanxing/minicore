@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, MemSize}
 import aethercore.config.PageTableGeometry
-import aethercore.core.{DataTranslationRequest, DataTranslationResponse, PmpChecker, PmpConstants, PmpGeometry}
+import aethercore.core.{DataTranslationRequest, DataTranslationResponse, PmpAccessChecker, PmpChecker, PmpConstants, PmpDecodedEntry, PmpGeometry}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -34,7 +34,8 @@ class TinyDualReplaySafeLoadUnit(
     val paddrBits: Int = -1,
     val tlbEntries: Int = 8,
     val txnIdBits: Int = 2,
-    val externalTranslation: Boolean = false
+    val externalTranslation: Boolean = false,
+    val externalPmpRanges: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val IdentityBits = TinyRobGeometry.IndexBits
@@ -66,6 +67,12 @@ class TinyDualReplaySafeLoadUnit(
     val pmpEnabled = Input(Bool())
     val pmpConfig = Input(Vec(PmpConstants.MaxEntries, UInt(8.W)))
     val pmpAddress = Input(Vec(PmpConstants.MaxEntries, UInt(PmpAddressBits.W)))
+    // Product composition may share CSR-owned range decoding with the data PTW.
+    // Access comparison/priority remains a separate lane.
+    val pmpRanges =
+      if (externalPmpRanges)
+        Some(Input(Vec(PmpConstants.MaxEntries, new PmpDecodedEntry(PhysicalBits))))
+      else None
 
     // One shared PTW seam. Only the exact-head slot may use it.
     val pteValid = Output(Bool())
@@ -253,18 +260,33 @@ class TinyDualReplaySafeLoadUnit(
     is(MemSize.DWord) { selectedAccessBytes := 8.U }
   }
 
-  val sharedPmp = Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
-  sharedPmp.io.privilege := io.effectivePrivilege
-  sharedPmp.io.address := io.resolvedPhysicalAddress
-  sharedPmp.io.bytes := selectedAccessBytes
-  sharedPmp.io.write := false.B
-  sharedPmp.io.execute := false.B
-  sharedPmp.io.config := io.pmpConfig
-  sharedPmp.io.pmpAddress := io.pmpAddress
+  val sharedPmpAllow = Wire(Bool())
+  if (externalPmpRanges) {
+    val sharedPmp =
+      Module(new PmpAccessChecker(PmpConstants.MaxEntries, PhysicalBits))
+    sharedPmp.io.privilege := io.effectivePrivilege
+    sharedPmp.io.address := io.resolvedPhysicalAddress
+    sharedPmp.io.bytes := selectedAccessBytes
+    sharedPmp.io.write := false.B
+    sharedPmp.io.execute := false.B
+    sharedPmp.io.ranges := io.pmpRanges.get
+    sharedPmpAllow := sharedPmp.io.allow
+  } else {
+    val sharedPmp =
+      Module(new PmpChecker(Xlen, PmpConstants.MaxEntries, PhysicalBits))
+    sharedPmp.io.privilege := io.effectivePrivilege
+    sharedPmp.io.address := io.resolvedPhysicalAddress
+    sharedPmp.io.bytes := selectedAccessBytes
+    sharedPmp.io.write := false.B
+    sharedPmp.io.execute := false.B
+    sharedPmp.io.config := io.pmpConfig
+    sharedPmp.io.pmpAddress := io.pmpAddress
+    sharedPmpAllow := sharedPmp.io.allow
+  }
 
   val selectedPmpDenied =
-    pmaSelectValid && selectedMemoryValid && io.pmpEnabled && !sharedPmp.io.allow
-  val selectedPmpAllowed = !io.pmpEnabled || sharedPmp.io.allow
+    pmaSelectValid && selectedMemoryValid && io.pmpEnabled && !sharedPmpAllow
+  val selectedPmpAllowed = !io.pmpEnabled || sharedPmpAllow
   val selectedPermit =
     pmaSelectValid && selectedMemoryValid && selectedPmpAllowed &&
       (selectedIsHead || replaySafe)
