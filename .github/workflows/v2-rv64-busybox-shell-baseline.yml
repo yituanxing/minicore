@@ -172,7 +172,7 @@ jobs:
             POST_INPUT_MAX_CYCLES=50000000 \
             PROGRESS_INTERVAL_CYCLES=25000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
-            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             run-local
           cp "$probe_dir/logs/boot-probe.log" build/rv64-busybox-shell/boot-probe.log
 
