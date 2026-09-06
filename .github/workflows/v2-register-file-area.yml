@@ -1,0 +1,101 @@
+name: AetherCore Register File FPGA Area
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/RegisterFile.scala'
+      - 'src/main/scala/aethercore/ElaborateRegisterFileSynthesisRV64.scala'
+      - '.github/workflows/v2-register-file-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-register-file-area-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure RV64 register-file ECP5 area
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+
+      - name: Elaborate register file
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/aethercore-register-file-area"
+          rm -rf "$out"
+          mkdir -p "$out/rtl"
+          ./mill aethercore.runMain aethercore.ElaborateRegisterFileSynthesisRV64 \
+            --target-dir "$out/rtl"
+          echo "AREA_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Map register file with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t svs < <(find "$AREA_OUT/rtl" -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+          yosys -Q -p "$read_cmd; hierarchy -check -top RegisterFile; synth_ecp5 -top RegisterFile -json $AREA_OUT/register-file.json; stat -top RegisterFile" \
+            2>&1 | tee "$AREA_OUT/yosys.log"
+
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          root = Path(os.environ["AREA_OUT"])
+          net = json.loads((root / "register-file.json").read_text())
+          types = Counter(c["type"] for c in net["modules"]["RegisterFile"]["cells"].values())
+          summary = {
+              "top": "RegisterFile",
+              "xlen": 64,
+              "cells": sum(types.values()),
+              "lut4": types["LUT4"],
+              "ff": types["TRELLIS_FF"],
+              "distributed_ram_trellis_dpr16x4": types["TRELLIS_DPR16X4"],
+              "bram_dp16kd": types["DP16KD"],
+              "ccu2c": types["CCU2C"],
+              "pfumx": types["PFUMX"],
+              "l6mux21": types["L6MUX21"],
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload register-file area evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-register-file-area-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.AREA_OUT }}/summary.json
+            ${{ env.AREA_OUT }}/yosys.log
