@@ -161,7 +161,7 @@ jobs:
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$probe_dir" \
             TOP=AetherCoreV2OpenSbiRV64SimTop \
-            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64Fast \
             FW_BIN=build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS="$(nproc)" \
             MAX_CYCLES=600000000 \
