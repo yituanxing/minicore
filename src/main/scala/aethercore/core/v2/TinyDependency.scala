@@ -239,7 +239,9 @@ class TinyDependencyState(val xlen: Int) extends Module {
           sameProducer(dependencies(index).rs1.producerTag, io.completion.bits.producerTag)
       ) {
         dependencies(index).rs1.ready := true.B
-        dependencies(index).rs1.value := io.completion.bits.value
+        // SYNTHESIS-ONLY AREA CEILING: intentionally omit the 64-bit wake-value
+        // broadcast write. This branch is architecturally invalid and exists
+        // only to bound the mux/write cost before designing a correct topology.
       }
       when(
         dependencies(index).valid &&
@@ -247,7 +249,7 @@ class TinyDependencyState(val xlen: Int) extends Module {
           sameProducer(dependencies(index).rs2.producerTag, io.completion.bits.producerTag)
       ) {
         dependencies(index).rs2.ready := true.B
-        dependencies(index).rs2.value := io.completion.bits.value
+        // SYNTHESIS-ONLY AREA CEILING: see rs1 above.
       }
     }
   }
