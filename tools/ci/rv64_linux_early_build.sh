@@ -218,23 +218,6 @@ cp "${QUALIFIED}" "${EVIDENCE_DIR}/qualified.env"
 file "${VMLINUX}" "${IMAGE}" > "${EVIDENCE_DIR}/files.txt"
 sha256sum "${VMLINUX}" "${IMAGE}" "${OBJ_DIR}/.config" > "${EVIDENCE_DIR}/kernel-sha256.txt"
 
-# Shell/performance workloads only need the already-qualified kernel object tree.
-# Skip the otherwise redundant DTS + OpenSBI payload build; the workload-specific
-# payload builder will construct the one firmware image that is actually run.
-if [[ "${RV64_LINUX_KERNEL_ONLY:-0}" == "1" ]]; then
-  {
-    echo "RV64_LINUX_EARLY_BUILD_RESULT: status=PASS"
-    echo "linux_version=${RV64_LINUX_VERSION}"
-    echo "linux_source_sha256=${RV64_LINUX_SHA256}"
-    echo "linux_recipe=${RV64_LINUX_RECIPE_VERSION}"
-    echo "kernel_recipe_key=${recipe_key}"
-    echo "kernel_image=${IMAGE}"
-    echo "kernel_image_sha256=$(sha256sum "${IMAGE}" | awk '{print $1}')"
-    echo "kernel_only=1"
-  } | tee "${BUILD_DIR}/result.txt"
-  exit 0
-fi
-
 command -v dtc >/dev/null 2>&1 || fail "device-tree-compiler (dtc) is required for RV64 AetherSoC DTS"
 chmod +x "${ROOT_DIR}/mill"
 "${ROOT_DIR}/mill" aethercore.runMain aethercore.EmitAetherSoCDts \
