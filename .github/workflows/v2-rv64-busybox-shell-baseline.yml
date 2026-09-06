@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/v2-rv64-busybox-shell-baseline.yml'
       - 'tools/ci/rv64_busybox_shell_build.sh'
+      - 'tools/ci/rv64_linux_kernel_reuse.sh'
       - 'tools/ci/rv64_busybox_shell_payload_build.sh'
       - 'software/rv64/**'
       - 'src/main/scala/aethercore/**'
@@ -109,7 +110,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RV64_LINUX_KERNEL_ONLY=1 bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_linux_kernel_reuse.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
 
       - name: Build static RV64 musl + BusyBox ash initramfs
