@@ -109,8 +109,125 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash tools/ci/rv64_linux_early_build.sh
-          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          RV64_LINUX_KERNEL_ONLY=1 bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS
+
+      - name: Build static RV64 musl + BusyBox ash initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/rv64_busybox_shell_build.sh
+          bash tools/ci/rv64_busybox_shell_build.sh
+
+      - name: Build OpenSBI payload with BusyBox shell Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/rv64_busybox_shell_payload_build.sh
+          bash tools/ci/rv64_busybox_shell_payload_build.sh
+
+      - name: Run current V2 SoC to real interactive ash
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$HOME/.cache/aethercore/v2-rv64-busybox-shell/$TARGET_SHA"
+          command_file="build/rv64-busybox-shell/uart-command.txt"
+          printf "printf 'RV64 BUSYBOX COMMAND %%s\\n' OK\n" > "$command_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64 \
+            FW_BIN=build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=600000000 \
+            MILESTONE='RV64 BUSYBOX COMMAND OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            UART_TRIGGER='RV64 BUSYBOX SHELL READY' \
+            UART_COMMAND_FILE="$command_file" \
+            POST_INPUT_MAX_CYCLES=50000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          cp "$probe_dir/logs/boot-probe.log" build/rv64-busybox-shell/boot-probe.log
+
+      - name: Extract shell-ready baseline and bottleneck snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          log = Path("build/rv64-busybox-shell/boot-probe.log").read_text(errors="replace").replace("\r","")
+          def one(pattern):
+              m = re.search(pattern, log, re.M)
+              if not m:
+                  raise SystemExit("missing measurement: " + pattern)
+              return m
+          shell = one(r"^L32_UART_INPUT_START cycles=(\d+) commits=(\d+).*trigger=RV64 BUSYBOX SHELL READY")
+          done = one(r"^L32_RUNTIME_MILESTONE_PASS cycles=(\d+) commits=(\d+).*marker=RV64 BUSYBOX COMMAND OK$")
+          init = re.search(r"\[\s*([0-9]+\.[0-9]+)\]\s+Run /init as init process", log)
+          dcache = re.search(r"^AETHERCORE_V2_DCACHE reason=marker hit=(\d+) miss=(\d+) bypass=(\d+)$", log, re.M)
+          perf = re.search(r"^AETHERCORE_V2_PERF head_not_ready=(\d+) head_ready_not_issued=(\d+) commit_idle_nonempty=(\d+) compute_head=(\d+) branch_head=(\d+) memory_head=(\d+) system_head=(\d+) interrupt_hold=(\d+) wfi_halted=(\d+)$", log, re.M)
+          top = re.search(r"^AETHERCORE_V2_TOPDOWN reason=marker cycles=(\d+) flow=(\d+) frontend_bound=(\d+) backend_bound=(\d+)$", log, re.M)
+          out = [
+              "RV64_V2_BUSYBOX_SHELL_BASELINE: status=PASS",
+              f"shell_ready_cycles={shell.group(1)}",
+              f"shell_ready_commits={shell.group(2)}",
+              f"command_roundtrip_cycles={done.group(1)}",
+              f"command_roundtrip_commits={done.group(2)}",
+          ]
+          if init:
+              out.append(f"linux_run_init_seconds={init.group(1)}")
+          if dcache:
+              h,m,b = map(int, dcache.groups())
+              out += [f"dcache_hit={h}", f"dcache_miss={m}", f"dcache_bypass={b}",
+                      f"dcache_cacheable_hit_rate={h/(h+m):.6f}" if h+m else "dcache_cacheable_hit_rate=0"]
+          if perf:
+              keys=("head_not_ready","head_ready_not_issued","commit_idle_nonempty","compute_head","branch_head","memory_head","system_head","interrupt_hold","wfi_halted")
+              out += [f"{k}={v}" for k,v in zip(keys, perf.groups())]
+          if top:
+              out += [f"topdown_{k}={v}" for k,v in zip(("cycles","flow","frontend_bound","backend_bound"), top.groups())]
+          Path("build/rv64-busybox-shell/baseline.txt").write_text("\n".join(out)+"\n")
+          print("\n".join(out))
+          PY
+          grep -q '^RV64_V2_BUSYBOX_SHELL_BASELINE: status=PASS$' build/rv64-busybox-shell/baseline.txt
+          grep -Fq 'BusyBox' build/rv64-busybox-shell/boot-probe.log
+          grep -Fq 'RV64 BUSYBOX SHELL READY' build/rv64-busybox-shell/boot-probe.log
+          grep -Fq 'RV64 BUSYBOX COMMAND OK' build/rv64-busybox-shell/boot-probe.log
+
+      - name: Publish measurement summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Current V2 RV64 BusyBox shell baseline'
+            echo
+            echo "- head: \`$TARGET_SHA\`"
+            if [[ -s build/rv64-busybox-shell/baseline.txt ]]; then
+              echo '```text'
+              cat build/rv64-busybox-shell/baseline.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload shell baseline evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-v2-rv64-busybox-shell-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-busybox-shell/result.txt
+            build/rv64-busybox-shell/baseline.txt
+            build/rv64-busybox-shell/boot-probe.log
+            build/rv64-busybox-shell/evidence/
+            build/rv64-busybox-shell-boot/result.txt
+            build/rv64-busybox-shell-boot/evidence/
+ build/rv64-linux-early/result.txt
 
       - name: Build static RV64 musl + BusyBox ash initramfs
         shell: bash
