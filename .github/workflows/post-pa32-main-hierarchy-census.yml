@@ -1,0 +1,169 @@
+name: Post-PA32 Main FPGA Hierarchy Census
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/post-pa32-main-hierarchy-census.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact current-main census carrier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys
+          yosys -V
+          yosys -Q -p 'help synth_ecp5' | grep -q -- '-noflatten'
+
+      - name: Elaborate current main CPU and SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/post-pa32-census"
+          rm -rf "$out"
+          mkdir -p "$out/core-rtl" "$out/soc-rtl"
+          ./mill aethercore.runMain aethercore.ElaborateV2CoreSynthesisRV64 --target-dir "$out/core-rtl"
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 --target-dir "$out/soc-rtl"
+          echo "CENSUS_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Preserve hierarchy while mapping ECP5 primitives
+        shell: bash
+        run: |
+          set -euo pipefail
+          map_one() {
+            local tag="$1"
+            local dir="$2"
+            local top="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            local read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -noflatten -top $top; write_json $CENSUS_OUT/$tag.json; stat -top $top" \
+              2>&1 | tee "$CENSUS_OUT/$tag.log"
+          }
+          map_one core "$CENSUS_OUT/core-rtl" TinyPagedCore
+          map_one soc "$CENSUS_OUT/soc-rtl" AetherCoreV2FpgaSoC
+
+      - name: Compute direct and inclusive hierarchy costs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from functools import lru_cache
+          from pathlib import Path
+
+          root=Path(os.environ["CENSUS_OUT"])
+          primitive_keys=("LUT4","TRELLIS_FF","PFUMX","L6MUX21","TRELLIS_DPR16X4","DP16KD","MULT18X18D","CCU2C")
+          known_primitive_prefixes=("$","$_","TRELLIS_","LUT","PFUMX","L6MUX","DP16KD","MULT18","CCU2C","IB","OB","BB")
+
+          def analyze(tag, top):
+              net=json.loads((root/f"{tag}.json").read_text())
+              mods=net["modules"]
+
+              def direct_counts(name):
+                  t=Counter(cell["type"] for cell in mods[name].get("cells",{}).values())
+                  return {k:t[k] for k in primitive_keys}, t
+
+              @lru_cache(None)
+              def inclusive(name):
+                  totals=Counter()
+                  for cell in mods[name].get("cells",{}).values():
+                      typ=cell["type"]
+                      if typ in mods:
+                          totals.update(inclusive(typ))
+                      else:
+                          totals[typ]+=1
+                  return totals
+
+              rows=[]
+              for name in mods:
+                  direct, direct_types=direct_counts(name)
+                  inc=inclusive(name)
+                  child_types=Counter(
+                      cell["type"] for cell in mods[name].get("cells",{}).values()
+                      if cell["type"] in mods
+                  )
+                  rows.append({
+                      "module":name,
+                      "instances_in_definition":sum(child_types.values()),
+                      "child_module_types":dict(child_types.most_common()),
+                      "direct":{k:direct[k] for k in primitive_keys},
+                      "inclusive":{k:inc[k] for k in primitive_keys},
+                      "inclusive_cells":sum(inc.values()),
+                  })
+
+              rows.sort(key=lambda r:(r["inclusive"]["LUT4"],r["inclusive_cells"]),reverse=True)
+              result={
+                  "top":top,
+                  "module_count":len(mods),
+                  "top_inclusive":rows[0] if rows and rows[0]["module"]==top else next(r for r in rows if r["module"]==top),
+                  "ranking":rows,
+              }
+              (root/f"{tag}-census.json").write_text(json.dumps(result,indent=2)+"\n")
+
+              print(f"\n=== {tag.upper()} TOP 40 INCLUSIVE LUT4 ===")
+              for r in rows[:40]:
+                  i=r["inclusive"]; d=r["direct"]
+                  print(
+                      f'{r["module"]}: incl_lut4={i["LUT4"]} direct_lut4={d["LUT4"]} '
+                      f'incl_ff={i["TRELLIS_FF"]} pfumx={i["PFUMX"]} l6mux={i["L6MUX21"]} '
+                      f'dpr={i["TRELLIS_DPR16X4"]} mult={i["MULT18X18D"]} cells={r["inclusive_cells"]}'
+                  )
+              print(f"\n=== {tag.upper()} TOP 30 DIRECT LUT4 ===")
+              for r in sorted(rows,key=lambda r:r["direct"]["LUT4"],reverse=True)[:30]:
+                  d=r["direct"]; i=r["inclusive"]
+                  print(
+                      f'{r["module"]}: direct_lut4={d["LUT4"]} incl_lut4={i["LUT4"]} '
+                      f'direct_ff={d["TRELLIS_FF"]} pfumx={d["PFUMX"]} l6mux={d["L6MUX21"]}'
+                  )
+              return result
+
+          core=analyze("core","TinyPagedCore")
+          soc=analyze("soc","AetherCoreV2FpgaSoC")
+
+          summary={
+              "baseline_sha":os.environ.get("GITHUB_SHA"),
+              "note":"Hierarchy-preserving ECP5 mapping. Inclusive module counts overlap by ancestry and must not be added together.",
+              "core_top":core["top_inclusive"],
+              "soc_top":soc["top_inclusive"],
+              "core_top20":core["ranking"][:20],
+              "soc_top30":soc["ranking"][:30],
+          }
+          (root/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+          PY
+
+      - name: Upload hierarchy census
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-pa32-main-hierarchy-census-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            ${{ env.CENSUS_OUT }}/summary.json
+            ${{ env.CENSUS_OUT }}/core-census.json
+            ${{ env.CENSUS_OUT }}/soc-census.json
+            ${{ env.CENSUS_OUT }}/core.log
+            ${{ env.CENSUS_OUT }}/soc.log
