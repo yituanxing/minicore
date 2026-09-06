@@ -115,7 +115,7 @@ class AetherCoreV2LinuxSoC(
     config,
     geometry,
     txnIdBits = txnIdBits,
-    dcacheEntries = 64,
+    dcacheEntries = 256,
     enableInstructionBackpressure = enableInstructionBackpressure
   ))
 
