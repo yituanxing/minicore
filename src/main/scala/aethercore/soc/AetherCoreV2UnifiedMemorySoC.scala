@@ -20,7 +20,8 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   */
 class AetherCoreV2UnifiedMemorySoC(
     val externalPhysicalSeams: Boolean = false,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val enableSafeFullBeatIcache: Boolean = true
 ) extends Module {
   private val xlen = 64
   private val paddrBits = implementedPaddrBits
@@ -140,8 +141,12 @@ class AetherCoreV2UnifiedMemorySoC(
     imemStart >= addressMap.ramBase.U &&
       imemBeatEndExclusive <= addressMap.ramLimit.U
   instructionCache.io.frontendFullBeatAllowed :=
-    platform.io.imemFullBeatPmpSafe &&
-      (fullBeatInBootRom || fullBeatInRam)
+    (if (enableSafeFullBeatIcache) {
+      platform.io.imemFullBeatPmpSafe &&
+        (fullBeatInBootRom || fullBeatInRam)
+    } else {
+      false.B
+    })
 
   instructionCache.io.invalidateAll := platform.io.instructionFence
   platform.io.imemReady.get := instructionCache.io.frontendReady
