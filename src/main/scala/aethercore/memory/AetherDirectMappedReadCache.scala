@@ -23,7 +23,8 @@ class AetherDirectMappedReadCache(
     val addrBits: Int,
     val dataBits: Int,
     val txnIdBits: Int,
-    val entries: Int = 64
+    val entries: Int = 64,
+    val fullBeatReadMissOracle: Boolean = false
 ) extends Module {
   require(addrBits > 0, s"cache address width must be positive, got $addrBits")
   require(dataBits == 32 || dataBits == 64,
@@ -89,6 +90,7 @@ class AetherDirectMappedReadCache(
   private val fillTag = Reg(Vec(TxnCount, UInt(TagBits.W)))
   private val fillOffset = Reg(Vec(TxnCount, UInt(OffsetBits.W)))
   private val fillMask = Reg(Vec(TxnCount, UInt(BeatBytes.W)))
+  private val fullBeatFill = RegInit(VecInit(Seq.fill(TxnCount)(false.B)))
   private val fillEpoch = Reg(Vec(TxnCount, UInt(4.W)))
 
   private val req = io.upstreamRequest.bits
@@ -151,14 +153,32 @@ class AetherDirectMappedReadCache(
   responses.io.in(0).bits := hitResponseBits
   responses.io.in(1).valid := io.downstreamResponse.valid
   responses.io.in(1).bits := io.downstreamResponse.bits
+  private val responseTxnForData = io.downstreamResponse.bits.txnId
+  private val responseDataForUpstream =
+    Mux(
+      fullBeatFill(responseTxnForData),
+      io.downstreamResponse.bits.rdata >>
+        (fillOffset(responseTxnForData) << 3),
+      io.downstreamResponse.bits.rdata
+    )
+  responses.io.in(1).bits.rdata := responseDataForUpstream
   io.downstreamResponse.ready := responses.io.in(1).ready
   io.upstreamResponse <> responses.io.out
 
   private val hitResponseFire = responses.io.in(0).fire
   private val hitCanAccept = !hitResponseValid || hitResponseFire
 
+  private val fullBeatMiss =
+    fullBeatReadMissOracle.B && ordinaryCacheableRead && !readHit
+  private val alignedBeatAddress =
+    Cat(req.paddr(addrBits - 1, OffsetBits), 0.U(OffsetBits.W))
+
   io.downstreamRequest.valid := io.upstreamRequest.valid && !readHit
   io.downstreamRequest.bits := io.upstreamRequest.bits
+  when(fullBeatMiss) {
+    io.downstreamRequest.bits.paddr := alignedBeatAddress
+    io.downstreamRequest.bits.size := MemSize.DWord
+  }
   io.upstreamRequest.ready :=
     Mux(readHit, hitCanAccept, io.downstreamRequest.ready)
 
@@ -208,7 +228,12 @@ class AetherDirectMappedReadCache(
       fillIndex(txn) := reqIndex
       fillTag(txn) := reqTag
       fillOffset(txn) := reqOffset
-      fillMask(txn) := reqMask
+      fillMask(txn) := Mux(
+        fullBeatMiss,
+        ((BigInt(1) << BeatBytes) - 1).U(BeatBytes.W),
+        reqMask
+      )
+      fullBeatFill(txn) := fullBeatMiss
       fillEpoch(txn) := lineEpoch(reqIndex)
     }
 
@@ -247,8 +272,12 @@ class AetherDirectMappedReadCache(
       val oldData = Mux(sameLine, lineData(index), 0.U)
       val oldMask = Mux(sameLine, lineByteValid(index), 0.U)
       val shifted =
-        (io.downstreamResponse.bits.rdata << (fillOffset(responseTxn) << 3))(
-          dataBits - 1, 0
+        Mux(
+          fullBeatFill(responseTxn),
+          io.downstreamResponse.bits.rdata,
+          (io.downstreamResponse.bits.rdata << (fillOffset(responseTxn) << 3))(
+            dataBits - 1, 0
+          )
         )
 
       lineValid(index) := true.B
@@ -257,6 +286,7 @@ class AetherDirectMappedReadCache(
       lineByteValid.write(index, oldMask | fillMask(responseTxn))
     }
     fillValid(responseTxn) := false.B
+    fullBeatFill(responseTxn) := false.B
   }
 
   // Atomic operations are never satisfied from cached state in stage 1.
