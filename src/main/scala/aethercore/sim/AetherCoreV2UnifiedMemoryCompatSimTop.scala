@@ -1,6 +1,7 @@
 package aethercore.sim
 
 import chisel3._
+import chisel3.util.experimental.BoringUtils
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
 import aethercore.soc.AetherCoreV2UnifiedMemorySoC
@@ -66,6 +67,12 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
 
+    // Simulation-only LoadQ2 saturation observability. These counters cannot
+    // feed production control and exist only on the historical host ABI shell.
+    val loadQBusyCycles = Output(UInt(64.W))
+    val loadQFullCycles = Output(UInt(64.W))
+    val loadQCapacityBlockedCycles = Output(UInt(64.W))
+
     val commit = Output(new CommitTrace(xlen, paddrBits, busDataBits))
     val halted = Output(Bool())
   })
@@ -77,6 +84,22 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
   // internals through BoringUtils; keeping this alias here avoids widening the
   // production SoC interface or bypassing the unified-memory datapath.
   val core = soc.platform.core
+
+  private val observedLoadQBusy =
+    BoringUtils.tapAndRead(core.backend.loadUnit.io.busy)
+  private val observedLoadQFull =
+    BoringUtils.tapAndRead(core.backend.loadUnit.io.full)
+  private val observedLoadQCapacityBlocked =
+    BoringUtils.tapAndRead(core.backend.loadIssue.io.capacityBlocked)
+
+  private val loadQBusyCycles = RegInit(0.U(64.W))
+  private val loadQFullCycles = RegInit(0.U(64.W))
+  private val loadQCapacityBlockedCycles = RegInit(0.U(64.W))
+  when(observedLoadQBusy) { loadQBusyCycles := loadQBusyCycles + 1.U }
+  when(observedLoadQFull) { loadQFullCycles := loadQFullCycles + 1.U }
+  when(observedLoadQCapacityBlocked) {
+    loadQCapacityBlockedCycles := loadQCapacityBlockedCycles + 1.U
+  }
 
   val hostMemory = Module(new AetherSoCUnifiedHostMemoryAdapter(
     addrBits = paddrBits,
@@ -132,6 +155,9 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
   io.dcacheHitCount := soc.io.dcacheHitCount
   io.dcacheMissCount := soc.io.dcacheMissCount
   io.dcacheBypassCount := soc.io.dcacheBypassCount
+  io.loadQBusyCycles := loadQBusyCycles
+  io.loadQFullCycles := loadQFullCycles
+  io.loadQCapacityBlockedCycles := loadQCapacityBlockedCycles
   io.commit := soc.io.commit
   io.halted := soc.io.halted
 }
