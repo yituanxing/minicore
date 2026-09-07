@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpRangeDecoder, PtwArbiter, RvcParcelController}
+import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpFullBeatExtensionGuard, PmpRangeDecoder, PtwArbiter, RvcParcelController}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -54,6 +54,10 @@ class TinyPagedCore(
     // A future I-cache/AXI wrapper opts in and may hold a translated fetch until
     // instruction data is actually available.
     val imemReady = if (enableInstructionBackpressure) Some(Input(Bool())) else None
+    // Conservative permission proof exported only for the optional SoC
+    // full-beat I-cache fill optimization. It never changes architectural
+    // fetch fault semantics for the current 4-byte instruction.
+    val imemFullBeatPmpSafe = Output(Bool())
     val ptw = new PageTableReadBusIO(PhysicalBits, geometry.pteBits)
 
     val commit = Output(new CommitTrace(Xlen, PhysicalBits, BusBits))
@@ -170,8 +174,37 @@ class TinyPagedCore(
   frontendPmpRanges.io.pmpAddress := backend.io.frontendPmpAddress
   instructionPmp.io.ranges := frontendPmpRanges.io.ranges
 
+  // Reuse the already-decoded PMP ranges and current matched entry. The guard
+  // proves only the additional bytes; the architectural 4-byte access keeps its
+  // original fault semantics.
+  private val fullBeatPmpSafe =
+    if (isa.hasC) {
+      false.B
+    } else if (!isa.hasPmp) {
+      true.B
+    } else {
+      val guard = Module(new PmpFullBeatExtensionGuard(
+        PmpConstants.MaxEntries,
+        PhysicalBits
+      ))
+      guard.io.address := fetch.io.physicalAddress
+      guard.io.currentAllowed := instructionPmp.io.allow
+      guard.io.currentMatched := instructionPmp.io.matched
+      guard.io.currentMatchedEntry := instructionPmp.io.matchedEntry
+      guard.io.ranges := frontendPmpRanges.io.ranges
+      guard.io.allow
+    }
+
   private val instructionPmpFault = fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && isa.hasPmp.B && !instructionPmp.io.allow
+
+  io.imemFullBeatPmpSafe :=
+    fetch.io.responseValid &&
+      !fetch.io.pageFault &&
+      !fetch.io.accessFault &&
+      !instructionPmpFault &&
+      (if (isa.hasC) false.B
+       else fetch.io.physicalAddress(2, 0) === 0.U && fullBeatPmpSafe)
 
   io.frontendPhysicalAddress := fetch.io.physicalAddress
   io.imem.valid := fetch.io.responseValid &&

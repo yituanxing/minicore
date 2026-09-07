@@ -32,8 +32,8 @@ class AetherSoCUnifiedHostMemoryAdapter(
 
     val imemValid = Output(Bool())
     val imemAddr = Output(UInt(addrBits.W))
-    val imemBytes = Output(UInt(3.W))
-    val imemInst = Input(UInt(32.W))
+    val imemBytes = Output(UInt(4.W))
+    val imemInst = Input(UInt(dataBits.W))
     val imemFault = Input(Bool())
 
     val ptwValid = Output(Bool())
@@ -109,7 +109,11 @@ class AetherSoCUnifiedHostMemoryAdapter(
   io.imemBytes := Mux(
     instructionRequest.size === MemSize.Half,
     2.U,
-    Mux(instructionRequest.size === MemSize.Word, 4.U, 0.U)
+    Mux(
+      instructionRequest.size === MemSize.Word,
+      4.U,
+      Mux(instructionRequest.size === MemSize.DWord, 8.U, 0.U)
+    )
   )
 
   io.ptwValid := ptwActive
@@ -146,7 +150,7 @@ class AetherSoCUnifiedHostMemoryAdapter(
   // the response arbiter without a separate ready input.
   responses.io.in(InstructionSource).valid := instructionActive
   responses.io.in(InstructionSource).bits.txnId := instructionRequest.txnId
-  responses.io.in(InstructionSource).bits.rdata := io.imemInst.pad(dataBits)
+  responses.io.in(InstructionSource).bits.rdata := io.imemInst
   responses.io.in(InstructionSource).bits.fault := io.imemFault
   responses.io.in(InstructionSource).bits.last := true.B
 
@@ -165,8 +169,9 @@ class AetherSoCUnifiedHostMemoryAdapter(
   when(instructionActive) {
     assert(
       instructionRequest.size === MemSize.Half ||
-        instructionRequest.size === MemSize.Word,
-      "unified host instruction request must be 2 or 4 bytes"
+        instructionRequest.size === MemSize.Word ||
+        instructionRequest.size === MemSize.DWord,
+      "unified host instruction request must be 2, 4 or 8 bytes"
     )
   }
 }

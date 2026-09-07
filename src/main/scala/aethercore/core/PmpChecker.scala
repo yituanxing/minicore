@@ -191,6 +191,70 @@ class PmpAccessChecker(
 }
 
 /**
+  * Cheap proof that an already-authorized 4-byte instruction access at an
+  * 8-byte-aligned address may extend through bytes +4..+7 without changing PMP
+  * ownership.
+  *
+  * The current access has already passed PmpAccessChecker. A widened access is
+  * therefore safe iff:
+  *   - the current owning entry covers the added upper half and no
+  *     higher-priority entry newly overlaps it; or
+  *   - the current access is unmatched/allowed and the added half is also
+  *     completely unmatched.
+  *
+  * This intentionally reuses decoded PMP geometry and the existing matched
+  * entry rather than instantiating a second complete access checker.
+  */
+class PmpFullBeatExtensionGuard(
+    val entries: Int = PmpConstants.MaxEntries,
+    val paddrBits: Int
+) extends Module {
+  require(entries > 0 && entries <= PmpConstants.MaxEntries)
+  private val entryIndexBits = math.max(1, log2Ceil(entries))
+
+  val io = IO(new Bundle {
+    val address = Input(UInt(paddrBits.W))
+    val currentAllowed = Input(Bool())
+    val currentMatched = Input(Bool())
+    val currentMatchedEntry = Input(UInt(entryIndexBits.W))
+    val ranges = Input(Vec(entries, new PmpDecodedEntry(paddrBits)))
+    val allow = Output(Bool())
+  })
+
+  val start = Cat(0.U(1.W), io.address)
+  val addedStart = start + 4.U
+  val widenedEnd = start + 7.U
+  val addedOverlap = Wire(Vec(entries, Bool()))
+
+  for (entry <- 0 until entries) {
+    val range = io.ranges(entry)
+    addedOverlap(entry) :=
+      range.active && addedStart < range.upper && widenedEnd >= range.lower
+  }
+
+  val matchedRange = io.ranges(io.currentMatchedEntry)
+  val higherPriorityAddedOverlap =
+    (0 until entries)
+      .map(entry =>
+        addedOverlap(entry) &&
+          entry.U < io.currentMatchedEntry)
+      .reduce(_ || _)
+
+  val matchedCanExtend =
+    io.currentMatched &&
+      widenedEnd < matchedRange.upper &&
+      !higherPriorityAddedOverlap
+
+  val unmatchedCanExtend =
+    !io.currentMatched && !addedOverlap.asUInt.orR
+
+  io.allow :=
+    io.currentAllowed &&
+      io.address(2, 0) === 0.U &&
+      Mux(io.currentMatched, matchedCanExtend, unmatchedCanExtend)
+}
+
+/**
   * Compatibility wrapper retaining the historical one-module PMP interface.
   * Integrations with multiple request lanes may instead share one PmpRangeDecoder
   * across multiple PmpAccessChecker instances.

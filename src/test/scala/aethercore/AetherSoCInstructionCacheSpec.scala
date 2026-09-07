@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import aethercore.common.MemSize
 import aethercore.soc.AetherSoCInstructionCache
 
 class AetherSoCInstructionCacheSpec
@@ -24,6 +25,7 @@ class AetherSoCInstructionCacheSpec
       dut.io.invalidateAll.poke(false.B)
       dut.io.frontendValid.poke(true.B)
       dut.io.frontendAddr.poke("h80001000".U)
+      dut.io.frontendFullBeatAllowed.poke(false.B)
       dut.io.frontendBytes.poke(2.U)
       dut.io.request.ready.poke(true.B)
       idleResponse(dut)
@@ -53,6 +55,7 @@ class AetherSoCInstructionCacheSpec
 
       // Only two bytes were fetched. A four-byte request to the same address
       // must miss rather than consuming uninitialized bytes from the line.
+      dut.io.frontendFullBeatAllowed.poke(false.B)
       dut.io.frontendBytes.poke(4.U)
       dut.io.frontendReady.expect(false.B)
       dut.io.request.valid.expect(true.B)
@@ -64,6 +67,7 @@ class AetherSoCInstructionCacheSpec
       dut.io.invalidateAll.poke(false.B)
       dut.io.frontendValid.poke(true.B)
       dut.io.frontendAddr.poke("h80002000".U)
+      dut.io.frontendFullBeatAllowed.poke(false.B)
       dut.io.frontendBytes.poke(4.U)
       dut.io.request.ready.poke(true.B)
       idleResponse(dut)
@@ -91,6 +95,7 @@ class AetherSoCInstructionCacheSpec
       // Launch a new miss for A, then redirect the frontend to B before A
       // returns. A's response must be consumed but never presented as B.
       dut.io.frontendAddr.poke("h80003000".U)
+      dut.io.frontendFullBeatAllowed.poke(false.B)
       dut.io.frontendBytes.poke(2.U)
       dut.io.request.valid.expect(true.B)
       dut.clock.step()
@@ -111,4 +116,47 @@ class AetherSoCInstructionCacheSpec
       }
     }
   }
+
+  it should "fill the complete beat only when a safe lower-half widening proof is present" in {
+    simulate(new AetherSoCInstructionCache()) { dut =>
+      dut.io.invalidateAll.poke(false.B)
+      dut.io.frontendValid.poke(true.B)
+      dut.io.frontendAddr.poke("h80005000".U)
+      dut.io.frontendBytes.poke(4.U)
+      dut.io.frontendFullBeatAllowed.poke(true.B)
+      dut.io.request.ready.poke(true.B)
+      idleResponse(dut)
+
+      withClue("qualified lower-half miss: ") {
+        dut.io.request.valid.expect(true.B)
+        dut.io.request.bits.paddr.expect("h80005000".U)
+        dut.io.request.bits.size.expect(MemSize.DWord)
+      }
+      dut.clock.step()
+
+      dut.io.response.valid.poke(true.B)
+      dut.io.response.bits.rdata.poke("h8877665544332211".U)
+      dut.io.frontendReady.expect(true.B)
+      dut.io.frontendInst.expect("h44332211".U)
+      dut.clock.step()
+
+      idleResponse(dut)
+      dut.io.frontendFullBeatAllowed.poke(false.B)
+      dut.io.frontendAddr.poke("h80005004".U)
+      withClue("upper half arrives from the same full-beat fill: ") {
+        dut.io.frontendReady.expect(true.B)
+        dut.io.frontendInst.expect("h88776655".U)
+        dut.io.request.valid.expect(false.B)
+      }
+
+      // Without the explicit proof, a fresh aligned miss remains a narrow Word.
+      dut.io.frontendAddr.poke("h80006000".U)
+      withClue("unqualified aligned miss remains narrow: ") {
+        dut.io.frontendReady.expect(false.B)
+        dut.io.request.valid.expect(true.B)
+        dut.io.request.bits.size.expect(MemSize.Word)
+      }
+    }
+  }
+
 }

@@ -90,10 +90,10 @@ class Memory {
            address - kRamBase <= bytes_.size() - size;
   }
 
-  std::uint32_t readInstruction(std::uint64_t address, std::size_t size) const {
-    if (size != 2 && size != 4)
-      throw std::runtime_error("instruction transaction must be 2 or 4 bytes");
-    return static_cast<std::uint32_t>(readData(address, size));
+  std::uint64_t readInstruction(std::uint64_t address, std::size_t size) const {
+    if (size != 2 && size != 4 && size != 8)
+      throw std::runtime_error("instruction transaction must be 2, 4 or 8 bytes");
+    return readData(address, size);
   }
 
   std::uint64_t readData(std::uint64_t address, std::size_t size) const {
@@ -246,7 +246,7 @@ void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
-  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4;
+  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4 && ibytes != 8;
   const bool ifault = ivalid &&
       (invalidInstructionWidth || !memory.contains(iaddr, ibytes));
   top.io_imemFault = ifault;
@@ -285,6 +285,30 @@ void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
       (!ptwValid || ptwFault) ? 0 : memory.readData(ptwAddr, ptwBytes);
 }
 
+#ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+template <typename Top>
+bool adaptiveRedriveMemoryChanged(Top& top, const Memory& memory) {
+  const auto oldImemFault = top.io_imemFault;
+  const auto oldImemInst = top.io_imemInst;
+  const auto oldMemReady = top.io_memReady;
+  const auto oldMemFault = top.io_memFault;
+  const auto oldMemRdata = top.io_memRdata;
+  const auto oldPtwReady = top.io_ptwReady;
+  const auto oldPtwFault = top.io_ptwFault;
+  const auto oldPtwRdata = top.io_ptwRdata;
+
+  driveMemory(top, memory, true);
+  return top.io_imemFault != oldImemFault ||
+      top.io_imemInst != oldImemInst ||
+      top.io_memReady != oldMemReady ||
+      top.io_memFault != oldMemFault ||
+      top.io_memRdata != oldMemRdata ||
+      top.io_ptwReady != oldPtwReady ||
+      top.io_ptwFault != oldPtwFault ||
+      top.io_ptwRdata != oldPtwRdata;
+}
+#endif
+
 /**
  * Execute one complete simulator cycle while preserving the qualified runtime
  * ordering: drive/evaluate twice at clock-low, commit an accepted physical
@@ -317,8 +341,17 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
   top.io_rxByte = rxValid ? rxByte : 0;
   driveMemory(top, memory, dataReadyThisLowPhase());
   top.eval();
+#ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+  if (configuredWait == 0) {
+    if (adaptiveRedriveMemoryChanged(top, memory)) top.eval();
+  } else {
+    driveMemory(top, memory, dataReadyThisLowPhase());
+    top.eval();
+  }
+#else
   driveMemory(top, memory, dataReadyThisLowPhase());
   top.eval();
+#endif
   const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
   const bool memoryHandshake =
