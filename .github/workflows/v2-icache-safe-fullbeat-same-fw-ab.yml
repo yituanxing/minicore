@@ -1,0 +1,256 @@
+name: AetherSoC V2 Safe Full-Beat I-cache Same-FW A-B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-icache-safe-fullbeat-same-fw-ab.yml'
+      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64SafeFullBeatAB.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCInstructionCache.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2UnifiedMemoryCompatSimTop.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
+      - 'src/main/scala/aethercore/core/PmpChecker.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyPagedCore.scala'
+      - 'tools/ci/rv64_busybox_shell_build.sh'
+      - 'tools/ci/rv64_busybox_shell_payload_build.sh'
+      - 'tools/ci/rv64_linux_kernel_reuse.sh'
+      - 'sim/**'
+      - 'software/rv64/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+      - 'mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-v2-safe-fullbeat-same-fw-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ab:
+    name: Same-FW baseline vs safe full-beat
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact A-B head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves gcc-riscv64-unknown-elf \
+            binutils-riscv64-unknown-elf
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore RV64 Linux BusyBox software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+            ~/.cache/aethercore/rv64/userspace
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-shell-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_busybox_shell_build.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-shell-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Activate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          echo "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin" >> "$GITHUB_PATH"
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin/verilator" --version
+          riscv64-unknown-elf-gcc --version | head -n 1
+
+      - name: Build one immutable BusyBox firmware image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_kernel_reuse.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          bash tools/ci/rv64_busybox_shell_build.sh
+          bash tools/ci/rv64_busybox_shell_payload_build.sh
+
+          fw="$GITHUB_WORKSPACE/build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin"
+          test -s "$fw"
+          sha256sum "$fw" | tee build/rv64-busybox-shell/same-fw.sha256
+          cp build/rv64-busybox-shell/result.txt build/rv64-busybox-shell/same-fw-userspace-result.txt
+          cp build/rv64-busybox-shell-boot/result.txt build/rv64-busybox-shell/same-fw-payload-result.txt
+
+      - name: Run baseline with safe full-beat disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          fw="$GITHUB_WORKSPACE/build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin"
+          sha256sum -c build/rv64-busybox-shell/same-fw.sha256
+
+          probe_dir="$HOME/.cache/aethercore/v2-safe-fullbeat-same-fw/$TARGET_SHA/off"
+          command_file="$GITHUB_WORKSPACE/build/rv64-busybox-shell/uart-command.txt"
+          printf "printf 'RV64 BUSYBOX COMMAND %%s\\n' OK\n" > "$command_file"
+
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64FastSafeFullBeatOff \
+            FW_BIN="$fw" \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=600000000 \
+            MILESTONE='RV64 BUSYBOX COMMAND OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            UART_TRIGGER='RV64 BUSYBOX SHELL READY' \
+            UART_COMMAND_FILE="$command_file" \
+            POST_INPUT_MAX_CYCLES=50000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_SIM_ADAPTIVE_SETTLE -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+
+          cp "$probe_dir/logs/boot-probe.log" build/rv64-busybox-shell/same-fw-off.log
+          sha256sum -c build/rv64-busybox-shell/same-fw.sha256
+
+      - name: Run candidate with safe full-beat enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          fw="$GITHUB_WORKSPACE/build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin"
+          sha256sum -c build/rv64-busybox-shell/same-fw.sha256
+
+          probe_dir="$HOME/.cache/aethercore/v2-safe-fullbeat-same-fw/$TARGET_SHA/on"
+          command_file="$GITHUB_WORKSPACE/build/rv64-busybox-shell/uart-command.txt"
+
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64FastSafeFullBeatOn \
+            FW_BIN="$fw" \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=600000000 \
+            MILESTONE='RV64 BUSYBOX COMMAND OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            UART_TRIGGER='RV64 BUSYBOX SHELL READY' \
+            UART_COMMAND_FILE="$command_file" \
+            POST_INPUT_MAX_CYCLES=50000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_SIM_ADAPTIVE_SETTLE -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+
+          cp "$probe_dir/logs/boot-probe.log" build/rv64-busybox-shell/same-fw-on.log
+          sha256sum -c build/rv64-busybox-shell/same-fw.sha256
+
+      - name: Calculate exact architecture delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def parse(path):
+              s=Path(path).read_text(errors="replace").replace("\r","")
+              shell=re.search(r"^L32_UART_INPUT_START cycles=(\d+) commits=(\d+).*trigger=RV64 BUSYBOX SHELL READY",s,re.M)
+              done=re.search(r"^L32_RUNTIME_MILESTONE_PASS cycles=(\d+) commits=(\d+).*marker=RV64 BUSYBOX COMMAND OK$",s,re.M)
+              if not shell or not done:
+                  raise SystemExit(f"missing BusyBox milestone in {path}")
+              return tuple(map(int,(shell.group(1),shell.group(2),done.group(1),done.group(2))))
+
+          off=parse("build/rv64-busybox-shell/same-fw-off.log")
+          on=parse("build/rv64-busybox-shell/same-fw-on.log")
+          ds=on[0]-off[0]
+          dc=on[2]-off[2]
+          shell_pct=100.0*ds/off[0]
+          command_pct=100.0*dc/off[2]
+          speedup=100.0*(off[0]-on[0])/off[0]
+          commit_delta=on[1]-off[1]
+          fw=Path("build/rv64-busybox-shell/same-fw.sha256").read_text().split()[0]
+
+          out=[
+              "AETHERCORE_SAFE_FULLBEAT_SAME_FW_AB: status=PASS",
+              f"fw_sha256={fw}",
+              f"baseline_shell_cycles={off[0]}",
+              f"baseline_shell_commits={off[1]}",
+              f"candidate_shell_cycles={on[0]}",
+              f"candidate_shell_commits={on[1]}",
+              f"shell_cycle_delta={ds}",
+              f"shell_cycle_delta_pct={shell_pct:.6f}",
+              f"shell_speedup_pct={speedup:.6f}",
+              f"shell_commit_delta={commit_delta}",
+              f"baseline_command_cycles={off[2]}",
+              f"candidate_command_cycles={on[2]}",
+              f"command_cycle_delta={dc}",
+              f"command_cycle_delta_pct={command_pct:.6f}",
+              "full_soc_lut_baseline=42928",
+              "full_soc_lut_candidate=43479",
+              "full_soc_lut_delta=551",
+              "full_soc_lut_delta_pct=1.283547",
+          ]
+          Path("build/rv64-busybox-shell/same-fw-ab.txt").write_text("\n".join(out)+"\n")
+          print("\n".join(out))
+          PY
+          grep -q '^AETHERCORE_SAFE_FULLBEAT_SAME_FW_AB: status=PASS$' build/rv64-busybox-shell/same-fw-ab.txt
+
+      - name: Upload exact A-B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-safe-fullbeat-same-fw-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-busybox-shell/same-fw.sha256
+            build/rv64-busybox-shell/same-fw-userspace-result.txt
+            build/rv64-busybox-shell/same-fw-payload-result.txt
+            build/rv64-busybox-shell/same-fw-off.log
+            build/rv64-busybox-shell/same-fw-on.log
+            build/rv64-busybox-shell/same-fw-ab.txt
