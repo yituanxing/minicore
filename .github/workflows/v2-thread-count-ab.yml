@@ -1,0 +1,80 @@
+name: AetherCore V2 Verilator Thread Count A-B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-thread-count-ab.yml'
+      - 'tools/ci/v2_thread_count_ab.sh'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'src/main/scala/aethercore/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-thread-count-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config curl xz-utils git \
+            python3 openjdk-17-jdk-headless device-tree-compiler dwarves \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+
+      - name: Cache fixed tools and RV64 software
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-thread-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'build.mill') }}
+
+      - name: Prepare fixed tools and workload
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+
+      - name: Run thread-count A-B
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/v2_thread_count_ab.sh
+          MAX_CYCLES=20000000 PROGRESS_INTERVAL_CYCLES=20000000 bash tools/ci/v2_thread_count_ab.sh
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-thread-count-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/v2-thread-count-ab/
