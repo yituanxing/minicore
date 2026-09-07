@@ -12,9 +12,11 @@ import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
   * The source tag layout is frozen by AetherSoCMemoryHub:
   *   0 = data/D-cache, 1 = PTW, 2 = instruction.
   *
-  * Each source owns one independent compatibility slot, so instruction, PTW
-  * and data traffic can remain concurrently outstanding while preserving the
-  * old runner ABI.
+  * PTW and instruction each retain one compatibility lifetime. Data ordinary
+  * reads retain one slot per local transaction ID so the lightweight host model
+  * does not collapse the production LoadQ/D-cache concurrency. Serialized Data
+  * traffic drains all normal reads first. Source and transaction identity remain
+  * intact while preserving the old runner ABI.
   */
 class AetherSoCUnifiedHostMemoryAdapter(
     val addrBits: Int = 56,
