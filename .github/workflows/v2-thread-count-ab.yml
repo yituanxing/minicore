@@ -65,9 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
-          bash tools/ci/rv64_minimal_initramfs_build.sh
-          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
-          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
 
       - name: Run thread-count A-B
         run: |
