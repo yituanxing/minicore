@@ -59,6 +59,25 @@ void emitAxiDataConcurrency(const Top& top) {
               << "\n";
   }
 }
+
+template <typename Top>
+void emitLoadQCapacity(const Top& top) {
+  if constexpr (requires {
+      top.io_loadQBusyCycles;
+      top.io_loadQFullCycles;
+      top.io_loadQCapacityBlockedCycles;
+    }) {
+    std::cerr << "\nL32_LOADQ_CAPACITY"
+              << " busy-cycles="
+              << static_cast<std::uint64_t>(top.io_loadQBusyCycles)
+              << " full-cycles="
+              << static_cast<std::uint64_t>(top.io_loadQFullCycles)
+              << " capacity-blocked-cycles="
+              << static_cast<std::uint64_t>(top.io_loadQCapacityBlockedCycles)
+              << "\n";
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -341,6 +360,7 @@ int main(int argc, char** argv) {
                     << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
         }
         emitAxiDataConcurrency(top);
+        emitLoadQCapacity(top);
 
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
