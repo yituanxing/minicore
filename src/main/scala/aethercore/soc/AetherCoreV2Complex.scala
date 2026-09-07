@@ -41,6 +41,7 @@ class AetherCoreV2Complex(
     val imem = new InstructionBusIO(paddrBits)
     val imemReady =
       if (enableInstructionBackpressure) Some(Input(Bool())) else None
+    val imemFullBeatPmpSafe = Output(Bool())
     val ptw = new PageTableReadBusIO(paddrBits, geometry.pteBits)
 
     // PMA/address-map classification is a SoC responsibility. The CPU complex
@@ -99,6 +100,7 @@ class AetherCoreV2Complex(
   io.imem.valid := core.io.imem.valid
   io.imem.addr := core.io.imem.addr
   io.imem.bytes := core.io.imem.bytes
+  io.imemFullBeatPmpSafe := core.io.imemFullBeatPmpSafe
   core.io.imem.inst := io.imem.inst
   core.io.imem.fault := io.imem.fault
   if (enableInstructionBackpressure) {
