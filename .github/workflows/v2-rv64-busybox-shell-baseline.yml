@@ -1,0 +1,258 @@
+name: AetherSoC V2 RV64 BusyBox I-cache Fast Matrix
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-rv64-busybox-shell-baseline.yml'
+      - 'tools/ci/rv64_busybox_shell_build.sh'
+      - 'tools/ci/rv64_linux_kernel_reuse.sh'
+      - 'tools/ci/rv64_busybox_shell_payload_build.sh'
+      - 'software/rv64/**'
+      - 'src/main/scala/aethercore/**'
+      - 'sim/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+      - 'mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-v2-rv64-busybox-shell-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Fast BusyBox ash I-cache ${{ matrix.icache_entries }} entries
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        icache_entries: [64, 128, 256, 512]
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      ICACHE_ENTRIES: ${{ matrix.icache_entries }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact measurement head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Select I-cache capacity candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          entries = int(os.environ["ICACHE_ENTRIES"])
+          path = Path("src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala")
+          text = path.read_text()
+          needle = "    txnIdBits = clientTxnIdBits,\n    entries = 64"
+          if text.count(needle) != 1:
+              raise SystemExit("expected exactly one production I-cache entries=64 selection")
+          if entries != 64:
+              path.write_text(text.replace(needle, f"    txnIdBits = clientTxnIdBits,\n    entries = {entries}"))
+          print(f"RV64 shell A/B I-cache entries={entries} capacity_bytes={entries * 8}")
+          PY
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves gcc-riscv64-unknown-elf \
+            binutils-riscv64-unknown-elf
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 Linux/OpenSBI cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+            ~/.cache/aethercore/rv64/userspace
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-shell-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_busybox_shell_build.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-shell-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Activate fixed Verilator and RV64 Linux toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          riscv64-unknown-elf-gcc --version | head -n 1
+          riscv64-unknown-elf-gcc -march=rv64ima_zicsr_zifencei -mabi=lp64 -print-multi-directory
+
+      - name: Reuse qualified unchanged Linux baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_kernel_reuse.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Build static RV64 musl + BusyBox ash initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/rv64_busybox_shell_build.sh
+          bash tools/ci/rv64_busybox_shell_build.sh
+
+      - name: Build OpenSBI payload with BusyBox shell Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/rv64_busybox_shell_payload_build.sh
+          bash tools/ci/rv64_busybox_shell_payload_build.sh
+
+      - name: Run current V2 SoC to real interactive ash
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$HOME/.cache/aethercore/v2-rv64-busybox-shell/$TARGET_SHA/icache-$ICACHE_ENTRIES"
+          command_file="build/rv64-busybox-shell/uart-command.txt"
+          printf "printf 'RV64 BUSYBOX COMMAND %%s\\n' OK\n" > "$command_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64Fast \
+            FW_BIN=build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=600000000 \
+            MILESTONE='RV64 BUSYBOX COMMAND OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            UART_TRIGGER='RV64 BUSYBOX SHELL READY' \
+            UART_COMMAND_FILE="$command_file" \
+            POST_INPUT_MAX_CYCLES=50000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          cp "$probe_dir/logs/boot-probe.log" build/rv64-busybox-shell/boot-probe.log
+
+      - name: Extract shell-ready baseline and bottleneck snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+          log = Path("build/rv64-busybox-shell/boot-probe.log").read_text(errors="replace").replace("\r","")
+          def one(pattern):
+              m = re.search(pattern, log, re.M)
+              if not m:
+                  raise SystemExit("missing measurement: " + pattern)
+              return m
+          shell = one(r"^L32_UART_INPUT_START cycles=(\d+) commits=(\d+).*trigger=RV64 BUSYBOX SHELL READY")
+          done = one(r"^L32_RUNTIME_MILESTONE_PASS cycles=(\d+) commits=(\d+).*marker=RV64 BUSYBOX COMMAND OK$")
+          init = re.search(r"\[\s*([0-9]+\.[0-9]+)\]\s+Run /init as init process", log)
+          dcache = re.search(r"^AETHERCORE_V2_DCACHE reason=marker hit=(\d+) miss=(\d+) bypass=(\d+)$", log, re.M)
+          perf = re.search(r"^AETHERCORE_V2_PERF head_not_ready=(\d+) head_ready_not_issued=(\d+) commit_idle_nonempty=(\d+) compute_head=(\d+) branch_head=(\d+) memory_head=(\d+) system_head=(\d+) interrupt_hold=(\d+) wfi_halted=(\d+)$", log, re.M)
+          top = re.search(r"^AETHERCORE_V2_TOPDOWN reason=marker cycles=(\d+) flow=(\d+) frontend_bound=(\d+) backend_bound=(\d+)$", log, re.M)
+          out = [
+              "RV64_V2_BUSYBOX_SHELL_BASELINE: status=PASS",
+              f"icache_entries={os.environ['ICACHE_ENTRIES']}",
+              f"icache_capacity_bytes={int(os.environ['ICACHE_ENTRIES']) * 8}",
+              f"shell_ready_cycles={shell.group(1)}",
+              f"shell_ready_commits={shell.group(2)}",
+              f"command_roundtrip_cycles={done.group(1)}",
+              f"command_roundtrip_commits={done.group(2)}",
+          ]
+          if init:
+              out.append(f"linux_run_init_seconds={init.group(1)}")
+          if dcache:
+              h,m,b = map(int, dcache.groups())
+              out += [f"dcache_hit={h}", f"dcache_miss={m}", f"dcache_bypass={b}",
+                      f"dcache_cacheable_hit_rate={h/(h+m):.6f}" if h+m else "dcache_cacheable_hit_rate=0"]
+          if perf:
+              keys=("head_not_ready","head_ready_not_issued","commit_idle_nonempty","compute_head","branch_head","memory_head","system_head","interrupt_hold","wfi_halted")
+              out += [f"{k}={v}" for k,v in zip(keys, perf.groups())]
+          if top:
+              out += [f"topdown_{k}={v}" for k,v in zip(("cycles","flow","frontend_bound","backend_bound"), top.groups())]
+          Path("build/rv64-busybox-shell/baseline.txt").write_text("\n".join(out)+"\n")
+          print("\n".join(out))
+          PY
+          grep -q '^RV64_V2_BUSYBOX_SHELL_BASELINE: status=PASS$' build/rv64-busybox-shell/baseline.txt
+          grep -Fq 'BusyBox' build/rv64-busybox-shell/boot-probe.log
+          grep -Fq 'RV64 BUSYBOX SHELL READY' build/rv64-busybox-shell/boot-probe.log
+          grep -Fq 'RV64 BUSYBOX COMMAND OK' build/rv64-busybox-shell/boot-probe.log
+
+      - name: Publish measurement summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Current V2 RV64 BusyBox shell baseline'
+            echo
+            echo "- head: \`$TARGET_SHA\`"
+            echo "- I-cache entries: \`$ICACHE_ENTRIES\`"
+            if [[ -s build/rv64-busybox-shell/baseline.txt ]]; then
+              echo '```text'
+              cat build/rv64-busybox-shell/baseline.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload shell baseline evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-v2-rv64-busybox-shell-icache-${{ matrix.icache_entries }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-busybox-shell/result.txt
+            build/rv64-busybox-shell/baseline.txt
+            build/rv64-busybox-shell/boot-probe.log
+            build/rv64-busybox-shell/evidence/
+            build/rv64-busybox-shell-boot/result.txt
+            build/rv64-busybox-shell-boot/evidence/
