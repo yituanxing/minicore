@@ -1,0 +1,60 @@
+name: AetherSoC Unified Host Data Multi-slot Gate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-unified-host-data-multislot.yml'
+      - 'src/main/scala/aethercore/sim/AetherSoCUnifiedHostMemoryAdapter.scala'
+      - 'src/test/scala/aethercore/AetherSoCUnifiedHostMemoryAdapterSpec.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2UnifiedMemoryCompatSimTop.scala'
+      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64Fast.scala'
+      - 'build.mill'
+      - 'mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-unified-host-data-multislot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Cache Scala dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install simulation prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 openjdk-17-jdk-headless
+
+      - name: Prove multi-slot Data read and serialized write semantics
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          ./mill aethercore.test.testOnly aethercore.AetherSoCUnifiedHostMemoryAdapterSpec
+
+      - name: Elaborate Fast unified compatibility top
+        run: |
+          set -euo pipefail
+          ./mill aethercore.runMain aethercore.ElaborateV2OpenSbiRV64Fast \
+            --target-dir build/unified-host-data-multislot-smoke
+          find build/unified-host-data-multislot-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
