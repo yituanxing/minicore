@@ -15,7 +15,9 @@ import aethercore.soc.AetherCoreV2UnifiedMemorySoC
   *
   *   I/PTW/Data adapters -> tagged MemoryHub -> one AetherMem master.
   */
-class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
+class AetherCoreV2UnifiedMemoryCompatSimTop(
+    val enableSafeFullBeatIcache: Boolean = true
+) extends Module {
   private val xlen = 64
   private val paddrBits = 56
   private val busDataBits = 64
@@ -70,7 +72,9 @@ class AetherCoreV2UnifiedMemoryCompatSimTop extends Module {
     val halted = Output(Bool())
   })
 
-  val soc = Module(new AetherCoreV2UnifiedMemorySoC)
+  val soc = Module(new AetherCoreV2UnifiedMemorySoC(
+    enableSafeFullBeatIcache = enableSafeFullBeatIcache
+  ))
 
   // Simulation-only compatibility alias for the existing performance,
   // Top-Down and attribution wrappers. Those layers observe TinyPagedCore
