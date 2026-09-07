@@ -44,7 +44,26 @@ jobs:
       - name: Install simulation prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3 openjdk-17-jdk-headless
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex \
+            build-essential python3 openjdk-17-jdk-headless git
+
+      - name: Cache fixed Verilator
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Activate fixed Verilator
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          verilator --version
 
       - name: Prove multi-slot Data read and serialized write semantics
         run: |
