@@ -285,6 +285,30 @@ void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
       (!ptwValid || ptwFault) ? 0 : memory.readData(ptwAddr, ptwBytes);
 }
 
+#ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+template <typename Top>
+bool adaptiveRedriveMemoryChanged(Top& top, const Memory& memory) {
+  const auto oldImemFault = top.io_imemFault;
+  const auto oldImemInst = top.io_imemInst;
+  const auto oldMemReady = top.io_memReady;
+  const auto oldMemFault = top.io_memFault;
+  const auto oldMemRdata = top.io_memRdata;
+  const auto oldPtwReady = top.io_ptwReady;
+  const auto oldPtwFault = top.io_ptwFault;
+  const auto oldPtwRdata = top.io_ptwRdata;
+
+  driveMemory(top, memory, true);
+  return top.io_imemFault != oldImemFault ||
+      top.io_imemInst != oldImemInst ||
+      top.io_memReady != oldMemReady ||
+      top.io_memFault != oldMemFault ||
+      top.io_memRdata != oldMemRdata ||
+      top.io_ptwReady != oldPtwReady ||
+      top.io_ptwFault != oldPtwFault ||
+      top.io_ptwRdata != oldPtwRdata;
+}
+#endif
+
 /**
  * Execute one complete simulator cycle while preserving the qualified runtime
  * ordering: drive/evaluate twice at clock-low, commit an accepted physical
@@ -317,8 +341,17 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
   top.io_rxByte = rxValid ? rxByte : 0;
   driveMemory(top, memory, dataReadyThisLowPhase());
   top.eval();
+#ifdef AETHERCORE_SIM_ADAPTIVE_SETTLE
+  if (configuredWait == 0) {
+    if (adaptiveRedriveMemoryChanged(top, memory)) top.eval();
+  } else {
+    driveMemory(top, memory, dataReadyThisLowPhase());
+    top.eval();
+  }
+#else
   driveMemory(top, memory, dataReadyThisLowPhase());
   top.eval();
+#endif
   const bool rxAccepted = top.io_rxValid && top.io_rxReady;
 
   const bool memoryHandshake =
