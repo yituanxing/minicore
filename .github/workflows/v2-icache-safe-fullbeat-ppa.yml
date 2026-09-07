@@ -1,0 +1,137 @@
+name: AetherSoC V2 Safe Full-Beat I-cache PPA
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-icache-safe-fullbeat-ppa.yml'
+      - 'src/main/scala/aethercore/core/PmpChecker.scala'
+      - 'src/main/scala/aethercore/core/v2/TinyPagedCore.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2Complex.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
+      - 'src/main/scala/aethercore/soc/AetherSoCInstructionCache.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
+      - 'src/main/scala/aethercore/ElaborateV2FpgaSoC.scala'
+      - 'build.mill'
+      - 'mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-v2-safe-fullbeat-ppa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synth:
+    name: Safe full-beat Full-SoC ECP5 PPA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Cache Scala dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+
+      - name: Elaborate production FPGA SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          rm -rf build/fpga-synth-proxy
+          ./mill aethercore.runMain aethercore.ElaborateV2FpgaSoCRV64 \
+            --target-dir build/fpga-synth-proxy
+          find build/fpga-synth-proxy -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+      - name: Map Full SoC with Yosys ECP5 proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethersoc-safe-fullbeat"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          mapfile -t svs < <(find build/fpga-synth-proxy -maxdepth 1 -name '*.sv' -print | sort)
+          test "${#svs[@]}" -gt 0
+          read_cmd="read_verilog -sv -DSYNTHESIS"
+          for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+
+          yosys -Q -p "$read_cmd; hierarchy -check -top AetherCoreV2FpgaSoC; synth_ecp5 -top AetherCoreV2FpgaSoC -json $out/fpga.json; stat -top AetherCoreV2FpgaSoC; flatten; ltp -noff AetherCoreV2FpgaSoC" \
+            2>&1 | tee "$out/yosys.log"
+
+          depth=$(sed -n 's/.*Longest topological path in AetherCoreV2FpgaSoC (length=\([0-9][0-9]*\)).*/\1/p' "$out/yosys.log" | tail -1)
+          test -n "$depth"
+
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[]] | length' "$out/fpga.json" > "$out/cells"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "LUT4")] | length' "$out/fpga.json" > "$out/lut4"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/fpga.json" > "$out/ff"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "DP16KD")] | length' "$out/fpga.json" > "$out/bram"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "TRELLIS_DPR16X4")] | length' "$out/fpga.json" > "$out/dpr"
+          jq '[.modules["AetherCoreV2FpgaSoC"].cells[] | select(.type == "MULT18X18D")] | length' "$out/fpga.json" > "$out/mult"
+          printf '%s\n' "$depth" > "$out/depth"
+          echo "SYNTH_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Summarize candidate PPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ["SYNTH_OUT"])
+          def n(name): return int((root/name).read_text().strip())
+          s={
+            "candidate":"safe-lower-half-fullbeat",
+            "cells":n("cells"),
+            "lut4":n("lut4"),
+            "ff":n("ff"),
+            "bram_dp16kd":n("bram"),
+            "distributed_ram_dpr16x4":n("dpr"),
+            "mult18x18d":n("mult"),
+            "logic_depth":n("depth"),
+            "baseline_lut4":42928,
+            "baseline_ff":12224,
+            "baseline_dpr16x4":364,
+            "baseline_logic_depth":5590
+          }
+          s["lut4_delta"]=s["lut4"]-s["baseline_lut4"]
+          s["lut4_delta_pct"]=round(100*s["lut4_delta"]/s["baseline_lut4"],4)
+          s["ff_delta"]=s["ff"]-s["baseline_ff"]
+          s["dpr_delta"]=s["distributed_ram_dpr16x4"]-s["baseline_dpr16x4"]
+          s["logic_depth_delta"]=s["logic_depth"]-s["baseline_logic_depth"]
+          (root/"summary.json").write_text(json.dumps(s,indent=2)+"\n")
+          print(json.dumps(s,indent=2))
+          PY
+
+      - name: Upload PPA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-v2-safe-fullbeat-ppa-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethersoc-safe-fullbeat/summary.json
+            ${{ runner.temp }}/aethersoc-safe-fullbeat/yosys.log
