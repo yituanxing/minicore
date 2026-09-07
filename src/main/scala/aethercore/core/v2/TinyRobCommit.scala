@@ -68,14 +68,20 @@ class TinyRobWindowEntry(val xlen: Int) extends Bundle {
   )
 }
 
-private class TinyRobEntry(val xlen: Int) extends Bundle {
-  val valid = Bool()
-  val complete = Bool()
-  val uop = new BackendUop(
-    xlen,
+private class TinyStoredUop(val xlen: Int) extends Bundle {
+  val decoded = new DecodedInstruction(xlen)
+  val executionClass = ExecutionClass()
+  val robToken = new RobToken(
     TinyRobGeometry.IndexBits,
     TinyRobGeometry.GenerationBits
   )
+  val producesValue = Bool()
+}
+
+private class TinyRobEntry(val xlen: Int) extends Bundle {
+  val valid = Bool()
+  val complete = Bool()
+  val uop = new TinyStoredUop(xlen)
   val predictionValid = Bool()
   val predictedNextPc = UInt(xlen.W)
   val resultValid = Bool()
@@ -116,6 +122,24 @@ class TinyRob(val xlen: Int) extends Module {
 
   private val entries = RegInit(VecInit(Seq.fill(Entries)(0.U.asTypeOf(new TinyRobEntry(xlen)))))
   val slotGenerations = RegInit(VecInit(Seq.fill(Entries)(0.U(GenerationBits.W))))
+
+  // Production currently allocates RobToken / ProducerTag / ValueRef from the
+  // same physical ROB lifetime. Keep one physical copy in the ROB and expand
+  // the three semantic identities only at external seams.
+  private def expandStoredUop(stored: TinyStoredUop): BackendUop = {
+    val expanded = WireDefault(
+      0.U.asTypeOf(new BackendUop(xlen, IndexBits, GenerationBits))
+    )
+    expanded.decoded := stored.decoded
+    expanded.executionClass := stored.executionClass
+    expanded.robToken := stored.robToken
+    expanded.producerTag.id := stored.robToken.index
+    expanded.producerTag.generation := stored.robToken.generation
+    expanded.valueRef.id := stored.robToken.index
+    expanded.valueRef.generation := stored.robToken.generation
+    expanded.producesValue := stored.producesValue
+    expanded
+  }
   val head = RegInit(0.U(IndexBits.W))
   val tail = RegInit(0.U(IndexBits.W))
   val count = RegInit(0.U(log2Ceil(Entries + 1).W))
@@ -125,7 +149,7 @@ class TinyRob(val xlen: Int) extends Module {
 
   private val retireHead = entries(head)
   io.headView.valid := retireHead.valid
-  io.headView.bits := retireHead.uop
+  io.headView.bits := expandStoredUop(retireHead.uop)
 
   // FPGA product path: expose the exact same ROB storage in physical-slot
   // order.  Consumers that only need age policy can move the tiny 2-bit age
@@ -149,12 +173,12 @@ class TinyRob(val xlen: Int) extends Module {
     io.window(age) := 0.U.asTypeOf(new TinyRobWindowEntry(xlen))
     io.window(age).valid := live
     io.window(age).complete := live && entry.complete
-    io.window(age).uop := entry.uop
+    io.window(age).uop := expandStoredUop(entry.uop)
   }
 
   io.retire.valid := retireHead.valid && retireHead.complete
   io.retire.bits := 0.U.asTypeOf(new RobRetirement(xlen))
-  io.retire.bits.uop := retireHead.uop
+  io.retire.bits.uop := expandStoredUop(retireHead.uop)
   io.retire.bits.resultValid := retireHead.resultValid
   io.retire.bits.result := retireHead.result
   io.retire.bits.exception := retireHead.exception
@@ -169,10 +193,10 @@ class TinyRob(val xlen: Int) extends Module {
     !completionEntry.complete &&
     completionEntry.uop.robToken.index === io.completion.bits.robToken.index &&
     completionEntry.uop.robToken.generation === io.completion.bits.robToken.generation &&
-    completionEntry.uop.producerTag.id === io.completion.bits.producerTag.id &&
-    completionEntry.uop.producerTag.generation === io.completion.bits.producerTag.generation &&
-    completionEntry.uop.valueRef.id === io.completion.bits.valueRef.id &&
-    completionEntry.uop.valueRef.generation === io.completion.bits.valueRef.generation
+    completionEntry.uop.robToken.index === io.completion.bits.producerTag.id &&
+    completionEntry.uop.robToken.generation === io.completion.bits.producerTag.generation &&
+    completionEntry.uop.robToken.index === io.completion.bits.valueRef.id &&
+    completionEntry.uop.robToken.generation === io.completion.bits.valueRef.generation
 
   private val branchFallthrough =
     completionEntry.uop.decoded.pc + completionEntry.uop.decoded.instBytes
@@ -267,7 +291,10 @@ class TinyRob(val xlen: Int) extends Module {
   when(allocFire) {
     entries(tail).valid := true.B
     entries(tail).complete := false.B
-    entries(tail).uop := io.allocated.bits
+    entries(tail).uop.decoded := io.allocated.bits.decoded
+    entries(tail).uop.executionClass := io.allocated.bits.executionClass
+    entries(tail).uop.robToken := io.allocated.bits.robToken
+    entries(tail).uop.producesValue := io.allocated.bits.producesValue
     entries(tail).predictionValid := io.dispatch.bits.predictionValid
     entries(tail).predictedNextPc := io.dispatch.bits.predictedNextPc
     entries(tail).resultValid := false.B
