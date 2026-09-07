@@ -1,0 +1,114 @@
+name: ROB4 Crossbar Area Ranking
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/ElaborateRobArea.scala'
+      - '.github/workflows/rob4-crossbar-area.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install Yosys
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+
+      - name: Elaborate focused tops
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          out="$RUNNER_TEMP/rob4-area"
+          rm -rf "$out"
+          mkdir -p "$out/rob" "$out/dep_state" "$out/dep_backend" "$out/issue"
+          ./mill aethercore.runMain aethercore.ElaborateTinyRobAreaRV64 --target-dir "$out/rob"
+          ./mill aethercore.runMain aethercore.ElaborateTinyDependencyStateAreaRV64 --target-dir "$out/dep_state"
+          ./mill aethercore.runMain aethercore.ElaborateTinyDependencyBackendAreaRV64 --target-dir "$out/dep_backend"
+          ./mill aethercore.runMain aethercore.ElaborateTinySelectiveComputeIssueAreaRV64 --target-dir "$out/issue"
+          echo "AREA_OUT=$out" >> "$GITHUB_ENV"
+
+      - name: Map focused tops
+        shell: bash
+        run: |
+          set -euo pipefail
+          map_one() {
+            dir="$1"
+            top="$2"
+            tag="$3"
+            mapfile -t svs < <(find "$dir" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            read_cmd="read_verilog -sv -DSYNTHESIS"
+            for sv in "${svs[@]}"; do read_cmd+=" $sv"; done
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $AREA_OUT/$tag.json; stat -top $top" \
+              2>&1 | tee "$AREA_OUT/$tag.log"
+          }
+          map_one "$AREA_OUT/rob" TinyRob rob
+          map_one "$AREA_OUT/dep_state" TinyDependencyState dep_state
+          map_one "$AREA_OUT/dep_backend" TinyDependencyBackend dep_backend
+          map_one "$AREA_OUT/issue" TinySelectiveComputeIssue issue
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ["AREA_OUT"])
+          tops={
+            "rob":"TinyRob",
+            "dep_state":"TinyDependencyState",
+            "dep_backend":"TinyDependencyBackend",
+            "issue":"TinySelectiveComputeIssue",
+          }
+          out={}
+          for tag,top in tops.items():
+            net=json.loads((root/f"{tag}.json").read_text())
+            mods=net["modules"]
+            key=top if top in mods else ("\\"+top if ("\\"+top) in mods else None)
+            if key is None:
+              raise SystemExit(f"top {top} not found; keys sample={list(mods)[:20]}")
+            cells=list(mods[key]["cells"].values())
+            count=lambda typ:sum(c["type"]==typ for c in cells)
+            out[tag]={
+              "top":key,
+              "cells":len(cells),
+              "lut4":count("LUT4"),
+              "ff":count("TRELLIS_FF"),
+              "dpr16x4":count("TRELLIS_DPR16X4"),
+              "bram":count("DP16KD"),
+              "mult":count("MULT18X18D"),
+              "pfumx":count("PFUMX"),
+              "l6mux21":count("L6MUX21"),
+            }
+          (root/"summary.json").write_text(json.dumps(out,indent=2)+"\n")
+          print(json.dumps(out,indent=2))
+          print("\nLUT4 ranking:")
+          for tag,row in sorted(out.items(), key=lambda kv: kv[1]["lut4"], reverse=True):
+            print(f'{row["lut4"]:7d}  {tag:12s}  FF={row["ff"]:6d} cells={row["cells"]:7d}')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rob4-crossbar-area-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            ${{ env.AREA_OUT }}/summary.json
+            ${{ env.AREA_OUT }}/*.log
