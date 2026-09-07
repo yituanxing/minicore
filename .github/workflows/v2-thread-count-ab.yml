@@ -55,14 +55,19 @@ jobs:
             ~/.cache/mill
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-thread-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'build.mill') }}
 
-      - name: Prepare fixed tools and workload
+      - name: Prepare fixed tools
         run: |
           set -euo pipefail
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Prepare fixed workload
+        run: |
+          set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
 
       - name: Run thread-count A-B
         run: |
