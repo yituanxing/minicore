@@ -1,18 +1,6 @@
 name: AetherSoC V2 RV64 BusyBox I-cache Fast Matrix
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/v2-rv64-busybox-shell-baseline.yml'
-      - 'tools/ci/rv64_busybox_shell_build.sh'
-      - 'tools/ci/rv64_linux_kernel_reuse.sh'
-      - 'tools/ci/rv64_busybox_shell_payload_build.sh'
-      - 'software/rv64/**'
-      - 'src/main/scala/aethercore/**'
-      - 'sim/**'
-      - 'Makefile.l32-linux-boot'
-      - 'build.mill'
-      - 'mill'
   workflow_dispatch:
 
 permissions:
