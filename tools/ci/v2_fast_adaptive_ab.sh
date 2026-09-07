@@ -49,7 +49,8 @@ for variant in reference adaptive; do
   end_ns="$(date +%s%N)"
   [[ "$rc" == 2 ]] || { echo "ERROR: unexpected runner rc=$rc for $variant" >&2; tail -80 "$log"; exit 3; }
   grep '^L32_OPENSBI_TIMEOUT ' "$log" | tail -1 > "$OUT_ROOT/$variant.snapshot.txt"
-  progress="$(grep 'L32_SIM_PROGRESS ' "$log" | tail -1 | sed -n 's/.*cycles-per-second=\([^ ]*\).*/\1/p')"
+  progress="$(grep 'L32_SIM_PROGRESS ' "$log" | tail -1 | sed -n 's/.*cycles-per-second=\([^ ]*\).*/\1/p' || true)"
+  [[ -n "$progress" ]] || progress="NA"
   secs="$(python3 - "$start_ns" "$end_ns" <<'PY'
 import sys
 print(f"{(int(sys.argv[2])-int(sys.argv[1]))/1e9:.6f}")
