@@ -27,7 +27,8 @@ class AetherSoCInstructionCache(
     val addrBits: Int = 56,
     val dataBits: Int = 64,
     val txnIdBits: Int = 2,
-    val entries: Int = 64
+    val entries: Int = 64,
+    val fullBeatWordMissOracle: Boolean = false
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 I-cache currently targets a 64-bit memory beat")
   require(txnIdBits > 0)
@@ -73,6 +74,7 @@ class AetherSoCInstructionCache(
   private val missTag = Reg(UInt(TagBits.W))
   private val missOffset = Reg(UInt(OffsetBits.W))
   private val missMask = Reg(UInt(BeatBytes.W))
+  private val missFullBeat = RegInit(false.B)
   private val missFillValid = RegInit(false.B)
 
   private val reqOffset = io.frontendAddr(OffsetBits - 1, 0)
@@ -81,17 +83,31 @@ class AetherSoCInstructionCache(
   private val reqTag =
     io.frontendAddr(addrBits - 1, OffsetBits + IndexBits)
 
-  private val requestSize = WireDefault(MemSize.Word)
   private val requestBytes = WireDefault(4.U(4.W))
   private val baseMask = WireDefault("b00001111".U(BeatBytes.W))
   when(io.frontendBytes === 2.U) {
-    requestSize := MemSize.Half
     requestBytes := 2.U
     baseMask := "b00000011".U
   }
 
   private val reqMask = (baseMask << reqOffset)(BeatBytes - 1, 0)
   private val reqFitsLine = (reqOffset +& requestBytes) <= BeatBytes.U
+
+  // Measurement-only oracle. A real product implementation must prove the
+  // entire aligned beat executable through translation/PMP/PMA before using
+  // this path. The oracle deliberately answers only the performance upper-bound
+  // question for the current broad-RAM Linux workload.
+  private val fullBeatWordMiss =
+    fullBeatWordMissOracle.B && io.frontendBytes === 4.U && reqFitsLine
+  private val requestSize =
+    Mux(fullBeatWordMiss, MemSize.DWord,
+      Mux(io.frontendBytes === 2.U, MemSize.Half, MemSize.Word))
+  private val requestAddr =
+    Mux(fullBeatWordMiss,
+      Cat(io.frontendAddr(addrBits - 1, OffsetBits), 0.U(OffsetBits.W)),
+      io.frontendAddr)
+  private val fillMask =
+    Mux(fullBeatWordMiss, Fill(BeatBytes, 1.U(1.W)), reqMask)
 
   private val tagHit =
     lineValid(reqIndex) && lineTag(reqIndex) === reqTag
@@ -110,15 +126,21 @@ class AetherSoCInstructionCache(
   // expose only for the exact PA that still owns the frontend request.
   io.frontendReady :=
     hit || (active && io.response.valid && activeMatches)
+  private val missResponseData =
+    Mux(
+      missFullBeat,
+      (io.response.bits.rdata >> (missOffset << 3))(31, 0),
+      io.response.bits.rdata(31, 0)
+    )
   io.frontendInst :=
-    Mux(hit, hitData, io.response.bits.rdata(31, 0))
+    Mux(hit, hitData, missResponseData)
   io.frontendFault :=
     Mux(hit, false.B, active && io.response.valid && activeMatches && io.response.bits.fault)
 
   io.request.valid := io.frontendValid && !hit && !active && !io.invalidateAll
   io.request.bits.txnId := 0.U
   io.request.bits.op := AetherMemOp.Read
-  io.request.bits.paddr := io.frontendAddr
+  io.request.bits.paddr := requestAddr
   io.request.bits.size := requestSize
   io.request.bits.wdata := 0.U
   io.request.bits.wmask := 0.U
@@ -139,7 +161,8 @@ class AetherSoCInstructionCache(
     missIndex := reqIndex
     missTag := reqTag
     missOffset := reqOffset
-    missMask := reqMask
+    missMask := fillMask
+    missFullBeat := fullBeatWordMiss
     missFillValid := reqFitsLine
   }
 
@@ -154,7 +177,11 @@ class AetherSoCInstructionCache(
       val oldData = Mux(sameLine, lineData(missIndex), 0.U)
       val oldMask = Mux(sameLine, lineByteValid(missIndex), 0.U)
       val shifted =
-        (io.response.bits.rdata << (missOffset << 3))(dataBits - 1, 0)
+        Mux(
+          missFullBeat,
+          io.response.bits.rdata,
+          (io.response.bits.rdata << (missOffset << 3))(dataBits - 1, 0)
+        )
 
       lineValid(missIndex) := true.B
       lineTag.write(missIndex, missTag)
@@ -163,6 +190,7 @@ class AetherSoCInstructionCache(
     }
 
     active := false.B
+    missFullBeat := false.B
     missFillValid := false.B
   }
 
