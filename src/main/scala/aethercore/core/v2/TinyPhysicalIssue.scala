@@ -225,6 +225,9 @@ class TinyPhysicalLoadQueueIssue(val xlen: Int) extends Module {
     val bypassable = Input(Vec(Slots, Valid(new RobToken(IndexBits, GenerationBits))))
     val request = Decoupled(new TinyMemoryRequest(xlen, IndexBits, GenerationBits))
     val preHead = Output(Bool())
+    // Observation-only saturation fact: at least one architecturally eligible
+    // ordinary Load exists, but both replay-safe Load slots are occupied.
+    val capacityBlocked = Output(Bool())
   })
 
   private val issuedValid = RegInit(VecInit(Seq.fill(Entries)(false.B)))
@@ -329,6 +332,7 @@ class TinyPhysicalLoadQueueIssue(val xlen: Int) extends Module {
   io.request.valid := selectedValid && io.available && !io.block
   io.request.bits := selectedRequest
   io.preHead := io.request.valid && selectedAge =/= 0.U
+  io.capacityBlocked := selectedValid && !io.available && !io.block
 
   when(io.allocated.valid) {
     issuedValid(io.allocated.bits.robToken.index) := false.B
