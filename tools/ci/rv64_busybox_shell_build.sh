@@ -14,7 +14,7 @@ MUSL_VERSION="1.2.5"
 MUSL_ARCHIVE="https://musl.libc.org/releases/musl-1.2.5.tar.gz"
 MUSL_SHA256="a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4"
 BUSYBOX_VERSION="1.36.1"
-BUSYBOX_ARCHIVE="https://busybox.net/downloads/busybox-1.36.1.tar.bz2"
+BUSYBOX_ARCHIVE="https://repository.timesys.com/buildsources/b/busybox/busybox-1.36.1/busybox-1.36.1.tar.bz2"
 BUSYBOX_SHA256="b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314"
 
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
@@ -73,7 +73,7 @@ fetch_verified() {
   local url="$1" sha="$2" out="$3" tmp
   if [[ -s "${out}" ]] && printf '%s  %s\n' "${sha}" "${out}" | sha256sum -c - >/dev/null 2>&1; then return 0; fi
   tmp="${out}.tmp.$$"; rm -f "${tmp}"
-  curl -fL --retry 3 --retry-delay 2 "${url}" -o "${tmp}"
+  curl -fL --connect-timeout 15 --max-time 120 --retry 3 --retry-all-errors --retry-delay 2 "${url}" -o "${tmp}"
   printf '%s  %s\n' "${sha}" "${tmp}" | sha256sum -c -
   mv "${tmp}" "${out}"
 }
