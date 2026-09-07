@@ -1,0 +1,100 @@
+name: AetherCore V2 Fast Runtime Adaptive A-B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-fast-adaptive-ab.yml'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'tools/ci/v2_fast_adaptive_ab.sh'
+      - 'src/main/scala/aethercore/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-fast-adaptive-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ab:
+    name: 20M-cycle Fast top reference vs adaptive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves gcc-riscv64-unknown-elf \
+            binutils-riscv64-unknown-elf
+
+      - name: Cache fixed toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-runtime-tools-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Cache Scala and qualified RV64 software
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-runtime-rv64-v1-${{ hashFiles('build.mill', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh') }}
+
+      - name: Prepare fixed tools and workload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+
+      - name: Run exact Fast-top A-B
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x tools/ci/v2_fast_adaptive_ab.sh
+          MAX_CYCLES=20000000 PROGRESS_INTERVAL_CYCLES=20000000 \
+            bash tools/ci/v2_fast_adaptive_ab.sh
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-fast-adaptive-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/v2-fast-adaptive-ab/
