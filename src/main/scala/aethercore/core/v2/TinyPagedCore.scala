@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpRangeDecoder, PtwArbiter, RvcParcelController}
+import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpFullBeatExtensionGuard, PmpRangeDecoder, PtwArbiter, RvcParcelController}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -174,52 +174,25 @@ class TinyPagedCore(
   frontendPmpRanges.io.pmpAddress := backend.io.frontendPmpAddress
   instructionPmp.io.ranges := frontendPmpRanges.io.ranges
 
-  // A 4-byte fetch at an 8-byte-aligned address may safely extend through the
-  // upper half of the same beat without a second full PMP checker when the
-  // already-selected PMP owner remains the first overlapping entry and its
-  // range covers the additional bytes. An unmatched Machine-mode access may
-  // extend only if the added upper half remains completely unmatched.
-  //
-  // Checking only the added half is sufficient because the architectural lower
-  // 4-byte access has already passed instructionPmp. Any higher-priority entry
-  // newly overlapping bytes +4..+7 would make a widened PMP access straddle
-  // that entry and therefore fail the architectural PMP rule.
+  // Reuse the already-decoded PMP ranges and current matched entry. The guard
+  // proves only the additional bytes; the architectural 4-byte access keeps its
+  // original fault semantics.
   private val fullBeatPmpSafe =
-    if (isa.hasC || !isa.hasPmp) {
-      (!isa.hasC).B
+    if (isa.hasC) {
+      false.B
+    } else if (!isa.hasPmp) {
+      true.B
     } else {
-      val start = Cat(0.U(1.W), fetch.io.physicalAddress)
-      val addedStart = start + 4.U
-      val widenedEnd = start + 7.U
-      val addedOverlap = Wire(Vec(PmpConstants.MaxEntries, Bool()))
-
-      for (entry <- 0 until PmpConstants.MaxEntries) {
-        val range = frontendPmpRanges.io.ranges(entry)
-        addedOverlap(entry) :=
-          range.active && addedStart < range.upper && widenedEnd >= range.lower
-      }
-
-      val matchedRange =
-        frontendPmpRanges.io.ranges(instructionPmp.io.matchedEntry)
-      val higherPriorityAddedOverlap =
-        (0 until PmpConstants.MaxEntries)
-          .map(entry =>
-            addedOverlap(entry) &&
-              entry.U < instructionPmp.io.matchedEntry)
-          .reduce(_ || _)
-
-      val matchedCanExtend =
-        instructionPmp.io.matched &&
-          instructionPmp.io.allow &&
-          widenedEnd < matchedRange.upper &&
-          !higherPriorityAddedOverlap
-
-      val unmatchedMachineCanExtend =
-        !instructionPmp.io.matched &&
-          instructionPmp.io.allow &&
-          !addedOverlap.asUInt.orR
-
-      matchedCanExtend || unmatchedMachineCanExtend
+      val guard = Module(new PmpFullBeatExtensionGuard(
+        PmpConstants.MaxEntries,
+        PhysicalBits
+      ))
+      guard.io.address := fetch.io.physicalAddress
+      guard.io.currentAllowed := instructionPmp.io.allow
+      guard.io.currentMatched := instructionPmp.io.matched
+      guard.io.currentMatchedEntry := instructionPmp.io.matchedEntry
+      guard.io.ranges := frontendPmpRanges.io.ranges
+      guard.io.allow
     }
 
   private val instructionPmpFault = fetch.io.responseValid &&
