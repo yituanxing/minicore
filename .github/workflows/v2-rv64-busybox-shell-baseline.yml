@@ -28,9 +28,9 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 4
       matrix:
-        icache_entries: [64, 128, 256]
+        icache_entries: [64, 128, 256, 512]
     timeout-minutes: 90
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
