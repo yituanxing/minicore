@@ -1,0 +1,177 @@
+name: AetherCore V2 LoadQ2 Saturation BusyBox
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-loadq2-saturation.yml'
+      - 'src/main/scala/aethercore/core/v2/TinyPhysicalIssue.scala'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2UnifiedMemoryCompatSimTop.scala'
+      - 'src/main/scala/aethercore/sim/AetherSoCUnifiedHostMemoryAdapter.scala'
+      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64Fast.scala'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'tools/ci/rv64_busybox_shell_build.sh'
+      - 'tools/ci/rv64_busybox_shell_payload_build.sh'
+      - 'tools/ci/rv64_linux_kernel_reuse.sh'
+      - 'software/rv64/**'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+      - 'mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-loadq2-saturation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Real BusyBox LoadQ2 saturation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves gcc-riscv64-unknown-elf \
+            binutils-riscv64-unknown-elf
+
+      - name: Cache fixed tools and RV64 software
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+            ~/.cache/aethercore/rv64/userspace
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-loadq2-saturation-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'tools/ci/rv64_busybox_shell_build.sh', 'build.mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-loadq2-saturation-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-busybox-
+
+      - name: Activate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse qualified unchanged Linux baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_kernel_reuse.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Build static RV64 musl and BusyBox ash initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_busybox_shell_build.sh
+
+      - name: Build OpenSBI payload with BusyBox shell Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_busybox_shell_payload_build.sh
+
+      - name: Run corrected Fast host model to real interactive ash
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$HOME/.cache/aethercore/v2-loadq2-saturation/$TARGET_SHA"
+          command_file="build/rv64-busybox-shell/uart-command.txt"
+          printf "printf 'RV64 BUSYBOX COMMAND %%s\\n' OK\n" > "$command_file"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2OpenSbiRV64Fast \
+            FW_BIN=build/rv64-busybox-shell-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=600000000 \
+            MILESTONE='RV64 BUSYBOX COMMAND OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            UART_TRIGGER='RV64 BUSYBOX SHELL READY' \
+            UART_COMMAND_FILE="$command_file" \
+            POST_INPUT_MAX_CYCLES=50000000 \
+            PROGRESS_INTERVAL_CYCLES=25000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          cp "$probe_dir/logs/boot-probe.log" build/rv64-busybox-shell/loadq2-boot-probe.log
+
+      - name: Extract LoadQ2 saturation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          log=Path("build/rv64-busybox-shell/loadq2-boot-probe.log").read_text(errors="replace").replace("\r","")
+          def need(p):
+              m=re.search(p,log,re.M)
+              if not m:
+                  raise SystemExit("missing measurement: "+p)
+              return m
+          shell=need(r"^L32_UART_INPUT_START cycles=(\d+) commits=(\d+).*trigger=RV64 BUSYBOX SHELL READY")
+          done=need(r"^L32_RUNTIME_MILESTONE_PASS cycles=(\d+) commits=(\d+).*marker=RV64 BUSYBOX COMMAND OK$")
+          q=need(r"^L32_LOADQ_CAPACITY busy-cycles=(\d+) full-cycles=(\d+) capacity-blocked-cycles=(\d+)$")
+          cyc=int(done.group(1)); busy=int(q.group(1)); full=int(q.group(2)); blocked=int(q.group(3))
+          out=[
+            "RV64_V2_LOADQ2_SATURATION: status=PASS",
+            f"shell_ready_cycles={shell.group(1)}",
+            f"shell_ready_commits={shell.group(2)}",
+            f"command_roundtrip_cycles={done.group(1)}",
+            f"command_roundtrip_commits={done.group(2)}",
+            f"loadq_busy_cycles={busy}",
+            f"loadq_full_cycles={full}",
+            f"loadq_capacity_blocked_cycles={blocked}",
+            f"loadq_busy_pct={100.0*busy/cyc:.6f}",
+            f"loadq_full_pct={100.0*full/cyc:.6f}",
+            f"loadq_capacity_blocked_pct={100.0*blocked/cyc:.6f}",
+          ]
+          Path("build/rv64-busybox-shell/loadq2-saturation.txt").write_text("\n".join(out)+"\n")
+          print("\n".join(out))
+          PY
+          grep -q '^RV64_V2_LOADQ2_SATURATION: status=PASS$' build/rv64-busybox-shell/loadq2-saturation.txt
+
+      - name: Upload LoadQ2 saturation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-v2-loadq2-saturation-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-busybox-shell/loadq2-saturation.txt
+            build/rv64-busybox-shell/loadq2-boot-probe.log
+            build/rv64-busybox-shell/result.txt
+            build/rv64-busybox-shell-boot/result.txt
