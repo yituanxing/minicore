@@ -71,12 +71,17 @@ jobs:
             ~/.cache/aethercore/l32/opensbi
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-runtime-rv64-v1-${{ hashFiles('build.mill', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh') }}
 
-      - name: Prepare fixed tools and workload
+      - name: Prepare fixed tools
         shell: bash
         run: |
           set -euo pipefail
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Prepare fixed workload
+        shell: bash
+        run: |
+          set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
