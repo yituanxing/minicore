@@ -54,6 +54,10 @@ class TinyPagedCore(
     // A future I-cache/AXI wrapper opts in and may hold a translated fetch until
     // instruction data is actually available.
     val imemReady = if (enableInstructionBackpressure) Some(Input(Bool())) else None
+    // Conservative permission proof exported only for the optional SoC
+    // full-beat I-cache fill optimization. It never changes architectural
+    // fetch fault semantics for the current 4-byte instruction.
+    val imemFullBeatPmpSafe = Output(Bool())
     val ptw = new PageTableReadBusIO(PhysicalBits, geometry.pteBits)
 
     val commit = Output(new CommitTrace(Xlen, PhysicalBits, BusBits))
@@ -170,8 +174,64 @@ class TinyPagedCore(
   frontendPmpRanges.io.pmpAddress := backend.io.frontendPmpAddress
   instructionPmp.io.ranges := frontendPmpRanges.io.ranges
 
+  // A 4-byte fetch at an 8-byte-aligned address may safely extend through the
+  // upper half of the same beat without a second full PMP checker when the
+  // already-selected PMP owner remains the first overlapping entry and its
+  // range covers the additional bytes. An unmatched Machine-mode access may
+  // extend only if the added upper half remains completely unmatched.
+  //
+  // Checking only the added half is sufficient because the architectural lower
+  // 4-byte access has already passed instructionPmp. Any higher-priority entry
+  // newly overlapping bytes +4..+7 would make a widened PMP access straddle
+  // that entry and therefore fail the architectural PMP rule.
+  private val fullBeatPmpSafe =
+    if (isa.hasC || !isa.hasPmp) {
+      (!isa.hasC).B
+    } else {
+      val start = Cat(0.U(1.W), fetch.io.physicalAddress)
+      val addedStart = start + 4.U
+      val widenedEnd = start + 7.U
+      val addedOverlap = Wire(Vec(PmpConstants.MaxEntries, Bool()))
+
+      for (entry <- 0 until PmpConstants.MaxEntries) {
+        val range = frontendPmpRanges.io.ranges(entry)
+        addedOverlap(entry) :=
+          range.active && addedStart < range.upper && widenedEnd >= range.lower
+      }
+
+      val matchedRange =
+        frontendPmpRanges.io.ranges(instructionPmp.io.matchedEntry)
+      val higherPriorityAddedOverlap =
+        (0 until PmpConstants.MaxEntries)
+          .map(entry =>
+            addedOverlap(entry) &&
+              entry.U < instructionPmp.io.matchedEntry)
+          .reduce(_ || _)
+
+      val matchedCanExtend =
+        instructionPmp.io.matched &&
+          instructionPmp.io.allow &&
+          widenedEnd < matchedRange.upper &&
+          !higherPriorityAddedOverlap
+
+      val unmatchedMachineCanExtend =
+        !instructionPmp.io.matched &&
+          instructionPmp.io.allow &&
+          !addedOverlap.asUInt.orR
+
+      matchedCanExtend || unmatchedMachineCanExtend
+    }
+
   private val instructionPmpFault = fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && isa.hasPmp.B && !instructionPmp.io.allow
+
+  io.imemFullBeatPmpSafe :=
+    fetch.io.responseValid &&
+      !fetch.io.pageFault &&
+      !fetch.io.accessFault &&
+      !instructionPmpFault &&
+      (if (isa.hasC) false.B
+       else fetch.io.physicalAddress(2, 0) === 0.U && fullBeatPmpSafe)
 
   io.frontendPhysicalAddress := fetch.io.physicalAddress
   io.imem.valid := fetch.io.responseValid &&
