@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.{CoreConfig, PageTableGeometry}
-import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpFullBeatExtensionGuard, PmpRangeDecoder, PtwArbiter, RvcParcelController}
+import aethercore.core.{InstructionFetchAdapter, PmpAccessChecker, PmpConstants, PmpRangeDecoder, PtwArbiter, RvcParcelController}
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
 
 /**
@@ -174,26 +174,14 @@ class TinyPagedCore(
   frontendPmpRanges.io.pmpAddress := backend.io.frontendPmpAddress
   instructionPmp.io.ranges := frontendPmpRanges.io.ranges
 
-  // Reuse the already-decoded PMP ranges and current matched entry. The guard
-  // proves only the additional bytes; the architectural 4-byte access keeps its
-  // original fault semantics.
+  // The existing instruction PMP lane also computes permission for an 8-byte
+  // access beginning at this same address. For non-C 4-byte fetches that are
+  // already 8-byte aligned, this is exactly the lower-half full-beat proof and
+  // shares the lane's decoded ranges and priority network.
   private val fullBeatPmpSafe =
-    if (isa.hasC) {
-      false.B
-    } else if (!isa.hasPmp) {
-      true.B
-    } else {
-      val guard = Module(new PmpFullBeatExtensionGuard(
-        PmpConstants.MaxEntries,
-        PhysicalBits
-      ))
-      guard.io.address := fetch.io.physicalAddress
-      guard.io.currentAllowed := instructionPmp.io.allow
-      guard.io.currentMatched := instructionPmp.io.matched
-      guard.io.currentMatchedEntry := instructionPmp.io.matchedEntry
-      guard.io.ranges := frontendPmpRanges.io.ranges
-      guard.io.allow
-    }
+    if (isa.hasC) false.B
+    else if (!isa.hasPmp) true.B
+    else instructionPmp.io.allowWidened8
 
   private val instructionPmpFault = fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && isa.hasPmp.B && !instructionPmp.io.allow
