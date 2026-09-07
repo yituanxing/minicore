@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-FW_BIN="${FW_BIN:-build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin}"
+FW_BIN="${FW_BIN:-build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin}"
 MAX_CYCLES="${MAX_CYCLES:-20000000}"
 PROGRESS_INTERVAL_CYCLES="${PROGRESS_INTERVAL_CYCLES:-20000000}"
 OUT_ROOT="${OUT_ROOT:-build/v2-fast-adaptive-ab}"
