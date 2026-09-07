@@ -63,7 +63,8 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/ensure_verilator_5_024.sh
-          verilator --version
+          echo "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin" >> "$GITHUB_PATH"
+          "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin/verilator" --version
 
       - name: Prove multi-slot Data read and serialized write semantics
         run: |
