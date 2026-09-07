@@ -126,7 +126,8 @@ class AetherCoreV2Complex(
     paddrBits,
     dataBits,
     txnIdBits,
-    entries = dcacheEntries
+    entries = dcacheEntries,
+    fullBeatReadMissOracle = true
   ))
   dcache.io.upstreamRequest <> core.io.memoryRequest
   core.io.memoryResponse <> dcache.io.upstreamResponse
