@@ -1,4 +1,4 @@
-name: AetherSoC V2 RV64 BusyBox Shell Fast Matrix
+name: AetherSoC V2 RV64 BusyBox I-cache Fast Matrix
 
 on:
   pull_request:
@@ -24,17 +24,17 @@ concurrency:
 
 jobs:
   measure:
-    name: Fast BusyBox ash D-cache ${{ matrix.dcache_entries }} entries
+    name: Fast BusyBox ash I-cache ${{ matrix.icache_entries }} entries
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       max-parallel: 3
       matrix:
-        dcache_entries: [64, 128, 256]
+        icache_entries: [64, 128, 256]
     timeout-minutes: 90
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      DCACHE_ENTRIES: ${{ matrix.dcache_entries }}
+      ICACHE_ENTRIES: ${{ matrix.icache_entries }}
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
@@ -47,22 +47,22 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Select D-cache capacity candidate
+      - name: Select I-cache capacity candidate
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import os
           from pathlib import Path
-          entries = int(os.environ["DCACHE_ENTRIES"])
-          path = Path("src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala")
+          entries = int(os.environ["ICACHE_ENTRIES"])
+          path = Path("src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala")
           text = path.read_text()
-          needle = "    dcacheEntries = 64,"
+          needle = "    txnIdBits = clientTxnIdBits,\n    entries = 64"
           if text.count(needle) != 1:
-              raise SystemExit("expected exactly one production dcacheEntries=64 selection")
+              raise SystemExit("expected exactly one production I-cache entries=64 selection")
           if entries != 64:
-              path.write_text(text.replace(needle, f"    dcacheEntries = {entries},"))
-          print(f"RV64 shell A/B D-cache entries={entries} capacity_bytes={entries * 8}")
+              path.write_text(text.replace(needle, f"    txnIdBits = clientTxnIdBits,\n    entries = {entries}"))
+          print(f"RV64 shell A/B I-cache entries={entries} capacity_bytes={entries * 8}")
           PY
 
       - name: Install hosted prerequisites
@@ -155,7 +155,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          probe_dir="$HOME/.cache/aethercore/v2-rv64-busybox-shell/$TARGET_SHA/dcache-$DCACHE_ENTRIES"
+          probe_dir="$HOME/.cache/aethercore/v2-rv64-busybox-shell/$TARGET_SHA/icache-$ICACHE_ENTRIES"
           command_file="build/rv64-busybox-shell/uart-command.txt"
           printf "printf 'RV64 BUSYBOX COMMAND %%s\\n' OK\n" > "$command_file"
           make -f Makefile.l32-linux-boot \
@@ -198,8 +198,8 @@ jobs:
           top = re.search(r"^AETHERCORE_V2_TOPDOWN reason=marker cycles=(\d+) flow=(\d+) frontend_bound=(\d+) backend_bound=(\d+)$", log, re.M)
           out = [
               "RV64_V2_BUSYBOX_SHELL_BASELINE: status=PASS",
-              f"dcache_entries={os.environ['DCACHE_ENTRIES']}",
-              f"dcache_capacity_bytes={int(os.environ['DCACHE_ENTRIES']) * 8}",
+              f"icache_entries={os.environ['ICACHE_ENTRIES']}",
+              f"icache_capacity_bytes={int(os.environ['ICACHE_ENTRIES']) * 8}",
               f"shell_ready_cycles={shell.group(1)}",
               f"shell_ready_commits={shell.group(2)}",
               f"command_roundtrip_cycles={done.group(1)}",
@@ -232,7 +232,7 @@ jobs:
             echo '## Current V2 RV64 BusyBox shell baseline'
             echo
             echo "- head: \`$TARGET_SHA\`"
-            echo "- D-cache entries: \`$DCACHE_ENTRIES\`"
+            echo "- I-cache entries: \`$ICACHE_ENTRIES\`"
             if [[ -s build/rv64-busybox-shell/baseline.txt ]]; then
               echo '```text'
               cat build/rv64-busybox-shell/baseline.txt
@@ -245,7 +245,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: aethersoc-v2-rv64-busybox-shell-dcache-${{ matrix.dcache_entries }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: aethersoc-v2-rv64-busybox-shell-icache-${{ matrix.icache_entries }}-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: warn
           path: |
