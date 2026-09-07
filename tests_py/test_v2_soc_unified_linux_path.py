@@ -9,14 +9,18 @@ LEGACY = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.sca
 
 
 class V2UnifiedLinuxPathSourceContract(unittest.TestCase):
-    def test_host_adapter_preserves_three_independent_source_slots(self):
+    def test_host_adapter_preserves_source_identity_and_product_read_concurrency(self):
         source = HOST.read_text(encoding="utf-8")
-        self.assertIn("private val dataActive = RegInit(false.B)", source)
+        self.assertIn("private val DataTxnCount = 1 << localTxnIdBits", source)
+        self.assertIn("private val dataReadActive =", source)
+        self.assertIn("RegInit(VecInit(Seq.fill(DataTxnCount)(false.B)))", source)
+        self.assertIn("private val dataSerialActive = RegInit(false.B)", source)
         self.assertIn("private val ptwActive = RegInit(false.B)", source)
         self.assertIn("private val instructionActive = RegInit(false.B)", source)
-        self.assertIn("DataSource.U -> !dataActive", source)
-        self.assertIn("PtwSource.U -> !ptwActive", source)
-        self.assertIn("InstructionSource.U -> !instructionActive", source)
+        self.assertIn("!dataSerialActive && !dataReadActive(incomingLocalTxn)", source)
+        self.assertIn("!dataSerialActive && allNormalReadsDrained", source)
+        self.assertIn("PtwSource.U -> (!dataSerialActive && !ptwActive)", source)
+        self.assertIn("InstructionSource.U -> (!dataSerialActive && !instructionActive)", source)
         self.assertIn("new RRArbiter(new AetherMemResponse", source)
 
     def test_compat_top_keeps_old_host_ports_but_contains_unified_soc(self):
