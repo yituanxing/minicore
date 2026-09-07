@@ -1,4 +1,4 @@
-name: AetherSoC V2 RV64 BusyBox I-cache Fast Matrix
+name: AetherSoC V2 RV64 BusyBox I-cache Full-Beat Oracle
 
 on:
   pull_request:
@@ -24,13 +24,13 @@ concurrency:
 
 jobs:
   measure:
-    name: Fast BusyBox ash I-cache ${{ matrix.icache_entries }} entries
+    name: Full-beat oracle BusyBox ash 64-entry I-cache
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 1
       matrix:
-        icache_entries: [64, 128, 256, 512]
+        icache_entries: [64]
     timeout-minutes: 90
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
