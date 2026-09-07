@@ -87,7 +87,8 @@ class AetherCoreV2UnifiedMemorySoC(
     addrBits = paddrBits,
     dataBits = dataBits,
     txnIdBits = clientTxnIdBits,
-    entries = 64
+    entries = 64,
+    fullBeatWordMissOracle = true
   ))
   val hub = Module(new AetherSoCMemoryHub(
     addrBits = paddrBits,
