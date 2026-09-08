@@ -384,6 +384,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout.flush();
+    emitAxiDataConcurrency(top);
     std::cerr << "\nL32_OPENSBI_TIMEOUT cycles=" << cycles
               << " commits=" << commits
               << " compressed=" << compressedCommits
