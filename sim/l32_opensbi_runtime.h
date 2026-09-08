@@ -90,10 +90,10 @@ class Memory {
            address - kRamBase <= bytes_.size() - size;
   }
 
-  std::uint32_t readInstruction(std::uint64_t address, std::size_t size) const {
-    if (size != 2 && size != 4)
-      throw std::runtime_error("instruction transaction must be 2 or 4 bytes");
-    return static_cast<std::uint32_t>(readData(address, size));
+  std::uint64_t readInstruction(std::uint64_t address, std::size_t size) const {
+    if (size != 2 && size != 4 && size != 8)
+      throw std::runtime_error("instruction transaction must be 2, 4 or 8 bytes");
+    return readData(address, size);
   }
 
   std::uint64_t readData(std::uint64_t address, std::size_t size) const {
@@ -246,7 +246,7 @@ void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
-  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4;
+  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4 && ibytes != 8;
   const bool ifault = ivalid &&
       (invalidInstructionWidth || !memory.contains(iaddr, ibytes));
   top.io_imemFault = ifault;
