@@ -17,7 +17,7 @@ class L32SimRuntimeContractTest(unittest.TestCase):
             "class Memory",
             "kRamBase = 0x80000000ULL",
             "kRamSize = 256ULL * 1024ULL * 1024ULL",
-            "std::uint32_t readInstruction",
+            "std::uint64_t readInstruction",
             "std::uint64_t readData",
             "void writeMasked",
             # Historical RV32 callers retain the narrow compatibility wrapper,
