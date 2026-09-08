@@ -42,6 +42,9 @@ class AetherSoCInstructionCache(
     val frontendValid = Input(Bool())
     val frontendAddr = Input(UInt(addrBits.W))
     val frontendBytes = Input(UInt(3.W))
+    // True only when the CPU PMP proof and SoC PMA aperture proof both permit
+    // widening this lower-half 4-byte fetch to the complete 8-byte beat.
+    val frontendFullBeatAllowed = Input(Bool())
     val frontendReady = Output(Bool())
     val frontendInst = Output(UInt(32.W))
     val frontendFault = Output(Bool())
@@ -90,7 +93,21 @@ class AetherSoCInstructionCache(
     baseMask := "b00000011".U
   }
 
+  // Only a lower-half 4-byte fetch can widen. The address is therefore already
+  // 8-byte aligned, so the downstream DWord response still presents the exact
+  // requested instruction in rdata[31:0].
+  private val safeFullBeatMiss =
+    io.frontendBytes === 4.U &&
+      reqOffset === 0.U &&
+      io.frontendFullBeatAllowed
+
+  when(safeFullBeatMiss) {
+    requestSize := MemSize.DWord
+  }
+
   private val reqMask = (baseMask << reqOffset)(BeatBytes - 1, 0)
+  private val fillMask =
+    Mux(safeFullBeatMiss, Fill(BeatBytes, 1.U(1.W)), reqMask)
   private val reqFitsLine = (reqOffset +& requestBytes) <= BeatBytes.U
 
   private val tagHit =
@@ -139,7 +156,7 @@ class AetherSoCInstructionCache(
     missIndex := reqIndex
     missTag := reqTag
     missOffset := reqOffset
-    missMask := reqMask
+    missMask := fillMask
     missFillValid := reqFitsLine
   }
 
@@ -188,6 +205,10 @@ class AetherSoCInstructionCache(
   io.missCount := missCounter
 
   when(io.frontendValid && !active) {
+    when(io.frontendFullBeatAllowed) {
+      assert(io.frontendBytes === 4.U && reqOffset === 0.U,
+        "full-beat I-cache permission may only accompany an aligned 4-byte fetch")
+    }
     assert(io.frontendBytes === 2.U || io.frontendBytes === 4.U,
       "I-cache frontend supports only 2-byte parcels or 4-byte instructions")
   }
