@@ -54,6 +54,10 @@ class TinyPagedCore(
     // A future I-cache/AXI wrapper opts in and may hold a translated fetch until
     // instruction data is actually available.
     val imemReady = if (enableInstructionBackpressure) Some(Input(Bool())) else None
+    // Conservative permission proof exported only for the optional SoC
+    // full-beat I-cache fill optimization. It never changes architectural
+    // fetch fault semantics for the current 4-byte instruction.
+    val imemFullBeatPmpSafe = Output(Bool())
     val ptw = new PageTableReadBusIO(PhysicalBits, geometry.pteBits)
 
     val commit = Output(new CommitTrace(Xlen, PhysicalBits, BusBits))
@@ -170,8 +174,25 @@ class TinyPagedCore(
   frontendPmpRanges.io.pmpAddress := backend.io.frontendPmpAddress
   instructionPmp.io.ranges := frontendPmpRanges.io.ranges
 
+  // The existing instruction PMP lane also computes permission for an 8-byte
+  // access beginning at this same address. For non-C 4-byte fetches that are
+  // already 8-byte aligned, this is exactly the lower-half full-beat proof and
+  // shares the lane's decoded ranges and priority network.
+  private val fullBeatPmpSafe =
+    if (isa.hasC) false.B
+    else if (!isa.hasPmp) true.B
+    else instructionPmp.io.allowWidened8
+
   private val instructionPmpFault = fetch.io.responseValid &&
     !fetch.io.pageFault && !fetch.io.accessFault && isa.hasPmp.B && !instructionPmp.io.allow
+
+  io.imemFullBeatPmpSafe :=
+    fetch.io.responseValid &&
+      !fetch.io.pageFault &&
+      !fetch.io.accessFault &&
+      !instructionPmpFault &&
+      (if (isa.hasC) false.B
+       else fetch.io.physicalAddress(2, 0) === 0.U && fullBeatPmpSafe)
 
   io.frontendPhysicalAddress := fetch.io.physicalAddress
   io.imem.valid := fetch.io.responseValid &&
