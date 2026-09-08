@@ -12,9 +12,11 @@ import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
   * The source tag layout is frozen by AetherSoCMemoryHub:
   *   0 = data/D-cache, 1 = PTW, 2 = instruction.
   *
-  * Each source owns one independent compatibility slot, so instruction, PTW
-  * and data traffic can remain concurrently outstanding while preserving the
-  * old runner ABI.
+  * PTW and instruction each retain one compatibility lifetime. Data ordinary
+  * reads retain one slot per local transaction ID so the lightweight host model
+  * does not collapse the production LoadQ/D-cache concurrency. Serialized Data
+  * traffic drains all normal reads first. Source and transaction identity remain
+  * intact while preserving the old runner ABI.
   */
 class AetherSoCUnifiedHostMemoryAdapter(
     val addrBits: Int = 56,
@@ -59,34 +61,65 @@ class AetherSoCUnifiedHostMemoryAdapter(
   private val DataSource = 0
   private val PtwSource = 1
   private val InstructionSource = 2
+  private val DataTxnCount = 1 << localTxnIdBits
 
-  private val dataActive = RegInit(false.B)
+  // Product AXI permits ordinary RAM reads with distinct transaction IDs to
+  // overlap. Mirror that semantic capability in the lightweight unified host
+  // adapter instead of re-serializing the LoadQ/D-cache path to one DataSource
+  // lifetime. Non-normal data traffic (write/atomic/ordered/side-effecting read)
+  // remains globally serialized exactly like AetherMemToAxi4Bridge.
+  private val dataReadActive =
+    RegInit(VecInit(Seq.fill(DataTxnCount)(false.B)))
+  private val dataReadRequest =
+    Reg(Vec(DataTxnCount, new AetherMemRequest(addrBits, dataBits, txnIdBits)))
+  private val dataSerialActive = RegInit(false.B)
+  private val dataSerialRequest =
+    Reg(new AetherMemRequest(addrBits, dataBits, txnIdBits))
+
   private val ptwActive = RegInit(false.B)
   private val instructionActive = RegInit(false.B)
 
-  private val dataRequest = Reg(new AetherMemRequest(addrBits, dataBits, txnIdBits))
   private val ptwRequest = Reg(new AetherMemRequest(addrBits, dataBits, txnIdBits))
   private val instructionRequest = Reg(new AetherMemRequest(addrBits, dataBits, txnIdBits))
 
   private val incomingSource =
     io.request.bits.txnId(txnIdBits - 1, localTxnIdBits)
+  private val incomingLocalTxn =
+    io.request.bits.txnId(localTxnIdBits - 1, 0)
+  private val incomingNormalRead =
+    io.request.bits.op === AetherMemOp.Read &&
+      !io.request.bits.attributes.sideEffecting &&
+      !io.request.bits.attributes.ordered
+
+  private val anyDataReadActive = dataReadActive.asUInt.orR
+  private val allNormalReadsDrained =
+    !anyDataReadActive && !ptwActive && !instructionActive
 
   io.request.ready := MuxLookup(
     incomingSource,
     false.B
   )(
     Seq(
-      DataSource.U -> !dataActive,
-      PtwSource.U -> !ptwActive,
-      InstructionSource.U -> !instructionActive
+      DataSource.U -> Mux(
+        incomingNormalRead,
+        !dataSerialActive && !dataReadActive(incomingLocalTxn),
+        !dataSerialActive && allNormalReadsDrained
+      ),
+      PtwSource.U -> (!dataSerialActive && !ptwActive),
+      InstructionSource.U -> (!dataSerialActive && !instructionActive)
     )
   )
 
   when(io.request.fire) {
     switch(incomingSource) {
       is(DataSource.U) {
-        dataRequest := io.request.bits
-        dataActive := true.B
+        when(incomingNormalRead) {
+          dataReadRequest(incomingLocalTxn) := io.request.bits
+          dataReadActive(incomingLocalTxn) := true.B
+        }.otherwise {
+          dataSerialRequest := io.request.bits
+          dataSerialActive := true.B
+        }
       }
       is(PtwSource.U) {
         ptwRequest := io.request.bits
@@ -115,22 +148,29 @@ class AetherSoCUnifiedHostMemoryAdapter(
   io.ptwValid := ptwActive
   io.ptwAddr := ptwRequest.paddr
 
-  io.memValid := dataActive
-  io.memWrite := dataRequest.op === AetherMemOp.Write
-  io.memAtomic := dataRequest.op === AetherMemOp.Atomic
-  io.memOp := dataRequest.op
-  io.memAtomicOp := dataRequest.atomicOp
-  io.memAddr := dataRequest.paddr
-  io.memWdata := dataRequest.wdata
-  io.memWmask := dataRequest.wmask
-  io.memSize := dataRequest.size
+  private val dataReadSelectValid = dataReadActive.asUInt.orR
+  private val dataReadSelect = PriorityEncoder(dataReadActive)
+  private val selectedDataReadRequest = dataReadRequest(dataReadSelect)
+  private val selectedDataValid = dataSerialActive || dataReadSelectValid
+  private val selectedDataRequest =
+    Mux(dataSerialActive, dataSerialRequest, selectedDataReadRequest)
+
+  io.memValid := selectedDataValid
+  io.memWrite := selectedDataRequest.op === AetherMemOp.Write
+  io.memAtomic := selectedDataRequest.op === AetherMemOp.Atomic
+  io.memOp := selectedDataRequest.op
+  io.memAtomicOp := selectedDataRequest.atomicOp
+  io.memAddr := selectedDataRequest.paddr
+  io.memWdata := selectedDataRequest.wdata
+  io.memWmask := selectedDataRequest.wmask
+  io.memSize := selectedDataRequest.size
 
   private val responses = Module(
     new RRArbiter(new AetherMemResponse(dataBits, txnIdBits), 3)
   )
 
-  responses.io.in(DataSource).valid := dataActive && io.memReady
-  responses.io.in(DataSource).bits.txnId := dataRequest.txnId
+  responses.io.in(DataSource).valid := selectedDataValid && io.memReady
+  responses.io.in(DataSource).bits.txnId := selectedDataRequest.txnId
   responses.io.in(DataSource).bits.rdata := io.memRdata
   responses.io.in(DataSource).bits.fault := io.memFault
   responses.io.in(DataSource).bits.last := true.B
@@ -153,13 +193,27 @@ class AetherSoCUnifiedHostMemoryAdapter(
   io.response <> responses.io.out
 
   when(responses.io.in(DataSource).fire) {
-    dataActive := false.B
+    when(dataSerialActive) {
+      dataSerialActive := false.B
+    }.otherwise {
+      dataReadActive(dataReadSelect) := false.B
+    }
   }
   when(responses.io.in(PtwSource).fire) {
     ptwActive := false.B
   }
   when(responses.io.in(InstructionSource).fire) {
     instructionActive := false.B
+  }
+
+  when(dataSerialActive) {
+    assert(!dataReadSelectValid && !ptwActive && !instructionActive,
+      "serialized Data request must own the host-memory boundary exclusively")
+  }
+
+  when(dataReadSelectValid) {
+    assert(!dataSerialActive,
+      "ordinary Data reads must not overlap a serialized Data request")
   }
 
   when(instructionActive) {
