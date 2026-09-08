@@ -151,7 +151,7 @@ bool redriveMemoryChanged(Top& top, const Memory& memory) {
   const bool ivalid = top.io_imemValid;
   const auto iaddr = static_cast<std::uint64_t>(top.io_imemAddr);
   const auto ibytes = static_cast<std::size_t>(top.io_imemBytes);
-  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4;
+  const bool invalidInstructionWidth = ibytes != 2 && ibytes != 4 && ibytes != 8;
   const bool ifault = ivalid &&
       (invalidInstructionWidth || !memory.contains(iaddr, ibytes));
   assign(top.io_imemFault, ifault);
