@@ -29,8 +29,8 @@ class AetherCoreV2Axi4CompatSimTop extends Module {
   val io = IO(new Bundle {
     val imemValid = Output(Bool())
     val imemAddr = Output(UInt(paddrBits.W))
-    val imemBytes = Output(UInt(3.W))
-    val imemInst = Input(UInt(32.W))
+    val imemBytes = Output(UInt(4.W))
+    val imemInst = Input(UInt(64.W))
     val imemFault = Input(Bool())
 
     val memValid = Output(Bool())

@@ -146,6 +146,10 @@ class PmpAccessChecker(
     val ranges = Input(Vec(entries, new PmpDecodedEntry(paddrBits)))
 
     val allow = Output(Bool())
+    // Permission for an 8-byte access beginning at the same address. This is
+    // used only by the non-C aligned I-fetch optimization; consumers must still
+    // require the architectural narrow access and page/PMA checks to succeed.
+    val allowWidened8 = Output(Bool())
     val matched = Output(Bool())
     val matchedEntry = Output(UInt(entryIndexBits.W))
   })
@@ -155,14 +159,31 @@ class PmpAccessChecker(
   end := start + io.bytes - 1.U
   val invalidRange = io.bytes === 0.U || end(paddrBits)
 
+  // The optional I-fetch widening proof shares the same start address, decoded
+  // ranges, permission bits and priority walk. Only the end-of-access compare
+  // differs, avoiding the dynamic matched-range mux and duplicated lower-bound
+  // compare network of the standalone extension guard.
+  val widened8End = start + 7.U
+  val widened8Invalid = widened8End(paddrBits)
+
   val overlaps = Wire(Vec(entries, Bool()))
+  val widened8Overlaps = Wire(Vec(entries, Bool()))
   val entryAllows = Wire(Vec(entries, Bool()))
+  val widened8EntryAllows = Wire(Vec(entries, Bool()))
 
   for (entry <- 0 until entries) {
     val range = io.ranges(entry)
+    val startBelowUpper = start < range.upper
     overlaps(entry) :=
-      range.active && !invalidRange && start < range.upper && end >= range.lower
-    val fullyContained = start >= range.lower && end < range.upper
+      range.active && !invalidRange && startBelowUpper && end >= range.lower
+    widened8Overlaps(entry) :=
+      range.active && !widened8Invalid &&
+        startBelowUpper && widened8End >= range.lower
+
+    val startAtOrAboveLower = start >= range.lower
+    val fullyContained = startAtOrAboveLower && end < range.upper
+    val widened8FullyContained =
+      startAtOrAboveLower && widened8End < range.upper
     val permission = Mux(
       io.execute,
       range.execute,
@@ -170,12 +191,16 @@ class PmpAccessChecker(
     )
     val machineBypass =
       io.privilege === PrivilegeMode.Machine.U && !range.lock
-    entryAllows(entry) := fullyContained && (machineBypass || permission)
+    val accessPermitted = machineBypass || permission
+    entryAllows(entry) := fullyContained && accessPermitted
+    widened8EntryAllows(entry) := widened8FullyContained && accessPermitted
   }
 
   val matched = WireDefault(false.B)
   val matchedEntry = WireDefault(0.U(entryIndexBits.W))
   val allowed = WireDefault(io.privilege === PrivilegeMode.Machine.U)
+  val widened8Allowed =
+    WireDefault(io.privilege === PrivilegeMode.Machine.U)
 
   for (entry <- (0 until entries).reverse) {
     when(overlaps(entry)) {
@@ -183,75 +208,15 @@ class PmpAccessChecker(
       matchedEntry := entry.U
       allowed := entryAllows(entry)
     }
+    when(widened8Overlaps(entry)) {
+      widened8Allowed := widened8EntryAllows(entry)
+    }
   }
 
   io.matched := matched
   io.matchedEntry := matchedEntry
   io.allow := allowed && !invalidRange
-}
-
-/**
-  * Cheap proof that an already-authorized 4-byte instruction access at an
-  * 8-byte-aligned address may extend through bytes +4..+7 without changing PMP
-  * ownership.
-  *
-  * The current access has already passed PmpAccessChecker. A widened access is
-  * therefore safe iff:
-  *   - the current owning entry covers the added upper half and no
-  *     higher-priority entry newly overlaps it; or
-  *   - the current access is unmatched/allowed and the added half is also
-  *     completely unmatched.
-  *
-  * This intentionally reuses decoded PMP geometry and the existing matched
-  * entry rather than instantiating a second complete access checker.
-  */
-class PmpFullBeatExtensionGuard(
-    val entries: Int = PmpConstants.MaxEntries,
-    val paddrBits: Int
-) extends Module {
-  require(entries > 0 && entries <= PmpConstants.MaxEntries)
-  private val entryIndexBits = math.max(1, log2Ceil(entries))
-
-  val io = IO(new Bundle {
-    val address = Input(UInt(paddrBits.W))
-    val currentAllowed = Input(Bool())
-    val currentMatched = Input(Bool())
-    val currentMatchedEntry = Input(UInt(entryIndexBits.W))
-    val ranges = Input(Vec(entries, new PmpDecodedEntry(paddrBits)))
-    val allow = Output(Bool())
-  })
-
-  val start = Cat(0.U(1.W), io.address)
-  val addedStart = start + 4.U
-  val widenedEnd = start + 7.U
-  val addedOverlap = Wire(Vec(entries, Bool()))
-
-  for (entry <- 0 until entries) {
-    val range = io.ranges(entry)
-    addedOverlap(entry) :=
-      range.active && addedStart < range.upper && widenedEnd >= range.lower
-  }
-
-  val matchedRange = io.ranges(io.currentMatchedEntry)
-  val higherPriorityAddedOverlap =
-    (0 until entries)
-      .map(entry =>
-        addedOverlap(entry) &&
-          entry.U < io.currentMatchedEntry)
-      .reduce(_ || _)
-
-  val matchedCanExtend =
-    io.currentMatched &&
-      widenedEnd < matchedRange.upper &&
-      !higherPriorityAddedOverlap
-
-  val unmatchedCanExtend =
-    !io.currentMatched && !addedOverlap.asUInt.orR
-
-  io.allow :=
-    io.currentAllowed &&
-      io.address(2, 0) === 0.U &&
-      Mux(io.currentMatched, matchedCanExtend, unmatchedCanExtend)
+  io.allowWidened8 := widened8Allowed && !widened8Invalid
 }
 
 /**
