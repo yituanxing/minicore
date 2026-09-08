@@ -39,8 +39,8 @@ class AetherSoCAxi4HostMemoryAdapter(
 
     val imemValid = Output(Bool())
     val imemAddr = Output(UInt(addrBits.W))
-    val imemBytes = Output(UInt(3.W))
-    val imemInst = Input(UInt(32.W))
+    val imemBytes = Output(UInt(4.W))
+    val imemInst = Input(UInt(64.W))
     val imemFault = Input(Bool())
 
     val ptwValid = Output(Bool())
@@ -165,7 +165,8 @@ class AetherSoCAxi4HostMemoryAdapter(
   io.imemAddr := instructionReadAddr
   io.imemBytes :=
     Mux(instructionReadSize === 1.U, 2.U,
-      Mux(instructionReadSize === 2.U, 4.U, 0.U))
+      Mux(instructionReadSize === 2.U, 4.U,
+        Mux(instructionReadSize === 3.U, 8.U, 0.U)))
 
   io.ptwValid := ptwReadActive
   io.ptwAddr := ptwReadAddr
