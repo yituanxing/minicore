@@ -1,0 +1,151 @@
+name: AetherSoC AXI4 Data Latency Overlap Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/v2-axi4-data-latency-overlap.yml'
+      - 'src/main/scala/aethercore/sim/AetherCoreV2Axi4CompatSimTop.scala'
+      - 'src/main/scala/aethercore/sim/AetherSoCAxi4HostMemoryAdapter.scala'
+      - 'src/main/scala/aethercore/soc/AetherMemToAxi4Bridge.scala'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'Makefile.l32-linux-boot'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethersoc-axi4-data-latency-overlap-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: 50M-cycle AXI Data overlap with 8-cycle host latency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '8'
+
+    steps:
+      - name: Checkout exact probe head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install hosted prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless device-tree-compiler dwarves
+
+      - name: Cache fixed tools and RV64 software
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-axi4-latency-probe-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'build.mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Activate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          echo "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin" >> "$GITHUB_PATH"
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          "$HOME/.cache/aethercore/toolchains/verilator-5.024/bin/verilator" --version
+
+      - name: Prepare unchanged early Linux payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_kernel_reuse.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
+
+      - name: Run fixed-cycle AXI overlap probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$HOME/.cache/aethercore/v2-axi4-data-latency-overlap/$TARGET_SHA"
+          set +e
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$probe_dir" \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2Axi4LinuxCompatRV64 \
+            FW_BIN=build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" \
+            MAX_CYCLES=50000000 \
+            MILESTONE='__AETHERCORE_AXI4_LATENCY_NEVER_MATCH__' \
+            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          rc=$?
+          set -e
+          if [[ $rc -ne 2 ]]; then
+            echo "unexpected runner rc=$rc (expected fixed-cycle timeout rc=2)" >&2
+            exit 1
+          fi
+          cp "$probe_dir/logs/boot-probe.log" build/axi4-data-latency-overlap.log
+
+      - name: Extract overlap result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path("build/axi4-data-latency-overlap.log").read_text(errors="replace").replace("\r","")
+          m=re.search(r"^L32_AXI_DATA_CONCURRENCY requests=(\d+) responses=(\d+) overlap-issues=(\d+) two-outstanding-cycles=(\d+) max-outstanding=(\d+)$",s,re.M)
+          if not m:
+              raise SystemExit("missing AXI concurrency snapshot")
+          req,resp,overlap,two,maxo=map(int,m.groups())
+          out=[
+            "AETHERCORE_AXI4_DATA_LATENCY_OVERLAP: status=PASS",
+            "host_data_wait_cycles=8",
+            f"requests={req}",
+            f"responses={resp}",
+            f"overlap_issues={overlap}",
+            f"two_outstanding_cycles={two}",
+            f"max_outstanding={maxo}",
+            f"concurrency_observed={1 if maxo >= 2 else 0}",
+          ]
+          Path("build/axi4-data-latency-overlap.txt").write_text("\n".join(out)+"\n")
+          print("\n".join(out))
+          PY
+
+      - name: Upload overlap evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethersoc-axi4-data-latency-overlap-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/axi4-data-latency-overlap.txt
+            build/axi4-data-latency-overlap.log
+            build/rv64-linux-early/result.txt
