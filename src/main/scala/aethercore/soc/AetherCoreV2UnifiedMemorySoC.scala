@@ -127,6 +127,22 @@ class AetherCoreV2UnifiedMemorySoC(
   instructionCache.io.frontendValid := platform.io.imemValid
   instructionCache.io.frontendAddr := platform.io.imemAddr
   instructionCache.io.frontendBytes := platform.io.imemBytes
+
+  // PMA side of the full-beat proof. Widen only when all 8 bytes remain inside
+  // a single executable SoC aperture. The CPU already proves translation/PMP;
+  // keeping this check here preserves ownership of the board address map.
+  private val imemStart = Cat(0.U(1.W), platform.io.imemAddr)
+  private val imemBeatEndExclusive = imemStart + 8.U
+  private val fullBeatInBootRom =
+    imemStart >= addressMap.bootRomBase.U &&
+      imemBeatEndExclusive <= addressMap.bootRomLimit.U
+  private val fullBeatInRam =
+    imemStart >= addressMap.ramBase.U &&
+      imemBeatEndExclusive <= addressMap.ramLimit.U
+  instructionCache.io.frontendFullBeatAllowed :=
+    platform.io.imemFullBeatPmpSafe &&
+      (fullBeatInBootRom || fullBeatInRam)
+
   instructionCache.io.invalidateAll := platform.io.instructionFence
   platform.io.imemReady.get := instructionCache.io.frontendReady
   platform.io.imemInst := instructionCache.io.frontendInst
