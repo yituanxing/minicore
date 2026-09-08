@@ -46,6 +46,7 @@ class AetherCoreV2LinuxSoC(
     val imemValid = Output(Bool())
     val imemAddr = Output(UInt(paddrBits.W))
     val imemBytes = Output(UInt(3.W))
+    val imemFullBeatPmpSafe = Output(Bool())
     val imemInst = Input(UInt(32.W))
     val imemFault = Input(Bool())
     val imemReady =
@@ -124,6 +125,7 @@ class AetherCoreV2LinuxSoC(
   io.imemValid := core.io.imem.valid
   io.imemAddr := core.io.imem.addr
   io.imemBytes := core.io.imem.bytes
+  io.imemFullBeatPmpSafe := core.io.imemFullBeatPmpSafe
   core.io.imem.inst := io.imemInst
   core.io.imem.fault := io.imemFault
   if (enableInstructionBackpressure) {
