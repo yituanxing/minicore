@@ -181,9 +181,27 @@ class V2MulUnit(val xlen: Int) extends Module {
   private val signedRhs = Cat(io.request.bits.rhs(xlen - 1), io.request.bits.rhs).asSInt
   private val unsignedLhs = Cat(0.U(1.W), io.request.bits.lhs).asSInt
   private val unsignedRhs = Cat(0.U(1.W), io.request.bits.rhs).asSInt
-  private val productSS = (signedLhs * signedRhs).asUInt
-  private val productSU = (signedLhs * unsignedRhs).asUInt
-  private val productUU = (unsignedLhs * unsignedRhs).asUInt
+  // The execution cluster broadcasts request.bits to every unit while routing
+  // only request.valid. Keep the expensive products behind the routed-valid
+  // condition so an inactive multiplier does not continuously recompute on
+  // unrelated request-bit changes in simulation. Result capture remains
+  // io.request.fire-only, so architectural behavior is unchanged.
+  private val ProductBits = 2 * (xlen + 1)
+  private val productSS = Mux(
+    io.request.valid,
+    (signedLhs * signedRhs).asUInt,
+    0.U(ProductBits.W)
+  )
+  private val productSU = Mux(
+    io.request.valid,
+    (signedLhs * unsignedRhs).asUInt,
+    0.U(ProductBits.W)
+  )
+  private val productUU = Mux(
+    io.request.valid,
+    (unsignedLhs * unsignedRhs).asUInt,
+    0.U(ProductBits.W)
+  )
 
   private val fullResult = WireDefault(productUU(xlen - 1, 0))
   switch(io.request.bits.aluOp) {
@@ -194,7 +212,11 @@ class V2MulUnit(val xlen: Int) extends Module {
   }
 
   private val result = if (xlen == 64) {
-    val product32 = io.request.bits.lhs(31, 0) * io.request.bits.rhs(31, 0)
+    val product32 = Mux(
+      io.request.valid,
+      io.request.bits.lhs(31, 0) * io.request.bits.rhs(31, 0),
+      0.U(64.W)
+    )
     val wordResult = Cat(Fill(32, product32(31)), product32(31, 0))
     Mux(io.request.bits.wordOp, wordResult, fullResult)
   } else {
