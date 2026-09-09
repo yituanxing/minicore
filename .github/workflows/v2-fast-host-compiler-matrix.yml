@@ -58,7 +58,7 @@ jobs:
             ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
             ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
             ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-host-compiler-tools-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-runtime-tools-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Cache Scala and qualified RV64 software
         uses: actions/cache@v4
@@ -69,7 +69,7 @@ jobs:
             ~/.cache/aethercore/rv64/linux
             ~/.cache/aethercore/rv64/linux-build
             ~/.cache/aethercore/l32/opensbi
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-host-compiler-rv64-v1-${{ hashFiles('build.mill', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh') }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-fast-runtime-rv64-v1-${{ hashFiles('build.mill', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh') }}
 
       - name: Prepare fixed tools
         shell: bash
