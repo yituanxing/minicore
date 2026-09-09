@@ -34,6 +34,26 @@ private class TinyProducerState(
   val value = UInt(xlen.W)
 }
 
+private class TinyResolvedSource(
+    val xlen: Int,
+    val identityBits: Int,
+    val generationBits: Int
+) extends Bundle {
+  val state = new OperandState(xlen, identityBits, generationBits)
+  val producerBacked = Bool()
+  val valueSnapshotValid = Bool()
+}
+
+private class TinyRetiredProducerValue(
+    val xlen: Int,
+    val identityBits: Int,
+    val generationBits: Int
+) extends Bundle {
+  val valid = Bool()
+  val producerTag = new ProducerTag(identityBits, generationBits)
+  val value = UInt(xlen.W)
+}
+
 private class TinyDependencyEntry(
     val xlen: Int,
     val identityBits: Int,
@@ -43,6 +63,14 @@ private class TinyDependencyEntry(
   val robToken = new RobToken(identityBits, generationBits)
   val rs1 = new OperandState(xlen, identityBits, generationBits)
   val rs2 = new OperandState(xlen, identityBits, generationBits)
+  // A producer-backed operand that was not ready at allocation deliberately
+  // keeps valueSnapshotValid=false. Completion wakes only the tiny ready bit;
+  // the 64-bit value is resolved from one retained producer value instead of
+  // being broadcast into every dependent slot.
+  val rs1ProducerBacked = Bool()
+  val rs2ProducerBacked = Bool()
+  val rs1ValueSnapshotValid = Bool()
+  val rs2ValueSnapshotValid = Bool()
 }
 
 /** Read-only physical-slot projection of dependency readiness. */
@@ -132,6 +160,18 @@ class TinyDependencyState(val xlen: Int) extends Module {
       )
     )
   )
+  // One shadow per physical producer slot is sufficient. A shadow is created
+  // only when a retired slot is reused. Any consumer of that retired producer
+  // is older than the replacement instruction, so in-order retirement prevents
+  // the same physical slot from being reused a second time before that consumer
+  // leaves the ROB.
+  private val retiredProducerValues = RegInit(
+    VecInit(
+      Seq.fill(Entries)(
+        0.U.asTypeOf(new TinyRetiredProducerValue(xlen, IdentityBits, GenerationBits))
+      )
+    )
+  )
 
   private def sameProducer(a: ProducerTag, b: ProducerTag): Bool =
     a.id === b.id && a.generation === b.generation
@@ -143,10 +183,11 @@ class TinyDependencyState(val xlen: Int) extends Module {
       address: UInt,
       used: Bool,
       committedValue: UInt
-  ): OperandState = {
-    val resolved = Wire(new OperandState(xlen, IdentityBits, GenerationBits))
-    resolved := 0.U.asTypeOf(new OperandState(xlen, IdentityBits, GenerationBits))
-    resolved.ready := true.B
+  ): TinyResolvedSource = {
+    val resolved = Wire(new TinyResolvedSource(xlen, IdentityBits, GenerationBits))
+    resolved := 0.U.asTypeOf(new TinyResolvedSource(xlen, IdentityBits, GenerationBits))
+    resolved.state.ready := true.B
+    resolved.valueSnapshotValid := true.B
 
     when(used && address =/= 0.U) {
       val mapping = rename(address)
@@ -163,23 +204,28 @@ class TinyDependencyState(val xlen: Int) extends Module {
           sameProducer(io.completion.bits.producerTag, mapping)
         val retainedValue = producer.ready
 
-        resolved.producerTag := mapping
+        resolved.producerBacked := true.B
+        resolved.state.producerTag := mapping
         when(completionBypass) {
-          resolved.ready := true.B
-          resolved.value := io.completion.bits.value
+          resolved.state.ready := true.B
+          resolved.state.value := io.completion.bits.value
+          resolved.valueSnapshotValid := true.B
         }.elsewhen(retainedValue) {
-          resolved.ready := true.B
-          resolved.value := producer.value
+          resolved.state.ready := true.B
+          resolved.state.value := producer.value
+          resolved.valueSnapshotValid := true.B
         }.otherwise {
-          resolved.ready := false.B
-          resolved.value := 0.U
+          resolved.state.ready := false.B
+          resolved.state.value := 0.U
+          resolved.valueSnapshotValid := false.B
         }
       }.otherwise {
-        // Stale/uninitialized rename payload is semantically invisible.  With
-        // no live older producer for this architectural register, the committed
-        // register-file value is the correct source.
-        resolved.ready := true.B
-        resolved.value := committedValue
+        // Stale/uninitialized rename payload is semantically invisible. With
+        // no live older producer for this architectural register, freeze the
+        // committed register-file value at allocation exactly as before.
+        resolved.state.ready := true.B
+        resolved.state.value := committedValue
+        resolved.valueSnapshotValid := true.B
       }
     }
 
@@ -197,14 +243,57 @@ class TinyDependencyState(val xlen: Int) extends Module {
     io.committedRs2
   )
 
+  private def materializeDependencyOperand(
+      stored: OperandState,
+      producerBacked: Bool,
+      valueSnapshotValid: Bool
+  ): OperandState = {
+    val resolved = Wire(new OperandState(xlen, IdentityBits, GenerationBits))
+    resolved := stored
+
+    val current = producers(stored.producerTag.id)
+    val shadow = retiredProducerValues(stored.producerTag.id)
+    val currentMatches =
+      current.ready && sameProducer(current.producerTag, stored.producerTag)
+    val shadowMatches =
+      shadow.valid && sameProducer(shadow.producerTag, stored.producerTag)
+
+    when(stored.ready && producerBacked && !valueSnapshotValid) {
+      when(currentMatches) {
+        resolved.value := current.value
+      }.elsewhen(shadowMatches) {
+        resolved.value := shadow.value
+      }.otherwise {
+        // Fail closed in hardware and make the lifetime invariant explicit in
+        // simulation. This state would require a physical producer slot to be
+        // reused twice while an older dependent instruction is still live,
+        // which in-order ROB retirement forbids.
+        resolved.ready := false.B
+        resolved.value := 0.U
+        assert(false.B,
+          "ready dependency lost both current and one-generation retained producer value")
+      }
+    }
+
+    resolved
+  }
+
   for (index <- 0 until Entries) {
     io.slotView(index) := 0.U.asTypeOf(
       new TinyDependencySlotView(xlen, IdentityBits, GenerationBits)
     )
     io.slotView(index).valid := dependencies(index).valid
     io.slotView(index).robToken := dependencies(index).robToken
-    io.slotView(index).rs1 := dependencies(index).rs1
-    io.slotView(index).rs2 := dependencies(index).rs2
+    io.slotView(index).rs1 := materializeDependencyOperand(
+      dependencies(index).rs1,
+      dependencies(index).rs1ProducerBacked,
+      dependencies(index).rs1ValueSnapshotValid
+    )
+    io.slotView(index).rs2 := materializeDependencyOperand(
+      dependencies(index).rs2,
+      dependencies(index).rs2ProducerBacked,
+      dependencies(index).rs2ValueSnapshotValid
+    )
   }
 
   private val headEntry = dependencies(io.head.bits.robToken.index)
@@ -216,8 +305,16 @@ class TinyDependencyState(val xlen: Int) extends Module {
   io.headRs1 := 0.U.asTypeOf(new OperandState(xlen, IdentityBits, GenerationBits))
   io.headRs2 := 0.U.asTypeOf(new OperandState(xlen, IdentityBits, GenerationBits))
   when(headMatches) {
-    io.headRs1 := headEntry.rs1
-    io.headRs2 := headEntry.rs2
+    io.headRs1 := materializeDependencyOperand(
+      headEntry.rs1,
+      headEntry.rs1ProducerBacked,
+      headEntry.rs1ValueSnapshotValid
+    )
+    io.headRs2 := materializeDependencyOperand(
+      headEntry.rs2,
+      headEntry.rs2ProducerBacked,
+      headEntry.rs2ValueSnapshotValid
+    )
   }
   io.headOperandsReady := headMatches && headEntry.rs1.ready && headEntry.rs2.ready
 
@@ -239,7 +336,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
           sameProducer(dependencies(index).rs1.producerTag, io.completion.bits.producerTag)
       ) {
         dependencies(index).rs1.ready := true.B
-        dependencies(index).rs1.value := io.completion.bits.value
       }
       when(
         dependencies(index).valid &&
@@ -247,7 +343,6 @@ class TinyDependencyState(val xlen: Int) extends Module {
           sameProducer(dependencies(index).rs2.producerTag, io.completion.bits.producerTag)
       ) {
         dependencies(index).rs2.ready := true.B
-        dependencies(index).rs2.value := io.completion.bits.value
       }
     }
   }
@@ -259,8 +354,10 @@ class TinyDependencyState(val xlen: Int) extends Module {
     val producer = producers(retiringProducer.id)
 
     when(producer.valid && sameProducer(producer.producerTag, retiringProducer)) {
+      // Keep the completed value/tag physically retained until this ROB slot is
+      // reused. A dependent consumer can therefore resolve through the central
+      // producer copy even after architectural retirement.
       producers(retiringProducer.id).valid := false.B
-      producers(retiringProducer.id).ready := false.B
     }
 
     val retiringDependency = dependencies(retiring.robToken.index)
@@ -281,14 +378,26 @@ class TinyDependencyState(val xlen: Int) extends Module {
 
     dependencies(slot).valid := true.B
     dependencies(slot).robToken := allocated.robToken
-    dependencies(slot).rs1 := allocateRs1
-    dependencies(slot).rs2 := allocateRs2
+    dependencies(slot).rs1 := allocateRs1.state
+    dependencies(slot).rs2 := allocateRs2.state
+    dependencies(slot).rs1ProducerBacked := allocateRs1.producerBacked
+    dependencies(slot).rs2ProducerBacked := allocateRs2.producerBacked
+    dependencies(slot).rs1ValueSnapshotValid := allocateRs1.valueSnapshotValid
+    dependencies(slot).rs2ValueSnapshotValid := allocateRs2.valueSnapshotValid
 
-    producers(allocated.producerTag.id).valid := createsProducer
-    producers(allocated.producerTag.id).producerTag := allocated.producerTag
-    producers(allocated.producerTag.id).rd := allocated.decoded.rd
-    producers(allocated.producerTag.id).ready := false.B
-    producers(allocated.producerTag.id).value := 0.U
+    val producerSlot = allocated.producerTag.id
+    val outgoingProducer = producers(producerSlot)
+    retiredProducerValues(producerSlot).valid := outgoingProducer.ready
+    when(outgoingProducer.ready) {
+      retiredProducerValues(producerSlot).producerTag := outgoingProducer.producerTag
+      retiredProducerValues(producerSlot).value := outgoingProducer.value
+    }
+
+    producers(producerSlot).valid := createsProducer
+    producers(producerSlot).producerTag := allocated.producerTag
+    producers(producerSlot).rd := allocated.decoded.rd
+    producers(producerSlot).ready := false.B
+    producers(producerSlot).value := 0.U
 
   }
 

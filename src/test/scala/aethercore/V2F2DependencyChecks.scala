@@ -273,6 +273,55 @@ trait V2F2DependencyChecks { this: AnyFlatSpec with Matchers with ChiselSim =>
     }
   }
 
+  it should "retain a completed value across producer-slot reuse for an older live consumer" in {
+    simulate(new TinyDependencyBackend(64)) { dut =>
+      initializeF2(dut)
+
+      // Fill ROB4 so slot0 becomes the first physical slot reused after the
+      // producer retires. Slot1 deliberately remains incomplete and therefore
+      // keeps the slot2 consumer live while slot0 is allocated again.
+      val producer = allocateF2(dut, BigInt("86800000", 16), rd = 5)
+      allocateF2(
+        dut,
+        BigInt("86800004", 16),
+        rd = 0,
+        writesRd = false
+      )
+      allocateF2(
+        dut,
+        BigInt("86800008", 16),
+        rd = 6,
+        rs1 = 5,
+        usesRs1 = true
+      )
+      allocateF2(
+        dut,
+        BigInt("8680000c", 16),
+        rd = 0,
+        writesRd = false
+      )
+
+      completeF2(dut, producer, value = 505)
+      dut.io.commit.valid.expect(true.B)
+      dut.clock.step() // retire slot0 producer; slot1 now blocks retirement
+      dut.io.commit.valid.expect(false.B)
+
+      val replacement = allocateF2(
+        dut,
+        BigInt("86800010", 16),
+        rd = 7
+      )
+      replacement.index shouldBe 0
+
+      // The replacement has overwritten the current producer slot0 state.
+      // The older slot2 consumer must therefore resolve through the exactly
+      // one-generation retained value shadow rather than receive zero/stale
+      // data from the replacement lifetime.
+      dut.dependencyState.io.slotView(2).rs1.ready.expect(true.B)
+      dut.dependencyState.io.slotView(2).rs1.value.expect(505.U)
+    }
+  }
+
   it should "preserve a younger WAW mapping when the older writer retires" in {
     simulate(new TinyDependencyBackend(64)) { dut =>
       initializeF2(dut)
