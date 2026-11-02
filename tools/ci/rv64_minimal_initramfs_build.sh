@@ -7,7 +7,7 @@ source "${ROOT_DIR}/software/rv64/linux_early.env"
 
 # Keep the full Linux qualification immutable; fast profile has an isolated object tree.
 RV64_INIT_PROFILE="${RV64_INIT_PROFILE:-baseline}"
-case "${RV64_INIT_PROFILE}" in baseline|isa-fast) ;; *) echo "invalid RV64_INIT_PROFILE" >&2; exit 2 ;; esac
+case "${RV64_INIT_PROFILE}" in baseline|isa-fast|isa-fast-v2) ;; *) echo "invalid RV64_INIT_PROFILE" >&2; exit 2 ;; esac
 
 : "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:?provision tools/ensure_riscv64_linux_gcc_13_3.sh first}"
 CROSS="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}"
@@ -15,8 +15,11 @@ CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
 SOURCE_DIR="${CACHE_ROOT}/rv64/linux/linux-${RV64_LINUX_VERSION}"
 BASELINE_RESULT="${ROOT_DIR}/build/rv64-linux-early/result.txt"
 BUILD_DIR="${ROOT_DIR}/build/rv64-linux-initramfs"
-if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+if [[ "${RV64_INIT_PROFILE}" != "baseline" ]]; then
   BUILD_DIR="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs"
+fi
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  BUILD_DIR="${ROOT_DIR}/build/rv64-linux-isa-fast-v2-initramfs"
 fi
 OBJ_DIR="${BUILD_DIR}/obj"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
@@ -56,8 +59,19 @@ mkdir -p "${BUILD_DIR}"
 # uses a reflink when the hosted filesystem supports it and falls back to an
 # ordinary byte copy otherwise; hard links are deliberately not used because
 # Kbuild must never mutate the qualified baseline cache through shared inodes.
-printf 'Seeding RV64 initramfs object tree from qualified baseline: %s\n' "${BASELINE_OBJ}"
-cp -a --reflink=auto "${BASELINE_OBJ}" "${OBJ_DIR}"
+SEED_OBJ="${BASELINE_OBJ}"
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  # Reuse the already built v1 fast tree: v2 only changes the remaining
+  # Kconfig switches and initramfs path, not the qualified Linux source.
+  V1_RESULT="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs/result.txt"
+  grep -qx "RV64_MINIMAL_INITRAMFS_BUILD_RESULT: status=PASS" "${V1_RESULT}" || \
+    fail "ISA-fast v1 must be built before v2"
+  SEED_OBJ="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs/obj"
+  [[ -s "${SEED_OBJ}/.config" && -s "${SEED_OBJ}/vmlinux" ]] || \
+    fail "ISA-fast v1 qualified object tree is missing"
+fi
+printf 'Seeding RV64 %s initramfs objects from: %s\n' "${RV64_INIT_PROFILE}" "${SEED_OBJ}"
+cp -a --reflink=auto "${SEED_OBJ}" "${OBJ_DIR}"
 mkdir -p "${EVIDENCE_DIR}" "${INIT_BUILD_DIR}"
 
 # Keep the PID1 ELF byte-reproducible. Invoking gcc as a compile+link driver in
@@ -116,12 +130,12 @@ EOF
 # Preserve the already-qualified RV64 kernel configuration byte-for-byte as the
 # starting point. This checkpoint changes only the deterministic initramfs
 # options needed to execute PID 1.
-cp "${BASELINE_OBJ}/.config" "${OBJ_DIR}/.config"
+cp "${SEED_OBJ}/.config" "${OBJ_DIR}/.config"
 "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
   -e BLK_DEV_INITRD \
   --set-str INITRAMFS_SOURCE "${INIT_SPEC}"
 
-if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+if [[ "${RV64_INIT_PROFILE}" != "baseline" ]]; then
   # Prune redundant initialization, not architectural features. CPU/CSR/Sv39,
   # the real timer, PLIC, UART and PID1 path remain enabled.
   "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
@@ -130,6 +144,17 @@ if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
     -d NET -d INET -d IPV6 -d NFS_FS -d 9P_FS -d NET_9P \
     -d SCSI -d PCI -d DEBUG_VM_PGTABLE -d FTRACE -d KPROBES \
     -d BLK_DEV_LOOP -d IOMMU_SUPPORT
+fi
+
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  # Stage-2: reduce boot infrastructure that contributes repeated work but
+  # no new basic CPU ISA coverage. Preserve IRQ/SBI/MMU, RCU, device model,
+  # UART/8250, initramfs, user ELF execution and timer sources.
+  "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
+    -d MODULES -d DEVTMPFS -d DEVTMPFS_MOUNT -d FW_LOADER \
+    -d CGROUPS -d NAMESPACES -d BPF_SYSCALL -d PERF_EVENTS \
+    -d AUDIT -d KEYS -d KALLSYMS -d BINFMT_MISC \
+    -d DEBUG_FS -d IKCONFIG
 fi
 
 export KBUILD_BUILD_USER="${RV64_LINUX_BUILD_USER}"
@@ -154,7 +179,7 @@ grep -Fqx "CONFIG_INITRAMFS_SOURCE=\"${INIT_SPEC}\"" "${OBJ_DIR}/.config" || \
 grep -qx '# CONFIG_EFI is not set' "${OBJ_DIR}/.config" || fail "Linux config retained EFI"
 grep -qx '# CONFIG_RISCV_ISA_C is not set' "${OBJ_DIR}/.config" || fail "Linux config retained C"
 grep -qx '# CONFIG_FPU is not set' "${OBJ_DIR}/.config" || fail "Linux config retained FPU"
-if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+if [[ "${RV64_INIT_PROFILE}" != "baseline" ]]; then
   for disabled in NET USB_SUPPORT NFS_FS DEBUG_VM_PGTABLE; do
     if grep -qx "CONFIG_${disabled}=y" "${OBJ_DIR}/.config"; then
       fail "fast profile failed to disable ${disabled}"
@@ -162,6 +187,12 @@ if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
   done
   for required in SERIAL_8250 SERIAL_8250_CONSOLE SERIAL_OF_PLATFORM MMU BLK_DEV_INITRD; do
     grep -qx "CONFIG_${required}=y" "${OBJ_DIR}/.config" || fail "fast profile lost ${required}"
+  done
+fi
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  for disabled in MODULES DEVTMPFS CGROUPS BPF_SYSCALL PERF_EVENTS; do
+    ! grep -qx "CONFIG_${disabled}=y" "${OBJ_DIR}/.config" || \
+      fail "ISA-fast v2 retained expensive facility ${disabled}"
   done
 fi
 
@@ -185,6 +216,7 @@ sha256sum "${INIT_ELF}" "${INIT_SPEC}" "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/
   echo "linux_source_sha256=${RV64_LINUX_SHA256}"
   echo "baseline_image=${BASELINE_IMAGE}"
   echo "baseline_object_seed=${BASELINE_OBJ}"
+  echo "object_seed=${SEED_OBJ}"
   echo "init=${INIT_ELF}"
   echo "init_arch=${init_arch}"
   echo "initramfs_spec=${INIT_SPEC}"

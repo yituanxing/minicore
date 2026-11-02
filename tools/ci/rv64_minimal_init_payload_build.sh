@@ -5,20 +5,26 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/rv64/opensbi_first_exec.env"
 source "${ROOT_DIR}/software/rv64/linux_early.env"
 RV64_INIT_PROFILE="${RV64_INIT_PROFILE:-baseline}"
-case "${RV64_INIT_PROFILE}" in baseline|isa-fast) ;; *) echo "invalid RV64_INIT_PROFILE" >&2; exit 2 ;; esac
+case "${RV64_INIT_PROFILE}" in baseline|isa-fast|isa-fast-v2) ;; *) echo "invalid RV64_INIT_PROFILE" >&2; exit 2 ;; esac
 
 : "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:?provision tools/ensure_riscv64_linux_gcc_13_3.sh first}"
 CROSS="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
 OPENSBI_SOURCE="${CACHE_ROOT}/l32/opensbi/${RV64_OPENSBI_COMMIT}"
 LINUX_BUILD_DIR="${ROOT_DIR}/build/rv64-linux-initramfs"
-if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+if [[ "${RV64_INIT_PROFILE}" != "baseline" ]]; then
   LINUX_BUILD_DIR="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs"
+fi
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  LINUX_BUILD_DIR="${ROOT_DIR}/build/rv64-linux-isa-fast-v2-initramfs"
 fi
 LINUX_IMAGE="${LINUX_BUILD_DIR}/obj/arch/riscv/boot/Image"
 BUILD_DIR="${ROOT_DIR}/build/rv64-minimal-init-boot"
-if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+if [[ "${RV64_INIT_PROFILE}" != "baseline" ]]; then
   BUILD_DIR="${ROOT_DIR}/build/rv64-isa-fast-boot"
+fi
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  BUILD_DIR="${ROOT_DIR}/build/rv64-isa-fast-v2-boot"
 fi
 OPENSBI_BUILD_DIR="${BUILD_DIR}/opensbi"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
@@ -29,8 +35,11 @@ JOBS="${RV64_LINUX_JOBS:-$(nproc)}"
 # kernel's default legacy PTY registration path, with no exploration shortcut.
 BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init"
 if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
-  # Preserve the physical tty and interrupt path; avoid huge printk UART cost.
   BOOTARGS="${BOOTARGS} quiet loglevel=3"
+elif [[ "${RV64_INIT_PROFILE}" == "isa-fast-v2" ]]; then
+  # The early polling console can dominate a cycle-accurate simulator.
+  # Retain Linux 8250/ttyS0 and PID1 UART IRQ traffic (PLIC/SEIP).
+  BOOTARGS="console=ttyS0,115200 rdinit=/init quiet loglevel=0"
 fi
 
 fail() {

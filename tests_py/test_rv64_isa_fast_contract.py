@@ -15,20 +15,22 @@ class Rv64IsaFastBuildContract(unittest.TestCase):
         initramfs = (ROOT / "tools/ci/rv64_minimal_initramfs_build.sh").read_text()
         payload = (ROOT / "tools/ci/rv64_minimal_init_payload_build.sh").read_text()
         workflow = (ROOT / ".github/workflows/v2-soc-virtual-fpga-linux-pid1.yml").read_text()
-        for expected in ("build/rv64-linux-initramfs", "build/rv64-linux-isa-fast-initramfs"):
+        for expected in ("build/rv64-linux-initramfs", "build/rv64-linux-isa-fast-initramfs", "build/rv64-linux-isa-fast-v2-initramfs"):
             self.assertIn(expected, initramfs)
             self.assertIn(expected, payload)
-        for expected in ("build/rv64-minimal-init-boot", "build/rv64-isa-fast-boot"):
+        for expected in ("build/rv64-minimal-init-boot", "build/rv64-isa-fast-boot", "build/rv64-isa-fast-v2-boot"):
             self.assertIn(expected, payload)
             self.assertIn(expected, workflow)
         self.assertNotIn(']] && echo ', payload)
         self.assertNotIn(']] && echo ', initramfs)
+        self.assertIn("earlycon", payload)
+        self.assertIn("loglevel=0", payload)
 
     def test_baseline_and_fast_profiles_are_independent(self):
         for path in ("rv64_minimal_initramfs_build.sh", "rv64_minimal_init_payload_build.sh"):
             content = (ROOT / "tools/ci" / path).read_text()
             self.assertIn('RV64_INIT_PROFILE="${RV64_INIT_PROFILE:-baseline}"', content)
-            self.assertIn('case "${RV64_INIT_PROFILE}" in baseline|isa-fast)', content)
+            self.assertIn('case "${RV64_INIT_PROFILE}" in baseline|isa-fast|isa-fast-v2)', content)
 
 
 if __name__ == "__main__":
