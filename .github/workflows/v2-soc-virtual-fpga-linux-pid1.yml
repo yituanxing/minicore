@@ -138,7 +138,12 @@ jobs:
           path: |
             build/v2-virtual-fpga-linux-pid1-model/rtl
             build/v2-virtual-fpga-linux-pid1-model/obj
-          key: aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v1-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}
+          # Run-attempt suffix allows a repaired cache to supersede a corrupted
+          # immutable Actions entry; restore-keys select the latest usable seed.
+          key: aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}-
+            aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-
 
       - name: Activate fixed Verilator
         shell: bash
@@ -154,15 +159,12 @@ jobs:
           python3 -m unittest tests_py.test_v2_virtual_fpga_board tests_py.test_l32_sim_artifact_cache_contract -v
           ./mill aethercore.test.testOnly aethercore.AetherFractionalTickGeneratorSpec
           ./mill aethercore.test.testOnly aethercore.AetherUart8N1PhySpec
-          if python3 tools/ci/l32_sim_artifact_cache.py check --stage=rtl \
-              --rtl-dir=build/v2-virtual-fpga-linux-pid1-model/rtl \
-              --elaborate-main=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64; then
-            echo 'VFPGA_RTL_SMOKE_REUSE: qualified generated RTL already exists'
-          else
-            ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
-              --target-dir build/v2-virtual-fpga-linux-pid1-smoke
-            find build/v2-virtual-fpga-linux-pid1-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
-          fi
+          # Compile-stage cache qualification also verifies successful RTL
+          # generation. A second disposable smoke elaboration is unnecessary.
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            rtl-cached
 
       - name: Provision exact RV64 Linux toolchain
         shell: bash
@@ -214,7 +216,8 @@ jobs:
         shell: bash
         run: |
           if [[ -f build/v2-virtual-fpga-linux-pid1-model/.sim-build-qualified-this-run && \
-                -s build/v2-virtual-fpga-linux-pid1-model/obj/.aethercore-sim-qualified.json ]]; then
+                -s build/v2-virtual-fpga-linux-pid1-model/obj/.aethercore-sim-qualified.json ]] && \
+                grep -qx 'result=MISS' build/v2-virtual-fpga-linux-pid1-model/.sim-cache-this-run; then
             echo 'ready=true' >> "$GITHUB_OUTPUT"
           fi
 
@@ -225,7 +228,7 @@ jobs:
           path: |
             build/v2-virtual-fpga-linux-pid1-model/rtl
             build/v2-virtual-fpga-linux-pid1-model/obj
-          key: aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v1-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}
+          key: aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload virtual FPGA PID1 evidence
         if: always()

@@ -103,8 +103,9 @@ def sim_recipe(args: argparse.Namespace) -> dict:
     if not all(path.is_file() for path in paths):
         raise ValueError("missing simulator build recipe input")
     return {
-        "rtl_source_recipe": source_recipe(args),
-        "generated_sv": identities(svs),
+        # Chisel sources qualify a separate RTL stage. A changed Scala file
+        # must not force C++ recompilation when generated SV is byte-identical.
+        "generated_sv": [(path.name, digest(path)) for path in svs],
         "host_sources": identities(paths),
         "runner": args.runner,
         "top": args.top,
@@ -159,10 +160,16 @@ def recipe_for(args: argparse.Namespace) -> dict:
 def verify(args: argparse.Namespace) -> tuple[bool, str, str]:
     marker = cache_path(args)
     try:
+        if args.stage == "sim":
+            rtl_args = argparse.Namespace(**{**vars(args), "stage": "rtl"})
+            if not verify(rtl_args)[0]:
+                return False, "unqualified-rtl", "unavailable"
         expected = key_for(recipe_for(args))
         if not marker.is_file():
             return False, "missing-manifest", expected
         saved = json.loads(marker.read_text(encoding="utf-8"))
+        if not isinstance(saved, dict):
+            return False, "invalid-manifest", expected
         if saved.get("schema") != SCHEMA or saved.get("key") != expected:
             return False, "recipe-changed", expected
         actual = {str(path.resolve()): digest(path) for path in artifacts(args)}
@@ -204,7 +211,7 @@ def stamp(args: argparse.Namespace) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check", "stamp"))
+    parser.add_argument("action", choices=("check", "stamp", "key"))
     parser.add_argument("--stage", choices=("rtl", "sim"), required=True)
     parser.add_argument("--rtl-dir", required=True)
     parser.add_argument("--obj-dir", default="")
@@ -218,6 +225,13 @@ def main() -> int:
     parser.add_argument("--runner", default="sim/opensbi_boot_main.cpp")
     parser.add_argument("--cxx", default="g++")
     args = parser.parse_args()
+
+    if args.action == "key":
+        try:
+            print(key_for(recipe_for(args)))
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            parser.error(str(exc))
+        return 0
 
     if args.action == "check":
         hit, reason, key = verify(args)

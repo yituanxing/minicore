@@ -122,6 +122,26 @@ class L32SimArtifactCacheContract(unittest.TestCase):
         with patch.object(cache, "cpu_identity", return_value="host-cpu-B"):
             self.assertFalse(cache.verify(self.args)[0])
 
+    def test_corrupted_non_object_manifest_is_a_miss_not_an_exception(self):
+        cache.stamp(self.args)
+        (self.rtl_dir / ".aethercore-rtl-qualified.json").write_text("[]\n")
+        hit, reason, _ = cache.verify(self.args)
+        self.assertFalse(hit)
+        self.assertEqual(reason, "invalid-manifest")
+
+    def test_identical_generated_sv_does_not_invalidate_compiled_model(self):
+        cache.stamp(self.args)
+        self.args.stage = "sim"
+        cache.stamp(self.args)
+        self.assertTrue(cache.verify(self.args)[0])
+        # The parent build must qualify the newly generated RTL before
+        # checking the model. Its byte-identical output needs no C++ rebuild.
+        self.source.write_text("class Core { val unused = true }\n")
+        self.args.stage = "rtl"
+        cache.stamp(self.args)
+        self.args.stage = "sim"
+        self.assertTrue(cache.verify(self.args)[0])
+
     def test_boot_and_forkserver_runners_are_separately_qualified(self):
         fork_runner = self.root / "sim/opensbi_forkserver_main.cpp"
         fork_runner.write_text("// forkserver\n")
@@ -176,7 +196,14 @@ class L32SimArtifactCacheContract(unittest.TestCase):
         verilator.write_text("#!/bin/sh\n[ \"$1\" = --version ] && { echo 'Fake Verilator'; exit 0; }\nexit 43\n")
         verilator.chmod(0o755)
         build = integration / "build/probe"
-        rtl = build / "rtl"
+        rtl_base = build / "rtl"
+        helper = integration / "tools/ci/l32_sim_artifact_cache.py"
+        key_result = subprocess.run(
+            [sys.executable, str(helper), "key", "--stage=rtl",
+             f"--rtl-dir={rtl_base}", "--elaborate-main=mock.Elaborate"],
+            check=True, cwd=integration, capture_output=True, text=True,
+        )
+        rtl = rtl_base / "by-source" / key_result.stdout.strip()
         rtl.mkdir(parents=True)
         (rtl / "Top.sv").write_text("module Top; endmodule\n")
         obj = build / "obj"
@@ -193,7 +220,6 @@ class L32SimArtifactCacheContract(unittest.TestCase):
             '--verilator-make-opt=-MAKEFLAGS "OPT_FAST=-O3 OPT_GLOBAL=-O3"',
             "--sim-cxxflags=-std=c++20 -O3 -march=native", "--cxx=g++",
         ]
-        helper = integration / "tools/ci/l32_sim_artifact_cache.py"
         for stage in ("rtl", "sim"):
             subprocess.run(
                 [sys.executable, str(helper), "stamp", f"--stage={stage}", *cache_args],
@@ -215,6 +241,154 @@ class L32SimArtifactCacheContract(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertIn("AETHERCORE_SIM_CACHE_HIT stage=sim", second.stdout)
         self.assertIn("L32_RUNTIME_MILESTONE_PASS", second.stdout)
+
+    def test_actual_make_miss_build_stamp_hit_and_regenerate_cleanly(self):
+        integration = self.root / "fresh-repo"
+        integration.mkdir()
+        (integration / "tools/ci").mkdir(parents=True)
+        shutil.copy2(ROOT / "Makefile.l32-linux-boot", integration / "Makefile.l32-linux-boot")
+        shutil.copy2(SCRIPT, integration / "tools/ci/l32_sim_artifact_cache.py")
+        scala = integration / "src/main/scala/Top.scala"
+        scala.parent.mkdir(parents=True)
+        scala.write_text("class Top {}\n")
+        (integration / "sim").mkdir()
+        (integration / "sim/opensbi_boot_main.cpp").write_text("// fake simulator\n")
+        (integration / "sim/l32_opensbi_runtime.h").write_text("// header\n")
+        (integration / "build.mill").write_text("// build\n")
+        mill = integration / "mill"
+        mill.write_text(
+            "#!/bin/bash\n"
+            "[[ ${FAIL_MILL:-0} == 0 ]] || exit 47\n"
+            "[[ $1 == aethercore.runMain ]] || exit 48\n"
+            "[[ $3 == --target-dir ]] || exit 49\n"
+            "mkdir -p \"$4\"\n"
+            "case $2 in *New*) name=New ;; *) name=Top ;; esac\n"
+            "printf 'module %s; endmodule\\n' \"$name\" > \"$4/$name.sv\"\n"
+        )
+        mill.chmod(0o755)
+        verilator = integration / "fake-verilator"
+        verilator.write_text(
+            "#!/bin/bash\n"
+            "if [[ $1 == --version ]]; then echo 'Fake Verilator 5.024'; exit 0; fi\n"
+            "[[ ${FAIL_VERILATOR:-0} == 0 ]] || exit 53\n"
+            "obj=; top=; prev=\n"
+            "for arg in \"$@\"; do\n"
+            "  if [[ $prev == -Mdir ]]; then obj=$arg; fi\n"
+            "  if [[ $prev == --top-module ]]; then top=$arg; fi\n"
+            "  prev=$arg\n"
+            "done\n"
+            "[[ -n $obj && -n $top ]] || exit 54\n"
+            "mkdir -p \"$obj\"\n"
+            "printf '%s\\n' build >> verilator-invocations.log\n"
+            "printf '#!/bin/bash\\n' > \"$obj/V$top\"\n"
+            "printf 'echo Linux version 6.6.143\\n' >> \"$obj/V$top\"\n"
+            "printf 'echo L32_RUNTIME_MILESTONE_PASS\\n' >> \"$obj/V$top\"\n"
+            "printf 'echo runtime >> runtime-invocations.log\\n' >> \"$obj/V$top\"\n"
+            "chmod +x \"$obj/V$top\"\n"
+        )
+        verilator.chmod(0o755)
+        (integration / "firmware.bin").write_bytes(b"initial firmware")
+        command = [
+            "make", "-f", "Makefile.l32-linux-boot", "BUILD_DIR=build/probe",
+            "TOP=Top", "ELABORATE_MAIN=mock.Elaborate",
+            f"VERILATOR={verilator}", "FW_BIN=firmware.bin", "run-cached",
+        ]
+
+        def run(args=None, env=None):
+            import os
+            return subprocess.run(
+                command if args is None else args, cwd=integration,
+                capture_output=True, text=True, env=None if env is None else {**os.environ, **env},
+            )
+
+        cold = run()
+        self.assertEqual(cold.returncode, 0, cold.stdout + cold.stderr)
+        self.assertIn("AETHERCORE_SIM_CACHE_MISS stage=rtl", cold.stdout)
+        self.assertIn("AETHERCORE_SIM_CACHE_MISS stage=sim", cold.stdout)
+        self.assertIn("AETHERCORE_SIM_CACHE_STAMP stage=rtl", cold.stdout)
+        self.assertIn("AETHERCORE_SIM_CACHE_STAMP stage=sim", cold.stdout)
+        self.assertIn("stage=sim result=MISS", cold.stdout)
+        self.assertEqual((integration / "verilator-invocations.log").read_text().count("build"), 1)
+
+        warm = run()
+        self.assertEqual(warm.returncode, 0, warm.stdout + warm.stderr)
+        self.assertIn("AETHERCORE_SIM_CACHE_HIT stage=rtl", warm.stdout)
+        self.assertIn("AETHERCORE_SIM_CACHE_HIT stage=sim", warm.stdout)
+        self.assertIn("stage=sim result=HIT", warm.stdout)
+        self.assertEqual((integration / "verilator-invocations.log").read_text().count("build"), 1)
+        self.assertEqual((integration / "runtime-invocations.log").read_text().count("runtime"), 2)
+
+        # An unqualified extra SV in the same source-keyed directory is
+        # removed before regenerating; it cannot contaminate model inputs.
+        current_dir = next((integration / "build/probe/rtl/by-source").iterdir())
+        (current_dir / "Obsolete.sv").write_text("module Obsolete; endmodule\n")
+        repaired = run()
+        self.assertEqual(repaired.returncode, 0, repaired.stdout + repaired.stderr)
+        self.assertIn("AETHERCORE_SIM_CACHE_MISS stage=rtl", repaired.stdout)
+        self.assertIn("AETHERCORE_SIM_CACHE_HIT stage=sim", repaired.stdout)
+        self.assertFalse((current_dir / "Obsolete.sv").exists())
+        self.assertEqual((integration / "verilator-invocations.log").read_text().count("build"), 1)
+
+        # A new source recipe elaborates in a new directory. If the generated
+        # SV is identical, the previously compiled Verilator model is reusable.
+        scala.write_text("class Top { val unrelated = 1 }\n")
+        refreshed = run()
+        self.assertEqual(refreshed.returncode, 0, refreshed.stdout + refreshed.stderr)
+        self.assertIn("AETHERCORE_SIM_CACHE_MISS stage=rtl", refreshed.stdout)
+        self.assertIn("AETHERCORE_SIM_CACHE_HIT stage=sim", refreshed.stdout)
+        self.assertEqual((integration / "verilator-invocations.log").read_text().count("build"), 1)
+
+        # A changed elaborator now emits a different module/file. Never feed
+        # the old Top.sv to Verilator in the same RTL directory.
+        new_command = [x.replace("mock.Elaborate", "mock.ElaborateNew") for x in command]
+        new_run = run(new_command)
+        self.assertEqual(new_run.returncode, 0, new_run.stdout + new_run.stderr)
+        self.assertIn("AETHERCORE_SIM_CACHE_MISS stage=sim", new_run.stdout)
+        self.assertEqual((integration / "verilator-invocations.log").read_text().count("build"), 2)
+        rtl_root = integration / "build/probe/rtl/by-source"
+        new_dirs = [p for p in rtl_root.iterdir() if (p / "New.sv").exists()]
+        self.assertEqual(len(new_dirs), 1)
+        self.assertEqual([p.name for p in new_dirs[0].glob("*.sv")], ["New.sv"])
+        self.assertEqual((integration / "runtime-invocations.log").read_text().count("runtime"), 5)
+
+        # A failed rebuild cannot publish a stale or misleading "this run"
+        # qualification, even if an earlier invocation in this build tree
+        # successfully compiled and passed Linux.
+        runner = integration / "sim/opensbi_boot_main.cpp"
+        runner.write_text("// changed simulator, requires recompilation\n")
+        failed = run(env={"FAIL_VERILATOR": "1"})
+        self.assertNotEqual(failed.returncode, 0, failed.stdout)
+        self.assertFalse((integration / "build/probe/.sim-build-qualified-this-run").exists())
+        self.assertFalse((integration / "build/probe/obj/.aethercore-sim-qualified.json").exists())
+        recovered = run()
+        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        self.assertIn("AETHERCORE_SIM_CACHE_MISS stage=sim", recovered.stdout)
+        self.assertEqual((integration / "verilator-invocations.log").read_text().count("build"), 3)
+        self.assertEqual((integration / "runtime-invocations.log").read_text().count("runtime"), 6)
+        stage_log = (integration / "build/probe/logs/cache-stages.log").read_text()
+        self.assertIn("stage=sim result=MISS elapsed-seconds=", stage_log)
+        self.assertIn("stage=sim result=HIT elapsed-seconds=", stage_log)
+        self.assertIn("stage=linux-runtime exit=0 elapsed-seconds=", stage_log)
+
+    def test_actual_make_failed_elaboration_never_stamps_qualified_rtl(self):
+        # A failed build must not be disguised as success by a trailing echo.
+        integration = self.root / "failed-repo"
+        integration.mkdir()
+        (integration / "tools/ci").mkdir(parents=True)
+        shutil.copy2(ROOT / "Makefile.l32-linux-boot", integration / "Makefile.l32-linux-boot")
+        shutil.copy2(SCRIPT, integration / "tools/ci/l32_sim_artifact_cache.py")
+        (integration / "src/main/scala").mkdir(parents=True)
+        (integration / "src/main/scala/Top.scala").write_text("class Top {}\n")
+        (integration / "build.mill").write_text("// fake\n")
+        mill = integration / "mill"
+        mill.write_text("#!/bin/sh\nexit 51\n")
+        mill.chmod(0o755)
+        outcome = subprocess.run(
+            ["make", "-f", "Makefile.l32-linux-boot", "BUILD_DIR=build/probe", "rtl-cached"],
+            cwd=integration, capture_output=True, text=True,
+        )
+        self.assertNotEqual(outcome.returncode, 0, outcome.stdout)
+        self.assertFalse(list((integration / "build/probe/rtl").rglob(".aethercore-rtl-qualified.json")))
 
 
 if __name__ == "__main__":
