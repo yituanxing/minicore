@@ -102,6 +102,44 @@ still provide regular long-running progress even before a phase is reached.
 No speedup multiplier is claimed until real cold/warm PID1 workflow durations
 have been measured and compared on equivalent hosts.
 
+### Hosted measurements: 2026-11-02
+
+Three full RV64 virtual-FPGA PID1 jobs reached the real `RV64 USER UART IRQ OK`
+milestone and passed the required STIP/SEIP/interrupt checks. These are
+wall-clock observations, **not** a controlled same-firmware/same-host IPC A/B:
+
+| GitHub Actions run | Toolchain producer | RTL / compiled model | Linux runtime | Main job wall time | Result |
+| --- | ---: | --- | ---: | ---: | --- |
+| [41434010080](https://github.com/yituanxing/minicore/actions/runs/41434010080) | 232 s, cold | MISS 14 s / MISS 21 s | 1815 s | ~43m22s | PASS |
+| [41446019947](https://github.com/yituanxing/minicore/actions/runs/41446019947) | 5 s, HIT | MISS 11 s / MISS 18 s | 1669 s | ~31m52s | PASS |
+| [41450753730](https://github.com/yituanxing/minicore/actions/runs/41450753730) | 5 s, HIT | HIT 0 s / HIT 0 s | 1749 s | ~32m55s | PASS |
+
+The third run restored the **actual first run's** qualified simulator cache
+(`AETHERCORE_SIM_CACHE_HIT stage=rtl` and `stage=sim`) and then independently
+proved same-host HIT/HIT after the full Linux PASS with
+`AETHERCORE_SAME_HOST_CACHE_PASS stage=rtl,sim`. The middle run had a different
+native CPU fingerprint, so rejecting the first run's `-march=native` binary
+was intentional. The Linux baseline itself was a qualified cache HIT in the
+second and third runs.
+
+Total pipeline time from the producer's start to the main job's finish fell
+from about 47m21s to 33m07s on the first-versus-third comparison. Of that, the actual
+RTL/Verilator model build only accounted for 35 seconds on the cold run; the
+vast majority of remaining time was **executing 424–427 million guest cycles**
+at roughly 0.23–0.25 million cycles/second. Persistent guest-state checkpoints
+and warm workload replay remain a separate, much larger opportunity.
+
+**Reproducibility caveat:** the three jobs' final OpenSBI `fw_payload.bin`
+SHA256 values differed; the embedded Linux `Image` hashes also differed.
+Conversely, the minimal PID1 ELF, initramfs file-list, resolved kernel config
+and device-tree blob matched by SHA256 across all three runs. The first varying
+artifact is therefore in the rebuilt initramfs Linux kernel image, but its
+precise cause has **not** been established. A future persisted guest-state
+checkpoint must always key on the *actual* firmware hash, not just the Linux
+version or source revision. Resolving this reproducibility gap is separate
+work; do not claim the Linux runtime differences above as a simulation-speed
+improvement attributable to caching.
+
 The previous L32 `fork()`/COW warm-shell test mechanism remains supported, but
 the RV64 minimal PID1 image has no BusyBox command shell; it cannot consume the
 L32 forkserver batch simply by changing `TOP`. Extending that workload protocol
