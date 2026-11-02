@@ -10,6 +10,7 @@ using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -99,6 +100,10 @@ int main(int argc, char** argv) {
     Memory memory;
     memory.loadAtBase(image);
 
+    const bool reportIsa = std::getenv("AETHERCORE_ISA_COVERAGE") != nullptr;
+    std::array<std::uint64_t, 128> opcodeCounts{};
+    std::array<std::uint64_t, 64> exceptionCounts{};
+    std::uint64_t atomicLr = 0, atomicSc = 0, atomicAmo = 0;
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
     std::uint64_t compressedCommits = 0;
@@ -246,6 +251,16 @@ int main(int argc, char** argv) {
 
       if (top.io_commit_valid) {
         ++commits;
+        if (reportIsa) {
+          const auto inst = static_cast<std::uint32_t>(top.io_commit_inst);
+          ++opcodeCounts[inst & 0x7fU];
+          if ((inst & 0x7fU) == 0x2fU) {
+            const auto atomicOp = (inst >> 27) & 0x1fU;
+            if (atomicOp == 0x02U) ++atomicLr;
+            else if (atomicOp == 0x03U) ++atomicSc;
+            else ++atomicAmo;
+          }
+        }
         const auto commitPc = static_cast<std::uint64_t>(top.io_commit_pc);
         if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
           ++compressedCommits;
@@ -275,6 +290,10 @@ int main(int argc, char** argv) {
 
         if (top.io_commit_exception) {
           ++exceptions;
+          if (reportIsa) {
+            const auto cause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
+            if (cause < exceptionCounts.size()) ++exceptionCounts[cause];
+          }
           lastExceptionPc = commitPc;
           lastExceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
           lastExceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);
@@ -370,6 +389,19 @@ int main(int argc, char** argv) {
         }
         emitAxiDataConcurrency(top);
 
+        if (reportIsa) {
+          std::cerr << "\nL32_ISA_COVERAGE version=1 commits=" << commits
+                    << " compressed=" << compressedCommits
+                    << " lr=" << atomicLr << " sc=" << atomicSc
+                    << " amo=" << atomicAmo
+                    << " stip=" << supervisorTimerInterrupts
+                    << " seip=" << supervisorExternalInterrupts;
+          for (std::size_t i = 0; i < opcodeCounts.size(); ++i)
+            if (opcodeCounts[i] != 0) std::cerr << " op_" << i << "=" << opcodeCounts[i];
+          for (std::size_t i = 0; i < exceptionCounts.size(); ++i)
+            if (exceptionCounts[i] != 0) std::cerr << " ex_" << i << "=" << exceptionCounts[i];
+          std::cerr << "\n";
+        }
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
                   << " compressed=" << compressedCommits

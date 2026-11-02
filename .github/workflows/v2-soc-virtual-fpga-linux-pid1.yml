@@ -31,6 +31,7 @@ on:
       - 'software/rv64_userspace/minimal_init.S'
       - 'tools/ci/rv64_minimal_initramfs_build.sh'
       - 'tools/ci/rv64_minimal_init_payload_build.sh'
+      - 'tools/ci/rv64_isa_fast_compare.py'
       - '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml'
   workflow_dispatch:
 
@@ -223,7 +224,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make -f Makefile.l32-linux-boot \
+          AETHERCORE_ISA_COVERAGE=1 make -f Makefile.l32-linux-boot \
             BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
             TOP=AetherCoreV2OpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
@@ -242,6 +243,41 @@ jobs:
           grep -Fq 'Linux version 6.6.143' "$log"
           grep -Fq 'RV64 USER UART IRQ OK' "$log"
           grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          grep -Fq 'L32_ISA_COVERAGE version=1 ' "$log"
+          cp "$log" build/v2-virtual-fpga-linux-pid1-model/logs/baseline-boot.log
+
+      # Baseline and fast run on the same model/host; software profiles have
+      # isolated build trees. Full cold boot assertions remain unchanged.
+      - name: Build and boot ISA-fast Linux on the same RTL model
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RV64_INIT_PROFILE=isa-fast
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          AETHERCORE_ISA_COVERAGE=1 make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            FW_BIN=build/rv64-isa-fast-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" MAX_CYCLES=950000000 \
+            MILESTONE='RV64 USER UART IRQ OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            REQUIRE_LINUX_BANNER=0 PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-cached
+          log=build/v2-virtual-fpga-linux-pid1-model/logs/boot-probe.log
+          grep -Fq 'RV64 USER UART IRQ OK' "$log"
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' "$log"
+          grep -Fq 'L32_ISA_COVERAGE version=1 ' "$log"
+          cp "$log" build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-boot.log
+          python3 tools/ci/rv64_isa_fast_compare.py \
+            build/v2-virtual-fpga-linux-pid1-model/logs/baseline-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-ab.json
 
       # Hosted runners are not guaranteed to have the same -march=native CPU.
       # Prove the full real model can be reused on the same qualified host,
@@ -297,4 +333,7 @@ jobs:
             build/rv64-linux-early/result.txt
             build/rv64-linux-initramfs/result.txt
             build/rv64-minimal-init-boot/result.txt
+            build/rv64-linux-isa-fast-initramfs/result.txt
+            build/rv64-isa-fast-boot/result.txt
+            build/v2-virtual-fpga-linux-pid1-model/logs/*.json
             build/v2-virtual-fpga-linux-pid1-model/logs/*.log

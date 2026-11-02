@@ -5,12 +5,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${ROOT_DIR}/software/rv64/opensbi_first_exec.env"
 source "${ROOT_DIR}/software/rv64/linux_early.env"
 
+# Keep the full Linux qualification immutable; fast profile has an isolated object tree.
+RV64_INIT_PROFILE="${RV64_INIT_PROFILE:-baseline}"
+case "${RV64_INIT_PROFILE}" in baseline|isa-fast) ;; *) echo "invalid RV64_INIT_PROFILE" >&2; exit 2 ;; esac
+
 : "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:?provision tools/ensure_riscv64_linux_gcc_13_3.sh first}"
 CROSS="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
 SOURCE_DIR="${CACHE_ROOT}/rv64/linux/linux-${RV64_LINUX_VERSION}"
 BASELINE_RESULT="${ROOT_DIR}/build/rv64-linux-early/result.txt"
-BUILD_DIR="${ROOT_DIR}/build/rv64-linux-initramfs"
+BUILD_DIR="${ROOT_DIR}/build/rv64-linux-$([[ "${RV64_INIT_PROFILE}" == "isa-fast" ]] && echo "isa-fast-initramfs" || echo "initramfs")}"
 OBJ_DIR="${BUILD_DIR}/obj"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 INIT_BUILD_DIR="${BUILD_DIR}/minimal-init"
@@ -114,6 +118,17 @@ cp "${BASELINE_OBJ}/.config" "${OBJ_DIR}/.config"
   -e BLK_DEV_INITRD \
   --set-str INITRAMFS_SOURCE "${INIT_SPEC}"
 
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+  # Prune redundant initialization, not architectural features. CPU/CSR/Sv39,
+  # the real timer, PLIC, UART and PID1 path remain enabled.
+  "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
+    -d USB_SUPPORT -d USB -d USB_STORAGE -d HID -d HID_GENERIC \
+    -d MEDIA_SUPPORT -d SOUND -d DRM -d VGA_CONSOLE \
+    -d NET -d INET -d IPV6 -d NFS_FS -d 9P_FS -d NET_9P \
+    -d SCSI -d PCI -d DEBUG_VM_PGTABLE -d FTRACE -d KPROBES \
+    -d BLK_DEV_LOOP -d IOMMU_SUPPORT
+fi
+
 export KBUILD_BUILD_USER="${RV64_LINUX_BUILD_USER}"
 export KBUILD_BUILD_HOST="${RV64_LINUX_BUILD_HOST}"
 export KBUILD_BUILD_VERSION="${RV64_LINUX_BUILD_VERSION}"
@@ -136,6 +151,16 @@ grep -Fqx "CONFIG_INITRAMFS_SOURCE=\"${INIT_SPEC}\"" "${OBJ_DIR}/.config" || \
 grep -qx '# CONFIG_EFI is not set' "${OBJ_DIR}/.config" || fail "Linux config retained EFI"
 grep -qx '# CONFIG_RISCV_ISA_C is not set' "${OBJ_DIR}/.config" || fail "Linux config retained C"
 grep -qx '# CONFIG_FPU is not set' "${OBJ_DIR}/.config" || fail "Linux config retained FPU"
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+  for disabled in NET USB_SUPPORT NFS_FS DEBUG_VM_PGTABLE; do
+    if grep -qx "CONFIG_${disabled}=y" "${OBJ_DIR}/.config"; then
+      fail "fast profile failed to disable ${disabled}"
+    fi
+  done
+  for required in SERIAL_8250 SERIAL_8250_CONSOLE SERIAL_OF_PLATFORM MMU BLK_DEV_INITRD; do
+    grep -qx "CONFIG_${required}=y" "${OBJ_DIR}/.config" || fail "fast profile lost ${required}"
+  done
+fi
 
 make -C "${SOURCE_DIR}" O="${OBJ_DIR}" \
   ARCH=riscv CROSS_COMPILE="${CROSS}" -j"${JOBS}" Image \
@@ -152,6 +177,7 @@ sha256sum "${INIT_ELF}" "${INIT_SPEC}" "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/
 
 {
   echo "RV64_MINIMAL_INITRAMFS_BUILD_RESULT: status=PASS"
+  echo "profile=${RV64_INIT_PROFILE}"
   echo "linux_version=${RV64_LINUX_VERSION}"
   echo "linux_source_sha256=${RV64_LINUX_SHA256}"
   echo "baseline_image=${BASELINE_IMAGE}"
