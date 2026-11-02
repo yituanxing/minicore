@@ -243,6 +243,25 @@ jobs:
           grep -Fq 'RV64 USER UART IRQ OK' "$log"
           grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
 
+      # Hosted runners are not guaranteed to have the same -march=native CPU.
+      # Prove the full real model can be reused on the same qualified host,
+      # while deliberately not re-running the expensive Linux test twice.
+      - name: Prove same-host RTL and model cache HIT
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=build/v2-virtual-fpga-linux-pid1-model/logs/warm-model-qualification.log
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            sim-cached 2>&1 | tee "$log"
+          grep -Fq 'AETHERCORE_SIM_CACHE_HIT stage=rtl ' "$log"
+          grep -Fq 'AETHERCORE_SIM_CACHE_HIT stage=sim ' "$log"
+          echo 'AETHERCORE_SAME_HOST_CACHE_PASS stage=rtl,sim'
+
       # Retain a qualified model even when Linux runtime later fails. Save
       # either a rebuilt model *or* a newly elaborated RTL tree alongside an
       # otherwise reusable model: the latter must persist across hosted runs.
@@ -253,9 +272,8 @@ jobs:
         run: |
           if [[ -f build/v2-virtual-fpga-linux-pid1-model/.sim-build-qualified-this-run && \
                 -s build/v2-virtual-fpga-linux-pid1-model/obj/.aethercore-sim-qualified.json ]] && \
-               { grep -qx 'result=MISS' build/v2-virtual-fpga-linux-pid1-model/.sim-cache-this-run || \
-                 grep -Eq '^AETHERCORE_SIM_CACHE_BUILD stage=rtl result=MISS ' \
-                   build/v2-virtual-fpga-linux-pid1-model/logs/cache-stages.log; }; then
+               grep -Eq '^AETHERCORE_SIM_CACHE_BUILD stage=(rtl|sim) result=MISS ' \
+                 build/v2-virtual-fpga-linux-pid1-model/logs/cache-stages.log; then
             echo 'ready=true' >> "$GITHUB_OUTPUT"
           fi
 

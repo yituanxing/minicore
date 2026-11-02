@@ -79,6 +79,14 @@ validated Scala dependencies, RV64 GCC and Linux/OpenSBI baseline immediately
 after each successful producer stage, instead of depending on a different
 workflow to seed those caches.
 
+Because GitHub-hosted machines can have different CPU instruction-set flags,
+one hosted run may correctly MISS the native-model cache restored from a
+different host. The workflow additionally runs an explicit **same-host**
+`sim-cached` second lookup after the full Linux PASS, requiring RTL and model
+HIT without executing Linux a second time. This distinguishes real cache
+correctness from cross-run host availability. Both HIT/MISS records remain in
+the uploaded build-stage log.
+
 ## Performance measurements and next stages
 
 The expected saving is in **RTL elaboration and C++ compilation**, not the
