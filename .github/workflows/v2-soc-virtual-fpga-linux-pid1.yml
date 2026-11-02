@@ -27,6 +27,7 @@ on:
       - 'tests_py/test_l32_sim_artifact_cache_contract.py'
       - 'tools/ci/l32_sim_artifact_cache.py'
       - 'Makefile.l32-linux-boot'
+      - '.github/workflows/hosted-verilator-cache.yml'
       - 'software/rv64_userspace/minimal_init.S'
       - 'tools/ci/rv64_minimal_initramfs_build.sh'
       - 'tools/ci/rv64_minimal_init_payload_build.sh'

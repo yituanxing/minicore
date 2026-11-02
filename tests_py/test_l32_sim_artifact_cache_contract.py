@@ -177,6 +177,9 @@ class L32SimArtifactCacheContract(unittest.TestCase):
         self.assertIn("Save qualified Linux/OpenSBI baseline", workflow)
         self.assertIn("Save verified RV64 Linux GCC", workflow)
         self.assertIn("Save resolved Scala dependencies", workflow)
+        producer = (ROOT / ".github/workflows/hosted-verilator-cache.yml").read_text()
+        self.assertIn("queue: max", producer)
+        self.assertIn("'.github/workflows/hosted-verilator-cache.yml'", workflow)
 
     def test_actual_make_cached_run_reuses_model_but_reruns_firmware(self):
         # This tiny private repo has a fake Verilator and a fake simulator.

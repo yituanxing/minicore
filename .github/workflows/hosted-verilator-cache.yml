@@ -15,6 +15,10 @@ jobs:
     concurrency:
       group: aethercore-hosted-verilator-5-024-v1
       cancel-in-progress: false
+      # Multiple caller workflows can queue concurrently. The default single
+      # pending slot silently cancels older consumers, including the real
+      # Linux PID1 gate, even when cancel-in-progress is false.
+      queue: max
     env:
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
       AETHERCORE_TOOLCHAIN_JOBS: "4"
