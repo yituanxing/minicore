@@ -21,8 +21,8 @@ class Rv64IsaFastBuildContract(unittest.TestCase):
         for expected in ("build/rv64-minimal-init-boot", "build/rv64-isa-fast-boot"):
             self.assertIn(expected, payload)
             self.assertIn(expected, workflow)
-        self.assertNotIn('$((', payload)
-        self.assertNotIn('$((', initramfs)
+        self.assertNotIn(']] && echo ', payload)
+        self.assertNotIn(']] && echo ', initramfs)
 
     def test_baseline_and_fast_profiles_are_independent(self):
         for path in ("rv64_minimal_initramfs_build.sh", "rv64_minimal_init_payload_build.sh"):
