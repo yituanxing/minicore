@@ -17,7 +17,12 @@ class Rv64MinimalInitramfsContractTest(unittest.TestCase):
     def test_build_derives_from_qualified_rv64_baseline(self):
         text = (ROOT / "tools/ci/rv64_minimal_initramfs_build.sh").read_text()
         self.assertIn("RV64_LINUX_EARLY_BUILD_RESULT: status=PASS", text)
-        self.assertIn('cp "${BASELINE_OBJ}/.config" "${OBJ_DIR}/.config"', text)
+        # Baseline and v1 still seed from the qualified Linux baseline.
+        # v2 may reuse the separately qualified v1 object tree to avoid
+        # rebuilding unchanged kernel objects.
+        self.assertIn('SEED_OBJ="${BASELINE_OBJ}"', text)
+        self.assertIn('SEED_OBJ="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs/obj"', text)
+        self.assertIn('cp "${SEED_OBJ}/.config" "${OBJ_DIR}/.config"', text)
         self.assertIn("-e BLK_DEV_INITRD", text)
         self.assertIn("INITRAMFS_SOURCE", text)
         self.assertIn("-march=rv64ima_zicsr_zifencei -mabi=lp64", text)
