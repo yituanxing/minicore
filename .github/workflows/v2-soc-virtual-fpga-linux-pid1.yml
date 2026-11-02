@@ -86,6 +86,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
 
       - name: Restore RV64 Linux GCC cache
+        id: rv64-gcc-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -96,6 +97,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
 
       - name: Restore Scala dependency cache
+        id: scala-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -106,6 +108,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Restore qualified RV64 software cache
+        id: rv64-software-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -166,9 +169,29 @@ jobs:
             ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
             rtl-cached
 
+      - name: Save resolved Scala dependencies
+        if: always() && steps.scala-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
       - name: Provision exact RV64 Linux toolchain
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Save verified RV64 Linux GCC
+        if: steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Reuse qualified Linux 6.6.143 baseline
         shell: bash
@@ -176,6 +199,17 @@ jobs:
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Save qualified Linux/OpenSBI baseline
+        if: steps.rv64-software-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Build deterministic PID1 payload
         shell: bash
@@ -208,20 +242,23 @@ jobs:
           grep -Fq 'RV64 USER UART IRQ OK' "$log"
           grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
 
-      # Retain a successfully compiled model even when a later Linux runtime
-      # assertion fails. A missing/invalid manifest can never cause a cache hit.
-      - name: Identify qualified compiled simulator
+      # Retain a qualified model even when Linux runtime later fails. Save
+      # either a rebuilt model *or* a newly elaborated RTL tree alongside an
+      # otherwise reusable model: the latter must persist across hosted runs.
+      - name: Identify newly qualified cache artifacts
         if: always()
         id: compiled-model
         shell: bash
         run: |
           if [[ -f build/v2-virtual-fpga-linux-pid1-model/.sim-build-qualified-this-run && \
                 -s build/v2-virtual-fpga-linux-pid1-model/obj/.aethercore-sim-qualified.json ]] && \
-                grep -qx 'result=MISS' build/v2-virtual-fpga-linux-pid1-model/.sim-cache-this-run; then
+               { grep -qx 'result=MISS' build/v2-virtual-fpga-linux-pid1-model/.sim-cache-this-run || \
+                 grep -Eq '^AETHERCORE_SIM_CACHE_BUILD stage=rtl result=MISS ' \
+                   build/v2-virtual-fpga-linux-pid1-model/logs/cache-stages.log; }; then
             echo 'ready=true' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Save compiled virtual FPGA simulator
+      - name: Save qualified virtual FPGA RTL and simulator
         if: always() && steps.virtual-sim-cache.outputs.cache-hit != 'true' && steps.compiled-model.outputs.ready == 'true'
         uses: actions/cache/save@v4
         with:

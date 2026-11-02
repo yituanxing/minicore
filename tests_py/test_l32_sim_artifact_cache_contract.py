@@ -173,6 +173,10 @@ class L32SimArtifactCacheContract(unittest.TestCase):
         self.assertIn("run-cached", workflow)
         self.assertIn("actions/cache/restore@v4", workflow)
         self.assertIn("actions/cache/save@v4", workflow)
+        self.assertIn("stage=rtl result=MISS", workflow)
+        self.assertIn("Save qualified Linux/OpenSBI baseline", workflow)
+        self.assertIn("Save verified RV64 Linux GCC", workflow)
+        self.assertIn("Save resolved Scala dependencies", workflow)
 
     def test_actual_make_cached_run_reuses_model_but_reruns_firmware(self):
         # This tiny private repo has a fake Verilator and a fake simulator.

@@ -73,7 +73,11 @@ cache authority. It keeps `-march=native`, so Actions keys also include the host
 CPU identity, and the manifest independently checks CPU features. Changing
 Linux/firmware without changing Chisel/runner sources can therefore reuse the
 compiled simulator across separate hosted runs. Only a newly built, qualified
-simulator is uploaded; an already-restored model is not uploaded again.
+simulator **or newly elaborated RTL** is uploaded; an already-restored model
+and RTL tree are not uploaded again. The Linux workflow also saves the
+validated Scala dependencies, RV64 GCC and Linux/OpenSBI baseline immediately
+after each successful producer stage, instead of depending on a different
+workflow to seed those caches.
 
 ## Performance measurements and next stages
 
