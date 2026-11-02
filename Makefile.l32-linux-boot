@@ -40,8 +40,17 @@ FORKSERVER_CASE_MAX_CYCLES ?= 50000000
 FORKSERVER_REQUIRE_USER_COMPRESSED ?= 0
 UART_INPUT_ENABLED := $(if $(strip $(UART_COMMAND)$(UART_COMMAND_FILE)),1,0)
 export AETHERCORE_UART_COMMAND := $(UART_COMMAND)
+CACHE_TOOL := python3 tools/ci/l32_sim_artifact_cache.py
+CACHE_ARGS = --rtl-dir="$(RTL_DIR)" \
+	--top="$(TOP)" --elaborate-main="$(ELABORATE_MAIN)" \
+	--verilator="$(VERILATOR)" --verilator-model-opt="$(VERILATOR_MODEL_OPT)" \
+	--verilator-threads="$(VERILATOR_THREADS)" \
+	--verilator-make-opt='$(VERILATOR_MAKE_OPT)' \
+	--sim-cxxflags="$(SIM_CXXFLAGS)" --cxx="$(CXX)"
+CACHE_BOOT_ARGS = $(CACHE_ARGS) --obj-dir="$(OBJ_DIR)" --runner=sim/opensbi_boot_main.cpp
+CACHE_FORKSERVER_ARGS = $(CACHE_ARGS) --obj-dir="$(FORKSERVER_OBJ_DIR)" --runner=sim/opensbi_forkserver_main.cpp
 
-.PHONY: all rtl sim forkserver-sim forkserver-sim-existing-rtl run-local run-existing forkserver-local clean
+.PHONY: all rtl sim sim-existing-rtl rtl-cached sim-cached run-cached forkserver-sim forkserver-sim-existing-rtl forkserver-sim-cached forkserver-cached run-local run-existing forkserver-local clean
 
 all: run-local
 
@@ -57,6 +66,9 @@ rtl:
 	exit $$rc
 
 sim: rtl
+	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) sim-existing-rtl
+
+sim-existing-rtl:
 	@test -n "$$(find $(RTL_DIR) -maxdepth 1 -name '*.sv' -print -quit)" || { echo "ERROR: no L32 Linux RTL generated"; exit 4; }
 	mkdir -p $(BUILD_DIR)/logs
 	set +e; \
@@ -87,6 +99,42 @@ forkserver-sim-existing-rtl:
 run-existing:
 	@test -x "$(OBJ_DIR)/V$(TOP)" || { echo "ERROR: missing existing L32 simulator $(OBJ_DIR)/V$(TOP); run run-local once first"; exit 3; }
 	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) RUN_DEPS= run-local
+
+# MiniC-style staged reuse: source recipe -> generated RTL -> compiled model.
+# These targets never cache a Linux PASS; the full runtime check always runs.
+# Unlike the legacy run-existing target, each cache hit validates recipe and
+# artifact hashes before an executable can be reused.
+rtl-cached:
+	@if $(CACHE_TOOL) check --stage=rtl $(CACHE_ARGS); then \
+		:; \
+	else \
+		$(MAKE) -f $(lastword $(MAKEFILE_LIST)) rtl; \
+		$(CACHE_TOOL) stamp --stage=rtl $(CACHE_ARGS); \
+	fi
+
+sim-cached: rtl-cached
+	@if $(CACHE_TOOL) check --stage=sim $(CACHE_BOOT_ARGS); then \
+		:; \
+	else \
+		$(MAKE) -f $(lastword $(MAKEFILE_LIST)) sim-existing-rtl; \
+		$(CACHE_TOOL) stamp --stage=sim $(CACHE_BOOT_ARGS); \
+	fi
+	@$(CACHE_TOOL) check --stage=sim $(CACHE_BOOT_ARGS) >/dev/null
+	@touch "$(BUILD_DIR)/.sim-build-qualified-this-run"
+
+run-cached: sim-cached
+	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) RUN_DEPS= run-local
+
+forkserver-sim-cached: rtl-cached
+	@if $(CACHE_TOOL) check --stage=sim $(CACHE_FORKSERVER_ARGS); then \
+		:; \
+	else \
+		$(MAKE) -f $(lastword $(MAKEFILE_LIST)) forkserver-sim-existing-rtl; \
+		$(CACHE_TOOL) stamp --stage=sim $(CACHE_FORKSERVER_ARGS); \
+	fi
+
+forkserver-cached: forkserver-sim-cached
+	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) FORKSERVER_RUN_DEPS= forkserver-local
 
 forkserver-local: $(FORKSERVER_RUN_DEPS)
 	@test -s "$(FW_BIN)" || { echo "ERROR: missing OpenSBI+Linux payload $(FW_BIN)"; exit 2; }

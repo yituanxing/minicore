@@ -114,7 +114,9 @@ int main(int argc, char** argv) {
     std::uint64_t milestoneCommitCount = 0;
     std::string uart;
     bool sawOpenSbiBanner = false;
+    bool sawLinuxBanner = false;
     bool sawMilestone = false;
+    std::uint64_t uartOutputBytes = 0;
     bool inputStarted = !uartInput.empty() && uartTrigger.empty();
     std::size_t inputIndex = 0;
     std::uint64_t seipAtInputStart = 0;
@@ -125,6 +127,25 @@ int main(int argc, char** argv) {
     std::uint64_t postInputDeadline = 0;
     std::uint64_t nextProgressCycle = progressIntervalCycles;
     const auto hostStart = std::chrono::steady_clock::now();
+    auto previousPhaseTime = hostStart;
+    std::uint64_t previousPhaseCycle = 0;
+    const auto reportPhase = [&](const char* phase) {
+      const auto now = std::chrono::steady_clock::now();
+      const double totalSeconds = std::chrono::duration<double>(now - hostStart).count();
+      const double phaseSeconds = std::chrono::duration<double>(now - previousPhaseTime).count();
+      const std::uint64_t phaseCycles = cycles - previousPhaseCycle;
+      std::cerr << "\nL32_SIM_PHASE stage=" << phase
+                << " cycles=" << cycles
+                << " delta-cycles=" << phaseCycles
+                << " host-seconds=" << totalSeconds
+                << " delta-host-seconds=" << phaseSeconds
+                << " delta-cycles-per-second="
+                << (phaseSeconds > 0 ? phaseCycles / phaseSeconds : 0.0)
+                << " commits=" << commits
+                << " uart-bytes=" << uartOutputBytes << "\n";
+      previousPhaseCycle = cycles;
+      previousPhaseTime = now;
+    };
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
@@ -185,6 +206,7 @@ int main(int argc, char** argv) {
 
       if (top.io_uartValid) {
         const char byte = static_cast<char>(top.io_uartByte);
+        ++uartOutputBytes;
         uart.push_back(byte);
         std::cout.put(byte);
         if (byte == '\n') std::cout.flush();
@@ -192,6 +214,11 @@ int main(int argc, char** argv) {
           sawOpenSbiBanner = true;
           std::cerr << "\nL32_OPENSBI_BANNER cycles=" << cycles
                     << " commits=" << commits << "\n";
+          reportPhase("opensbi-banner");
+        }
+        if (!sawLinuxBanner && endsWith(uart, "Linux version 6.6.143")) {
+          sawLinuxBanner = true;
+          reportPhase("linux-banner");
         }
         if (!inputStarted && !uartInput.empty() && !uartTrigger.empty() &&
             endsWith(uart, uartTrigger)) {
@@ -213,6 +240,7 @@ int main(int argc, char** argv) {
                     << " stip=" << supervisorTimerInterrupts
                     << " seip=" << supervisorExternalInterrupts
                     << " marker=" << milestone << "\n";
+          reportPhase("requested-milestone");
         }
       }
 
