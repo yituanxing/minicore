@@ -32,6 +32,7 @@ on:
       - 'tools/ci/rv64_minimal_initramfs_build.sh'
       - 'tools/ci/rv64_minimal_init_payload_build.sh'
       - 'tools/ci/rv64_isa_fast_compare.py'
+      - 'tests_py/test_rv64_isa_fast_contract.py'
       - '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml'
   workflow_dispatch:
 
@@ -161,7 +162,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x mill
-          python3 -m unittest tests_py.test_v2_virtual_fpga_board tests_py.test_l32_sim_artifact_cache_contract -v
+          python3 -m unittest tests_py.test_v2_virtual_fpga_board tests_py.test_l32_sim_artifact_cache_contract tests_py.test_rv64_isa_fast_contract -v
           ./mill aethercore.test.testOnly aethercore.AetherFractionalTickGeneratorSpec
           ./mill aethercore.test.testOnly aethercore.AetherUart8N1PhySpec
           # Compile-stage cache qualification also verifies successful RTL
@@ -219,6 +220,9 @@ jobs:
           set -euo pipefail
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          # Validate the exact runner path before paying for Verilator model build.
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          grep -Fq "firmware_bin=$GITHUB_WORKSPACE/build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin" build/rv64-minimal-init-boot/result.txt
 
       - name: Run real PID1 through virtual FPGA pins
         shell: bash
@@ -255,6 +259,8 @@ jobs:
           export RV64_INIT_PROFILE=isa-fast
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-isa-fast-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          grep -Fq "firmware_bin=$GITHUB_WORKSPACE/build/rv64-isa-fast-boot/opensbi/platform/generic/firmware/fw_payload.bin" build/rv64-isa-fast-boot/result.txt
           AETHERCORE_ISA_COVERAGE=1 make -f Makefile.l32-linux-boot \
             BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
             TOP=AetherCoreV2OpenSbiRV64SimTop \

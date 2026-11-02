@@ -14,7 +14,10 @@ CROSS="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
 SOURCE_DIR="${CACHE_ROOT}/rv64/linux/linux-${RV64_LINUX_VERSION}"
 BASELINE_RESULT="${ROOT_DIR}/build/rv64-linux-early/result.txt"
-BUILD_DIR="${ROOT_DIR}/build/rv64-linux-$([[ "${RV64_INIT_PROFILE}" == "isa-fast" ]] && echo "isa-fast-initramfs" || echo "initramfs")}"
+BUILD_DIR="${ROOT_DIR}/build/rv64-linux-initramfs"
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+  BUILD_DIR="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs"
+fi
 OBJ_DIR="${BUILD_DIR}/obj"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 INIT_BUILD_DIR="${BUILD_DIR}/minimal-init"

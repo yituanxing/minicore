@@ -11,9 +11,15 @@ case "${RV64_INIT_PROFILE}" in baseline|isa-fast) ;; *) echo "invalid RV64_INIT_
 CROSS="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}"
 CACHE_ROOT="${AETHERCORE_CACHE_ROOT:-${HOME}/.cache/aethercore}"
 OPENSBI_SOURCE="${CACHE_ROOT}/l32/opensbi/${RV64_OPENSBI_COMMIT}"
-LINUX_BUILD_DIR="${ROOT_DIR}/build/rv64-linux-$([[ "${RV64_INIT_PROFILE}" == "isa-fast" ]] && echo "isa-fast-initramfs" || echo "initramfs")}"
+LINUX_BUILD_DIR="${ROOT_DIR}/build/rv64-linux-initramfs"
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+  LINUX_BUILD_DIR="${ROOT_DIR}/build/rv64-linux-isa-fast-initramfs"
+fi
 LINUX_IMAGE="${LINUX_BUILD_DIR}/obj/arch/riscv/boot/Image"
-BUILD_DIR="${ROOT_DIR}/build/rv64-$([[ "${RV64_INIT_PROFILE}" == "isa-fast" ]] && echo "isa-fast-boot" || echo "minimal-init-boot")}"
+BUILD_DIR="${ROOT_DIR}/build/rv64-minimal-init-boot"
+if [[ "${RV64_INIT_PROFILE}" == "isa-fast" ]]; then
+  BUILD_DIR="${ROOT_DIR}/build/rv64-isa-fast-boot"
+fi
 OPENSBI_BUILD_DIR="${BUILD_DIR}/opensbi"
 EVIDENCE_DIR="${BUILD_DIR}/evidence"
 DTS="${BUILD_DIR}/aethersoc-v0-initramfs.dts"

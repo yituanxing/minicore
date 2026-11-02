@@ -18,7 +18,7 @@ def parse(path):
         if int(result[key]) <= 0:
             raise RuntimeError(f"{path}: missing {key}")
     for key in ("commits", "stip", "seip"):
-        if int(isa[key]) != int(result[key]) if key != "commits" else int(isa[key]) != int(result[key]):
+        if int(isa[key]) != int(result[key]):
             raise RuntimeError(f"{path}: inconsistent coverage field {key}")
     return result, isa
 
@@ -31,10 +31,23 @@ def main():
         if key.startswith(("op_", "ex_")) and int(value) > 0 and int(f.get(key, 0)) == 0:
             missing[key] = int(value)
     baseline_cycles, fast_cycles = int(base["cycles"]), int(fast["cycles"])
+    def elapsed(path):
+        data = pathlib.Path(path).read_text(errors="replace")
+        phases = re.findall(r"^L32_SIM_PHASE stage=requested-milestone (.+)$", data, re.M)
+        if len(phases) != 1:
+            raise RuntimeError(f"{path}: expected one requested-milestone timing line")
+        m = re.search(r"(?:^| )host-seconds=([0-9.]+)", phases[0])
+        if not m:
+            raise RuntimeError(f"{path}: missing elapsed time")
+        return float(m.group(1))
+    baseline_seconds, fast_seconds = elapsed(sys.argv[1]), elapsed(sys.argv[2])
     report = {
         "baseline": {"cycles": baseline_cycles, "commits": int(base["commits"])},
         "fast": {"cycles": fast_cycles, "commits": int(fast["commits"])},
         "cycle_reduction_percent": round((baseline_cycles-fast_cycles)*100/baseline_cycles, 2),
+        "baseline_seconds": baseline_seconds,
+        "fast_seconds": fast_seconds,
+        "runtime_reduction_percent": round((baseline_seconds-fast_seconds)*100/baseline_seconds, 2),
         "lost_coverage_classes": missing,
         "baseline_isa": b, "fast_isa": f,
         "note": "Opcode-class coverage is not proof of instruction correctness; retain directed tests and full cold boot."
