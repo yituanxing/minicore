@@ -4,12 +4,13 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FOUNDATION = ROOT / "src/main/scala/aethercore/core/v2/FoundationTypes.scala"
+SEMANTIC = ROOT / "src/main/scala/aethercore/core/semantic/SemanticTypes.scala"
 MEM_LINK = ROOT / "src/main/scala/aethercore/memory/AetherMemLink.scala"
 
 
 class V2FoundationContractTest(unittest.TestCase):
     def test_foundation_separates_semantics_uops_and_lifetime_identities(self) -> None:
-        text = FOUNDATION.read_text(encoding="utf-8")
+        text = FOUNDATION.read_text(encoding="utf-8") + SEMANTIC.read_text(encoding="utf-8")
 
         for required in (
             "class DecodedInstruction",
@@ -32,7 +33,7 @@ class V2FoundationContractTest(unittest.TestCase):
 
     def test_semantic_decode_contract_does_not_leak_v1_frontend_or_backend_implementation_controls(self) -> None:
         text = FOUNDATION.read_text(encoding="utf-8")
-        decoded_body = text.split("class DecodedInstruction", 1)[1].split("/** First backend-owned representation", 1)[0]
+        decoded_body = SEMANTIC.read_text(encoding="utf-8").split("class DecodedInstruction", 1)[1]
         backend_body = text.split("class BackendUop", 1)[1].split("/** Narrow request contract", 1)[0]
 
         for forbidden in (
@@ -57,7 +58,7 @@ class V2FoundationContractTest(unittest.TestCase):
 
         self.assertNotIn("executionClass", decoded_body)
         self.assertIn("executionClass", backend_body)
-        self.assertIn("Architectural instruction semantics after decode", text)
+        self.assertIn("Architectural instruction semantics after decode", SEMANTIC.read_text(encoding="utf-8"))
         self.assertIn("lhsSource", decoded_body)
         self.assertIn("rhsSource", decoded_body)
         self.assertIn("controlFlow", decoded_body)
@@ -68,8 +69,8 @@ class V2FoundationContractTest(unittest.TestCase):
 
     def test_execution_operand_sources_are_semantic_not_v1_mux_controls(self) -> None:
         text = FOUNDATION.read_text(encoding="utf-8")
-        source_body = text.split("object OperandSourceKind", 1)[1].split("object ControlFlowKind", 1)[0]
-        decoded_body = text.split("class DecodedInstruction", 1)[1].split("/** First backend-owned representation", 1)[0]
+        source_body = SEMANTIC.read_text(encoding="utf-8").split("object OperandSourceKind", 1)[1].split("object ControlFlowKind", 1)[0]
+        decoded_body = SEMANTIC.read_text(encoding="utf-8").split("class DecodedInstruction", 1)[1]
 
         for source in ("Zero", "Rs1", "Rs2", "Pc", "Immediate"):
             self.assertIn(source, source_body)
@@ -80,7 +81,7 @@ class V2FoundationContractTest(unittest.TestCase):
 
     def test_rv64_word_operation_semantics_survive_decode_and_execute_seams(self) -> None:
         text = FOUNDATION.read_text(encoding="utf-8")
-        decoded_body = text.split("class DecodedInstruction", 1)[1].split("/** First backend-owned representation", 1)[0]
+        decoded_body = SEMANTIC.read_text(encoding="utf-8").split("class DecodedInstruction", 1)[1]
         request_body = text.split("class ExecutionRequest", 1)[1].split("/** Tagged completion", 1)[0]
 
         self.assertIn("val wordOp = Bool()", decoded_body)
@@ -98,14 +99,14 @@ class V2FoundationContractTest(unittest.TestCase):
 
     def test_csr_immediate_is_explicit_semantics_not_reinterpreted_rs1(self) -> None:
         text = FOUNDATION.read_text(encoding="utf-8")
-        system_body = text.split("class DecodedSystemOperation", 1)[1].split("/** Architectural instruction semantics", 1)[0]
+        system_body = SEMANTIC.read_text(encoding="utf-8").split("class DecodedSystemOperation", 1)[1].split("/** Architectural instruction semantics", 1)[0]
 
         self.assertIn("val csrUseImmediate = Bool()", system_body)
         self.assertIn("val csrImmediate = UInt(5.W)", system_body)
         self.assertIn("five-bit zimm", system_body)
 
     def test_existing_isa_semantic_enums_are_reused_instead_of_forked(self) -> None:
-        text = FOUNDATION.read_text(encoding="utf-8")
+        text = FOUNDATION.read_text(encoding="utf-8") + SEMANTIC.read_text(encoding="utf-8")
 
         self.assertIn("AluOp", text)
         self.assertIn("AtomicOp", text)
@@ -131,7 +132,7 @@ class V2FoundationContractTest(unittest.TestCase):
             self.assertNotIn(forbidden, text)
 
     def test_foundation_does_not_create_a_new_arch_profile_or_microarch_generator(self) -> None:
-        text = FOUNDATION.read_text(encoding="utf-8") + MEM_LINK.read_text(encoding="utf-8")
+        text = FOUNDATION.read_text(encoding="utf-8") + SEMANTIC.read_text(encoding="utf-8") + MEM_LINK.read_text(encoding="utf-8")
 
         self.assertNotIn("ArchProfile", text)
         self.assertNotIn("MicroArchConfig", text)

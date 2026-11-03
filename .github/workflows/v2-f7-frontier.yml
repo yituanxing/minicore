@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/core/semantic/**'
+      - 'src/test/scala/aethercore/SharedSemanticDecodeSpec.scala'
+      - 'src/test/scala/aethercore/V2FoundationTypesSpec.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
       - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
@@ -104,6 +107,8 @@ jobs:
         run: |
           ./mill aethercore.test.testOnly \
             aethercore.V2F7SemanticDecodeSpec \
+            aethercore.SharedSemanticDecodeSpec \
+            aethercore.V2FoundationTypesSpec \
             aethercore.V2F7BareCoreSpec \
             aethercore.V2F7PagedCoreSpec \
             aethercore.V2F7AsyncInterruptSpec \

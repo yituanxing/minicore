@@ -10,6 +10,10 @@ on:
       - 'tests_py/product_g1_rename_reference.py'
       - 'tests_py/test_product_g1_rename_reference.py'
       - 'tests_py/test_product_nax_distro_target.py'
+      - 'tests_py/test_shared_semantic_owner.py'
+      - 'tests_py/test_v2_foundation_contract.py'
+      - 'tests_py/test_v2_decode_boundary.py'
+      - 'src/main/scala/aethercore/core/semantic/**'
       - '.github/workflows/rv64gc-product-g0.yml'
   workflow_dispatch:
 
@@ -37,4 +41,7 @@ jobs:
             tests_py.test_product_g0_contract \
             tests_py.test_product_g1_migration_contract \
             tests_py.test_product_g1_rename_reference \
-            tests_py.test_product_nax_distro_target -v
+            tests_py.test_product_nax_distro_target \
+            tests_py.test_shared_semantic_owner \
+            tests_py.test_v2_foundation_contract \
+            tests_py.test_v2_decode_boundary -v

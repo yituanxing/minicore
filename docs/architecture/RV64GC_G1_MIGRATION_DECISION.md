@@ -210,3 +210,9 @@ G0 单独运行 **Fast Gate**、机器可读契约和 Rename 参考模型测试�
 都自洽，**下一轮直接进入批次 S+B 的产品代码**，不再继续抽象审计。
 仅在证明 G1 不能实现当前合同（语义冲突/FPGA PPA 不可行）时回头修改 G0。
 外部板级 DDR/PLL/真实 UART 可以沿 v0 独立推进，不被这条线卡住。
+
+## S 批已进入真实代码实现（待 CI 资格验证）
+
+共享架构语义不再属于 Tiny：新增 `core/semantic/SemanticTypes.scala` 和 `SemanticDecode.scala`，`TinySemanticDecode` 只处理 v2 RobDispatch/ExecutionClass，`core/v2/package.scala` 保持旧 API 的类型别名/枚举引用，`FoundationTypes` 只拥有 ROB/Producer/Value/执行结果等后台身份。**仅一份解码算法与语义类型定义**。包含旧 v2 源码合同、直接 SharedSemanticDecodeSpec、V2F7SemanticDecodeSpec 和 v2 ELF/OpenSBI elaboration 的回归；通过前不得将此项标记为 S 批 PASS。ISA/ABI 可配置能力仍不会凭此升级到 F/D/LP64D。
+
+按 NaxRiscv 经验：Small 与 Debian ISA/ABI 是独立维度；S 完成后，下一批进入连通的 G1 Rename/PRF/ROB/IQ/Commit/Recovery/LSQ，而不是再新增另一套 Decoder。
