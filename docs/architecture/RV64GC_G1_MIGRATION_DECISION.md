@@ -242,3 +242,16 @@ ProductSmallOoOBackend 的 Issue／Completion 接口已经连到 `ProductInteger
 `ProductSmallOoOBackend` 的 IQ 不再简单选「第一个依赖就绪项」；使用 **integerAvailable 和 mAvailable 独立资源就绪**选择可执行指令。即便旧的 DIV/M 资源 busy，年轻且独立的 ADD/Branch 仍可 issue；完成经 2 路 RRArbiter 回到唯一 ROB，严格按年龄退休，迟到/killed Completion 继续通过独立 lifetime 检查。新 `ProductMUnitSpec` 验证所有 MULH/MULHSU/MULHU、DIV/DIVU/REM/REMU、W 形式及 zero/overflow、response backpressure；`ProductSmallIntegerCoreSpec` 验证 **busy DIV → younger ADD 越序完成 → ROB 按序退休**，并保留真实 ALU/BEQ 与拒绝访存测试。F7 同时运行旧 `V2F3ExecutionSpec` 确保 shared-divider 迁移没有回退。
 
 **验收边界**：这仍不是完整 RV64IMA SoC。产品访存 LSU/Cache/PTW/CSR/Sv39/FP 都未实现，不得把 M 通过当作 Linux/Debian PASS。静态合同不能替代时序 Chisel。
+
+## G1 连续大批次：完整物理访存生命周期（代码已提案，RTL 需 CI 定向验收）
+
+本批不是「只加一个 Load 单元」：经通读 v2/TinyBlockingLsu、双 LQ、CSR/Translation、AetherMem/AXI/PlatformFabric、Product ROB/IQ/FU 后，将以下互相依赖的正确性机制作为**同一代码批次**接入：
+
+- `ProductPhysicalLsq`：LoadQ2 / StoreQ2 分配容量、**ROB dispatch 时预留年龄/身份**、等待实际地址翻译、已知物理地址的 Store forwarding、未解析旧 Store 阻塞年轻 Load、部分重叠的安全背压。默认不使用不安全的内存依赖猜测；未来可在相同契约下增加 replay/predictor。
+- **独立物理 AetherMem txn-id 表**：请求发出后只由外部事务所有者管理，kill/squash 不能提前回收；旧响应与旧 translation 在 ROB index/generation 复用后也能排空，不得产生 PRF/ROB Completion。
+- **精确对外副作用**：普通 Store 只有在精确 ROB head 时才能真正发出 Write；非幂等或有副作用的 MMIO Load 也只能在 ROB head 触达外部设备。只有 PMA 明确标成 cacheable/idempotent 且不 sideEffecting/ordered 的 Load 才能投机。
+- `ProductSmallOoOBackend`：将 MemoryReserve、MemoryHead/RecoveryKill、执行类别/Store rs2 实值与内存 FU availability 从 Rename/IQ/ROB 一次贯通，不再使用 TinyRob 或继承 TinyMemoryBackend。
+- `ProductSmallMemoryCore`：完成整数、M、物理 LSQ 三路执行与 Completion 仲裁。向独立 MMU/PTW/PMP/PMA owner 提供 `memoryExecute`（虚地址语义）和 `memoryResolved`（物理地址、属性、异常）两阶段接口，另有 `resolverKill`。此阶段**绝不能擅自把 VA 当 PA**；没有翻译器接线则不声称新核能跑 Sv39 或 Linux。
+- `ProductPhysicalLsqSpec` 和 `ProductSmallMemoryCoreSpec`：真实 Chisel 覆盖未知旧 Store、同址转发、部分重叠、精确写入、MMIO、kill/txnId 重用/旧翻译排空、误对齐异常、容量背压，以及从 Decode → IQ → LSQ → AetherMem → Completion → Commit 的 LW/SW 实际闭环。
+
+**验收状态**：上述是已提交的生产 RTL 与定向验证设计，必须以新的 F7 Scala/Chisel、旧 V2 F3/F7、Fast Gate 全部检查结论为准。未实现 Atomic/LRSC、完全 Store-to-Load replay predictor、Sv39/PMP 的真实装配、F/D、实体 FPGA DDR/SD、Debian。产品配置继续明确 `rtlImplemented=false`。下一批应先把现有 v2 的 TranslationUnit/PMP/PMA 接到这个明确的解析端口，再通过逐退休差分与 Linux 运行链；不能靠继续堆文档掩盖系统缺口。

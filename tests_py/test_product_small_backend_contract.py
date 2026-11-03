@@ -39,9 +39,10 @@ class ProductSmallBackendContracts(unittest.TestCase):
 
     def test_unsupported_memory_privilege_fp_do_not_silently_execute(self):
         source = CORE.read_text()
-        self.assertIn("dispatchDecoded.memory.kind === MemoryOperationKind.None", source)
+        self.assertIn("dispatchDecoded.memory.kind === MemoryOperationKind.Load", source)
         self.assertIn("dispatchDecoded.system.kind === SystemOperationKind.None", source)
-        self.assertIn("io.dispatch.ready := canDispatch && (supported || exceptionOnly)", source)
+        self.assertIn("io.memoryReserve.valid := io.dispatch.valid && canDispatch", source)
+        self.assertIn("(!memoryDispatch || exceptionOnly || io.memoryReserve.ready)", source)
         self.assertIn("not a complete CPU", source)
         self.assertIn("rtlImplemented: Boolean = false", CONFIG.read_text())
 

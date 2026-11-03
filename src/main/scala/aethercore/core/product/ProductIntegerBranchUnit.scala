@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AluOp, BranchType, MachineExceptionCode}
 import aethercore.core.ALU
-import aethercore.core.semantic.ControlFlowKind
+import aethercore.core.semantic.{ControlFlowKind, MemoryOperationKind}
 
 /** Registered RV64I integer and branch FU. Deliberately no M/F/D or memory
   * datapaths: M uses a separate future iterative unit. The shared ALU has its
@@ -140,7 +140,8 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   io.redirect := backend.io.redirect
   io.trap := backend.io.trap
   io.occupancy := backend.io.occupancy
-  io.unsupported := backend.io.unsupported
+  io.unsupported := backend.io.unsupported ||
+    (io.dispatch.valid && io.dispatch.bits.decoded.memory.kind =/= MemoryOperationKind.None)
   io.mUnitNeeded := false.B
   io.mBusy := !m.io.available
   io.outOfOrderCompletion := backend.io.outOfOrderCompletion

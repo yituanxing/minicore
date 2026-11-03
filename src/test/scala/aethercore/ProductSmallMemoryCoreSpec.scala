@@ -1,0 +1,184 @@
+package aethercore
+
+import chisel3._
+import chisel3.util._
+import chisel3.simulator.scalatest.ChiselSim
+import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.matchers.should.Matchers
+import aethercore.core.product._
+import aethercore.core.semantic.SemanticDecode
+import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
+
+private class PhysicalProductHarness extends Module {
+  private val config = ProductCoreProfiles.smallEngineering
+  private val I = log2Ceil(config.geometry.robEntries)
+  private val P = log2Ceil(config.geometry.integerPhysicalRegisters)
+  private val T = log2Ceil(config.geometry.loadQueueEntries + config.geometry.storeQueueEntries)
+  private val PA = config.platform.paddrBits
+  val io = IO(new Bundle {
+    val pc = Input(UInt(64.W))
+    val inst = Input(UInt(32.W))
+    val valid = Input(Bool())
+    val ready = Output(Bool())
+    val execute = Decoupled(new ProductIssue(64, I, P, 16))
+    val resolved = Flipped(Decoupled(new ProductResolvedMem(PA, I, 16)))
+    val physicalRequest = Decoupled(new AetherMemRequest(PA, 64, T))
+    val physicalResponse = Flipped(Decoupled(new AetherMemResponse(64, T)))
+    val retirement = Decoupled(new ProductRetirement(64, I, P, 16))
+    val occupancy = Output(UInt(log2Ceil(config.geometry.robEntries + 1).W))
+  })
+  private val decoder = Module(new SemanticDecode(config.software.isa))
+  decoder.io.pc := io.pc
+  decoder.io.inst := io.inst
+  decoder.io.rawInst := io.inst
+  decoder.io.instBytes := 4.U
+  decoder.io.fetchException := 0.U.asTypeOf(decoder.io.fetchException)
+
+  private val core = Module(new ProductSmallMemoryCore(config))
+  core.io.dispatch.valid := io.valid
+  core.io.dispatch.bits.decoded := decoder.io.decoded
+  core.io.dispatch.bits.predictedNextPc := io.pc + 4.U
+  io.ready := core.io.dispatch.ready
+  io.execute.valid := core.io.memoryExecute.valid
+  io.execute.bits := core.io.memoryExecute.bits
+  core.io.memoryExecute.ready := io.execute.ready
+  core.io.memoryResolved.valid := io.resolved.valid
+  core.io.memoryResolved.bits := io.resolved.bits
+  io.resolved.ready := core.io.memoryResolved.ready
+  io.physicalRequest.valid := core.io.memoryRequest.valid
+  io.physicalRequest.bits := core.io.memoryRequest.bits
+  core.io.memoryRequest.ready := io.physicalRequest.ready
+  core.io.memoryResponse.valid := io.physicalResponse.valid
+  core.io.memoryResponse.bits := io.physicalResponse.bits
+  io.physicalResponse.ready := core.io.memoryResponse.ready
+  io.retirement.valid := core.io.retire.valid
+  io.retirement.bits := core.io.retire.bits
+  core.io.retire.ready := io.retirement.ready
+  io.occupancy := core.io.occupancy
+}
+
+class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
+  behavior of "Product SmallOoO decoded memory -> LSQ -> AetherMem -> precise ROB retirement"
+
+  private def init(d: PhysicalProductHarness): Unit = {
+    d.io.valid.poke(false.B)
+    d.io.pc.poke("h80000000".U)
+    d.io.inst.poke("h00000013".U)
+    d.io.execute.ready.poke(true.B)
+    d.io.resolved.valid.poke(false.B)
+    d.io.resolved.bits.poke(0.U.asTypeOf(d.io.resolved.bits))
+    d.io.physicalRequest.ready.poke(true.B)
+    d.io.physicalResponse.valid.poke(false.B)
+    d.io.physicalResponse.bits.poke(0.U.asTypeOf(d.io.physicalResponse.bits))
+    d.io.retirement.ready.poke(true.B)
+    d.clock.step()
+  }
+
+  private def decode(d: PhysicalProductHarness, pc: BigInt, inst: BigInt): Unit = {
+    d.io.pc.poke(pc.U)
+    d.io.inst.poke(inst.U)
+    d.io.valid.poke(true.B)
+    d.io.ready.expect(true.B)
+    d.clock.step()
+    d.io.valid.poke(false.B)
+  }
+
+  private def resolve(d: PhysicalProductHarness, index: BigInt, gen: BigInt, address: BigInt): Unit = {
+    d.io.resolved.bits.token.index.poke(index.U)
+    d.io.resolved.bits.token.generation.poke(gen.U)
+    d.io.resolved.bits.paddr.poke(address.U)
+    d.io.resolved.bits.storeData.poke(0.U)
+    d.io.resolved.bits.attributes.cacheable.poke(true.B)
+    d.io.resolved.bits.attributes.idempotent.poke(true.B)
+    d.io.resolved.bits.attributes.sideEffecting.poke(false.B)
+    d.io.resolved.bits.attributes.ordered.poke(false.B)
+    d.io.resolved.bits.attributes.executable.poke(true.B)
+    d.io.resolved.bits.attributes.supportsAtomic.poke(true.B)
+    d.io.resolved.bits.attributes.supportsPartial.poke(true.B)
+    d.io.resolved.bits.fault.valid.poke(false.B)
+    d.io.resolved.bits.fault.cause.poke(0.U)
+    d.io.resolved.bits.fault.value.poke(0.U)
+    d.io.resolved.valid.poke(true.B)
+    d.io.resolved.ready.expect(true.B)
+    d.clock.step()
+    d.io.resolved.valid.poke(false.B)
+  }
+
+  private def physicalResponse(d: PhysicalProductHarness, txn: BigInt, data: BigInt): Unit = {
+    d.io.physicalResponse.bits.txnId.poke(txn.U)
+    d.io.physicalResponse.bits.rdata.poke(data.U)
+    d.io.physicalResponse.bits.fault.poke(false.B)
+    d.io.physicalResponse.bits.last.poke(true.B)
+    d.io.physicalResponse.valid.poke(true.B)
+    d.io.physicalResponse.ready.expect(true.B)
+    d.clock.step()
+    d.io.physicalResponse.valid.poke(false.B)
+  }
+
+  it should "execute a decoded LW across the physical resolver and commit its sign-extended data" in {
+    simulate(new PhysicalProductHarness) { d =>
+      init(d)
+      decode(d, BigInt("80000000", 16), BigInt("00002183", 16)) // lw x3,0(x0)
+      d.io.execute.valid.expect(true.B)
+      d.io.execute.bits.memoryKind.expect(aethercore.core.semantic.MemoryOperationKind.Load)
+      val idx = d.io.execute.bits.token.index.peek().litValue
+      val gen = d.io.execute.bits.token.generation.peek().litValue
+      d.clock.step()
+      resolve(d, idx, gen, BigInt("80001000", 16))
+      d.io.physicalRequest.valid.expect(true.B)
+      d.io.physicalRequest.bits.op.expect(AetherMemOp.Read)
+      val tx = d.io.physicalRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      physicalResponse(d, tx, BigInt("ffffff80", 16))
+      var values = List.empty[(BigInt, BigInt)]
+      for (_ <- 0 until 15) {
+        if (d.io.retirement.valid.peek().litToBoolean)
+          values :+= (d.io.retirement.bits.rd.peek().litValue,
+            d.io.retirement.bits.value.peek().litValue)
+        d.clock.step()
+      }
+      values shouldBe List((BigInt(3), BigInt("ffffffffffffff80", 16)))
+      d.io.occupancy.expect(0.U)
+    }
+  }
+
+  it should "run ADDI -> SW and externalize Store only at exact ROB head" in {
+    simulate(new PhysicalProductHarness) { d =>
+      init(d)
+      decode(d, BigInt("80000000",16), BigInt("00500093",16)) // addi x1,x0,5
+      var addiRetired = false
+      for (_ <- 0 until 12) {
+        if (d.io.retirement.valid.peek().litToBoolean) {
+          d.io.retirement.bits.value.expect(5.U)
+          addiRetired = true
+        }
+        d.clock.step()
+      }
+      addiRetired shouldBe true
+      decode(d, BigInt("80000004",16), BigInt("00102023",16)) // sw x1,0(x0)
+      d.io.execute.valid.expect(true.B)
+      d.io.execute.bits.storeData.expect(5.U)
+      val idx = d.io.execute.bits.token.index.peek().litValue
+      val gen = d.io.execute.bits.token.generation.peek().litValue
+      d.clock.step()
+      resolve(d, idx, gen, BigInt("80001000",16))
+      d.io.physicalRequest.valid.expect(true.B)
+      d.io.physicalRequest.bits.op.expect(AetherMemOp.Write)
+      d.io.physicalRequest.bits.wdata.expect(5.U)
+      d.io.physicalRequest.bits.wmask.expect(15.U)
+      val tx = d.io.physicalRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      physicalResponse(d, tx, 0)
+      var storeRetired = false
+      for (_ <- 0 until 15) {
+        if (d.io.retirement.valid.peek().litToBoolean) {
+          d.io.retirement.bits.wroteRegister.expect(false.B)
+          storeRetired = true
+        }
+        d.clock.step()
+      }
+      storeRetired shouldBe true
+      d.io.occupancy.expect(0.U)
+    }
+  }
+}

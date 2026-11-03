@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AluOp, BranchType, TrapInfo}
 import aethercore.core.semantic._
+import aethercore.common.MemSize
 
 /** Lifetime identity is owned by ROB and never inferred from a PRF address. */
 class ProductRobId(val indexBits: Int, val generationBits: Int) extends Bundle {
@@ -27,8 +28,12 @@ class ProductIssue(val xlen: Int, val indexBits: Int, val physicalBits: Int, val
   val token = new ProductRobId(indexBits, generationBits)
   val destination = new ProductPhysicalTag(physicalBits, generationBits)
   val hasDestination = Bool()
+  val storeData = UInt(xlen.W)
   val aluOp = AluOp()
   val wordOp = Bool()
+  val memoryKind = MemoryOperationKind()
+  val memorySize = MemSize()
+  val memoryUnsigned = Bool()
   val controlFlow = ControlFlowKind()
   val branchType = BranchType()
   val lhs = UInt(xlen.W)
@@ -96,6 +101,9 @@ private class ProductIqSlot(
   val rhsSource = OperandSourceKind()
   val aluOp = AluOp()
   val wordOp = Bool()
+  val memoryKind = MemoryOperationKind()
+  val memorySize = MemSize()
+  val memoryUnsigned = Bool()
   val controlFlow = ControlFlowKind()
   val branchType = BranchType()
   val immediate = UInt(xlen.W)
@@ -134,6 +142,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
     // combinational loop through request.ready or completion arbitration.
     val integerAvailable = Input(Bool())
     val mAvailable = Input(Bool())
+    val memoryAvailable = Input(Bool())
+    val memoryReserve = Decoupled(new ProductMemReservation(I, F, G))
+    val memoryHead = Valid(new ProductRobId(I, G))
+    val memoryKill = Valid(new ProductRobId(I, G))
     val completion = Flipped(Decoupled(new ProductCompletion(Xlen, I, F, G)))
     val retire = Decoupled(new ProductRetirement(Xlen, I, F, G))
     val redirect = Valid(new ProductRedirect(Xlen, I, G))
@@ -173,12 +185,20 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.staleCompletion := false.B
   io.redirect := 0.U.asTypeOf(io.redirect)
   io.trap := 0.U.asTypeOf(io.trap)
+  io.memoryReserve.valid := false.B
+  io.memoryReserve.bits := 0.U.asTypeOf(io.memoryReserve.bits)
+  io.memoryHead.valid := false.B
+  io.memoryHead.bits := 0.U.asTypeOf(io.memoryHead.bits)
+  io.memoryKill.valid := false.B
+  io.memoryKill.bits := 0.U.asTypeOf(io.memoryKill.bits)
 
   val dispatchDecoded = io.dispatch.bits.decoded
   val writes = dispatchDecoded.writesRd && dispatchDecoded.rd =/= 0.U
   val exceptionOnly = dispatchDecoded.exception.valid
+  val memoryDispatch = dispatchDecoded.memory.kind === MemoryOperationKind.Load ||
+    dispatchDecoded.memory.kind === MemoryOperationKind.Store
   val supported =
-    dispatchDecoded.memory.kind === MemoryOperationKind.None &&
+    (dispatchDecoded.memory.kind === MemoryOperationKind.None || memoryDispatch) &&
       dispatchDecoded.system.kind === SystemOperationKind.None &&
       dispatchDecoded.ordering === OrderingClass.Normal
   io.unsupported := io.dispatch.valid && !supported && !exceptionOnly
@@ -219,11 +239,28 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
 
   // Dispatch and retirement are blocked on any redirect boundary. No two
   // divergent owners mutate the speculative RAT in one cycle.
-  val canDispatch = !recovering && !branchMismatch && count < N.U &&
-    (!writes || hasPhysical) && (exceptionOnly || hasIq)
+  val trapCandidate = count =/= 0.U && headEntry.valid &&
+    headEntry.complete && !recovering && !branchMismatch &&
+    io.retire.ready && headEntry.exception.valid
+  val canDispatch = !recovering && !branchMismatch && !trapCandidate &&
+    count < N.U && (!writes || hasPhysical) && (exceptionOnly || hasIq)
+  io.memoryReserve.valid := io.dispatch.valid && canDispatch &&
+    supported && !exceptionOnly && memoryDispatch
+  io.memoryReserve.bits.token.index := tail
+  io.memoryReserve.bits.token.generation := generations(tail)
+  io.memoryReserve.bits.kind := dispatchDecoded.memory.kind
+  io.memoryReserve.bits.size := dispatchDecoded.memory.size
+  io.memoryReserve.bits.unsigned := dispatchDecoded.memory.unsigned
+  io.memoryReserve.bits.destination.index := Mux(writes, chosenPhysical, 0.U)
+  io.memoryReserve.bits.destination.generation :=
+    Mux(writes, physicalGenerations(chosenPhysical) + 1.U, 0.U)
+  io.memoryReserve.bits.hasDestination := writes
   io.dispatch.ready := canDispatch && (supported || exceptionOnly) &&
-    !(count =/= 0.U && headEntry.valid && headEntry.complete &&
-      !recovering && !branchMismatch && io.retire.ready && headEntry.exception.valid)
+    (!memoryDispatch || exceptionOnly || io.memoryReserve.ready)
+  io.memoryHead.valid := count =/= 0.U && headEntry.valid &&
+    !recovering && !branchMismatch
+  io.memoryHead.bits.index := head
+  io.memoryHead.bits.generation := headEntry.tokenGeneration
 
   val retiringFault = headEntry.exception.valid
   io.retire.valid := count =/= 0.U && headEntry.valid &&
@@ -245,8 +282,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   val iqReady = Wire(Vec(Q, Bool()))
   for (j <- 0 until Q) {
     val e = iq(j)
-    val fuAvailable = Mux(ProductMOperation.isM(e.aluOp),
-      io.mAvailable, io.integerAvailable)
+    val fuAvailable = Mux(e.memoryKind =/= MemoryOperationKind.None,
+      io.memoryAvailable, Mux(ProductMOperation.isM(e.aluOp),
+        io.mAvailable, io.integerAvailable))
     iqReady(j) := e.valid && fuAvailable &&
       (!e.useRs1 || ready(e.src1)) &&
       (!e.useRs2 || ready(e.src2))
@@ -261,6 +299,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.issue.bits.hasDestination := selected.writes
   io.issue.bits.aluOp := selected.aluOp
   io.issue.bits.wordOp := selected.wordOp
+  io.issue.bits.memoryKind := selected.memoryKind
+  io.issue.bits.memorySize := selected.memorySize
+  io.issue.bits.memoryUnsigned := selected.memoryUnsigned
+  io.issue.bits.storeData := Mux(selected.src2 === 0.U, 0.U, prf(selected.src2))
   io.issue.bits.controlFlow := selected.controlFlow
   io.issue.bits.branchType := selected.branchType
   io.issue.bits.pc := selected.pc
@@ -286,6 +328,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
       val victimIndex = (tail - 1.U)(I - 1, 0)
       val victim = rob(victimIndex)
       assert(victim.valid, "recovery victim must belong to a live ROB lifetime")
+      io.memoryKill.valid := victim.decoded.memory.kind =/= MemoryOperationKind.None
+      io.memoryKill.bits.index := victimIndex
+      io.memoryKill.bits.generation := victim.tokenGeneration
       when(victim.writes) {
         speculativeRat(victim.decoded.rd) := victim.oldPhysical
         free(victim.newPhysical.index) := true.B
@@ -348,6 +393,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
           iq(chosenIq).rhsSource := d.rhsSource
           iq(chosenIq).aluOp := d.aluOp
           iq(chosenIq).wordOp := d.wordOp
+          iq(chosenIq).memoryKind := d.memory.kind
+          iq(chosenIq).memorySize := d.memory.size
+          iq(chosenIq).memoryUnsigned := d.memory.unsigned
           iq(chosenIq).controlFlow := d.controlFlow.kind
           iq(chosenIq).branchType := d.controlFlow.branchType
           iq(chosenIq).immediate := d.immediate

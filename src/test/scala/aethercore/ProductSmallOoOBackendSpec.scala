@@ -247,7 +247,8 @@ class ProductSmallOoOBackendSpec extends AnyFlatSpec with Matchers with ChiselSi
       init(d)
       d.io.inst.poke("h0040a183".U) // lw x3,4(x1)
       d.io.dispatchValid.poke(true.B)
-      d.io.unsupported.expect(true.B)
+      // Bare backend has a valid memory contract but no attached LSQ.
+      d.io.unsupported.expect(false.B)
       d.io.dispatchReady.expect(false.B)
       d.clock.step()
       d.io.occupancy.expect(0.U)
