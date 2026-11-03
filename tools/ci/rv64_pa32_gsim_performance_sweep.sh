@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Compare SuperNode 15/24/35/48 on one host and one Verilator+firmware baseline.
 # The 20M checkpoint/RAM/commit differential, not throughput, is the gate.
+# IMPORTANT: verify_size is also called within "if ... && ..."; Bash disables
+# errexit for function bodies in conditional tests. Every correctness command
+# therefore needs an explicit "|| return" to prevent false PASS results.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -24,13 +27,13 @@ verify_size() {
   echo "AETHERCORE_PA32_GSIM_SWEEP_STAGE size=$size step=RV64I_20K"
   python3 tools/ci/rv64_pa32_gsim_bare_diff.py \
     "$model/prefix-bare.log" "$reference/verilator-bare.log" \
-    > "$BASE/bare-diff-$size.log"
+    > "$BASE/bare-diff-$size.log" || return $?
   echo "AETHERCORE_PA32_GSIM_SWEEP_STAGE size=$size step=FIRMWARE_20M"
   GSIM_OUT="$model" VERILATOR_OUT="$reference" OUT="$result" \
     FW_BIN="$FW_BIN" CYCLES=20000000 TIMEOUT_SECONDS=900 \
-    bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
-  grep -q '^AETHERCORE_PA32_GSIM_VERILATOR_FIRMWARE_DIFF_PASS ' "$result/diff-result.txt"
-  python3 - "$size" "$result/performance.txt" "$BASE/summary.tsv" <<'PY'
+    bash tools/ci/rv64_pa32_gsim_firmware_diff.sh || return $?
+  grep -q '^AETHERCORE_PA32_GSIM_VERILATOR_FIRMWARE_DIFF_PASS ' "$result/diff-result.txt" || return $?
+  python3 - "$size" "$result/performance.txt" "$BASE/summary.tsv" <<'PY' || return $?
 import pathlib,re,sys
 size,path,dst=sys.argv[1:]
 rows=[r for r in pathlib.Path(path).read_text().splitlines()

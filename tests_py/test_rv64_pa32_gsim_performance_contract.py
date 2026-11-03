@@ -22,6 +22,53 @@ class PerformanceContracts(unittest.TestCase):
         self.assertIn('VERILATOR_OUT="$reference"',source)
         self.assertIn("summary.tsv",source)
 
+    def test_fail_closed_when_bare_diff_fails_inside_if(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            bin_dir=root/"bin"
+            bin_dir.mkdir()
+            fake=bin_dir/"python3"
+            fake.write_text("#!/bin/sh\nexit 17\n")
+            fake.chmod(0o755)
+            source=(ROOT/"tools/ci/rv64_pa32_gsim_performance_sweep.sh").read_text()
+            block=source.split("verify_size() {",1)[1].split("\n}\n",1)[0]
+            shell=("set -euo pipefail\n"
+                   f"BASE={root}\nreference={root}/reference\nFW_BIN=missing\n"
+                   "verify_size() {" + block + "\n}\n"
+                   "if verify_size 15; then echo FALSE_PASS; else echo BLOCKED; fi\n")
+            env={**os.environ,"PATH":str(bin_dir)+":"+os.environ["PATH"]}
+            result=subprocess.run(["/bin/bash","-c",shell],env=env,
+                                  capture_output=True,text=True,check=True)
+            self.assertIn("BLOCKED",result.stdout)
+            self.assertNotIn("FALSE_PASS",result.stdout)
+            self.assertNotIn("step=FIRMWARE_20M",result.stdout)
+
+    def test_fail_closed_when_firmware_diff_fails_inside_if(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)
+            bin_dir=root/"bin"
+            bin_dir.mkdir()
+            for name,exit_code in (("python3",0),("bash",23)):
+                fake=bin_dir/name
+                fake.write_text(f"#!/bin/sh\nexit {exit_code}\n")
+                fake.chmod(0o755)
+            source=(ROOT/"tools/ci/rv64_pa32_gsim_performance_sweep.sh").read_text()
+            block=source.split("verify_size() {",1)[1].split("\n}\n",1)[0]
+            shell=("set -euo pipefail\n"
+                   f"BASE={root}\nreference={root}/reference\nFW_BIN=missing\n"
+                   "verify_size() {" + block + "\n}\n"
+                   "if verify_size 15; then echo FALSE_PASS; else echo BLOCKED; fi\n")
+            env={**os.environ,"PATH":str(bin_dir)+":"+os.environ["PATH"]}
+            result=subprocess.run(["/bin/bash","-c",shell],env=env,
+                                  capture_output=True,text=True,check=True)
+            self.assertIn("step=FIRMWARE_20M",result.stdout)
+            self.assertIn("BLOCKED",result.stdout)
+            self.assertNotIn("FALSE_PASS",result.stdout)
+
     def test_llvm_pgo_still_requires_real_oracle(self):
         source=(ROOT/"tools/ci/rv64_pa32_gsim_pgo_ab.sh").read_text()
         for token in ("-fprofile-instr-generate","llvm-profdata-19 merge",
