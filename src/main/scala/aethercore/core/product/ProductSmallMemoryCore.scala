@@ -30,8 +30,13 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     // Translation capacity must NOT be inferred from Decoupled.ready;
     // otherwise issue.valid would combinationally depend on ready.
     val memoryResourceAvailable = Input(Bool())
+    // Exact ROB head for a shared translator: only the head may start a
+    // speculative TLB-miss page-table walk. Non-head TLB hits remain legal.
+    val memoryHead = Valid(new ProductRobId(I, G))
     val resolverKill = Valid(new ProductRobId(I, G))
-    // From that owner: resolved physical PA, attributes or precise fault.
+    // From that owner: the identical lifetime's effective VA, resolved PA,
+    // attributes or precise fault. VA must survive to retirement for stval;
+    // the LSQ must never substitute PA for an architectural fault address.
     val memoryResolved = Flipped(Decoupled(new ProductResolvedMem(PA, I, G)))
     val memoryRequest = Decoupled(new AetherMemRequest(PA, 64, Tx))
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(64, Tx)))
@@ -59,6 +64,7 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   lsq.io.reserve <> backend.io.memoryReserve
   lsq.io.robHead := backend.io.memoryHead
   lsq.io.kill := backend.io.memoryKill
+  io.memoryHead := backend.io.memoryHead
   io.resolverKill := backend.io.memoryKill
 
   // External resolver is explicitly separate: no implicit identity mapping.

@@ -89,9 +89,11 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
   }
 
   private def resolve(d: PhysicalProductHarness, index: BigInt, gen: BigInt,
-                      address: BigInt, storeData: BigInt = 0): Unit = {
+                      address: BigInt, storeData: BigInt = 0,
+                      virtualAddress: BigInt = 0): Unit = {
     d.io.resolved.bits.token.index.poke(index.U)
     d.io.resolved.bits.token.generation.poke(gen.U)
+    d.io.resolved.bits.virtualAddress.poke(virtualAddress.U)
     d.io.resolved.bits.paddr.poke(address.U)
     d.io.resolved.bits.storeData.poke(storeData.U)
     d.io.resolved.bits.attributes.cacheable.poke(true.B)
@@ -221,12 +223,68 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
           d.io.retirement.bits.wroteRegister.expect(false.B)
           d.io.retirement.bits.exception.cause.expect(
             aethercore.common.MachineExceptionCode.LoadAccessFault.U)
+          d.io.retirement.bits.exception.value.expect(0.U)
           d.io.trap.valid.expect(true.B)
           faulted = true
         }
         d.clock.step()
       }
       faulted shouldBe true
+      d.io.occupancy.expect(0.U)
+    }
+  }
+
+  it should "trap an older faulting Store without retiring a completed younger Load" in {
+    simulate(new PhysicalProductHarness) { d =>
+      init(d)
+      decode(d, BigInt("80000000", 16), BigInt("00002023", 16)) // sw x0,0(x0)
+      d.io.execute.valid.expect(true.B)
+      val storeIdx = d.io.execute.bits.token.index.peek().litValue
+      val storeGen = d.io.execute.bits.token.generation.peek().litValue
+      d.clock.step()
+      resolve(d, storeIdx, storeGen, BigInt("80001000", 16))
+      d.io.physicalRequest.valid.expect(true.B)
+      d.io.physicalRequest.bits.op.expect(AetherMemOp.Write)
+      val storeTx = d.io.physicalRequest.bits.txnId.peek().litValue
+      d.clock.step()
+
+      decode(d, BigInt("80000004", 16), BigInt("00002183", 16)) // lw x3,0(x0)
+      d.io.execute.valid.expect(true.B)
+      val loadIdx = d.io.execute.bits.token.index.peek().litValue
+      val loadGen = d.io.execute.bits.token.generation.peek().litValue
+      d.clock.step()
+      resolve(d, loadIdx, loadGen, BigInt("80002000", 16))
+      d.io.physicalRequest.valid.expect(true.B)
+      d.io.physicalRequest.bits.op.expect(AetherMemOp.Read)
+      val loadTx = d.io.physicalRequest.bits.txnId.peek().litValue
+      loadTx should not be storeTx
+      d.clock.step()
+
+      physicalResponse(d, loadTx, 42)
+      for (_ <- 0 until 5) {
+        d.io.retirement.valid.expect(false.B)
+        d.clock.step()
+      }
+      physicalResponse(d, storeTx, 0, fault = true)
+      var storeTrapSeen = false
+      var youngerRetired = false
+      for (_ <- 0 until 40) {
+        if (d.io.retirement.valid.peek().litToBoolean) {
+          if (d.io.retirement.bits.exception.valid.peek().litToBoolean) {
+            d.io.retirement.bits.token.index.expect(storeIdx.U)
+            d.io.retirement.bits.exception.cause.expect(
+              aethercore.common.MachineExceptionCode.StoreAccessFault.U)
+            d.io.retirement.bits.exception.value.expect(0.U)
+            d.io.trap.valid.expect(true.B)
+            storeTrapSeen = true
+          } else {
+            youngerRetired = true
+          }
+        }
+        d.clock.step()
+      }
+      storeTrapSeen shouldBe true
+      youngerRetired shouldBe false
       d.io.occupancy.expect(0.U)
     }
   }

@@ -55,10 +55,11 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
   private def resolve(d: ProductPhysicalLsq, idx: Int, addr: BigInt, data: BigInt = 0,
                       gen: Int = 0, ram: Boolean = true,
-                      partial: Boolean = true): Unit = {
+                      partial: Boolean = true, vaddr: Option[BigInt] = None): Unit = {
     val p = d.io.resolve.bits
     p.token.index.poke(idx.U)
     p.token.generation.poke(gen.U)
+    p.virtualAddress.poke(vaddr.getOrElse(addr).U)
     p.paddr.poke(addr.U)
     p.storeData.poke(data.U)
     p.attributes.cacheable.poke(ram.B)
@@ -243,14 +244,14 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       init(d)
       head(d, 0)
       reserve(d, 0, MemoryOperationKind.Load, size = MemSize.Word, dest = 34, writes = true)
-      resolve(d, 0, 0x80004003L)
+      resolve(d, 0, 0x80004003L, vaddr = Some(0x40004003L))
       d.io.memoryRequest.valid.expect(false.B)
       d.clock.step()
       d.io.completion.valid.expect(true.B)
       d.io.completion.bits.hasValue.expect(true.B)
       d.io.completion.bits.exception.valid.expect(true.B)
       d.io.completion.bits.exception.cause.expect(MachineExceptionCode.LoadAddressMisaligned.U)
-      d.io.completion.bits.exception.value.expect(0x80004003L.U)
+      d.io.completion.bits.exception.value.expect(0x40004003L.U)
       d.io.completion.ready.poke(true.B)
       d.clock.step()
       d.io.outstanding.expect(0.U)
@@ -262,14 +263,15 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       init(d)
       head(d, 0)
       reserve(d, 0, MemoryOperationKind.Store, size = MemSize.Byte)
-      resolve(d, 0, 0x10000000L, data = 0x5aL, ram = false, partial = false)
+      resolve(d, 0, 0x10000000L, data = 0x5aL, ram = false,
+        partial = false, vaddr = Some(0x40000000L))
       d.io.memoryRequest.valid.expect(false.B)
       d.clock.step()
       d.io.completion.valid.expect(true.B)
       d.io.completion.bits.token.index.expect(0.U)
       d.io.completion.bits.exception.valid.expect(true.B)
       d.io.completion.bits.exception.cause.expect(MachineExceptionCode.StoreAccessFault.U)
-      d.io.completion.bits.exception.value.expect(0x10000000L.U)
+      d.io.completion.bits.exception.value.expect(0x40000000L.U)
       d.io.outstanding.expect(0.U)
       d.io.completion.ready.poke(true.B)
       d.clock.step()
@@ -282,7 +284,7 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       init(d)
       head(d, 0)
       reserve(d, 0, MemoryOperationKind.Load, size = MemSize.Word, dest = 34, writes = true)
-      resolve(d, 0, 0x80005000L)
+      resolve(d, 0, 0x80005000L, vaddr = Some(0x40005000L))
       d.io.memoryRequest.valid.expect(true.B)
       val txn = d.io.memoryRequest.bits.txnId.peek().litValue
       d.clock.step()
@@ -291,6 +293,7 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.completion.bits.hasValue.expect(true.B)
       d.io.completion.bits.exception.valid.expect(true.B)
       d.io.completion.bits.exception.cause.expect(MachineExceptionCode.LoadAccessFault.U)
+      d.io.completion.bits.exception.value.expect(0x40005000L.U)
       d.io.completion.ready.poke(true.B)
       d.clock.step()
       d.io.outstanding.expect(0.U)

@@ -10,8 +10,11 @@ BASE = ROOT / "src/main/scala/aethercore/core/product"
 LSQ = BASE / "ProductPhysicalLsq.scala"
 BACKEND = BASE / "ProductSmallOoOBackend.scala"
 TOP = BASE / "ProductSmallMemoryCore.scala"
+RESOLVER = BASE / "ProductDataResolver.scala"
+TRANSLATED_TOP = BASE / "ProductSmallTranslatedCore.scala"
 TEST = ROOT / "src/test/scala/aethercore/ProductPhysicalLsqSpec.scala"
 CORETEST = ROOT / "src/test/scala/aethercore/ProductSmallMemoryCoreSpec.scala"
+RESOLVERTEST = ROOT / "src/test/scala/aethercore/ProductDataResolverSpec.scala"
 
 class ProductLsqOwnershipContract(unittest.TestCase):
     def test_reserve_before_issue_and_independent_transaction_identity(self):
@@ -43,6 +46,21 @@ class ProductLsqOwnershipContract(unittest.TestCase):
             self.assertIn(fragment, s)
         self.assertNotIn("memoryDependencyPredictor", s)
 
+    def test_faults_keep_effective_virtual_address_across_translation_and_bus(self):
+        s = LSQ.read_text()
+        for fragment in (
+            "val virtualAddress = UInt(64.W)",
+            "slots(resolveIndex).virtualAddress := io.resolve.bits.virtualAddress",
+            "slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress",
+            "completions.io.enq.bits.exception.value := returningSlot.virtualAddress",
+        ):
+            self.assertIn(fragment, s)
+        self.assertNotIn("completions.io.enq.bits.exception.value := returningSlot.paddr", s)
+        directed = TEST.read_text()
+        for fragment in ("vaddr: Option[BigInt]", "Some(0x40004003L)",
+                         "Some(0x40005000L)", "Some(0x40000000L)"):
+            self.assertIn(fragment, directed)
+
     def test_backend_is_connected_to_memory_reservations_and_recovery(self):
         b = BACKEND.read_text()
         for fragment in ("val memoryReserve = Decoupled", "val memoryKill = Valid",
@@ -64,6 +82,34 @@ class ProductLsqOwnershipContract(unittest.TestCase):
         self.assertIn("backend.io.memoryAvailable := io.memoryResourceAvailable", top)
         self.assertNotIn("backend.io.memoryAvailable := io.memoryExecute.ready", top)
         self.assertIn("must", top.lower())
+
+    def test_product_uses_one_shared_sv39_translator_with_rob_token_ownership(self):
+        s = RESOLVER.read_text()
+        for fragment in (
+            "class ProductDataResolver", "private val slots = RegInit",
+            "new TranslationUnit(", "externalWalkGate = true",
+            "translation.io.walkAllowed.get := selectedHead",
+            "translation.io.kill := killActive",
+            "slots(freeIndex).token := io.memoryIssue.bits.token",
+            "PhysicalAddressNarrowing", "PmpRangeDecoder",
+            "PmpAccessChecker", "io.translationFence",
+            "result.virtualAddress :=", "io.resourceAvailable :=",
+        ):
+            self.assertIn(fragment, s)
+        self.assertNotIn("new PageTableWalker", s)
+        self.assertNotIn("new TranslationTlb", s)
+        top = TRANSLATED_TOP.read_text()
+        for fragment in (
+            "new ProductSmallMemoryCore(config)", "new ProductDataResolver(config",
+            "resolver.io.memoryIssue <> core.io.memoryExecute",
+            "resolver.io.robHead := core.io.memoryHead",
+            "resolver.io.kill := core.io.resolverKill",
+            "core.io.memoryResolved <> resolver.io.resolved",
+        ):
+            self.assertIn(fragment, top)
+        self.assertIn("ProductDataResolverSpec", RESOLVERTEST.read_text())
+        self.assertIn("aethercore.ProductDataResolverSpec",
+            (ROOT / ".github/workflows/v2-f7-frontier.yml").read_text())
 
     def test_real_chisel_directed_lsq_and_integrated_execution_tests(self):
         a, b = TEST.read_text(), CORETEST.read_text()

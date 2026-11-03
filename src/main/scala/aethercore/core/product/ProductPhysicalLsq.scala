@@ -23,6 +23,9 @@ class ProductMemReservation(val indexBits: Int, val physicalBits: Int, val gener
   */
 class ProductResolvedMem(val paddrBits: Int, val indexBits: Int, val generationBits: Int) extends Bundle {
   val token = new ProductRobId(indexBits, generationBits)
+  // Exact effective VA from the issued uOp, echoed by the resolver. Fault
+  // tval/stval is architectural VA, never the translated physical address.
+  val virtualAddress = UInt(64.W)
   val paddr = UInt(paddrBits.W)
   val storeData = UInt(64.W)
   val attributes = new MemoryAttributes
@@ -41,6 +44,7 @@ private class ProductMemSlot(val paddrBits: Int, val indexBits: Int,
   val hasDestination = Bool()
   val resolved = Bool()
   val launched = Bool()
+  val virtualAddress = UInt(64.W)
   val paddr = UInt(paddrBits.W)
   val storeData = UInt(64.W)
   val attributes = new MemoryAttributes
@@ -169,6 +173,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   io.resolve.ready := true.B // stale/duplicate results are drained, never assigned to a new lifetime
   when(io.resolve.fire && resolutionLive) {
     slots(resolveIndex).resolved := true.B
+    slots(resolveIndex).virtualAddress := io.resolve.bits.virtualAddress
     slots(resolveIndex).paddr := io.resolve.bits.paddr
     slots(resolveIndex).storeData := io.resolve.bits.storeData
     slots(resolveIndex).attributes := io.resolve.bits.attributes
@@ -186,11 +191,11 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
         slots(resolveIndex).fault.cause := Mux(resolving.kind === MemoryOperationKind.Load,
           MachineExceptionCode.LoadAddressMisaligned.U,
           MachineExceptionCode.StoreAddressMisaligned.U)
-        slots(resolveIndex).fault.value := io.resolve.bits.paddr
+        slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
       }.elsewhen(unsupportedPartialStore) {
         slots(resolveIndex).fault.valid := true.B
         slots(resolveIndex).fault.cause := MachineExceptionCode.StoreAccessFault.U
-        slots(resolveIndex).fault.value := io.resolve.bits.paddr
+        slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
       }
     }
   }
@@ -351,7 +356,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       completions.io.enq.bits.exception.valid := io.memoryResponse.bits.fault
       completions.io.enq.bits.exception.cause := Mux(owner.isLoad,
         MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
-      completions.io.enq.bits.exception.value := returningSlot.paddr
+      completions.io.enq.bits.exception.value := returningSlot.virtualAddress
     }.otherwise {
       io.drainedKilledResponse := true.B
     }
