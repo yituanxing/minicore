@@ -23,8 +23,10 @@ class Rv64IsaFastBuildContract(unittest.TestCase):
             self.assertIn(expected, workflow)
         self.assertNotIn(']] && echo ', payload)
         self.assertNotIn(']] && echo ', initramfs)
-        self.assertIn("earlycon", payload)
-        self.assertIn("loglevel=0", payload)
+        # Baseline retains the qualified early-console bootargs; v2 deliberately
+        # overrides them with a non-early UART console.
+        self.assertIn('BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init"', payload)
+        self.assertIn('BOOTARGS="console=ttyS0,115200 rdinit=/init quiet loglevel=0"', payload)
 
     def test_baseline_and_fast_profiles_are_independent(self):
         for path in ("rv64_minimal_initramfs_build.sh", "rv64_minimal_init_payload_build.sh"):
