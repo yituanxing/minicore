@@ -60,11 +60,24 @@ int main(int argc, char** argv) {
         if (dut->io_commit_exception) ++exceptions;
       }
       if (dut->io_commit_interrupt) ++interrupts;
+      if ((cycle - 31) % 100000 == 0) {
+        std::printf("AETHERCORE_PA32_VERILATOR_CHECKPOINT cycle=%llu retires=%llu"
+                    " exceptions=%llu interrupts=%llu mtime=%llu"
+                    " last_pc=0x%llx commit_digest=0x%llx\n",
+                    static_cast<unsigned long long>(cycle - 31),
+                    static_cast<unsigned long long>(retires),
+                    static_cast<unsigned long long>(exceptions),
+                    static_cast<unsigned long long>(interrupts),
+                    static_cast<unsigned long long>(dut->io_mtime),
+                    static_cast<unsigned long long>(lastPc),
+                    static_cast<unsigned long long>(digest));
+      }
     }
 
     const double sec=std::chrono::duration<double>(
         std::chrono::steady_clock::now()-start).count();
-    std::printf("AETHERCORE_PA32_VERILATOR_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f\n",
+    const std::uint64_t ramDigest = memory.stateDigest();
+    std::printf("AETHERCORE_PA32_VERILATOR_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f ram_digest=0x%llx\n",
         static_cast<unsigned long long>(guestCycles),
         static_cast<unsigned long long>(retires),
         static_cast<unsigned long long>(exceptions),
@@ -72,7 +85,8 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(dut->io_mtime),
         static_cast<unsigned long long>(lastPc),
         static_cast<unsigned long long>(digest),
-        sec, sec>0 ? guestCycles/sec : 0.0);
+        sec, sec>0 ? guestCycles/sec : 0.0,
+        static_cast<unsigned long long>(ramDigest));
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr,"AETHERCORE_PA32_VERILATOR_REFERENCE_FAIL %s\n",e.what());

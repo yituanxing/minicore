@@ -201,11 +201,24 @@ int main(int argc, char** argv) {
         if (commit.exception) ++exceptions;
       }
       if (commit.interrupt) ++interrupts;
+      if ((cycle - 31) % 100000 == 0) {
+        std::printf("AETHERCORE_PA32_GSIM_CHECKPOINT cycle=%llu retires=%llu"
+                    " exceptions=%llu interrupts=%llu mtime=%llu"
+                    " last_pc=0x%llx commit_digest=0x%llx\n",
+                    static_cast<unsigned long long>(cycle - 31),
+                    static_cast<unsigned long long>(retires),
+                    static_cast<unsigned long long>(exceptions),
+                    static_cast<unsigned long long>(interrupts),
+                    static_cast<unsigned long long>(ports.mtime()),
+                    static_cast<unsigned long long>(lastPc),
+                    static_cast<unsigned long long>(digest));
+      }
     }
 
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - hostStart).count();
-    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f matched_rv64i=%llu\n",
+    const std::uint64_t ramDigest = memory.stateDigest();
+    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f matched_rv64i=%llu ram_digest=0x%llx\n",
                 static_cast<unsigned long long>(total),
                 static_cast<unsigned long long>(retires),
                 static_cast<unsigned long long>(exceptions),
@@ -214,7 +227,8 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(lastPc),
                 static_cast<unsigned long long>(digest),
                 elapsed, elapsed > 0 ? total / elapsed : 0.0,
-                static_cast<unsigned long long>(matchingBareInstructions));
+                static_cast<unsigned long long>(matchingBareInstructions),
+                static_cast<unsigned long long>(ramDigest));
 
 #ifdef AETHERCORE_GSIM_HOST_BRIDGE
     std::printf("AETHERCORE_PA32_GSIM_BRIDGE_METRICS calls=%llu valid_fetch=%llu nonzero_fetch_replies=%llu\n",

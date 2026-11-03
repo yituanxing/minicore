@@ -27,7 +27,7 @@ def make_log(engine, changed=False):
     lines.append(f"AETHERCORE_PA32_{engine}_PREFIX "
                  "guest_cycles=20000 retires=7 exceptions=0 interrupts=0 "
                  "mtime=9992 last_pc=0x8000000c commit_digest=0xdeadbeef "
-                 "host_seconds=1.0 host_cps=20000")
+                 "ram_digest=0x45 host_seconds=1.0 host_cps=20000")
     return "\n".join(lines)+"\n"
 
 class RealBareDifferential(unittest.TestCase):

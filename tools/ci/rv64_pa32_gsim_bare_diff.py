@@ -10,7 +10,7 @@ import re
 import sys
 
 FIELDS = ("guest_cycles", "retires", "exceptions", "interrupts",
-          "mtime", "last_pc", "commit_digest")
+          "mtime", "last_pc", "commit_digest", "ram_digest")
 def parse(path, engine):
     lines = pathlib.Path(path).read_text().splitlines()
     prefix = f"AETHERCORE_PA32_{engine}_PREFIX "
@@ -27,11 +27,29 @@ def parse(path, engine):
                                  ("index","pc","inst","exception","cause")))
     if not commits:
         raise ValueError(f"{engine}: no committed instructions")
-    return summary, commits
+    checkpoint_prefix = f"AETHERCORE_PA32_{engine}_CHECKPOINT "
+    checkpoints = []
+    for line in lines:
+        if line.startswith(checkpoint_prefix):
+            fields = dict(re.findall(r"([\w-]+)=([^\s]+)", line))
+            checkpoints.append(tuple(fields.get(k) for k in
+                ("cycle", "retires", "exceptions", "interrupts", "mtime",
+                 "last_pc", "commit_digest")))
+    return summary, commits, checkpoints
 
 def compare(gsfile, vlfile, strict_bare=True):
-    g, gc = parse(gsfile, "GSIM")
-    v, vc = parse(vlfile, "VERILATOR")
+    g, gc, gcheck = parse(gsfile, "GSIM")
+    v, vc, vcheck = parse(vlfile, "VERILATOR")
+    if not strict_bare:
+        if not gcheck or not vcheck:
+            raise ValueError("firmware differential requires periodic checkpoints")
+        if gcheck != vcheck:
+            for i, (a, b) in enumerate(zip(gcheck, vcheck)):
+                if a != b:
+                    raise ValueError(f"FIRST_CHECKPOINT_DIVERGENCE index={i} "
+                                     f"cycle={a[0]} GSIM={a} Verilator={b}")
+            raise ValueError(f"checkpoint count mismatch GSIM={len(gcheck)} "
+                             f"Verilator={len(vcheck)}")
     for key in FIELDS:
         if g.get(key) != v.get(key):
             raise ValueError(f"field {key}: GSIM={g.get(key)} Verilator={v.get(key)}")
@@ -46,7 +64,8 @@ def compare(gsfile, vlfile, strict_bare=True):
         print(f"AETHERCORE_PA32_GSIM_VERILATOR_FIRMWARE_DIFF_PASS "
               f"cycles={g['guest_cycles']} retires={g['retires']} "
               f"exceptions={g['exceptions']} mtime={g['mtime']} "
-              f"digest={g['commit_digest']}")
+              f"digest={g['commit_digest']} ram_digest={g['ram_digest']} "
+              f"checkpoints={len(gcheck)}")
         return
     if int(g["exceptions"]) != 0 or int(g["retires"]) < 4:
         raise ValueError("bare RV64I test must retire real instructions without traps")
