@@ -31,6 +31,10 @@ on:
         description: 'After 20M PASS, also compare real Linux PID1 and STIP/SEIP'
         type: boolean
         default: false
+      thinlto_ab:
+        description: 'Optional frozen ThinLTO A-B-B-A experiment (not default)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -170,7 +174,8 @@ jobs:
         run: |
           set -euo pipefail
           AETHERCORE_GSIM_PHASE_PROFILE=1 CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
-      - name: Final bounded ThinLTO A-B-B-A same-host strict 20M candidate
+      - name: Historical ThinLTO A-B-B-A reproduction (manual only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.thinlto_ab }}
         run: |
           set -euo pipefail
           GSIM_OUT=build/rv64-pa32-gsim-host-bridge \

@@ -27,7 +27,9 @@ class ThinLtoContract(unittest.TestCase):
 
     def test_job_is_same_host_and_uploads_evidence(self):
         wf=(ROOT / ".github/workflows/rv64-pa32-gsim-host-bridge.yml").read_text()
-        self.assertIn("Final bounded ThinLTO A-B-B-A",wf)
+        self.assertIn("Historical ThinLTO A-B-B-A reproduction (manual only)",wf)
+        self.assertIn("inputs.thinlto_ab",wf)
+        self.assertIn("if: ${{ github.event_name == 'workflow_dispatch' && inputs.thinlto_ab }}",wf)
         self.assertIn("lld-19",wf)
         self.assertIn("rv64_pa32_gsim_thinlto_ab.sh",wf)
         self.assertIn("build/rv64-pa32-gsim-thinlto/measurements.tsv",wf)
