@@ -1,0 +1,156 @@
+name: AetherCore Product G4 Real Linux 6.6.143 Early Boot
+
+# This is intentionally an opt-in kernel gate. The Product CPU already has
+# independent G1/G2/G3 gates for short PR feedback. A real Linux kernel can
+# require hundreds of millions of simulated cycles, so do not attach it to
+# every Product Scala edit.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/product-g4-linux-early.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g4-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-linux-banner:
+    name: Product SmallOoO real Linux 6.6.143 banner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install pinned tool build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves
+
+      - name: Restore fixed Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore fixed RV64 GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 Linux source and build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Verify Product host and pinned tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          chmod +x ./mill tools/ensure_verilator_5_024.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          test -f sim/product_rv64_opensbi_shim/VAetherCoreOpenSbiSimTop.h
+          test -f src/main/scala/aethercore/sim/AetherCoreProductUnifiedMemoryCompatSimTop.scala
+
+      - name: Build unchanged Linux 6.6.143 image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Build unchanged deterministic initramfs and OpenSBI payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s \
+            bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+
+      - name: Boot real Linux on Product SmallOoO until kernel banner
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g4/$TARGET_SHA"
+          mkdir -p "$build"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            TOP=AetherCoreProductOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
+            FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS=4 \
+            MAX_CYCLES=200000000 \
+            MILESTONE='Linux version 6.6.143' \
+            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          log="$build/logs/boot-probe.log"
+          grep -Eq '^L32_OPENSBI_BANNER cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          grep -Fq 'Linux version 6.6.143' "$log"
+          grep -Eq '^L32_RUNTIME_MILESTONE_PASS cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          echo 'PRODUCT_G4_LINUX_EARLY_PASS: unchanged kernel entered real Product SmallOoO SoC'
+
+      - name: Preserve Product Linux first-boot diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-product-g4-linux-early-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
+            ${{ runner.temp }}/aethercore-product-g4/${{ env.TARGET_SHA }}/logs/*.log
