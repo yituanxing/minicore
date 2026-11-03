@@ -20,6 +20,7 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
     val request = Flipped(Decoupled(new ProductIssue(Xlen, I, P, G)))
     val response = Decoupled(new ProductCompletion(Xlen, I, P, G))
     val unsupportedM = Output(Bool())
+    val available = Output(Bool())
   })
 
   val req = io.request.bits
@@ -60,7 +61,8 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
 
   private val held = RegInit(false.B)
   private val responseReg = Reg(new ProductCompletion(Xlen, I, P, G))
-  io.request.ready := (!held || io.response.ready) && !mInstruction
+  io.available := !held || io.response.ready
+  io.request.ready := io.available && !mInstruction
   io.response.valid := held
   io.response.bits := responseReg
 
@@ -81,10 +83,12 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
   }
 }
 
-/** First executable same-source product *integer subset* (no fetch/LSU/CSR).
+/** First executable same-source product integer+M+branch subset.
   *
-  * Uses the real ProductSmallOoOBackend, canonical DecodedInstruction,
-  * and the shared FPGA-slimmed RV64I ALU. This is not a Linux-capable CPU.
+  * FU resources remain independent: a long running DIV can be overtaken by
+  * independent integer operations, while one RR completion fabric validates
+  * ROB/PRF lifetime before wakeup and precise retirement.
+  * Fetch/LSQ/privileged/VM/FP/SoC are not implemented here.
   */
 class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   private val g = config.geometry
@@ -99,18 +103,36 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
     val trap = Valid(new ProductRetirement(64, I, P, G))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
     val unsupported = Output(Bool())
+    // Kept for pre-M test harness compatibility: there is now a real M unit.
     val mUnitNeeded = Output(Bool())
+    val mBusy = Output(Bool())
+    val outOfOrderCompletion = Output(Bool())
+    val staleCompletion = Output(Bool())
   })
 
   private val backend = Module(new ProductSmallOoOBackend(g))
-  private val execute = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC))
+  private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC))
+  private val m = Module(new ProductMUnit(g))
+  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G), 2))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits
   io.dispatch.ready := backend.io.dispatch.ready
 
-  execute.io.request <> backend.io.issue
-  backend.io.completion <> execute.io.response
+  // The ready-state of both FUs is independent of issue.bits. IQ can bypass
+  // a busy M unit to issue younger, dependency-ready integer/branch work.
+  backend.io.integerAvailable := integer.io.available
+  backend.io.mAvailable := m.io.available
+  private val issueM = ProductMOperation.isM(backend.io.issue.bits.aluOp)
+  integer.io.request.valid := backend.io.issue.valid && !issueM
+  integer.io.request.bits := backend.io.issue.bits
+  m.io.request.valid := backend.io.issue.valid && issueM
+  m.io.request.bits := backend.io.issue.bits
+  backend.io.issue.ready := Mux(issueM, m.io.request.ready, integer.io.request.ready)
+
+  completion.io.in(0) <> integer.io.response
+  completion.io.in(1) <> m.io.response
+  backend.io.completion <> completion.io.out
 
   io.retire.valid := backend.io.retire.valid
   io.retire.bits := backend.io.retire.bits
@@ -119,5 +141,8 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   io.trap := backend.io.trap
   io.occupancy := backend.io.occupancy
   io.unsupported := backend.io.unsupported
-  io.mUnitNeeded := execute.io.unsupportedM
+  io.mUnitNeeded := false.B
+  io.mBusy := !m.io.available
+  io.outOfOrderCompletion := backend.io.outOfOrderCompletion
+  io.staleCompletion := backend.io.staleCompletion
 }

@@ -41,6 +41,9 @@ private class SmallOoOTestHarness extends Module {
   d.io.instBytes := 4.U
   d.io.fetchException := 0.U.asTypeOf(d.io.fetchException)
   val core = Module(new ProductSmallOoOBackend(g))
+  // Standalone backend injection test models both execution resources as ready.
+  core.io.integerAvailable := true.B
+  core.io.mAvailable := true.B
   core.io.dispatch.valid := io.dispatchValid
   core.io.dispatch.bits.decoded := d.io.decoded
   core.io.dispatch.bits.predictedNextPc := io.predictedNextPc

@@ -234,3 +234,11 @@ G0 单独运行 **Fast Gate**、机器可读契约和 Rename 参考模型测试�
 ProductSmallOoOBackend 的 Issue／Completion 接口已经连到 `ProductIntegerBranchUnit`，形成 `ProductSmallIntegerCore` 的 **实际整数 I 子集 + Branch 运算 → tagged Completion → ROB/PRF → Commit**。ALU 使用原有 `aethercore.core.ALU`，新增 `withMulDiv=false` 的 Chisel **elaboration-time 参数**，在此整数 FU 中不生成乘除网络；已有 v1/v2 ALU 的默认 `withMulDiv=true` 保持不变。M 类指令（MUL/DIV/REM）、访存、CSR、Sv39 与 F/D 仍缺失或未连接，明确挂起/背压；SmallRV64GC 仍不可运行 Debian。
 
 `ProductSmallIntegerCoreSpec` 将覆盖真正的 ADDI/RAW 寄存器流、BEQ 错预测、M 未实现门禁及内存 fail-closed；同时保留 `ALUSpec` 和 `RV64MALUSpec` 保护旧 ALU 算法。**只有 Chisel F7 门禁执行完成后，才能声称整数执行链路已验证。** 后续 G1 仍须增加独立迭代 M Unit、LSQ/SQ、特权/MMU/Caches、系统启动和 Spike 逐退休差分。
+
+### G1 M 扩展与资源选择（硬件代码，待 Chisel 验收）
+
+新增 `core/arith/UnsignedRestoringDivider.scala`：**唯一**的逐位恢复除法递推，输入 unsigned magnitude，产出 quotient/remainder，Decoupled 稳定持有；现有 `V2IterativeDivider` 和新 `ProductMUnit` 各自实现 signed/unsigned、DIVW/DIVUW、零除和溢出等 ISA 包装，但不再复制逐位除法递推。共享 `ALU` 在原有 `withMulDiv` 默认值外，新增可分别消除 multiply/divide RTL 的生成参数；新 Product M 单元只用 multiplier（无组合除法），DIV 交给共享迭代器。
+
+`ProductSmallOoOBackend` 的 IQ 不再简单选「第一个依赖就绪项」；使用 **integerAvailable 和 mAvailable 独立资源就绪**选择可执行指令。即便旧的 DIV/M 资源 busy，年轻且独立的 ADD/Branch 仍可 issue；完成经 2 路 RRArbiter 回到唯一 ROB，严格按年龄退休，迟到/killed Completion 继续通过独立 lifetime 检查。新 `ProductMUnitSpec` 验证所有 MULH/MULHSU/MULHU、DIV/DIVU/REM/REMU、W 形式及 zero/overflow、response backpressure；`ProductSmallIntegerCoreSpec` 验证 **busy DIV → younger ADD 越序完成 → ROB 按序退休**，并保留真实 ALU/BEQ 与拒绝访存测试。F7 同时运行旧 `V2F3ExecutionSpec` 确保 shared-divider 迁移没有回退。
+
+**验收边界**：这仍不是完整 RV64IMA SoC。产品访存 LSU/Cache/PTW/CSR/Sv39/FP 都未实现，不得把 M 通过当作 Linux/Debian PASS。静态合同不能替代时序 Chisel。

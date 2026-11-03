@@ -130,6 +130,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new ProductDispatch(Xlen)))
     val issue = Decoupled(new ProductIssue(Xlen, I, F, G))
+    // FU state is observed independently from issue.bits; do not close a
+    // combinational loop through request.ready or completion arbitration.
+    val integerAvailable = Input(Bool())
+    val mAvailable = Input(Bool())
     val completion = Flipped(Decoupled(new ProductCompletion(Xlen, I, F, G)))
     val retire = Decoupled(new ProductRetirement(Xlen, I, F, G))
     val redirect = Valid(new ProductRedirect(Xlen, I, G))
@@ -152,7 +156,8 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   private val committedRat = RegInit(VecInit((0 until 32).map(_.U(F.W))))
   private val free = RegInit(VecInit((0 until P).map(i => (i >= 32).B)))
   private val ready = RegInit(VecInit((0 until P).map(i => (i < 32).B)))
-  private val prf = Reg(Vec(P, UInt(Xlen.W))) // values are initialized by software before consumption
+  // Architectural registers begin at zero; physical zero is never written.
+  private val prf = RegInit(VecInit(Seq.fill(P)(0.U(Xlen.W))))
   private val head = RegInit(0.U(I.W))
   private val tail = RegInit(0.U(I.W))
   private val count = RegInit(0.U(log2Ceil(N + 1).W))
@@ -240,7 +245,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   val iqReady = Wire(Vec(Q, Bool()))
   for (j <- 0 until Q) {
     val e = iq(j)
-    iqReady(j) := e.valid &&
+    val fuAvailable = Mux(ProductMOperation.isM(e.aluOp),
+      io.mAvailable, io.integerAvailable)
+    iqReady(j) := e.valid && fuAvailable &&
       (!e.useRs1 || ready(e.src1)) &&
       (!e.useRs2 || ready(e.src2))
   }
