@@ -30,6 +30,16 @@ class Pa32AccelerationContracts(unittest.TestCase):
         self.assertIn("REQUIRE_POST_CHECKPOINT_SEIP ?= 1", make)
         self.assertIn("Run /init as init process", make)
         self.assertIn("sim/pa32_checkpoint_forkserver_main.cpp", make)
+        self.assertIn("PA32_CHECKPOINT_REPLAY_ON_FAILURE", source)
+        self.assertIn("PA32_CHECKPOINT_DIAGNOSTIC_REPLAY_START", source)
+        self.assertIn("PA32_CHECKPOINT_DIAGNOSTIC_REPLAY_RESULT", source)
+        self.assertIn("PA32_CHECKPOINT_REPLAY_COMMIT", source)
+        self.assertIn("if (replayOnFailure)", source)
+        self.assertIn("if (diagnosticTrace && top.io_commit_valid)", source)
+        self.assertIn("top.prepareClone()", source)
+        self.assertIn("const int rc = forkChild(index, false)", source)
+        self.assertIn("const int replayRc = forkChild(childCount + index, true)", source)
+
 
     def test_fork_verifier_accepts_actual_result_line_format(self):
         # V2_CHECKPOINT_PASS deliberately does not contain passed= or failed=.

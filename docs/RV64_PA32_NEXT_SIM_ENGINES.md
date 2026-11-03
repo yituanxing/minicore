@@ -74,3 +74,24 @@ different model versions or runner hardware.
   children (STIP +9, SEIP +1 each). Job failed **after** RTL PASS because the
   verifier read `passed` from the wrong `V2_CHECKPOINT_PASS` line instead
   of `V2_CHECKPOINT_RESULT`. A fixture test now protects this contract.
+
+## Next isolated GSIM compatibility experiment
+
+The stock pinned GSIM stopped at `invalid opType 19` (`OP_ASUINT`) during
+`dupTreeWithBits`. A new experiment uses **exact GSIM source commit**
+`45a73d6afb9b1893781cfb57ccd54096987bb23d`, Clang 19 and a surgical
+source patch that wraps casts in a bit-slice rather than distributing a slice
+through the cast. Both `OP_ASUINT` and `OP_ASSINT` retain their original
+subtree so the result bits are unchanged. The patch applies only to the
+`dupTreeWithBits` operator dispatch and aborts if upstream source has drifted.
+
+Its workflow `rv64-pa32-gsim-source-patch.yml` generates fresh PA32
+CHIRRTL, builds patched GSIM in an isolated CI directory and tries to emit
+C++. It does not touch Chisel/CPU RTL and is **experimental** until
+frontend generation, differential simulation and full Linux all pass.
+Success at C++ generation is not an ISA or Linux PASS.
+
+The current PA32 Fork/COW runner also supports opt-in
+`PA32_CHECKPOINT_REPLAY_ON_FAILURE=1`: only a failed child triggers another
+fork from the frozen PID1 parent and traces the last 64 committed instructions.
+This is fault reproduction from one checkpoint, not periodic LightSSS.

@@ -1,0 +1,70 @@
+name: PA32 GSIM experimental source cast compatibility
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rv64-pa32-gsim-source-patch.yml'
+      - 'tools/ci/rv64_pa32_gsim_cast_patch.py'
+      - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
+      - 'tests_py/test_rv64_pa32_gsim_cast_patch.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pa32-gsim-source-patch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    name: Pinned GSIM source + conservative cast support + same PA32 CHIRRTL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install Chisel and GSIM source-build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 \
+            clang-19 bison flex libgmp-dev libjemalloc-dev git curl make
+      - name: Restore Scala dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Validate scoped patch semantics and provenance
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_cast_patch -v
+      - name: Build patched GSIM and compile complete PA32 CHIRRTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
+      - name: Upload source-patch experiment evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-gsim-sourcepatch-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-pa32-gsim-source-patch/chirrtl-export.log
+            build/rv64-pa32-gsim-source-patch/chirrtl.sha256
+            build/rv64-pa32-gsim-source-patch/compiler-version.txt
+            build/rv64-pa32-gsim-source-patch/gsim-scoped.patch
+            build/rv64-pa32-gsim-source-patch/gsim-patch.sha256
+            build/rv64-pa32-gsim-source-patch/gsim-build.log
+            build/rv64-pa32-gsim-source-patch/gsim-compile.log
+            build/rv64-pa32-gsim-source-patch/cpp-files.txt
+            build/rv64-pa32-gsim-source-patch/result.txt

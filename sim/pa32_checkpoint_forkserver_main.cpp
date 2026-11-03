@@ -2,7 +2,10 @@
 #include "l32_opensbi_runtime.h"
 #include "verilated.h"
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -69,7 +72,7 @@ int runChild(Top& top, VerilatedContext& context, Memory& memory,
              std::uint64_t startCycles, Stats startStats,
              const std::string& marker, std::uint64_t maxDeltaCycles,
              std::uint64_t progressEvery, bool requirePostCheckpointSeip,
-             std::uint64_t childIndex) {
+             std::uint64_t childIndex, bool diagnosticTrace = false) {
   std::uint64_t cycles = startCycles;
   Stats stats = startStats;
   const auto startCommits = stats.commits;
@@ -80,6 +83,28 @@ int runChild(Top& top, VerilatedContext& context, Memory& memory,
   std::string uart;
   bool sawMarker = false;
   const auto hostStart = std::chrono::steady_clock::now();
+  // Allocate trace storage only in a diagnostic replay. Normal children
+  // remain unchanged and never pay per-commit ring-buffer overhead.
+  struct RecentCommit {
+    std::uint64_t cycle = 0;
+    std::uint64_t pc = 0;
+    std::uint32_t inst = 0;
+    bool exception = false;
+  };
+  std::array<RecentCommit, 64> recent{};
+  std::size_t recentSeen = 0;
+  const auto dumpRecent = [&]() {
+    if (!diagnosticTrace) return;
+    const auto count = std::min(recentSeen, recent.size());
+    std::cerr << "\nPA32_CHECKPOINT_REPLAY_TRACE count=" << count << "\n";
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto& c = recent[(recentSeen - count + i) % recent.size()];
+      std::cerr << "PA32_CHECKPOINT_REPLAY_COMMIT cycle=" << c.cycle
+                << " pc=0x" << std::hex << c.pc
+                << " inst=0x" << c.inst << std::dec
+                << " exception=" << (c.exception ? 1 : 0) << "\n";
+    }
+  };
 
   std::cerr << "\nV2_CHECKPOINT_CHILD_START index=" << childIndex
             << " cycles=" << cycles
@@ -90,6 +115,13 @@ int runChild(Top& top, VerilatedContext& context, Memory& memory,
 
   for (std::uint64_t delta = 0; delta < maxDeltaCycles; ++delta) {
     runCycle(top, context, memory, cycles, stats);
+    if (diagnosticTrace && top.io_commit_valid) {
+      recent[recentSeen % recent.size()] = RecentCommit{
+          cycles, static_cast<std::uint64_t>(top.io_commit_pc),
+          static_cast<std::uint32_t>(top.io_commit_inst),
+          static_cast<bool>(top.io_commit_exception)};
+      ++recentSeen;
+    }
 
     if (top.io_uartValid) {
       const char byte = static_cast<char>(top.io_uartByte);
@@ -137,6 +169,7 @@ int runChild(Top& top, VerilatedContext& context, Memory& memory,
       std::cerr << "\nV2_CHECKPOINT_CHILD_EXIT index=" << childIndex
                 << " code=" << static_cast<std::uint64_t>(top.io_exitCode)
                 << " delta-cycles=" << (cycles - startCycles) << "\n";
+      dumpRecent();
       return 14;
     }
   }
@@ -151,6 +184,7 @@ int runChild(Top& top, VerilatedContext& context, Memory& memory,
             << " marker=" << (sawMarker ? 1 : 0)
             << " require-post-checkpoint-seip="
             << (requirePostCheckpointSeip ? 1 : 0) << "\n";
+  dumpRecent();
   return 12;
 }
 }  // namespace
@@ -252,51 +286,60 @@ int main(int argc, char** argv) {
               << " children=" << childCount << "\n";
     std::cerr.flush();
 
-    std::uint64_t passed = 0;
-    std::uint64_t failed = 0;
-    for (std::uint64_t index = 0; index < childCount; ++index) {
+    // The parent never advances: the exact RTL and host RAM snapshot is
+    // inherited by both normal children and any failure-only replay child.
+    const bool replayOnFailure =
+        std::getenv("PA32_CHECKPOINT_REPLAY_ON_FAILURE") != nullptr &&
+        std::string(std::getenv("PA32_CHECKPOINT_REPLAY_ON_FAILURE")) == "1";
+    const auto forkChild = [&](std::uint64_t index, bool diagnostic) -> int {
       std::cout.flush();
       std::cerr.flush();
-
-      // Verilator's clone hooks make the generated model fork-safe. The host
-      // Memory vector, timer/device state embedded in the model, VerilatedContext
-      // and all counters are inherited by fork() through OS copy-on-write. The
-      // parent never advances after this boundary, so every child starts from
-      // the exact same Linux/OpenSBI machine state.
       top.prepareClone();
       errno = 0;
       const pid_t pid = ::fork();
       const int forkError = errno;
       top.atClone();
-
-      if (pid < 0) {
-        throw std::runtime_error(
-            "fork failed: " + std::string(std::strerror(forkError)));
-      }
+      if (pid < 0)
+        throw std::runtime_error("fork failed: " +
+                                 std::string(std::strerror(forkError)));
       if (pid == 0) {
+        if (diagnostic)
+          std::cerr << "\nPA32_CHECKPOINT_DIAGNOSTIC_REPLAY_START index="
+                    << index << " checkpoint-cycles=" << cycles << "\n";
         const int rc = runChild(
             top, context, memory, cycles, stats, childMarker,
-            childMaxCycles, progressEvery, requirePostCheckpointSeip, index);
+            childMaxCycles, progressEvery, requirePostCheckpointSeip, index,
+            diagnostic);
         std::cout.flush();
         std::cerr.flush();
         _exit(rc);
       }
-
       int status = 0;
       while (::waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR) continue;
-        throw std::runtime_error(
-            "waitpid failed: " + std::string(std::strerror(errno)));
+        throw std::runtime_error("waitpid failed: " + std::string(std::strerror(errno)));
       }
+      return WIFEXITED(status) ? WEXITSTATUS(status) :
+          128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    };
 
-      if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+    std::uint64_t passed = 0;
+    std::uint64_t failed = 0;
+    for (std::uint64_t index = 0; index < childCount; ++index) {
+      const int rc = forkChild(index, false);
+      if (rc == 0) {
         ++passed;
       } else {
         ++failed;
         std::cerr << "\nV2_CHECKPOINT_CHILD_FAIL index=" << index
-                  << " rc=" << (WIFEXITED(status) ? WEXITSTATUS(status) : -1)
-                  << " signal=" << (WIFSIGNALED(status) ? WTERMSIG(status) : 0)
-                  << "\n";
+                  << " rc=" << rc << "\n";
+        if (replayOnFailure) {
+          const int replayRc = forkChild(childCount + index, true);
+          std::cerr << "\nPA32_CHECKPOINT_DIAGNOSTIC_REPLAY_RESULT"
+                    << " index=" << index << " original-rc=" << rc
+                    << " replay-rc=" << replayRc << "\n";
+          // A diagnostic replay cannot turn an original failure into PASS.
+        }
       }
     }
 

@@ -40,3 +40,19 @@ Both experimental workflows are separate from the original signoff.
 Results are candidates until a **same-firmware full Linux cold run** proves
 the promoted simulator settings. Do not multiply independent historic
 speedup ratios from different RTL/hosts.
+
+## Failure-only replay at the immutable PID1 snapshot
+
+The PA32 fork/COW runner now supports opt-in
+`PA32_CHECKPOINT_REPLAY_ON_FAILURE=1`. The default two-child
+cold-then-replay signoff remains unchanged. After a failing child,
+the parent creates an **additional** diagnostic child from its unchanged
+checkpoint via the same `prepareClone()`/`fork()`/`atClone()` API;
+that child records the latest 64 real retirement PC/instruction/exception
+events. It emits `PA32_CHECKPOINT_REPLAY_COMMIT` and
+`PA32_CHECKPOINT_DIAGNOSTIC_REPLAY_RESULT` diagnostics. The original
+child's failure remains a failure even if the replay differs/succeeds.
+
+This is a first failure-replay slice, **not** a periodic LightSSS
+checkpoint nor a persistent disk snapshot. It adds no execution or
+per-commit tracing on the default normal-PASS path.

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Experimental only: patch a pinned GSIM frontend, never the CPU RTL.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
+OUT="${OUT:-build/rv64-pa32-gsim-source-patch}"
+REV=45a73d6afb9b1893781cfb57ccd54096987bb23d
+GSIM_URL=https://github.com/OpenXiangShan/gsim.git
+mkdir -p "$OUT"
+test -f ./mill || { echo "missing Mill launcher" >&2; exit 2; }
+chmod +x ./mill
+./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardPA32CHIRRTL \
+  "$ROOT/$OUT/pa32.fir" > "$OUT/chirrtl-export.log" 2>&1 || {
+    tail -100 "$OUT/chirrtl-export.log" >&2; exit 3;
+  }
+test -s "$OUT/pa32.fir"
+sha256sum "$OUT/pa32.fir" > "$OUT/chirrtl.sha256"
+src="$OUT/upstream"
+git -C "$OUT" init -q upstream
+git -C "$src" remote add origin "$GSIM_URL"
+git -C "$src" fetch --quiet --depth=1 origin "$REV"
+git -C "$src" checkout -q --detach FETCH_HEAD
+test "$(git -C "$src" rev-parse HEAD)" = "$REV"
+python3 tools/ci/rv64_pa32_gsim_cast_patch.py "$src/src/splitNodes.cpp"
+git -C "$src" diff -- src/splitNodes.cpp > "$OUT/gsim-scoped.patch"
+test -s "$OUT/gsim-scoped.patch"
+sha256sum "$OUT/gsim-scoped.patch" > "$OUT/gsim-patch.sha256"
+clang++-19 --version | head -1 > "$OUT/compiler-version.txt"
+make -C "$src" CXX=clang++-19 -j "${JOBS:-4}" build-gsim \
+  > "$OUT/gsim-build.log" 2>&1 || {
+    tail -100 "$OUT/gsim-build.log" >&2; exit 4;
+  }
+test -x "$src/build/gsim/gsim"
+mkdir -p "$OUT/generated"
+set +e
+timeout --signal=TERM --kill-after=10s 900s \
+  "$src/build/gsim/gsim" --dir "$OUT/generated" --log-level=1 "$OUT/pa32.fir" \
+  > "$OUT/gsim-compile.log" 2>&1
+rc=$?
+set -e
+echo "gsim-source-patch-exit=$rc" | tee "$OUT/result.txt"
+if ((rc != 0)); then
+  tail -100 "$OUT/gsim-compile.log" >&2
+  echo "AETHERCORE_PA32_GSIM_PATCHED_FRONTEND_FAIL rc=$rc" >&2
+  exit "$rc"
+fi
+find "$OUT/generated" -type f -name '*.cpp' -size +0c | sort > "$OUT/cpp-files.txt"
+test -s "$OUT/cpp-files.txt"
+echo "AETHERCORE_PA32_GSIM_PATCHED_FRONTEND_PASS"
+echo "This is frontend C++ generation only, NOT runtime or Linux qualification."
