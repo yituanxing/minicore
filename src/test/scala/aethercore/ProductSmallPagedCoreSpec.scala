@@ -319,8 +319,8 @@ class ProductSmallPagedCoreSpec extends AnyFlatSpec with Matchers with ChiselSim
 
   it should "preserve PC+2 for a second C parcel access fault across a page boundary" in {
     val boundaryPc = BigInt("80000ffe", 16)
-    val cProfile = ProductCoreProfiles.smallDebianTarget.copy(
-      platform = ProductCoreProfiles.smallDebianTarget.platform.copy(resetVector = boundaryPc))
+    val cProfile = ProductCoreProfiles.smallCompressedEngineering.copy(
+      platform = ProductCoreProfiles.smallCompressedEngineering.platform.copy(resetVector = boundaryPc))
     simulate(new ProductSmallPagedCore(cProfile)) { d =>
       init(d)
       var sawSecondParcel = false

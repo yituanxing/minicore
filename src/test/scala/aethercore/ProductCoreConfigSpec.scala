@@ -38,6 +38,16 @@ class ProductCoreConfigSpec extends AnyFlatSpec with Matchers {
     small.rtlImplemented shouldBe false
     ProductCoreProfiles.smallEngineering.mabi shouldBe "lp64"
     ProductCoreProfiles.smallEngineering.software.isa.hasZifencei shouldBe true
+
+    // A C-capable real engineering profile is not the still-unimplemented
+    // floating-point Debian target, regardless of their identical geometry.
+    val compressed = ProductCoreProfiles.smallCompressedEngineering
+    compressed.geometry shouldBe ProductCoreProfiles.smallGeometry
+    compressed.software.isa.hasC shouldBe true
+    compressed.software.isa.extensions.contains('F') shouldBe false
+    compressed.software.isa.extensions.contains('D') shouldBe false
+    compressed.mabi shouldBe "lp64"
+    compressed.rtlImplemented shouldBe false
   }
 
   it should "reject impossible dispatch width, ROB and PRF port configurations" in {

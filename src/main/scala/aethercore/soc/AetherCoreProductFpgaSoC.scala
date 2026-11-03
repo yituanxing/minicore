@@ -1,7 +1,7 @@
 package aethercore.soc
 
 import aethercore.common.CommitTrace
-import aethercore.core.product.ProductRetirement
+import aethercore.core.product.{ProductCoreGeometry, ProductCoreProfiles, ProductRetirement}
 import aethercore.soc.phy.AetherUart8N1Phy
 import chisel3._
 import chisel3.util._
@@ -15,12 +15,14 @@ import chisel3.util._
   * board qualifications and are not claimed by RTL elaboration alone.
   */
 class AetherCoreProductFpgaSoC(
-    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits
+    val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
+    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
 ) extends Module {
   private val Xlen = 64
   private val DataBits = 64
-  private val TxnIdBits = 4
-  private val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits)
+  private val TxnIdBits = AetherCoreProductSoCProfiles.externalTransactionBits(productGeometry)
+  private val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
+    implementedPaddrBits, productGeometry)
   private val geometry = config.geometry
 
   val io = IO(new Bundle {
@@ -58,7 +60,7 @@ class AetherCoreProductFpgaSoC(
     val halted = Output(Bool())
   })
 
-  val soc = Module(new AetherCoreProductAxi4SoC(implementedPaddrBits))
+  val soc = Module(new AetherCoreProductAxi4SoC(implementedPaddrBits, productGeometry))
   val uartPhy = Module(new AetherUart8N1Phy)
 
   io.axi.aw.valid := soc.io.axi.aw.valid

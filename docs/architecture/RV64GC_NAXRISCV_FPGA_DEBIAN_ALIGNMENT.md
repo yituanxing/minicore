@@ -72,3 +72,19 @@ D0 与 D1/D2 可以并行。D3 依赖 D0 和 D2。D4 **不能成为 D3 的前置
 - **验收主线**：从这里开始不把 FPGA Linux PID1 视为最终产品，不以 Small/Medium 大小为发行版能力的替代目标，停止没有直接支持 D0–D3 的抽象架构设计。
 
 **结论：先让同一套可配置乱序核具有完整 RV64GC/LP64D 能力，先让它在真实 FPGA 上跑 Debian，之后根据资源/性能选择大 ROB。**
+
+## 6. Product SoC 容量参数贯通与资格边界（2026-11-04）
+
+本轮只扩展**已经实现的单通道** SmallOoO 后端的存储深度，避免把结构容量增大误报为双发射、双退休或 RV64GC 已完成。
+
+| Product 硬件组合 | Decode / Dispatch / Issue / Retire | ROB / IQ / PRF | LQ / SQ | SoC 外部事务 ID | 资格 |
+| --- | --- | --- | --- | --- | --- |
+| Small | 1 / 1 / 1 / 1 | 8 / 4 / 48 | 2 / 2 | 4 位 | 原 Linux/OpenSBI 工程基线，默认值不变 |
+| Expanded single-lane | 1 / 1 / 1 / 1 | 16 / 8 / 64 | 4 / 4 | 5 位 | 同一套后端与 SoC RTL；需独立的 BootROM/LSQ/AXI 验收 |
+| Medium / Large 候选 | 2-wide 等 | 参数候选 | 参数候选 | 按各自 LSQ 推导 | **尚无对应多通道 RTL 验收，不能宣称已实现** |
+
+容量的位宽由 `ceil(log2(LQ + SQ))` 得到本地 Client ID，统一内存仲裁器在其高位添加 Data / PTW / I-fetch 三个源的 2 位标记，再贯通 AXI4 和 FPGA IO。过去的 2 位本地 ID / 4 位 AXI ID 常数不能容纳扩展后的 LQ/SQ。保留默认 Small 的接口宽度，避免改变已验证的旧启动链。
+
+ISA 也须独立声明：当前可实例化的工程硬件为带 **C** 的 RV64IMAC（软浮点 `lp64`）；尚未实现 F/D 执行及 FCSR/FS，`rv64gc/lp64d` 仅是产品目标，不可直接实例化为已完成硬件。为防止错误验收，Product paged RTL 对包含 F/D 的配置显式拒绝。
+
+资格证据分层：`ProductGeometrySoCSpec` 先证明两档**实际 RTL**在统一内存、AXI4、FPGA 顶层展开；接着借助固定版本 Verilator 检查两档 BootROM → 外部 RAM → Load 退休路径。后者列入 Product G2 directed CI；CI 未通过前不将 expanded 档标记为运行时 PASS。完整 Debian 仍须经过 D2（F/D 等）与 D3（实体 FPGA + 持久化 rootfs）的验收，不能被这批参数化工作替代。

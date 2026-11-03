@@ -1,7 +1,7 @@
 package aethercore.soc
 
 import aethercore.common.CommitTrace
-import aethercore.core.product.ProductRetirement
+import aethercore.core.product.{ProductCoreGeometry, ProductCoreProfiles, ProductRetirement}
 import chisel3._
 import chisel3.util._
 
@@ -12,12 +12,14 @@ import chisel3.util._
   * is not reused as a CPU and remains qualified independently.
   */
 class AetherCoreProductAxi4SoC(
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
 ) extends Module {
   private val Xlen = 64
   private val DataBits = 64
-  private val TxnIdBits = 4
-  private val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits)
+  private val TxnIdBits = AetherCoreProductSoCProfiles.externalTransactionBits(productGeometry)
+  private val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
+    implementedPaddrBits, productGeometry)
   private val geometry = config.geometry
 
   val io = IO(new Bundle {
@@ -61,7 +63,8 @@ class AetherCoreProductAxi4SoC(
 
   val soc = Module(new AetherCoreProductUnifiedMemorySoC(
     externalPhysicalSeams = true,
-    implementedPaddrBits = implementedPaddrBits
+    implementedPaddrBits = implementedPaddrBits,
+    productGeometry = productGeometry
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = implementedPaddrBits,

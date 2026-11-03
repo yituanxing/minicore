@@ -13,6 +13,7 @@ on:
       - 'src/test/scala/aethercore/ProductCommitTraceSpec.scala'
       - 'src/test/scala/aethercore/AetherCoreProductUnifiedMemorySoCSpec.scala'
       - 'src/test/scala/aethercore/AetherCoreProductSoCElaborationSpec.scala'
+      - 'src/test/scala/aethercore/ProductGeometrySoCSpec.scala'
       - '.github/workflows/product-g2-soc.yml'
 
 permissions:
@@ -156,7 +157,8 @@ jobs:
           ./mill aethercore.test.testOnly \
             aethercore.ProductCommitTraceSpec \
             aethercore.AetherCoreProductUnifiedMemorySoCSpec \
-            aethercore.AetherCoreProductSoCElaborationSpec
+            aethercore.AetherCoreProductSoCElaborationSpec \
+            aethercore.ProductGeometrySoCSpec
 
       - name: Save G2 directed Mill output accelerator
         if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'

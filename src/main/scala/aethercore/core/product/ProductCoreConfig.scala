@@ -93,6 +93,16 @@ object ProductCoreProfiles {
       AbiProfiles.lp64
     )
 
+  // Real C-capable Product hardware may run soft-float LP64 software before
+  // the F/D state and execution pipeline is implemented. Keep this distinct
+  // from the requested RV64GC/LP64D distro target; ISA support is not implied
+  // by a geometry or by a software profile name.
+  val compressedEngineeringSoftware: SoftwareTarget =
+    SoftwareTarget(
+      engineeringSoftware.isa.copy(extensions = engineeringSoftware.isa.extensions + 'C'),
+      AbiProfiles.lp64
+    )
+
   /** Upstream Debian riscv64 target, not yet implemented by either ProductCore or v2. */
   val distroSoftware: SoftwareTarget =
     SoftwareTarget(
@@ -107,6 +117,8 @@ object ProductCoreProfiles {
     ProductCoreConfig(name, geometry, target, reference.platform)
 
   val smallEngineering: ProductCoreConfig = configure("small-ima-engineering", smallGeometry, engineeringSoftware)
+  val smallCompressedEngineering: ProductCoreConfig =
+    configure("small-imac-engineering", smallGeometry, compressedEngineeringSoftware)
   val smallDebianTarget: ProductCoreConfig = configure("small-rv64gc-debian-target", smallGeometry, distroSoftware)
   val mediumDebianTarget: ProductCoreConfig = configure("medium-rv64gc-debian-target", mediumGeometry, distroSoftware)
   val largeDebianTarget: ProductCoreConfig = configure("large-rv64gc-debian-target", largeGeometry, distroSoftware)

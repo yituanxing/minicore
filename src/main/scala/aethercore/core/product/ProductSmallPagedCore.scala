@@ -43,6 +43,8 @@ class ProductSmallPagedCore(
     "ProductSmallPagedCore requires the real RV64 Sv39 hardware profile")
   require(isa.hasS && isa.hasU,
     "ProductSmallPagedCore requires machine, supervisor and user privilege")
+  require(!isa.extensions.contains('F') && !isa.extensions.contains('D'),
+    "ProductSmallPagedCore has no F/D execution or FCSR state; use the LP64 engineering profile")
   require(!withSupervisorExternalInterrupt || isa.hasS,
     "supervisor external interrupt requires implemented S-mode")
 

@@ -2,7 +2,7 @@ package aethercore.soc
 
 import aethercore.common.CommitTrace
 import aethercore.config.SoftwareTarget
-import aethercore.core.product.{ProductCoreConfig, ProductCoreProfiles, ProductRetirement, ProductSmallPagedCore}
+import aethercore.core.product.{ProductCoreConfig, ProductCoreGeometry, ProductCoreProfiles, ProductRetirement, ProductSmallPagedCore}
 import aethercore.memory.{AetherDirectMappedReadCache, AetherMemRequest, AetherMemResponse}
 import chisel3._
 import chisel3.util._
@@ -20,16 +20,32 @@ object AetherCoreProductSoCProfiles {
   // aperture; source 17 is used during the firmware's cold initialization.
   // Keep the already-qualified V2 board's 16-source preset independent.
   val OpenSbiPlicSourceCount: Int = 52
+  val MemoryClientCount: Int = 3
 
-  def smallOpenSbiEngineering(implementedPaddrBits: Int): ProductCoreConfig = {
+  // The physical LSQ owns its transaction namespace. The hub appends a
+  // separate source tag for the data, PTW, and instruction clients; neither
+  // width is a board constant. Keep this identical through AXI and FPGA IO.
+  def clientTransactionBits(geometry: ProductCoreGeometry): Int =
+    log2Ceil(geometry.loadQueueEntries + geometry.storeQueueEntries)
+
+  def externalTransactionBits(geometry: ProductCoreGeometry): Int =
+    clientTransactionBits(geometry) + log2Ceil(MemoryClientCount)
+
+  def smallOpenSbiEngineering(
+      implementedPaddrBits: Int,
+      productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
+  ): ProductCoreConfig = {
     require(implementedPaddrBits >= 32 && implementedPaddrBits <= 56,
       "Product SoC supports a 32..56-bit physical memory seam")
-    val base = ProductCoreProfiles.smallEngineering
+    require(productGeometry.decodeWidth == 1 && productGeometry.dispatchWidth == 1 &&
+      productGeometry.issueWidth == 1 && productGeometry.retireWidth == 1,
+      "Product SmallOoO SoC implements one-wide execution and retirement")
+    val base = ProductCoreProfiles.smallCompressedEngineering
     base.copy(
       name = "small-imac-opensbi-product",
+      geometry = productGeometry,
       software = SoftwareTarget(
         base.software.isa.copy(
-          extensions = base.software.isa.extensions + 'C',
           zExtensions = base.software.isa.zExtensions ++ Set("Zicsr", "Zifencei"),
           machineProvidedSupervisorTimer = true,
           timeCounter = true
@@ -58,16 +74,18 @@ object AetherCoreProductSoCProfiles {
   */
 class AetherCoreProductUnifiedMemorySoC(
     val externalPhysicalSeams: Boolean = false,
-    val implementedPaddrBits: Int = 56
+    val implementedPaddrBits: Int = 56,
+    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
 ) extends Module {
   private val Xlen = 64
   private val DataBits = 64
-  private val ClientTxnBits = 2
-  private val ClientCount = 3
+  private val ClientTxnBits = AetherCoreProductSoCProfiles.clientTransactionBits(productGeometry)
+  private val ClientCount = AetherCoreProductSoCProfiles.MemoryClientCount
   private val SourceBits = log2Ceil(ClientCount)
   val externalTxnIdBits: Int = ClientTxnBits + SourceBits
 
-  val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits)
+  val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
+    implementedPaddrBits, productGeometry)
   private val geometry = config.geometry
   private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform).copy(
     plicSourceCount = AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
