@@ -76,6 +76,13 @@ timeout --signal=TERM --kill-after=5s 120s \
 grep -q '^AETHERCORE_PA32_GSIM_NATIVE_SMOKE_PASS ' "$OUT/native-smoke.log"
 cat "$OUT/native-smoke.log"
 
+# Engine-only A/B deliberately bypasses the still-unqualified host-RAM path.
+# The main GSIM transport job never sets this flag and retains strict RV64I PASS.
+if [[ "${GSIM_SKIP_BARE:-0}" == "1" ]]; then
+  echo "AETHERCORE_PA32_GSIM_ENGINE_ONLY no_guest_linux_qualification=1"
+  exit 0
+fi
+
 # Exercise the actual RV64I fetch/retire path with the exact shared host RAM.
 # This is an unqualified prefix probe, not a replacement for Verilator.
 timeout --signal=TERM --kill-after=10s 1200s \
