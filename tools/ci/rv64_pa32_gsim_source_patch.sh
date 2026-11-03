@@ -90,6 +90,7 @@ if [[ "${GSIM_SKIP_BARE:-0}" == "1" ]]; then
 fi
 
 bridge_compile_flags=()
+GSIM_PREFIX_OPT="${GSIM_PREFIX_OPT:--O0}"
 if [[ "${GSIM_HOST_BRIDGE_EXPERIMENT:-0}" == "1" ]]; then
   bridge_compile_flags=(-DAETHERCORE_GSIM_HOST_BRIDGE)
 fi
@@ -97,7 +98,7 @@ fi
 # Exercise the actual RV64I fetch/retire path with the exact shared host RAM.
 # This is an unqualified prefix probe, not a replacement for Verilator.
 timeout --signal=TERM --kill-after=10s 1200s \
-  clang++-19 -std=gnu++20 -O0 -pthread -lz \
+  clang++-19 -std=gnu++20 "$GSIM_PREFIX_OPT" -march=native -pthread -lz \
   "${bridge_compile_flags[@]}" \
   -I"$OUT/generated" -I"$ROOT/sim" \
   "$OUT/generated/"*.cpp "$ROOT/sim/pa32_gsim_prefix_main.cpp" \
