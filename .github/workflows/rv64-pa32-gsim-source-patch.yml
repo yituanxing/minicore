@@ -9,6 +9,7 @@ on:
       - 'tests_py/test_rv64_pa32_gsim_cast_patch.py'
       - 'tools/ci/rv64_pa32_gsim_ports.py'
       - 'sim/pa32_gsim_native_smoke.cpp'
+      - 'sim/pa32_gsim_port_adapter.h'
   workflow_dispatch:
 
 permissions:

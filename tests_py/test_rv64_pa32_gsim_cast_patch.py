@@ -46,9 +46,10 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
         self.assertIn("pa32_gsim_native_smoke.cpp", script)
         ports = (ROOT / "sim/pa32_gsim_port_adapter.h").read_text()
         smoke = (ROOT / "sim/pa32_gsim_native_smoke.cpp").read_text()
-        for field in ("get_io$commit$pc", "get_io$ptwAddr",
-                      "set_io$imemInst", "set_io$memRdata",
-                      "get_io$uartValid", "get_io$mtime"):
+        gs = chr(36) * 2
+        for field in (f"get_io{gs}commit{gs}pc", f"get_io{gs}ptwAddr",
+                      f"set_io{gs}imemInst", f"set_io{gs}memRdata",
+                      f"get_io{gs}uartValid", f"get_io{gs}mtime"):
             self.assertIn(field, ports)
         self.assertIn("ports.clock(false)", smoke)
         self.assertIn("ports.clock(true)", smoke)
