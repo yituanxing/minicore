@@ -220,3 +220,11 @@ G0 单独运行 **Fast Gate**、机器可读契约和 Rename 参考模型测试�
 ### S 批配置实现（待测试验收）
 
 `core/product/ProductCoreConfig.scala` 新增 **三根正交配置轴** 的真实 Scala 验证层：`ProductCoreGeometry` 负责 Decode/Dispatch/Issue/Retire/ROB/IQ/LQ/SQ/PRF 规模及端口检查；`SoftwareTarget` 独立描述工程 RV64IMA/LP64 与产品 RV64GC/LP64D；`PlatformConfig` 保留真实板级参数。含 `smallEngineering`、`smallDebianTarget`、`mediumDebianTarget`、`largeDebianTarget`，**均显式标为 rtlImplemented=false**。PRF 小于 32+ROB 只触发可预计的分配背压标记，不被错误判为 ISA 不合法，遵循 NaxRiscv 可配置实践。配置检查由 `ProductCoreConfigSpec` Scala 测试以及独立 Python 静态所有权测试承担；这不是 SmallOoO RTL 本体。
+
+### G1 可综合后端第一落点（独立整数／分支切片；不能冒充完整 CPU）
+
+`core/product/ProductSmallOoOBackend.scala` 新增 **真实 Chisel 硬件状态和 ready/valid 接口**：ROB8、IQ4、显式 SpecRAT/CommittedRAT、PRF48、FreeList、ROB/物理寄存器各自代际编号、out-of-order 完成与 oldest-only 退休、多周期 youngest-first 分支 rollback、精确同步异常全域 flush、被取消／复用的 Completion 拒绝。该模块接受共享 `DecodedInstruction`；Issue/Completion 由后续 FU 通过独立握手实现。前端、整数 FU、MMU/LSQ、特权、中断和 SoC 尚未接入，所以 `rtlImplemented=false` **暂不改变**。
+
+`ProductSmallOoOBackendSpec` 为真实 Chisel 时序测试：年轻独立指令先完成但不能先退休、RAW PRF 就绪与恢复、非头部 Branch 错误预测与晚到 Completion、异常精确边界，以及对未实现的 Memory/System 指令 fail closed。它不是单纯的 JSON／Python 自洽检查。与 F7 共享语义和现有 v2 回归同门禁运行。**验收前不得宣称 G1 SmallOoO 已完整实现或 Linux 已经运行。**
+
+后续一次闭环补齐：复用共享 ALU/乘除和分支运算（不得继承 Tiny 后端）、LSQ/MemoryTransport 独立所有权、Commit CSR/中断、Sv39/Cache/PTW，再做逐退休 Spike 差分，最后 opt-in ProductCoreComplex 接入 SoC。现在的整数后端是这个大批次真实硬件的首段，绝非 Debian 产品完成。
