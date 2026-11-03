@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     const auto total = std::stoull(argv[2]);
     if (total < 1 || total > 1000000000ULL) return 3;
     Memory memory;
+    std::puts("AETHERCORE_PA32_GSIM_SINGLE_STEP_TIMING_UNQUALIFIED");
     if (std::string(argv[1]) == "--bare") {
       // RV64I: addi x1,x0,1; addi x2,x1,2; addi x3,x2,3; jal x0,0.
       const std::uint32_t program[] = {
@@ -93,42 +94,22 @@ int main(int argc, char** argv) {
     ports.reset(true);
     ports.respond({});
 
-    std::uint64_t settlements = 0;
     std::uint64_t retires = 0, interrupts = 0, exceptions = 0;
     std::uint64_t digest = 14695981039346656037ULL;
+    ports.clock(true);
     std::uint64_t lastPc = 0;
     const auto hostStart = std::chrono::steady_clock::now();
 
     for (std::uint64_t cycle = 0; cycle < total + 32; ++cycle) {
       const bool reset = cycle < 32;
       ports.reset(reset);
-      ports.clock(false);
-      top->step();
-      Request request = ports.request();
-      Response response = readResponses(request, memory);
+      // GSIM step() computes AND commits one abstract tick; it is not a
+      // combinational eval(). Do not call it twice/three times per guest cycle.
+      // The host response observed from the previous tick is delivered to
+      // the next one. This provisional timing requires Verilator differential.
+      const Request request = ports.request();
+      const Response response = readResponses(request, memory);
       ports.respond(response);
-
-      // A second low-phase evaluation must not advance architectural
-      // state; validate this hypothesis against the Verilator reference.
-      // GSIM's step() schedules its own supernodes, so an exact hardware
-      // equivalence proof remains mandatory before any Linux speed claim.
-      constexpr int kMaxSettle = 8;
-      for (int settle = 0; settle < kMaxSettle; ++settle) {
-        top->step();
-        ++settlements;
-        const Request next = ports.request();
-        const Response nextResponse = readResponses(next, memory);
-        request = next;
-        if (sameResponse(response, nextResponse)) {
-          response = nextResponse;
-          break;
-        }
-        response = nextResponse;
-        ports.respond(response);
-        if (settle + 1 == kMaxSettle)
-          throw std::runtime_error("GSIM host RAM combinational response did not converge");
-      }
-
       commitAcceptedMemory(request, response, memory, reset);
       ports.clock(true);
       top->step();
@@ -153,7 +134,7 @@ int main(int argc, char** argv) {
 
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - hostStart).count();
-    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx settlements=%llu host_seconds=%.6f host_cps=%.1f\n",
+    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f\n",
                 static_cast<unsigned long long>(total),
                 static_cast<unsigned long long>(retires),
                 static_cast<unsigned long long>(exceptions),
@@ -161,7 +142,6 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(ports.mtime()),
                 static_cast<unsigned long long>(lastPc),
                 static_cast<unsigned long long>(digest),
-                static_cast<unsigned long long>(settlements),
                 elapsed, elapsed > 0 ? total / elapsed : 0.0);
 
     if (std::string(argv[1]) == "--bare") {

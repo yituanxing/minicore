@@ -147,3 +147,20 @@ same clock-low combinational evaluation semantics as Verilator `eval()`.
 A full cycle-by-cycle commit/interrupt/port differential is mandatory before
 firmware/Linux is trusted. The bare run is only a useful intermediate
 integration test; no GSIM results will replace cold Verilator signoff.
+
+## Important GSIM clock-domain correction
+
+The first clocked native smoke (CI #41563055472) successfully ran 256
+post-reset *declared* cycles with two `step()` calls each, but observed
+`mtime=248`. With a 20 MHz source and 10 MHz timebase, this is approximately
+**twice** the correct tick progression; GSIM `step()` is a whole abstract
+cycle, not a Verilator low/high `eval()`. Never treat two GSIM steps as a
+single hardware cycle. The new smoke uses one step per guest cycle and
+requires `mtime` delta 118..122 after a 16-cycle board reset stretcher.
+
+The new bare RV64I probe also uses one GSIM step per guest cycle. Its host
+RAM replies are consequently one step behind the initial combinational
+request until a properly qualified GSIM mid-cycle host callback exists.
+A bare retirement PASS does *not* prove memory-timing equivalence or Linux
+correctness. This limit is reported explicitly, rather than silently
+fast-forwarding the CPU or removing MMU/atomic complexity.

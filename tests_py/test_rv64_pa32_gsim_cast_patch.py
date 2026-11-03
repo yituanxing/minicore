@@ -51,9 +51,10 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
                       f"set_io{gs}imemInst", f"set_io{gs}memRdata",
                       f"get_io{gs}uartValid", f"get_io{gs}mtime"):
             self.assertIn(field, ports)
-        self.assertIn("ports.clock(false)", smoke)
         self.assertIn("ports.clock(true)", smoke)
-        self.assertIn("after <= before", smoke)
+        self.assertIn("tickDelta < 118 || tickDelta > 122", smoke)
+        self.assertIn("dut->step()", smoke)
+        self.assertIn("AETHERCORE_PA32_GSIM_SINGLE_STEP_TIMING_UNQUALIFIED", probe)
         memory = (ROOT / "sim/l32_opensbi_runtime.h").read_text()
         probe = (ROOT / "sim/pa32_gsim_prefix_main.cpp").read_text()
         self.assertIn("AETHERCORE_GSIM_HOST_MEMORY_ONLY", memory)
