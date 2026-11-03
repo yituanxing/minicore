@@ -6,6 +6,8 @@ on:
       - 'src/main/scala/aethercore/core/v2/**'
       - 'src/main/scala/aethercore/core/semantic/**'
       - 'src/main/scala/aethercore/core/product/**'
+      - 'src/main/scala/aethercore/core/ALU.scala'
+      - 'src/test/scala/aethercore/ProductSmallIntegerCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala'
       - 'src/test/scala/aethercore/SharedSemanticDecodeSpec.scala'
@@ -113,6 +115,9 @@ jobs:
             aethercore.SharedSemanticDecodeSpec \
             aethercore.ProductCoreConfigSpec \
             aethercore.ProductSmallOoOBackendSpec \
+            aethercore.ProductSmallIntegerCoreSpec \
+            aethercore.ALUSpec \
+            aethercore.RV64MALUSpec \
             aethercore.V2FoundationTypesSpec \
             aethercore.V2F7BareCoreSpec \
             aethercore.V2F7PagedCoreSpec \

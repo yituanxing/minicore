@@ -228,3 +228,9 @@ G0 单独运行 **Fast Gate**、机器可读契约和 Rename 参考模型测试�
 `ProductSmallOoOBackendSpec` 为真实 Chisel 时序测试：年轻独立指令先完成但不能先退休、RAW PRF 就绪与恢复、非头部 Branch 错误预测与晚到 Completion、异常精确边界，以及对未实现的 Memory/System 指令 fail closed。它不是单纯的 JSON／Python 自洽检查。与 F7 共享语义和现有 v2 回归同门禁运行。**验收前不得宣称 G1 SmallOoO 已完整实现或 Linux 已经运行。**
 
 后续一次闭环补齐：复用共享 ALU/乘除和分支运算（不得继承 Tiny 后端）、LSQ/MemoryTransport 独立所有权、Commit CSR/中断、Sv39/Cache/PTW，再做逐退休 Spike 差分，最后 opt-in ProductCoreComplex 接入 SoC。现在的整数后端是这个大批次真实硬件的首段，绝非 Debian 产品完成。
+
+### G1 RV64I 执行闭环扩展（仍非完整 ProductCore）
+
+ProductSmallOoOBackend 的 Issue／Completion 接口已经连到 `ProductIntegerBranchUnit`，形成 `ProductSmallIntegerCore` 的 **实际整数 I 子集 + Branch 运算 → tagged Completion → ROB/PRF → Commit**。ALU 使用原有 `aethercore.core.ALU`，新增 `withMulDiv=false` 的 Chisel **elaboration-time 参数**，在此整数 FU 中不生成乘除网络；已有 v1/v2 ALU 的默认 `withMulDiv=true` 保持不变。M 类指令（MUL/DIV/REM）、访存、CSR、Sv39 与 F/D 仍缺失或未连接，明确挂起/背压；SmallRV64GC 仍不可运行 Debian。
+
+`ProductSmallIntegerCoreSpec` 将覆盖真正的 ADDI/RAW 寄存器流、BEQ 错预测、M 未实现门禁及内存 fail-closed；同时保留 `ALUSpec` 和 `RV64MALUSpec` 保护旧 ALU 算法。**只有 Chisel F7 门禁执行完成后，才能声称整数执行链路已验证。** 后续 G1 仍须增加独立迭代 M Unit、LSQ/SQ、特权/MMU/Caches、系统启动和 Spike 逐退休差分。

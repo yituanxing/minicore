@@ -4,7 +4,11 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.AluOp
 
-class ALU(val xlen: Int = 64) extends Module {
+class ALU(val xlen: Int = 64, val withMulDiv: Boolean = true) extends Module {
+  // Backend-neutral FPGA knob: disable M datapaths at elaboration time
+  // for the first integer/branch product FU, without changing existing v2.
+  // The Product FU must explicitly backpressure unsupported M requests.
+
   require(xlen == 32 || xlen == 64, s"ALU XLEN must be 32 or 64, got $xlen")
 
   val io = IO(new Bundle {
@@ -25,9 +29,9 @@ class ALU(val xlen: Int = 64) extends Module {
   val aUnsignedExt = Cat(0.U(1.W), io.a).asSInt
   val bUnsignedExt = Cat(0.U(1.W), io.b).asSInt
 
-  val productSS = (aSignedExt * bSignedExt).asUInt
-  val productSU = (aSignedExt * bUnsignedExt).asUInt
-  val productUU = (aUnsignedExt * bUnsignedExt).asUInt
+  val productSS = if (withMulDiv) (aSignedExt * bSignedExt).asUInt else 0.U((2 * xlen + 2).W)
+  val productSU = if (withMulDiv) (aSignedExt * bUnsignedExt).asUInt else 0.U((2 * xlen + 2).W)
+  val productUU = if (withMulDiv) (aUnsignedExt * bUnsignedExt).asUInt else 0.U((2 * xlen + 2).W)
 
   val allOnes = ((BigInt(1) << xlen) - 1).U(xlen.W)
   val minSigned = (BigInt(1) << (xlen - 1)).U(xlen.W)
@@ -40,12 +44,12 @@ class ALU(val xlen: Int = 64) extends Module {
   // result is selected from an exceptional-case constant.
   val signedDividend = Mux(signedOverflow, 0.S(xlen.W), io.a.asSInt)
   val signedDivisor = Mux(signedExceptional, 1.S(xlen.W), io.b.asSInt)
-  val signedQuotient = (signedDividend / signedDivisor).asUInt
-  val signedRemainder = (signedDividend % signedDivisor).asUInt
+  val signedQuotient = if (withMulDiv) (signedDividend / signedDivisor).asUInt else 0.U(xlen.W)
+  val signedRemainder = if (withMulDiv) (signedDividend % signedDivisor).asUInt else 0.U(xlen.W)
 
   val unsignedDivisor = Mux(divByZero, 1.U(xlen.W), io.b)
-  val unsignedQuotient = io.a / unsignedDivisor
-  val unsignedRemainder = io.a % unsignedDivisor
+  val unsignedQuotient = if (withMulDiv) io.a / unsignedDivisor else 0.U(xlen.W)
+  val unsignedRemainder = if (withMulDiv) io.a % unsignedDivisor else 0.U(xlen.W)
 
   val result = WireDefault(0.U(xlen.W))
   switch(io.op) {
@@ -83,7 +87,7 @@ class ALU(val xlen: Int = 64) extends Module {
     val a32 = io.a(31, 0)
     val b32 = io.b(31, 0)
     val shamt32 = b32(4, 0)
-    val product32 = a32 * b32
+    val product32 = if (withMulDiv) a32 * b32 else 0.U(64.W)
 
     val allOnes32 = "hffffffff".U(32.W)
     val minSigned32 = "h80000000".U(32.W)
@@ -93,12 +97,12 @@ class ALU(val xlen: Int = 64) extends Module {
 
     val signedDividend32 = Mux(signedOverflow32, 0.S(32.W), a32.asSInt)
     val signedDivisor32 = Mux(signedExceptional32, 1.S(32.W), b32.asSInt)
-    val signedQuotient32 = (signedDividend32 / signedDivisor32).asUInt
-    val signedRemainder32 = (signedDividend32 % signedDivisor32).asUInt
+    val signedQuotient32 = if (withMulDiv) (signedDividend32 / signedDivisor32).asUInt else 0.U(32.W)
+    val signedRemainder32 = if (withMulDiv) (signedDividend32 % signedDivisor32).asUInt else 0.U(32.W)
 
     val unsignedDivisor32 = Mux(divByZero32, 1.U(32.W), b32)
-    val unsignedQuotient32 = a32 / unsignedDivisor32
-    val unsignedRemainder32 = a32 % unsignedDivisor32
+    val unsignedQuotient32 = if (withMulDiv) a32 / unsignedDivisor32 else 0.U(32.W)
+    val unsignedRemainder32 = if (withMulDiv) a32 % unsignedDivisor32 else 0.U(32.W)
 
     val result32 = WireDefault(0.U(32.W))
     switch(io.op) {

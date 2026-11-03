@@ -121,6 +121,10 @@ class ProductSmallOoOBackendSpec extends AnyFlatSpec with Matchers with ChiselSi
     c.exception.value.poke(0.U)
     d.io.completion.valid.poke(true.B)
     d.io.completion.ready.expect(true.B)
+    if (branchTarget.nonEmpty) {
+      d.io.redirect.valid.expect(true.B)
+      d.io.redirect.bits.target.expect(branchTarget.get.U)
+    }
     d.clock.step()
     d.io.completion.valid.poke(false.B)
   }
@@ -212,7 +216,8 @@ class ProductSmallOoOBackendSpec extends AnyFlatSpec with Matchers with ChiselSi
       d.io.retire.bits.rd.expect(1.U)
       d.clock.step()
       d.io.retire.valid.expect(true.B)
-      d.io.retire.bits.rd.expect(0.U)
+      // BEQ's encoding bits 11:7 are an immediate, NOT an architectural rd.
+      d.io.retire.bits.wroteRegister.expect(false.B)
       d.clock.step()
       d.io.occupancy.expect(0.U)
     }
