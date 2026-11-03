@@ -61,6 +61,8 @@ class ProductLsqOwnershipContract(unittest.TestCase):
                          "completion.io.in(2) <> lsq.io.completion",
                          "backend.io.completion <> completion.io.out"):
             self.assertIn(fragment, top)
+        self.assertIn("backend.io.memoryAvailable := io.memoryResourceAvailable", top)
+        self.assertNotIn("backend.io.memoryAvailable := io.memoryExecute.ready", top)
         self.assertIn("must", top.lower())
 
     def test_real_chisel_directed_lsq_and_integrated_execution_tests(self):

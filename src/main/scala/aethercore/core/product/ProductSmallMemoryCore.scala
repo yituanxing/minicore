@@ -27,6 +27,9 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     // To the external translation/PMP/PMA owner: VADDR = lhs+immediate,
     // STORE data = issue.storeData. The resolver may stall arbitrarily.
     val memoryExecute = Decoupled(new ProductIssue(64, I, P, G))
+    // Translation capacity must NOT be inferred from Decoupled.ready;
+    // otherwise issue.valid would combinationally depend on ready.
+    val memoryResourceAvailable = Input(Bool())
     val resolverKill = Valid(new ProductRobId(I, G))
     // From that owner: resolved physical PA, attributes or precise fault.
     val memoryResolved = Flipped(Decoupled(new ProductResolvedMem(PA, I, G)))
@@ -62,7 +65,7 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   io.memoryExecute.valid := backend.io.issue.valid &&
     backend.io.issue.bits.memoryKind =/= MemoryOperationKind.None
   io.memoryExecute.bits := backend.io.issue.bits
-  backend.io.memoryAvailable := io.memoryExecute.ready
+  backend.io.memoryAvailable := io.memoryResourceAvailable
 
   lsq.io.resolve.valid := io.memoryResolved.valid
   lsq.io.resolve.bits := io.memoryResolved.bits

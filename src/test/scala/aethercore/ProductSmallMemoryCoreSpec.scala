@@ -21,6 +21,7 @@ private class PhysicalProductHarness extends Module {
     val valid = Input(Bool())
     val ready = Output(Bool())
     val execute = Decoupled(new ProductIssue(64, I, P, 16))
+    val executeAvailable = Input(Bool())
     val resolved = Flipped(Decoupled(new ProductResolvedMem(PA, I, 16)))
     val physicalRequest = Decoupled(new AetherMemRequest(PA, 64, T))
     val physicalResponse = Flipped(Decoupled(new AetherMemResponse(64, T)))
@@ -43,6 +44,7 @@ private class PhysicalProductHarness extends Module {
   io.execute.valid := core.io.memoryExecute.valid
   io.execute.bits := core.io.memoryExecute.bits
   core.io.memoryExecute.ready := io.execute.ready
+  core.io.memoryResourceAvailable := io.executeAvailable
   core.io.memoryResolved.valid := io.resolved.valid
   core.io.memoryResolved.bits := io.resolved.bits
   io.resolved.ready := core.io.memoryResolved.ready
@@ -67,6 +69,7 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
     d.io.pc.poke("h80000000".U)
     d.io.inst.poke("h00000013".U)
     d.io.execute.ready.poke(true.B)
+    d.io.executeAvailable.poke(true.B)
     d.io.resolved.valid.poke(false.B)
     d.io.resolved.bits.poke(0.U.asTypeOf(d.io.resolved.bits))
     d.io.physicalRequest.ready.poke(true.B)
@@ -85,11 +88,12 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
     d.io.valid.poke(false.B)
   }
 
-  private def resolve(d: PhysicalProductHarness, index: BigInt, gen: BigInt, address: BigInt): Unit = {
+  private def resolve(d: PhysicalProductHarness, index: BigInt, gen: BigInt,
+                      address: BigInt, storeData: BigInt = 0): Unit = {
     d.io.resolved.bits.token.index.poke(index.U)
     d.io.resolved.bits.token.generation.poke(gen.U)
     d.io.resolved.bits.paddr.poke(address.U)
-    d.io.resolved.bits.storeData.poke(0.U)
+    d.io.resolved.bits.storeData.poke(storeData.U)
     d.io.resolved.bits.attributes.cacheable.poke(true.B)
     d.io.resolved.bits.attributes.idempotent.poke(true.B)
     d.io.resolved.bits.attributes.sideEffecting.poke(false.B)
@@ -126,6 +130,13 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
       d.io.execute.bits.memoryKind.expect(aethercore.core.semantic.MemoryOperationKind.Load)
       val idx = d.io.execute.bits.token.index.peek().litValue
       val gen = d.io.execute.bits.token.generation.peek().litValue
+      d.io.execute.ready.poke(false.B)
+      for (_ <- 0 until 2) {
+        d.io.execute.valid.expect(true.B) // valid independent of downstream ready
+        d.io.execute.bits.token.index.expect(idx.U)
+        d.clock.step()
+      }
+      d.io.execute.ready.poke(true.B)
       d.clock.step()
       resolve(d, idx, gen, BigInt("80001000", 16))
       d.io.physicalRequest.valid.expect(true.B)
@@ -164,7 +175,7 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
       val idx = d.io.execute.bits.token.index.peek().litValue
       val gen = d.io.execute.bits.token.generation.peek().litValue
       d.clock.step()
-      resolve(d, idx, gen, BigInt("80001000",16))
+      resolve(d, idx, gen, BigInt("80001000",16), storeData = 5)
       d.io.physicalRequest.valid.expect(true.B)
       d.io.physicalRequest.bits.op.expect(AetherMemOp.Write)
       d.io.physicalRequest.bits.wdata.expect(5.U)
