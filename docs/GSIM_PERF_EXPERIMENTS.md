@@ -15,3 +15,5 @@ JOBS=4 bash tools/ci/rv64_pa32_gsim_performance_sweep.sh
 ```
 
 The sweep intentionally regenerates and recompiles GSIM per SuperNode setting to avoid stale graph/model artifacts. Results still require repeated matched host measurements to distinguish true speedups from thermal or system noise. The PGO route uses clang instrumentation rather than privileged `perf` or BOLT.
+
+Default PR gates run the strict 20M firmware differential. The already-qualified 450M Linux PID1 signoff is explicit workflow_dispatch with full_linux=true. No candidate is promoted on 20M results alone.

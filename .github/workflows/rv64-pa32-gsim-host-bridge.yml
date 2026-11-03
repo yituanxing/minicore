@@ -26,7 +26,7 @@ on:
       full_linux:
         description: 'After 20M PASS, also compare real Linux PID1 and STIP/SEIP'
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -164,17 +164,17 @@ jobs:
         run: |
           set -euo pipefail
           CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
-      # First full-system qualification is required on this PR before GSIM is
-      # offered as a normal simulator engine; subsequent signoff is manual.
+      # Full Linux PID1 was strictly qualified at commit 39b1f628, run 41578321826.
+      # PR runs the fast 20M differential. Full PID1 is manual for a selected candidate.
       - name: Build real Linux PID1 initramfs and its OpenSBI payload
-        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full_linux) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}
         run: |
           set -euo pipefail
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
           grep -qx 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-minimal-init-boot/result.txt
       - name: Compare real Linux PID1, STIP/SEIP and 256 MiB RAM on both engines
-        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full_linux) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}
         run: |
           set -euo pipefail
           FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \

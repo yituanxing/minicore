@@ -154,6 +154,16 @@ int main() {
                       "Linux version 6.6.143", "uartDigest", "stip", "seip"):
             self.assertIn(token, shared)
 
+    def test_full_linux_signoff_is_explicit(self):
+        gsim = (ROOT / ".github/workflows/rv64-pa32-gsim-host-bridge.yml").read_text()
+        self.assertIn("default: false", gsim)
+        self.assertEqual(
+            gsim.count("if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}"),
+            2,
+        )
+        self.assertNotIn("github.event_name == 'pull_request' ||", gsim)
+        self.assertIn("CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh", gsim)
+        self.assertIn("CYCLES=450000000 TIMEOUT_SECONDS=7200 LINUX_PID1=1", gsim)
     def test_gsim_ci_reuses_qualified_cache_and_real_pid1_payload(self):
         gsim = (ROOT / ".github/workflows/rv64-pa32-gsim-host-bridge.yml").read_text()
         baseline = (ROOT / ".github/workflows/rv64-minimal-initramfs-v1.yml").read_text()
