@@ -15,12 +15,13 @@ test -s "$REFERENCE"
 test -s "$FW_BIN"
 test -s "$GSIM_OUT/generated/AetherCoreV2OpenSbiRV64SimTop.h"
 command -v clang++-19 >/dev/null
-command -v ld.lld-19 >/dev/null
+LTO_LINKER="$(command -v ld.lld-19)"
+test -x "$LTO_LINKER"
 sha256sum "$FW_BIN" > "$OUT/firmware.sha256"
 echo "AETHERCORE_PA32_GSIM_LTO_STAGE step=BUILD"
 timeout --signal=TERM --kill-after=10s 1200s \
   clang++-19 -std=gnu++20 -O3 -march=native -pthread -lz \
-  -DAETHERCORE_GSIM_HOST_BRIDGE -flto=thin -fuse-ld=lld-19 \
+  -DAETHERCORE_GSIM_HOST_BRIDGE -flto=thin -fuse-ld="$LTO_LINKER" \
   -I"$GSIM_OUT/generated" -I"$ROOT/sim" \
   "$GSIM_OUT/generated/"*.cpp "$ROOT/sim/pa32_gsim_prefix_main.cpp" \
   -o "$OUT/pa32-gsim-prefix" > "$OUT/build.log" 2>&1 || {

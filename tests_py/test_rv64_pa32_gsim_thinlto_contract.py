@@ -13,7 +13,7 @@ class ThinLtoContract(unittest.TestCase):
         self.assertIn("baseline-1 thinlto-1 thinlto-2 baseline-2",s)
         self.assertIn("CYCLES=20000000",s)
         self.assertIn('AETHERCORE_GSIM_PHASE_PROFILE=0',s)
-        self.assertIn("-flto=thin -fuse-ld=lld-19",s)
+        self.assertIn('-flto=thin -fuse-ld="$LTO_LINKER"',s)
 
     def test_every_trial_has_original_firmware_strict_oracle(self):
         s=SCRIPT.read_text()
