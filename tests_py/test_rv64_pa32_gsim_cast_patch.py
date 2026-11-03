@@ -60,7 +60,7 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
         self.assertIn("AETHERCORE_GSIM_HOST_MEMORY_ONLY", memory)
         self.assertIn("memory.commitAtomic", probe)
         self.assertIn("memory.writeMasked", probe)
-        self.assertIn("memory.readData", probe)
+        self.assertIn("mem.readData", probe)
         self.assertIn("AETHERCORE_PA32_GSIM_BARE_PASS", probe)
         self.assertIn("AETHERCORE_PA32_GSIM_BARE_PASS", script)
         self.assertIn("AETHERCORE_PA32_GSIM_NATIVE_SMOKE_PASS", script)
