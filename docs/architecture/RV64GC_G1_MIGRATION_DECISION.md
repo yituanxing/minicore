@@ -118,6 +118,7 @@ FP PRF/FPU 暂不启用。这是为**先证明所有权与精确恢复**选择�
 - 退休：普通指令经精确 Commit 更新 `Committed RAT`。
   **旧 pdst 在覆盖它的指令提交后才释放一次**，不是旧值生成时释放，
   也不是年轻 uOp 被分配时就释放。
+  旧映射的物理编号可能是初始的 phys1..phys31；这些编号提交后可以重新进入 FreeList，**只有 phys0 永远保留**。
 - Branch 恢复：验证任意年龄分支的 token，ROB 保留分支及所有 older，
   只剔除 younger。Rename 停止分配/退休，按照 younger 的**逆年龄顺序**
   恢复 spec RAT 的旧映射，并返还被 squash 的新 pdst。

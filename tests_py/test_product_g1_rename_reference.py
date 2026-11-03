@@ -40,6 +40,21 @@ class ProductG1RenameReferenceTest(unittest.TestCase):
         self.assertIn(a.dst_tag[0], r.free)
         self.assertNotIn(b.dst_tag[0], r.free)
 
+    def test_architectural_old_physical_ids_are_recycled_only_after_commit(self):
+        r = RenameReference(rob_entries=8, physical_int=33)
+        writer = r.allocate_group([op(rd=5)])[0]
+        self.assertNotIn(5, r.free)
+        self.assertTrue(r.complete(writer.token, writer.dst_tag, 17))
+        self.assertNotIn(5, r.free)
+        self.assertEqual(len(r.retire()), 1)
+        self.assertIn(5, r.free, "old architectural register is now stale")
+        reuse = r.allocate_group([op(rd=6)])[0]
+        self.assertEqual(reuse.dst_tag[0], 5)
+        self.assertNotIn(0, r.free)
+        self.assertTrue(r.complete(reuse.token, reuse.dst_tag, 12))
+        self.assertEqual(len(r.retire()), 1)
+        self.assertEqual(r.committed_rat[6], 5)
+
     def test_failed_group_allocation_has_zero_mutations(self):
         for kwargs in ({"iq_free": 1}, {"lsq_free": 0}, {"redirect": True}):
             with self.subTest(kwargs=kwargs):

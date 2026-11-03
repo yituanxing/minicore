@@ -93,6 +93,10 @@ class RenameReference:
             if entry.rd:
                 self.committed_rat[entry.rd] = entry.dst_tag[0]
                 # The old mapping becomes obsolete only at retirement.
+                # Old committed architectural ids (1..31) are reclaimable,
+                # not permanently reserved. Only physical zero is pinned.
+                assert entry.old_phys != 0
+                assert entry.old_phys not in self.free
                 self.free.add(entry.old_phys)
             self.rob_gen[entry.token[0]] += 1
             retired.append(entry)
@@ -103,6 +107,7 @@ class RenameReference:
         if entry.rd:
             assert self.spec_rat[entry.rd] == entry.dst_tag[0]
             self.spec_rat[entry.rd] = entry.old_phys
+            assert entry.dst_tag[0] not in self.free
             self.free.add(entry.dst_tag[0])
         self.rob_gen[entry.token[0]] += 1
 
@@ -139,4 +144,5 @@ class RenameReference:
         for entry in self.live:
             if entry.dst_tag:
                 assert entry.dst_tag[0] not in self.free
-        assert all(32 <= x < self.physical_int for x in self.free)
+        assert 0 not in self.free
+        assert all(1 <= x < self.physical_int for x in self.free)

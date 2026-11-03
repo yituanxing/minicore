@@ -159,7 +159,8 @@
     "Using a physical ROB slot number as a unique long-lived MemTxnId",
     "Writing physical destination or waking IQ before full live completion validation",
     "Storing the only canonical result value in ROB for product instead of PRF",
-    "Publishing RV64GC/LP64D or real-FPGA qualification before tests exist"
+    "Publishing RV64GC/LP64D or real-FPGA qualification before tests exist",
+    "Declaring FPGA Fmax, place-and-route closure or bitstream quality without real targeted-device PPA data"
   ],
   "closure": [
     "D02/D06 G1 technical direction reviewed",
