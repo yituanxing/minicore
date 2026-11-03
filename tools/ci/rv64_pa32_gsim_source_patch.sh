@@ -94,9 +94,6 @@ timeout --signal=TERM --kill-after=10s 120s \
     echo "AETHERCORE_PA32_GSIM_BARE_RUNTIME_FAIL" >&2
     exit 25
   }
-grep -q '^AETHERCORE_PA32_GSIM_BARE_PASS
+grep -q '^AETHERCORE_PA32_GSIM_BARE_PASS$' "$OUT/prefix-bare.log"
 cat "$OUT/prefix-bare.log"
-echo "Bare RV64 activity is experimental; exact Verilator instruction/cycle differential still required."
- "$OUT/prefix-bare.log"
-cat "$OUT/prefix-bare.log"
-echo "Bare RV64 activity is experimental; exact Verilator instruction/cycle differential still required."
+echo 'GSIM RV64I qualification requires correct real instruction retirement and Verilator differential.'
