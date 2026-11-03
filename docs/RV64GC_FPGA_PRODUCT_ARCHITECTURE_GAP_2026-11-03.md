@@ -6,6 +6,11 @@
 产品目标输入：用户文档《RV64 FPGA Linux 最终产品目标与系统方案 v1.1》（2026-11-02）  
 并行工程收尾：`docs/GSIM_PERF_STUDY_CLOSURE_2026-11-03.md` 位于独立的 PR #378 分支；不要以其代替产品架构验收。
 
+> **G0 follow-up (2026-11-03):** The ownership/data-flow/handshake proposal is in
+> [docs/architecture/RV64GC_G0_DESIGN_AND_OWNERSHIP.md](architecture/RV64GC_G0_DESIGN_AND_OWNERSHIP.md),
+> with machine-readable semantics in [rv64gc_g0_contract.json](architecture/rv64gc_g0_contract.json)
+> and executable contract checks in [test_product_g0_contract.py](../tests_py/test_product_g0_contract.py).
+> G0 remains **proposed**, not a frozen RTL design or Linux qualification.
 ## 0. 两种身份，禁止混为一谈
 
 1. **已经存在的工程事实：** `yituanxing/minicore` 有完整的 Chisel RTL、AetherCore v2、AetherSoC v0、AXI/ROM/UART/PLIC/ACLINT/Cache，虚拟 FPGA 上 OpenSBI→Linux 6.6.143→用户态中断标志已经通过。以 `docs/AETHERSOC_V0_FREEZE.md` 和 `docs/ROADMAP.md` 为准。

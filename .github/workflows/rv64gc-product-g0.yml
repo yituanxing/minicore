@@ -1,0 +1,29 @@
+name: RV64GC product G0 ownership and protocol contract
+
+on:
+  pull_request:
+    paths:
+      - 'docs/architecture/**'
+      - 'docs/RV64GC_FPGA_PRODUCT_ARCHITECTURE_GAP_2026-11-03.md'
+      - 'tests_py/test_product_g0_contract.py'
+      - '.github/workflows/rv64gc-product-g0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64gc-g0-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  g0-contract:
+    name: State ownership, identities, example protocols, current RTL anchors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate machine-readable G0 contract JSON
+        run: python3 -m json.tool docs/architecture/rv64gc_g0_contract.json >/dev/null
+      - name: Run exact G0 architecture-contract tests (no RTL claim)
+        run: python3 -m unittest tests_py.test_product_g0_contract -v
