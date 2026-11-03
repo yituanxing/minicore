@@ -25,3 +25,12 @@ The differing host-scale results prove that absolute seconds and different-host 
 AetherSoC v0 board-neutral Linux PID1 is qualified. Move effort to the project-level RV64GC/LP64D FPGA Linux computer and to real microarchitecture contracts. See the separate product architecture audit, which must distinguish the frozen v0/v2 implementation from the more ambitious new two-decode/two-retire OoO target.
 
 **Do not reopen simulator optimization** absent a change in host, RTL model, user workload or a measured slowdown that materially blocks development. An explicitly scoped checkpoint/fast-forward capability may be considered later on its own merits; it is not a prerequisite to the CPU/SoC hardware work.
+
+## Archived historical CI probes
+
+After the closure push, two superseded automated PR workflows remained red:
+
+- `rv64-pa32-gsim-feasibility.yml`: unpatched pinned GSIM frontend reaches a historical `splitNodes.cpp:658 dupTreeWithBits` assertion, exit 134;
+- `rv64-pa32-gsim-source-patch.yml`: the old single-step/no host-callback bare RV64I probe retires no valid program, `matched_rv64i=0`, exit 25.
+
+Those workflows are now **workflow_dispatch only**, preserved for historical reproduction. They are **not** the qualified GSIM-vs-Verilator path and must not be used as Linux pass gates. The authoritative `rv64-pa32-gsim-host-bridge.yml` retains source-contract tests, bare RV64I and memory/atomics differential, real 20M firmware strict differential, and optional manual full Linux PID1 signoff. We are not silencing failures in that qualified path.

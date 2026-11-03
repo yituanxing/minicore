@@ -1,12 +1,8 @@
 name: AetherCore PA32 GSIM CHIRRTL feasibility
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/ElaborateV2VirtualFpgaBoardPA32CHIRRTL.scala'
-      - 'tools/ci/rv64_pa32_gsim_feasibility.sh'
-      - '.github/workflows/rv64-pa32-gsim-feasibility.yml'
-      - 'tests_py/test_rv64_pa32_new_accel_contract.py'
+  # Historical experiment; retained only for explicit reproduction.
+  # The qualified modern path is rv64-pa32-gsim-host-bridge.yml.
   workflow_dispatch:
 
 permissions:

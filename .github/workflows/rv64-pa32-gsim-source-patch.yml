@@ -1,17 +1,8 @@
 name: PA32 GSIM experimental source cast compatibility
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/rv64-pa32-gsim-source-patch.yml'
-      - 'tools/ci/rv64_pa32_gsim_cast_patch.py'
-      - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
-      - 'tests_py/test_rv64_pa32_gsim_cast_patch.py'
-      - 'tools/ci/rv64_pa32_gsim_ports.py'
-      - 'sim/pa32_gsim_native_smoke.cpp'
-      - 'sim/pa32_gsim_port_adapter.h'
-      - 'sim/pa32_gsim_prefix_main.cpp'
-      - 'sim/l32_opensbi_runtime.h'
+  # Historical experiment; retained only for explicit reproduction.
+  # The qualified modern path is rv64-pa32-gsim-host-bridge.yml.
   workflow_dispatch:
 
 permissions:
