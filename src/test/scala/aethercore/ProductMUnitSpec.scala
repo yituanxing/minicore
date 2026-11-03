@@ -19,7 +19,7 @@ class ProductMUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     d.clock.step()
   }
 
-  private def execute(
+  private def runOperation(
     d: ProductMUnit,
     op: AluOp.Type,
     lhs: BigInt,
@@ -73,24 +73,24 @@ class ProductMUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
   it should "handle all high multiply signedness variants and MULW" in {
     simulate(new ProductMUnit(ProductCoreProfiles.smallGeometry)) { d =>
       init(d)
-      execute(d, AluOp.Mul, -7, 3, -21)
-      execute(d, AluOp.Mulh, -2, 3, -1)
-      execute(d, AluOp.Mulhsu, -2, 3, -1)
-      execute(d, AluOp.Mulhu, mask - 1, 3, 2)
-      execute(d, AluOp.Mul, 0xffffffffL, 2, -2, word = true)
+      runOperation(d, AluOp.Mul, -7, 3, -21)
+      runOperation(d, AluOp.Mulh, -2, 3, -1)
+      runOperation(d, AluOp.Mulhsu, -2, 3, -1)
+      runOperation(d, AluOp.Mulhu, mask - 1, 3, 2)
+      runOperation(d, AluOp.Mul, 0xffffffffL, 2, -2, word = true)
     }
   }
 
   it should "preserve signed divide/remainder zero and overflow semantics" in {
     simulate(new ProductMUnit(ProductCoreProfiles.smallGeometry)) { d =>
       init(d)
-      execute(d, AluOp.Div, -7, 3, -2, iterative = true)
-      execute(d, AluOp.Rem, -7, 3, -1, iterative = true)
-      execute(d, AluOp.Div, -7, 0, -1, iterative = true)
-      execute(d, AluOp.Rem, -7, 0, -7, iterative = true)
-      execute(d, AluOp.Div, BigInt(1) << 63, -1, BigInt(1) << 63,
+      runOperation(d, AluOp.Div, -7, 3, -2, iterative = true)
+      runOperation(d, AluOp.Rem, -7, 3, -1, iterative = true)
+      runOperation(d, AluOp.Div, -7, 0, -1, iterative = true)
+      runOperation(d, AluOp.Rem, -7, 0, -7, iterative = true)
+      runOperation(d, AluOp.Div, BigInt(1) << 63, -1, BigInt(1) << 63,
         iterative = true)
-      execute(d, AluOp.Rem, BigInt(1) << 63, -1, 0,
+      runOperation(d, AluOp.Rem, BigInt(1) << 63, -1, 0,
         iterative = true)
     }
   }
@@ -98,14 +98,14 @@ class ProductMUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
   it should "handle DIVU/REMU, DIVW and DIVUW sign extension" in {
     simulate(new ProductMUnit(ProductCoreProfiles.smallGeometry)) { d =>
       init(d)
-      execute(d, AluOp.Divu, mask, 3, BigInt("5555555555555555", 16),
+      runOperation(d, AluOp.Divu, mask, 3, BigInt("5555555555555555", 16),
         iterative = true)
-      execute(d, AluOp.Remu, mask, 3, 0, iterative = true)
-      execute(d, AluOp.Div, 0x80000000L, -1, BigInt("ffffffff80000000", 16),
+      runOperation(d, AluOp.Remu, mask, 3, 0, iterative = true)
+      runOperation(d, AluOp.Div, 0x80000000L, -1, BigInt("ffffffff80000000", 16),
         word = true, iterative = true)
-      execute(d, AluOp.Divu, 0xffffffffL, 2, 0x7fffffffL,
+      runOperation(d, AluOp.Divu, 0xffffffffL, 2, 0x7fffffffL,
         word = true, iterative = true)
-      execute(d, AluOp.Rem, -7, 3, -1, word = true, iterative = true)
+      runOperation(d, AluOp.Rem, -7, 3, -1, word = true, iterative = true)
     }
   }
 }
