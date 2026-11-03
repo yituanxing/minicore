@@ -87,4 +87,23 @@ D0 与 D1/D2 可以并行。D3 依赖 D0 和 D2。D4 **不能成为 D3 的前置
 
 ISA 也须独立声明：当前可实例化的工程硬件为带 **C** 的 RV64IMAC（软浮点 `lp64`）；尚未实现 F/D 执行及 FCSR/FS，`rv64gc/lp64d` 仅是产品目标，不可直接实例化为已完成硬件。为防止错误验收，Product paged RTL 对包含 F/D 的配置显式拒绝。
 
-资格证据分层：`ProductGeometrySoCSpec` 先证明两档**实际 RTL**在统一内存、AXI4、FPGA 顶层展开；接着借助固定版本 Verilator 检查两档 BootROM → 外部 RAM → Load 退休路径。后者列入 Product G2 directed CI；CI 未通过前不将 expanded 档标记为运行时 PASS。完整 Debian 仍须经过 D2（F/D 等）与 D3（实体 FPGA + 持久化 rootfs）的验收，不能被这批参数化工作替代。
+资格证据分层：`ProductGeometrySoCSpec` 先证明两档**实际 RTL**在统一内存、AXI4、FPGA 顶层展开；再借助固定版本 Verilator 检查两档 BootROM → 外部 RAM → Load 退休路径。提交 `54b0667` 的 [Product G2 CI](https://github.com/yituanxing/minicore/actions/runs/41672431552) 已通过这两层门禁；后续物理 LSQ 重构属于**新 RTL**，必须重新验收。完整 Debian 仍须经过 D2（F/D 等）与 D3（实体 FPGA + 持久化 rootfs）的验收，不能被这批参数化工作替代。
+
+## 7. 物理 LSQ 与 PMP 所有权收敛（2026-11-04）
+
+真实数据流复核发现：旧 `ProductPhysicalLsq` 的 `MemSlot` 由 `ROB entries` 分配，且每个候选对全 ROB 遍历、构造 Store Forwarding 数据路径。它让两个独立的容量轴错误耦合，也让扩大 ROB 产生不必要的平方级组合网络。
+
+本批架构修改后的硬件契约：
+
+- **ROB 只管理指令生命周期**；LSQ 宽物理槽数量等于 `LQ+SQ`，各槽拥有完整 `RobId(index,generation)`，不再用 LSQ 下标冒充 ROB 下标。
+- Reserve / Resolve / Kill / Memory Response 都用准确身份查找槽。已发出外部请求即使被 squash，也保留独立 `MemTxnId` 租约直到 terminal response；不可用新的 ROB generation 接走旧响应。
+- Store 依赖比较和地址覆盖检查随 `(LQ+SQ)^2` 扩展，而非 `ROB^2`；实际 64 位转发数据选择位于仲裁之后，只形成一条共享宽数据路径。按 ROB head 相对年龄的**平衡选择树**保留跨环绕的最老候选优先级。
+- `ProductDataResolver` 保留每个译码时刻的 PMP 快照，但后级只锁存 `slot index+paddr`，共享原翻译槽的上下文所有权，删除宽快照的第二份逐位复制；round-robin 对非 2 的幂队列使用真实取模索引。
+
+| 配置 | 旧 LSQ 宽物理槽 | 新 LSQ 宽物理槽 | 旧依赖比较上界 | 新依赖比较上界 |
+| --- | ---: | ---: | ---: | ---: |
+| Small ROB8 / LQ2+SQ2 | 8 | 4 | 64 | 16 |
+| Expanded ROB16 / LQ4+SQ4 | 16 | 8 | 256 | 64 |
+| ROB64 / LQ16+SQ16 候选 | 64 | 32 | 4096 | 1024 |
+
+这些仅是**结构实例数量/比较对数**，并不是 LUT/FF/Fmax 实测值。增加 `ProductPhysicalStorageSpec` 与杀死 post 分类、六槽轮转动态验证；新增 Product Small/Expanded 同顶层 PA32 `synth_ecp5` 面积及逻辑深度 A/B 门禁。**必须看 RTL/Verilator/综合实际结果后才能评价 FPGA 收益**，不能凭表直接声称已经满足 FPGA 资源或 Debian 产品要求。

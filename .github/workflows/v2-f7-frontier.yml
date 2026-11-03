@@ -11,6 +11,7 @@ on:
       - 'src/test/scala/aethercore/ProductPhysicalLsqSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallMemoryCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductDataResolverSpec.scala'
+      - 'src/test/scala/aethercore/ProductPhysicalStorageSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallTranslatedCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductAtomicCoreSpec.scala'
       - 'src/main/scala/aethercore/core/ALU.scala'
@@ -127,6 +128,7 @@ jobs:
             aethercore.ProductPhysicalLsqSpec \
             aethercore.ProductSmallMemoryCoreSpec \
             aethercore.ProductDataResolverSpec \
+            aethercore.ProductPhysicalStorageSpec \
             aethercore.ProductSmallTranslatedCoreSpec \
             aethercore.ProductAtomicCoreSpec \
             aethercore.V2F3ExecutionSpec \

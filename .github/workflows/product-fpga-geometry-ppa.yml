@@ -1,0 +1,141 @@
+name: AetherCore Product FPGA Geometry PPA A-B
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/scala/aethercore/core/product/ProductPhysicalLsq.scala'
+      - 'src/main/scala/aethercore/core/product/ProductDataResolver.scala'
+      - 'src/main/scala/aethercore/core/product/ProductSmallOoOBackend.scala'
+      - 'src/main/scala/aethercore/core/product/ProductCoreConfig.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaSoC.scala'
+      - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
+      - '.github/workflows/product-fpga-geometry-ppa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-fpga-ppa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-fpga-ppa:
+    name: Compare actual Product Small and Expanded FPGA netlists
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install FPGA synthesis proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+          chmod +x mill
+
+      - name: Validate physical storage and both FPGA geometry RTLs
+        shell: bash
+        run: ./mill aethercore.test.testOnly aethercore.ProductPhysicalStorageSpec
+
+      - name: Generate and map the two one-wide Product capacities
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethercore-product-fpga-ppa"
+          mkdir -p "$out"
+          echo "PRODUCT_PPA_OUT=$out" >> "$GITHUB_ENV"
+
+          for size in small expanded; do
+            rtl="$out/$size/rtl"
+            mkdir -p "$rtl"
+            ./mill aethercore.runMain \
+              aethercore.soc.ElaborateProductFpgaSoCGeometry \
+              "$size" --target-dir "$rtl"
+            mapfile -t svs < <(find "$rtl" -maxdepth 1 -name '*.sv' -print | sort)
+            test "${#svs[@]}" -gt 0
+            read_cmd='read_verilog -sv -DSYNTHESIS'
+            for sv in "${svs[@]}"; do
+              read_cmd+=" $sv"
+            done
+            top='AetherCoreProductFpgaSoC'
+            yosys -Q -p "$read_cmd; hierarchy -check -top $top; synth_ecp5 -top $top -json $out/$size/netlist.json; stat -top $top; flatten; ltp -noff $top" \
+              > "$out/$size/yosys.log" 2>&1
+            sed -n "s/.*Longest topological path in $top (length=\([0-9][0-9]*\)).*/\1/p" \
+              "$out/$size/yosys.log" | tail -1 > "$out/$size/depth"
+            test -s "$out/$size/depth"
+            jq -n \
+              --arg capacity "$size" \
+              --argjson cells "$(jq '[.modules["'"$top"'"].cells[]] | length' "$out/$size/netlist.json")" \
+              --argjson lut4 "$(jq '[.modules["'"$top"'"].cells[] | select(.type == "LUT4")] | length' "$out/$size/netlist.json")" \
+              --argjson ff "$(jq '[.modules["'"$top"'"].cells[] | select(.type == "TRELLIS_FF")] | length' "$out/$size/netlist.json")" \
+              --argjson bram "$(jq '[.modules["'"$top"'"].cells[] | select(.type == "DP16KD")] | length' "$out/$size/netlist.json")" \
+              --argjson dpr "$(jq '[.modules["'"$top"'"].cells[] | select(.type == "TRELLIS_DPR16X4")] | length' "$out/$size/netlist.json")" \
+              --argjson dsp "$(jq '[.modules["'"$top"'"].cells[] | select(.type == "MULT18X18D")] | length' "$out/$size/netlist.json")" \
+              --argjson depth "$(cat "$out/$size/depth")" \
+              '{capacity: $capacity, cells: $cells, lut4: $lut4, ff: $ff, bram: $bram, dpr: $dpr, dsp: $dsp, depth: $depth}' \
+              > "$out/$size/metrics.json"
+          done
+          small_rtl=$(find "$out/small/rtl" -maxdepth 1 -name '*.sv' -print -quit)
+          expanded_rtl=$(find "$out/expanded/rtl" -maxdepth 1 -name '*.sv' -print -quit)
+          if cmp -s "$small_rtl" "$expanded_rtl"; then
+            echo 'ERROR: Small and Expanded RTL emitted identical hardware' >&2
+            exit 1
+          fi
+
+      - name: Compare and report Product geometry cost
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ['PRODUCT_PPA_OUT'])
+          small = json.loads((root / 'small/metrics.json').read_text())
+          expanded = json.loads((root / 'expanded/metrics.json').read_text())
+          keys = ('cells', 'lut4', 'ff', 'bram', 'dpr', 'dsp', 'depth')
+          result = {'top': 'AetherCoreProductFpgaSoC', 'paddr_bits': 32,
+                    'proxy': 'Yosys synth_ecp5 + ltp -noff (board-neutral)',
+                    'small': small, 'expanded': expanded,
+                    'delta': {key: expanded[key] - small[key] for key in keys},
+                    'qualification': 'not device timing or FPGA board placement'}
+          (root / 'summary.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## Product FPGA Small vs Expanded A/B\n\n')
+              f.write('| Metric | Small | Expanded | Delta |\n| --- | ---: | ---: | ---: |\n')
+              for key in keys:
+                  f.write(f'| {key} | {small[key]} | {expanded[key]} | {result["delta"][key]:+} |\n')
+              f.write('\nProxy is not a board Fmax, placed/routed result, or Debian qualification.\n')
+          PY
+
+      - name: Upload exact-head FPGA structural evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-fpga-ppa-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethercore-product-fpga-ppa/summary.json
+            ${{ runner.temp }}/aethercore-product-fpga-ppa/*/metrics.json
+            ${{ runner.temp }}/aethercore-product-fpga-ppa/*/yosys.log

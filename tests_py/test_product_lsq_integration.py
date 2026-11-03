@@ -59,7 +59,7 @@ class ProductLsqOwnershipContract(unittest.TestCase):
         ):
             self.assertIn(fragment, backend)
         for fragment in (
-            "slots(reserveIndex).atomicOp := io.reserve.bits.atomicOp",
+            "slots(chosenSlot).atomicOp := io.reserve.bits.atomicOp",
             "(reserveStore || reserveAtomic) && storeCount < S.U",
             "!olderAtomic && !localFault && safeLoad",
             "AetherMemOp.Atomic",
@@ -69,7 +69,7 @@ class ProductLsqOwnershipContract(unittest.TestCase):
             self.assertIn(fragment, lsq)
         for fragment in (
             "selected.atomicOp === AtomicOp.Lr",
-            "post.slot.atomicOp === AtomicOp.Lr",
+            "postSlot.atomicOp === AtomicOp.Lr",
             "!io.pmaAttributes.supportsAtomic",
             "slots(freeIndex).atomicOp := io.memoryIssue.bits.atomicOp",
         ):
@@ -86,8 +86,8 @@ class ProductLsqOwnershipContract(unittest.TestCase):
         s = LSQ.read_text()
         for fragment in (
             "val virtualAddress = UInt(64.W)",
-            "slots(resolveIndex).virtualAddress := io.resolve.bits.virtualAddress",
-            "slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress",
+            "slots(resolveSlot).virtualAddress := io.resolve.bits.virtualAddress",
+            "slots(resolveSlot).fault.value := io.resolve.bits.virtualAddress",
             "completions.io.enq.bits.exception.value := returningSlot.virtualAddress",
         ):
             self.assertIn(fragment, s)
@@ -121,6 +121,26 @@ class ProductLsqOwnershipContract(unittest.TestCase):
         self.assertIn("backend.io.memoryAvailable := io.memoryResourceAvailable", top)
         self.assertNotIn("backend.io.memoryAvailable := io.memoryExecute.ready", top)
         self.assertIn("must", top.lower())
+
+    def test_physical_capacity_is_separate_from_rob_and_pmp_has_one_owner(self):
+        lsq = LSQ.read_text()
+        resolver = RESOLVER.read_text()
+        for fragment in (
+            "Seq.fill(T)(", "val token = new ProductRobId",
+            "val resolveMatches = matchingSlot(io.resolve.bits.token)",
+            "val responseMatches = matchingSlot(owner.token)",
+            "transactions(chosenTxn).token := candidate.token",
+            "val shiftedForward =", "def oldest(xs: Seq[AgeCandidate])",
+        ):
+            self.assertIn(fragment, lsq)
+        self.assertNotIn("Seq.fill(N)(", lsq)
+        for fragment in (
+            "private val postSlot = slots(postIndex)",
+            "private val postPaddr = Reg(UInt(PA.W))",
+            "private def wrapAdd(base: UInt, increment: UInt)",
+        ):
+            self.assertIn(fragment, resolver)
+        self.assertNotIn("private val post = Reg(new ProductPhysicalClassification", resolver)
 
     def test_product_uses_one_shared_sv39_translator_with_rob_token_ownership(self):
         s = RESOLVER.read_text()

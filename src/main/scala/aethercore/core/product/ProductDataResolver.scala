@@ -38,14 +38,6 @@ private class ProductTranslationSlot(val indexBits: Int, val generationBits: Int
     UInt(PmpGeometry(64, paddrBits).encodedAddressBits.W))
 }
 
-/** One translated result waiting for the combinational PMP/PMA classification. */
-private class ProductPhysicalClassification(val indexBits: Int, val generationBits: Int,
-                                            val geometry: PageTableGeometry,
-                                            val paddrBits: Int) extends Bundle {
-  val slot = new ProductTranslationSlot(indexBits, generationBits, geometry, paddrBits)
-  val paddr = UInt(paddrBits.W)
-}
-
 /** Shared Sv39 data translation for the Small physical LQ/SQ.
   *
   * Every already-issued memory operation has a distinct input slot, up to
@@ -72,7 +64,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   private val P = log2Ceil(g.integerPhysicalRegisters)
   private val G = 16
   private val pmpAddrBits = PmpGeometry(64, PA).encodedAddressBits
-  require(T > 1 && (T & (T - 1)) == 0, "translation slots use a power-of-two physical queue")
+  require(T > 1, "the physical translation pool needs separate LQ/SQ capacity")
   require(PA > 0 && PA <= ArchPA, "the current Sv39 platform must fit architectural PA width")
 
   val io = IO(new Bundle {
@@ -107,12 +99,16 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   // The two downstream single-entry holds are also lifetime leases. A future
   // ROB generation wrap may not make an old output look like a new operation.
   private val postValid = RegInit(false.B)
-  private val post = Reg(new ProductPhysicalClassification(I, G, geometry, PA))
+  // The translation slot remains leased across PMP/PMA classification, so a
+  // second full-width ProductTranslationSlot (including 16 PMP snapshots) is
+  // redundant. Only the translated PA needs a separate stage register.
+  private val postPaddr = Reg(UInt(PA.W))
   private val postIndex = Reg(UInt(S.W))
+  private val postSlot = slots(postIndex)
   private val resultValid = RegInit(false.B)
   private val result = Reg(new ProductResolvedMem(PA, I, G))
   private val resultIndex = Reg(UInt(S.W))
-  private val heldAlias = (postValid && same(post.slot.token, io.memoryIssue.bits.token)) ||
+  private val heldAlias = (postValid && same(postSlot.token, io.memoryIssue.bits.token)) ||
     (resultValid && same(result.token, io.memoryIssue.bits.token))
   io.resourceAvailable := freeMask.orR && !io.translationFence
   io.memoryIssue.ready := io.resourceAvailable && !alias && !heldAlias && !killedIssue
@@ -146,16 +142,22 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   private val activeValid = RegInit(false.B)
   private val activeIndex = Reg(UInt(S.W))
   private val roundRobin = RegInit(0.U(S.W))
+  // Non-power-of-two LQ+SQ capacities must use real modulo-T rotation rather
+  // than truncating address bits into illegal physical slot numbers.
+  private def wrapAdd(base: UInt, increment: UInt): UInt = {
+    val sum = base +& increment
+    Mux(sum >= T.U, (sum - T.U)(S - 1, 0), sum(S - 1, 0))
+  }
   private val candidateMask = VecInit(slots.map(s => s.valid && !s.translating))
   private val exactHead = VecInit((0 until T).map(j =>
     candidateMask(j) && io.robHead.valid && same(slots(j).token, io.robHead.bits)))
   private val hasHead = exactHead.asUInt.orR
   private val rotated = Wire(Vec(T, Bool()))
   for (offset <- 0 until T) {
-    rotated(offset) := candidateMask((roundRobin + offset.U)(S - 1, 0))
+    rotated(offset) := candidateMask(wrapAdd(roundRobin, offset.U))
   }
   private val selectedIndex = Mux(hasHead, PriorityEncoder(exactHead.asUInt),
-    (roundRobin + PriorityEncoder(rotated.asUInt))(S - 1, 0))
+    wrapAdd(roundRobin, PriorityEncoder(rotated.asUInt)))
   private val selected = slots(selectedIndex)
   private val candidateValid = candidateMask.asUInt.orR && !activeValid &&
     !postValid && !resultValid && !io.translationFence
@@ -201,7 +203,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   // A young miss is a rejected lookup, not a leased walk. Rotate the probe
   // candidate so a non-head miss cannot starve the next possible TLB hit.
   when(candidateValid && !selectedHead && !selectedKilled) {
-    roundRobin := selectedIndex + 1.U
+    roundRobin := wrapAdd(selectedIndex, 1.U)
   }
   when(translationRequestFire && !translationResponseFire) {
     activeValid := true.B
@@ -229,8 +231,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
       }.otherwise {
         postValid := true.B
         postIndex := responseIndex
-        post.slot := responseSlot
-        post.paddr := narrowDataAddress
+        postPaddr := narrowDataAddress
       }
     }
   }
@@ -238,7 +239,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   // Check the real PA domain before any PTW external request. PMP PTE reads
   // are Supervisor reads regardless of the original data access privilege.
   private val pmpRanges = Module(new PmpRangeDecoder(64, PmpConstants.MaxEntries, PA))
-  private val pmpOwner = Mux(postValid, post.slot,
+  private val pmpOwner = Mux(postValid, postSlot,
     Mux(activeValid, slots(activeIndex), selected))
   pmpRanges.io.config := pmpOwner.pmpConfig
   pmpRanges.io.pmpAddress := pmpOwner.pmpAddress
@@ -262,33 +263,34 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   translation.io.pteData := io.pte.rdata
   translation.io.pteFault := pteAccessFault || (io.pte.valid && io.pte.fault)
 
-  dataPmp.io.privilege := post.slot.context.effectivePrivilege
-  dataPmp.io.address := post.paddr
-  dataPmp.io.bytes := (1.U(4.W) << post.slot.size.asUInt)
-  private val postRead = post.slot.kind === MemoryOperationKind.Load ||
-    (post.slot.kind === MemoryOperationKind.Atomic && post.slot.atomicOp === AtomicOp.Lr)
+  dataPmp.io.privilege := postSlot.context.effectivePrivilege
+  dataPmp.io.address := postPaddr
+  dataPmp.io.bytes := (1.U(4.W) << postSlot.size.asUInt)
+  private val postRead = postSlot.kind === MemoryOperationKind.Load ||
+    (postSlot.kind === MemoryOperationKind.Atomic && postSlot.atomicOp === AtomicOp.Lr)
   dataPmp.io.write := !postRead
   dataPmp.io.execute := false.B
   io.pmaValid := postValid
-  io.pmaAddress := post.paddr
+  io.pmaAddress := postPaddr
 
   // A registered post-translation stage isolates TLB/PTW logic from the
   // platform PMA decoder and holds attributes through output backpressure.
-  when(postValid && !resultValid && !io.translationFence) {
+  when(postValid && !resultValid && !io.translationFence &&
+    !(io.kill.valid && same(postSlot.token, io.kill.bits))) {
     resultIndex := postIndex
     result := 0.U.asTypeOf(result)
-    result.token := post.slot.token
-    result.virtualAddress := post.slot.virtualAddress
-    result.paddr := post.paddr
-    result.storeData := post.slot.storeData
+    result.token := postSlot.token
+    result.virtualAddress := postSlot.virtualAddress
+    result.paddr := postPaddr
+    result.storeData := postSlot.storeData
     result.attributes := io.pmaAttributes
     val deniedPmp = config.software.isa.hasPmp.B && !dataPmp.io.allow
-    val deniedAtomicPma = post.slot.kind === MemoryOperationKind.Atomic &&
+    val deniedAtomicPma = postSlot.kind === MemoryOperationKind.Atomic &&
       !io.pmaAttributes.supportsAtomic
     result.fault.valid := deniedPmp || deniedAtomicPma
     result.fault.cause := Mux(postRead,
       MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
-    result.fault.value := post.slot.virtualAddress
+    result.fault.value := postSlot.virtualAddress
     resultValid := true.B
     postValid := false.B
   }
@@ -325,7 +327,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
       }
     }
     when(killActive) { activeValid := false.B }
-    when(postValid && same(post.slot.token, io.kill.bits)) { postValid := false.B }
+    when(postValid && same(postSlot.token, io.kill.bits)) { postValid := false.B }
     when(resultValid && same(result.token, io.kill.bits)) { resultValid := false.B }
   }
   when(io.translationFence) {

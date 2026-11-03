@@ -37,7 +37,7 @@ class ProductResolvedMem(val paddrBits: Int, val indexBits: Int, val generationB
 private class ProductMemSlot(val paddrBits: Int, val indexBits: Int,
                              val physicalBits: Int, val generationBits: Int) extends Bundle {
   val valid = Bool()
-  val tokenGeneration = UInt(generationBits.W)
+  val token = new ProductRobId(indexBits, generationBits)
   val kind = MemoryOperationKind()
   val size = MemSize()
   val unsigned = Bool()
@@ -62,6 +62,9 @@ private class ProductTxnOwner(val indexBits: Int, val generationBits: Int) exten
 
 /** Correctness-first LQ/SQ: physical-address stage, two independent lifetimes.
   *
+  * - Physical storage is sized by LQ+SQ, NOT ROB depth. Each slot carries an
+  *   independent ROB token; a larger ROB cannot replicate the wide VA/PA/data
+  *   records or the store-dependency network.
   * - Reservation is atomic with ROB dispatch, so older unresolved stores block
   *   younger loads instead of requiring speculative alias prediction/replay.
   * - Full-cover youngest-older store data forwards; partial overlap stalls.
@@ -104,7 +107,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     val drainedKilledResponse = Output(Bool())
   })
 
-  private val slots = RegInit(VecInit(Seq.fill(N)(
+  private val slots = RegInit(VecInit(Seq.fill(T)(
     0.U.asTypeOf(new ProductMemSlot(paddrBits, I, P, G)))))
   private val transactions = RegInit(VecInit(Seq.fill(T)(
     0.U.asTypeOf(new ProductTxnOwner(I, G)))))
@@ -163,6 +166,8 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     Mux(size === MemSize.Word, word.pad(64), dword)
   }
   private def age(index: UInt): UInt = (index - io.robHead.bits.index)(I - 1, 0)
+  private def matchingSlot(token: ProductRobId): Vec[Bool] =
+    VecInit(slots.map(s => s.valid && equal(s.token, token)))
 
   val loadCount = PopCount(slots.map(s => s.valid && s.kind === MemoryOperationKind.Load))
   // Atomic instructions reserve StoreQ capacity, including LR. Their
@@ -179,7 +184,8 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   val reserveLoad = reserveKind === MemoryOperationKind.Load
   val reserveStore = reserveKind === MemoryOperationKind.Store
   val reserveAtomic = reserveKind === MemoryOperationKind.Atomic
-  val reserveIndex = io.reserve.bits.token.index
+  val freeSlotMask = VecInit(slots.map(s => !s.valid)).asUInt
+  val chosenSlot = PriorityEncoder(freeSlotMask)
   // Prevent a wrapped ROB generation from aliasing an external memory
   // transaction which is still leased after squash (memory latency unbounded).
   val outstandingSameLifetime = transactions.map { txn =>
@@ -188,7 +194,8 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   }.reduce(_ || _)
   io.reserve.ready := (reserveLoad && loadCount < L.U ||
                        (reserveStore || reserveAtomic) && storeCount < S.U) &&
-    !slots(reserveIndex).valid && !outstandingSameLifetime
+    freeSlotMask.orR && !matchingSlot(io.reserve.bits.token).asUInt.orR &&
+    !outstandingSameLifetime
   when(io.reserve.fire) {
     assert(reserveLoad || reserveStore || reserveAtomic,
       "LSQ only reserves ordinary or atomic memory operations")
@@ -197,32 +204,32 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
         (io.reserve.bits.size === MemSize.Word || io.reserve.bits.size === MemSize.DWord),
         "decoded RV64 atomics must have a valid operation and W/D access width")
     }
-    slots(reserveIndex) := 0.U.asTypeOf(slots(reserveIndex))
-    slots(reserveIndex).valid := true.B
-    slots(reserveIndex).tokenGeneration := io.reserve.bits.token.generation
-    slots(reserveIndex).kind := reserveKind
-    slots(reserveIndex).size := io.reserve.bits.size
-    slots(reserveIndex).unsigned := io.reserve.bits.unsigned
-    slots(reserveIndex).atomicOp := io.reserve.bits.atomicOp
-    slots(reserveIndex).destination := io.reserve.bits.destination
-    slots(reserveIndex).hasDestination := io.reserve.bits.hasDestination
+    slots(chosenSlot) := 0.U.asTypeOf(slots(chosenSlot))
+    slots(chosenSlot).valid := true.B
+    slots(chosenSlot).token := io.reserve.bits.token
+    slots(chosenSlot).kind := reserveKind
+    slots(chosenSlot).size := io.reserve.bits.size
+    slots(chosenSlot).unsigned := io.reserve.bits.unsigned
+    slots(chosenSlot).atomicOp := io.reserve.bits.atomicOp
+    slots(chosenSlot).destination := io.reserve.bits.destination
+    slots(chosenSlot).hasDestination := io.reserve.bits.hasDestination
   }
 
-  val resolveIndex = io.resolve.bits.token.index
-  private val resolving = slots(resolveIndex)
+  val resolveMatches = matchingSlot(io.resolve.bits.token)
+  val resolveSlot = PriorityEncoder(resolveMatches.asUInt)
+  private val resolving = slots(resolveSlot)
   // The MMU/translator may finish AFTER ROB squash and slot reuse. Drain
   // stale responses instead of backpressuring the resolver indefinitely.
-  val resolutionLive = resolving.valid && !resolving.resolved &&
-    resolving.tokenGeneration === io.resolve.bits.token.generation &&
+  val resolutionLive = resolveMatches.asUInt.orR && !resolving.resolved &&
     !(io.kill.valid && equal(io.kill.bits, io.resolve.bits.token))
   io.resolve.ready := true.B // stale/duplicate results are drained, never assigned to a new lifetime
   when(io.resolve.fire && resolutionLive) {
-    slots(resolveIndex).resolved := true.B
-    slots(resolveIndex).virtualAddress := io.resolve.bits.virtualAddress
-    slots(resolveIndex).paddr := io.resolve.bits.paddr
-    slots(resolveIndex).storeData := io.resolve.bits.storeData
-    slots(resolveIndex).attributes := io.resolve.bits.attributes
-    slots(resolveIndex).fault := io.resolve.bits.fault
+    slots(resolveSlot).resolved := true.B
+    slots(resolveSlot).virtualAddress := io.resolve.bits.virtualAddress
+    slots(resolveSlot).paddr := io.resolve.bits.paddr
+    slots(resolveSlot).storeData := io.resolve.bits.storeData
+    slots(resolveSlot).attributes := io.resolve.bits.attributes
+    slots(resolveSlot).fault := io.resolve.bits.fault
     val mask = bytesOf(resolving.size) - 1.U
     val misaligned = (io.resolve.bits.paddr & mask) =/= 0.U
     val atomic = resolving.kind === MemoryOperationKind.Atomic
@@ -236,20 +243,20 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       resolving.size =/= MemSize.DWord && !io.resolve.bits.attributes.supportsPartial
     when(!io.resolve.bits.fault.valid) {
       when(misaligned) {
-        slots(resolveIndex).fault.valid := true.B
-        slots(resolveIndex).fault.cause := Mux(readLike,
+        slots(resolveSlot).fault.valid := true.B
+        slots(resolveSlot).fault.cause := Mux(readLike,
           MachineExceptionCode.LoadAddressMisaligned.U,
           MachineExceptionCode.StoreAddressMisaligned.U)
-        slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
+        slots(resolveSlot).fault.value := io.resolve.bits.virtualAddress
       }.elsewhen(unsupportedAtomic) {
-        slots(resolveIndex).fault.valid := true.B
-        slots(resolveIndex).fault.cause := Mux(readLike,
+        slots(resolveSlot).fault.valid := true.B
+        slots(resolveSlot).fault.cause := Mux(readLike,
           MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
-        slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
+        slots(resolveSlot).fault.value := io.resolve.bits.virtualAddress
       }.elsewhen(unsupportedPartialStore) {
-        slots(resolveIndex).fault.valid := true.B
-        slots(resolveIndex).fault.cause := MachineExceptionCode.StoreAccessFault.U
-        slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
+        slots(resolveSlot).fault.valid := true.B
+        slots(resolveSlot).fault.cause := MachineExceptionCode.StoreAccessFault.U
+        slots(resolveSlot).fault.value := io.resolve.bits.virtualAddress
       }
     }
   }
@@ -258,29 +265,28 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   // keeps its leased physical transaction ID until its terminal response.
   io.droppedStaleResolution := io.resolve.fire && !resolutionLive
   when(io.kill.valid) {
-    val killed = slots(io.kill.bits.index)
-    when(killed.valid && killed.tokenGeneration === io.kill.bits.generation) {
-      slots(io.kill.bits.index).valid := false.B
+    for (j <- 0 until T) {
+      when(slots(j).valid && equal(slots(j).token, io.kill.bits)) {
+        slots(j).valid := false.B
+      }
     }
   }
 
   val freeTxn = VecInit(transactions.map(t => !t.active)).asUInt
   val hasTxn = freeTxn.orR
   val chosenTxn = PriorityEncoder(freeTxn)
-  val eligible = Wire(Vec(N, Bool()))
-  val forwardable = Wire(Vec(N, Bool()))
-  val forwardedData = Wire(Vec(N, UInt(64.W)))
-  val faulted = Wire(Vec(N, Bool()))
+  val eligible = Wire(Vec(T, Bool()))
+  val forwardable = Wire(Vec(T, Bool()))
+  val forwardOwner = Wire(Vec(T, UInt(TxBits.W)))
+  val faulted = Wire(Vec(T, Bool()))
 
-  // Each record is indexed by architectural ROB slot and has its own
-  // generation. Age selection is a pure feed-forward network: we never feed
-  // a mutable Wire back into its own enable / priority condition.
-  for (j <- 0 until N) {
+  // The compact physical entries are addressed by ROB *identity*, not slot
+  // number. The dependency comparisons scale as (L+S)^2, independently of
+  // ROB depth. The wide 64-bit forwarding data path is shared only after an
+  // eligible instruction is selected, instead of replicated per comparison.
+  for (j <- 0 until T) {
     val item = slots(j)
-    val token = Wire(new ProductRobId(I, G))
-    token.index := j.U
-    token.generation := item.tokenGeneration
-    val isHead = io.robHead.valid && equal(token, io.robHead.bits)
+    val isHead = io.robHead.valid && equal(item.token, io.robHead.bits)
     val isLoad = item.kind === MemoryOperationKind.Load
     val isStore = item.kind === MemoryOperationKind.Store
     val isAtomic = item.kind === MemoryOperationKind.Atomic
@@ -290,21 +296,21 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
 
     // Prefix reduction: feed-forward youngest overlapping older Store wins.
     // Unknown older Store blocks ALL younger loads until its address resolves.
-    val olderStore = (0 until N).map { k =>
+    val olderStore = (0 until T).map { k =>
       slots(k).valid && slots(k).kind === MemoryOperationKind.Store &&
-        age(k.U) < age(j.U)
+        age(slots(k).token.index) < age(item.token.index)
     }
     // An older LR/SC/AMO is a full memory-order barrier until it leaves ROB.
     // This conservatively implements aq/rl without permitting a younger RAM
     // Load to observe pre-atomic state or prematurely alter a reservation.
-    val olderAtomic = (0 until N).map { k =>
+    val olderAtomic = (0 until T).map { k =>
       slots(k).valid && slots(k).kind === MemoryOperationKind.Atomic &&
-        age(k.U) < age(j.U)
+        age(slots(k).token.index) < age(item.token.index)
     }.reduce(_ || _)
-    val unknownOlder = (0 until N).map { k =>
+    val unknownOlder = (0 until T).map { k =>
       olderStore(k) && !slots(k).resolved
     }.reduce(_ || _)
-    val intersects = (0 until N).map { k =>
+    val intersects = (0 until T).map { k =>
       val previous = slots(k)
       olderStore(k) && previous.resolved &&
       alignedWord(previous.paddr) === alignedWord(item.paddr) &&
@@ -313,17 +319,16 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     var found: Bool = false.B
     var youngest: UInt = 0.U(I.W)
     var complete: Bool = false.B
-    var data: UInt = 0.U(64.W)
-    for (k <- 0 until N) {
+    var source: UInt = 0.U(TxBits.W)
+    for (k <- 0 until T) {
       val previous = slots(k)
       val mask = laneMask(item.paddr, item.size)
       val covered = (laneMask(previous.paddr, previous.size) & mask) === mask
-      val shiftedStore = (previous.storeData << (previous.paddr(2, 0) << 3))(63, 0)
-      val result = shiftedStore >> (item.paddr(2, 0) << 3)
-      val take = intersects(k) && (!found || age(k.U) >= youngest)
-      data = Mux(take, result, data)
+      val previousAge = age(previous.token.index)
+      val take = intersects(k) && (!found || previousAge >= youngest)
       complete = Mux(take, covered, complete)
-      youngest = Mux(take, age(k.U), youngest)
+      youngest = Mux(take, previousAge, youngest)
+      source = Mux(take, k.U, source)
       found = found || intersects(k)
     }
     val localFault = item.fault.valid
@@ -335,25 +340,35 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       (localFault || forward || read || write) && io.robHead.valid &&
       !io.kill.valid && (hasTxn || forward || localFault)
     forwardable(j) := forward
-    forwardedData(j) := data
+    forwardOwner(j) := source
     faulted(j) := localFault
   }
 
-  // Rotate by actual ROB head; selecting a physical slot number would give
-  // incorrect age priority across head/tail wrap.
-  val rotated = Wire(Vec(N, Bool()))
-  for (offset <- 0 until N) {
-    val index = (io.robHead.bits.index + offset.U)(I - 1, 0)
-    rotated(offset) := eligible(index)
+  // Balanced age tournament: the physical index is arbitrary, and candidate
+  // selection must still choose the oldest eligible ROB lifetime across wrap.
+  // A linear T-stage priority chain would turn a larger LQ/SQ into a deep
+  // FPGA timing path, even though only one request may launch per cycle.
+  case class AgeCandidate(valid: Bool, slot: UInt, distance: UInt)
+  def earlier(a: AgeCandidate, b: AgeCandidate): AgeCandidate = {
+    val takeB = b.valid && (!a.valid || b.distance < a.distance)
+    AgeCandidate(a.valid || b.valid,
+      Mux(takeB, b.slot, a.slot), Mux(takeB, b.distance, a.distance))
   }
-  val candidateValid = rotated.asUInt.orR
-  val candidateOffset = PriorityEncoder(rotated.asUInt)
-  val candidateIndex = (io.robHead.bits.index + candidateOffset)(I - 1, 0)
+  def oldest(xs: Seq[AgeCandidate]): AgeCandidate =
+    if (xs.size == 1) xs.head
+    else earlier(oldest(xs.take(xs.size / 2)), oldest(xs.drop(xs.size / 2)))
+  val selected = oldest((0 until T).map { j =>
+    AgeCandidate(eligible(j), j.U(TxBits.W), age(slots(j).token.index))
+  })
+  val candidateValid = selected.valid
+  val candidateIndex = selected.slot
   val candidateForward = forwardable(candidateIndex)
-  val candidateForwardData = forwardedData(candidateIndex)
   val candidateLocalFault = faulted(candidateIndex)
 
   private val candidate = slots(candidateIndex)
+  private val forwardingStore = slots(forwardOwner(candidateIndex))
+  val shiftedForward = (forwardingStore.storeData << (forwardingStore.paddr(2, 0) << 3))(63, 0)
+  val candidateForwardData = shiftedForward >> (candidate.paddr(2, 0) << 3)
   val immediate = candidateForward || candidateLocalFault
   io.memoryRequest.valid := candidateValid && !immediate && hasTxn
   io.memoryRequest.bits := 0.U.asTypeOf(io.memoryRequest.bits)
@@ -374,15 +389,13 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   when(io.memoryRequest.fire) {
     assert(!transactions(chosenTxn).active, "external txn ID is leased exactly once")
     transactions(chosenTxn).active := true.B
-    transactions(chosenTxn).token.index := candidateIndex
-    transactions(chosenTxn).token.generation := candidate.tokenGeneration
+    transactions(chosenTxn).token := candidate.token
     transactions(chosenTxn).isLoad := candidate.kind === MemoryOperationKind.Load ||
       (candidate.kind === MemoryOperationKind.Atomic && candidate.atomicOp === AtomicOp.Lr)
     slots(candidateIndex).launched := true.B
     when(candidate.kind === MemoryOperationKind.Store ||
       candidate.kind === MemoryOperationKind.Atomic) {
-      val sameHead = io.robHead.valid && candidateIndex === io.robHead.bits.index &&
-        candidate.tokenGeneration === io.robHead.bits.generation
+      val sameHead = io.robHead.valid && equal(candidate.token, io.robHead.bits)
       assert(sameHead, "Store/Atomic must NEVER externalize before exact ROB head")
     }
   }
@@ -403,9 +416,10 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
 
   val responseIndex = io.memoryResponse.bits.txnId
   private val owner = transactions(responseIndex)
-  private val returningSlot = slots(owner.token.index)
-  val matchingLive = returningSlot.valid && returningSlot.launched &&
-    returningSlot.tokenGeneration === owner.token.generation &&
+  private val responseMatches = matchingSlot(owner.token)
+  private val responseSlot = PriorityEncoder(responseMatches.asUInt)
+  private val returningSlot = slots(responseSlot)
+  val matchingLive = responseMatches.asUInt.orR && returningSlot.launched &&
     !(io.kill.valid && equal(io.kill.bits, owner.token))
   io.memoryResponse.ready := !io.memoryResponse.valid || !owner.active ||
     !matchingLive || completions.io.enq.ready
@@ -414,7 +428,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     assert(io.memoryResponse.bits.last, "single-beat LSQ requires terminal response")
     transactions(responseIndex).active := false.B
     when(matchingLive) {
-      slots(owner.token.index).valid := false.B
+      slots(responseSlot).valid := false.B
       completions.io.enq.valid := true.B
       completions.io.enq.bits.token := owner.token
       completions.io.enq.bits.destination := returningSlot.destination
@@ -455,8 +469,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   when(candidateValid && immediate && !responseWon && completions.io.enq.ready) {
     slots(candidateIndex).valid := false.B
     completions.io.enq.valid := true.B
-    completions.io.enq.bits.token.index := candidateIndex
-    completions.io.enq.bits.token.generation := candidate.tokenGeneration
+    completions.io.enq.bits.token := candidate.token
     completions.io.enq.bits.destination := candidate.destination
     completions.io.enq.bits.hasValue := candidate.hasDestination
     completions.io.enq.bits.value := extended(candidateForwardData, candidate.size, candidate.unsigned)

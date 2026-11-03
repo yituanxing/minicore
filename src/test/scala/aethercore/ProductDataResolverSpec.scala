@@ -285,4 +285,46 @@ class ProductDataResolverSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.pte.valid.expect(true.B) // exact-head walk starts despite 3 young misses
     }
   }
+
+  it should "rotate all six non-power-of-two physical slots without losing ROB identities" in {
+    val geometry = profile.geometry.copy(loadQueueEntries = 3, storeQueueEntries = 3)
+    simulate(new ProductDataResolver(profile.copy(geometry = geometry))) { d =>
+      init(d)
+      for (i <- 0 until 6) issue(d, i, BigInt("80010000", 16) + i * 8)
+      d.io.pending.expect(6.U)
+      d.io.resourceAvailable.expect(false.B)
+      val returned = scala.collection.mutable.Set.empty[BigInt]
+      for (_ <- 0 until 6) {
+        awaitResult(d, cycles = 50)
+        d.io.resolved.bits.fault.valid.expect(false.B)
+        val token = d.io.resolved.bits.token.index.peek().litValue
+        returned should not contain token
+        returned += token
+        d.io.resolved.bits.virtualAddress.expect(
+          (BigInt("80010000", 16) + token * 8).U)
+        consume(d)
+      }
+      returned shouldBe (0 until 6).map(BigInt(_)).toSet
+      d.io.pending.expect(0.U)
+    }
+  }
+
+  it should "cancel a leased PMP classification before it can generate a stale result" in {
+    simulate(new ProductDataResolver(profile)) { d =>
+      init(d)
+      issue(d, 2, BigInt("80030000", 16), generation = 7)
+      for (_ <- 0 until 30 if !d.io.pmaValid.peek().litToBoolean) d.clock.step()
+      d.io.pmaValid.expect(true.B)
+      d.io.kill.valid.poke(true.B)
+      d.io.kill.bits.index.poke(2.U)
+      d.io.kill.bits.generation.poke(7.U)
+      d.clock.step()
+      d.io.kill.valid.poke(false.B)
+      for (_ <- 0 until 6) {
+        d.io.resolved.valid.expect(false.B)
+        d.clock.step()
+      }
+      d.io.pending.expect(0.U)
+    }
+  }
 }

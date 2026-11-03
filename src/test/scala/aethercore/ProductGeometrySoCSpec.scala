@@ -20,13 +20,7 @@ class ProductGeometrySoCSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "Product one-wide SoC capacity scaling"
 
   private val small = ProductCoreProfiles.smallGeometry
-  private val expanded = small.copy(
-    robEntries = 16,
-    iqEntries = 8,
-    integerPhysicalRegisters = 64,
-    loadQueueEntries = 4,
-    storeQueueEntries = 4
-  )
+  private val expanded = ProductCoreProfiles.expandedSingleLaneGeometry
   private val geometries = Seq(
     ("small", small, 4),
     ("expanded", expanded, 5)

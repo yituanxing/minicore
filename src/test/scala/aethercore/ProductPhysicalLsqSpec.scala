@@ -104,6 +104,56 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
     d.io.completion.ready.poke(false.B)
   }
 
+  it should "reuse compact six-entry physical slots across ROB wrap while preserving LQ and SQ quotas" in {
+    val geometry = ProductCoreProfiles.smallGeometry.copy(
+      robEntries = 16, loadQueueEntries = 3, storeQueueEntries = 3)
+    simulate(new ProductPhysicalLsq(geometry)) { d =>
+      init(d)
+      head(d, 15)
+      reserve(d, 0, MemoryOperationKind.Store)
+      reserve(d, 1, MemoryOperationKind.Load, dest = 33, writes = true)
+      resolve(d, 1, 0x80002000L)
+      d.io.memoryRequest.valid.expect(false.B)
+      resolve(d, 0, 0x80002000L, data = BigInt("cafebabedeadbeef", 16))
+      d.io.forwarded.expect(true.B)
+      d.clock.step()
+      receive(d, 1, BigInt("cafebabedeadbeef", 16), writes = true)
+      head(d, 0)
+      d.io.memoryRequest.valid.expect(true.B)
+      val oldTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      response(d, oldTxn)
+      receive(d, 0)
+
+      Seq(2, 3, 4).foreach(i => reserve(d, i, MemoryOperationKind.Load, writes = true))
+      Seq(5, 6, 7).foreach(i => reserve(d, i, MemoryOperationKind.Store))
+      d.io.loadCount.expect(3.U)
+      d.io.storeCount.expect(3.U)
+      d.io.reserve.bits.token.index.poke(8.U)
+      d.io.reserve.bits.token.generation.poke(0.U)
+      d.io.reserve.bits.kind.poke(MemoryOperationKind.Store)
+      d.io.reserve.valid.poke(true.B)
+      d.io.reserve.ready.expect(false.B)
+      d.io.reserve.valid.poke(false.B)
+
+      d.io.kill.valid.poke(true.B)
+      d.io.kill.bits.index.poke(5.U)
+      d.io.kill.bits.generation.poke(0.U)
+      d.clock.step()
+      d.io.kill.valid.poke(false.B)
+      d.io.storeCount.expect(2.U)
+      reserve(d, 8, MemoryOperationKind.Store)
+      d.io.storeCount.expect(3.U)
+      head(d, 2)
+      resolve(d, 2, 0x80003000L)
+      d.io.memoryRequest.valid.expect(true.B)
+      val liveTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      response(d, liveTxn, value = 0x55L)
+      receive(d, 2, 0x55L, writes = true)
+    }
+  }
+
   it should "reserve older unknown Store before younger Load and forward completed full-cover data" in {
     simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
       init(d)

@@ -75,6 +75,12 @@ object ProductCoreProfiles {
     robEntries = 8, iqEntries = 4, loadQueueEntries = 2, storeQueueEntries = 2,
     integerPhysicalRegisters = 48, integerReadPorts = 2, integerWritePorts = 1
   )
+  // A second *implemented* capacity of the same one-wide RTL, used for FPGA
+  // cost A/B. The Medium/Large two-wide profiles below are still future RTL.
+  val expandedSingleLaneGeometry: ProductCoreGeometry = smallGeometry.copy(
+    robEntries = 16, iqEntries = 8, integerPhysicalRegisters = 64,
+    loadQueueEntries = 4, storeQueueEntries = 4
+  )
   val mediumGeometry = ProductCoreGeometry(
     decodeWidth = 2, dispatchWidth = 2, issueWidth = 1, retireWidth = 2,
     robEntries = 16, iqEntries = 8, loadQueueEntries = 4, storeQueueEntries = 4,
