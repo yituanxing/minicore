@@ -7,6 +7,9 @@ OUT="${OUT:-build/rv64-pa32-gsim-feasibility}"
 GSIM_TAG="master-2026-10-30-45a73d6"
 GSIM_SHA256="c4af0822567e15a2d7322653b36b310206dc51c6c6c89e1ad2ff9c148d19e919"
 mkdir -p "$OUT"
+# The mill launcher is stored without an executable bit in this repository.
+test -f ./mill || { echo "missing Mill launcher" >&2; exit 2; }
+chmod +x ./mill
 ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardPA32CHIRRTL \
   "$ROOT/$OUT/pa32.fir" 2>&1 | tee "$OUT/chirrtl-export.log"
 test -s "$OUT/pa32.fir"
