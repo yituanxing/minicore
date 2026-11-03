@@ -14,16 +14,21 @@
 
 using aethercore::l32sim::Memory;
 int main(int argc, char** argv) {
-  if (argc != 2) return 2;
+  if (argc != 2 && argc != 3) return 2;
   try {
-    const auto guestCycles = std::stoull(argv[1]);
+    const bool bare = argc == 2;
+    const auto guestCycles = std::stoull(argv[bare ? 1 : 2]);
     if (guestCycles < 1 || guestCycles > 1000000000ULL) return 3;
     Memory memory;
     constexpr std::uint32_t program[] = {
         0x00100093U, 0x00208113U, 0x00310193U, 0x0000006fU};
-    for (unsigned i = 0; i < 4; ++i)
-      memory.write32Masked(aethercore::l32sim::kRamBase + i*4,
-                           program[i], 0xFU);
+    if (bare) {
+      for (unsigned i = 0; i < 4; ++i)
+        memory.write32Masked(aethercore::l32sim::kRamBase + i*4,
+                             program[i], 0xFU);
+    } else {
+      memory.loadAtBase(argv[1]);
+    }
 
     VerilatedContext context;
     auto dut = std::make_unique<VAetherCoreV2OpenSbiRV64SimTop>(&context);

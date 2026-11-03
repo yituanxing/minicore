@@ -29,7 +29,7 @@ def parse(path, engine):
         raise ValueError(f"{engine}: no committed instructions")
     return summary, commits
 
-def compare(gsfile, vlfile):
+def compare(gsfile, vlfile, strict_bare=True):
     g, gc = parse(gsfile, "GSIM")
     v, vc = parse(vlfile, "VERILATOR")
     for key in FIELDS:
@@ -40,6 +40,14 @@ def compare(gsfile, vlfile):
             if a != b:
                 raise ValueError(f"retirement mismatch index={i}: GSIM={a} Verilator={b}")
         raise ValueError(f"retirement count mismatch: GSIM={len(gc)} Verilator={len(vc)}")
+    if not strict_bare:
+        if int(g["retires"]) < 100:
+            raise ValueError("OpenSBI firmware prefix retired too few instructions")
+        print(f"AETHERCORE_PA32_GSIM_VERILATOR_FIRMWARE_DIFF_PASS "
+              f"cycles={g['guest_cycles']} retires={g['retires']} "
+              f"exceptions={g['exceptions']} mtime={g['mtime']} "
+              f"digest={g['commit_digest']}")
+        return
     if int(g["exceptions"]) != 0 or int(g["retires"]) < 4:
         raise ValueError("bare RV64I test must retire real instructions without traps")
     for expected, pc, instruction in (
@@ -56,10 +64,10 @@ def compare(gsfile, vlfile):
           f"digest={g['commit_digest']}")
 
 if __name__=="__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: rv64_pa32_gsim_bare_diff.py GSIM.log VERILATOR.log")
+    if len(sys.argv) not in (3,4) or (len(sys.argv)==4 and sys.argv[3]!="--firmware"):
+        raise SystemExit("usage: rv64_pa32_gsim_bare_diff.py GSIM.log VERILATOR.log [--firmware]")
     try:
-        compare(*sys.argv[1:])
+        compare(sys.argv[1],sys.argv[2],strict_bare=(len(sys.argv)==3))
     except (ValueError, OSError) as error:
         print(f"AETHERCORE_PA32_GSIM_VERILATOR_BARE_DIFF_FAIL {error}",file=sys.stderr)
         sys.exit(1)
