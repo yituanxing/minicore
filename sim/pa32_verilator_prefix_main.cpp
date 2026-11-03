@@ -4,6 +4,7 @@
 #include "VAetherCoreV2OpenSbiRV64SimTop.h"
 #include "l32_opensbi_runtime.h"
 #include "pa32_firmware_milestone.h"
+#include "pa32_sim_progress.h"
 
 #include <chrono>
 #include <cstdio>
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
     std::uint64_t lastPc = 0;
     std::uint64_t executedCycles = 0;
     const auto start=std::chrono::steady_clock::now();
+    aethercore::pa32sim::SimProgress progress("VERILATOR", guestCycles, requireLinux, start);
 
     for (std::uint64_t cycle = 0; cycle < guestCycles + 32; ++cycle) {
       const bool reset = cycle < 32;
@@ -79,6 +81,7 @@ int main(int argc, char** argv) {
       }
       if (dut->io_commit_interrupt) ++interrupts;
       if ((cycle - 31) % 100000 == 0) {
+        progress.observe(executedCycles, retires, firmware);
         std::printf("AETHERCORE_PA32_VERILATOR_CHECKPOINT cycle=%llu retires=%llu"
                     " exceptions=%llu interrupts=%llu mtime=%llu"
                     " last_pc=0x%llx commit_digest=0x%llx\n",
@@ -93,6 +96,7 @@ int main(int argc, char** argv) {
       if (requireLinux && firmware.linuxPassed()) break;
     }
 
+    progress.finish(executedCycles, retires, firmware);
     const double sec=std::chrono::duration<double>(
         std::chrono::steady_clock::now()-start).count();
     const std::uint64_t ramDigest = memory.stateDigest();

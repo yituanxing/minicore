@@ -28,16 +28,11 @@ fi
 mkdir -p "$OUT"
 sha256sum "$FW_BIN" > "$OUT/firmware.sha256"
 
-timeout --signal=TERM --kill-after=10s "${TIMEOUT_SECONDS}s" \
-  "$GSIM_OUT/pa32-gsim-prefix" "$FW_BIN" "$CYCLES" "${runner_args[@]}" \
-  > "$OUT/gsim-firmware.log" 2>&1 || {
-    tail -90 "$OUT/gsim-firmware.log" >&2; exit 5;
-  }
-timeout --signal=TERM --kill-after=10s "${TIMEOUT_SECONDS}s" \
-  "$VERILATOR_OUT/obj/V$TOP" "$FW_BIN" "$CYCLES" "${runner_args[@]}" \
-  > "$OUT/verilator-firmware.log" 2>&1 || {
-    tail -90 "$OUT/verilator-firmware.log" >&2; exit 6;
-  }
+# One shared streaming runner preserves exact output logs and exit codes.
+SIM_LOG="$OUT/gsim-firmware.log" SIM_TIMEOUT_SECONDS="$TIMEOUT_SECONDS" \
+  bash tools/ci/rv64_pa32_sim_run.sh gsim "$FW_BIN" "$CYCLES" "${runner_args[@]}" || exit 5
+SIM_LOG="$OUT/verilator-firmware.log" SIM_TIMEOUT_SECONDS="$TIMEOUT_SECONDS" \
+  bash tools/ci/rv64_pa32_sim_run.sh verilator "$FW_BIN" "$CYCLES" "${runner_args[@]}" || exit 6
 
 python3 tools/ci/rv64_pa32_gsim_bare_diff.py \
   "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" "${diff_args[@]}" \

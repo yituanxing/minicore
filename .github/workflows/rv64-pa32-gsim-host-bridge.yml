@@ -7,6 +7,9 @@ on:
       - 'tools/ci/rv64_pa32_gsim_host_bridge_patch.py'
       - 'sim/pa32_gsim_prefix_main.cpp'
       - 'sim/pa32_firmware_milestone.h'
+      - 'sim/pa32_sim_progress.h'
+      - 'tools/ci/rv64_pa32_sim_run.sh'
+      - 'tests_py/test_rv64_pa32_sim_progress.py'
       - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
       - 'tests_py/test_rv64_pa32_gsim_host_bridge.py'
       - 'sim/pa32_verilator_prefix_main.cpp'
@@ -45,7 +48,8 @@ jobs:
             tests_py.test_rv64_pa32_gsim_host_bridge \
             tests_py.test_rv64_pa32_gsim_bare_diff \
             tests_py.test_rv64_pa32_gsim_firmware_diff \
-            tests_py.test_rv64_pa32_gsim_memory_diff -v
+            tests_py.test_rv64_pa32_gsim_memory_diff \
+            tests_py.test_rv64_pa32_sim_progress -v
 
   native:
     needs: contracts

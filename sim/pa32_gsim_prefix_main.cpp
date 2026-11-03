@@ -5,6 +5,7 @@
 #include "l32_opensbi_runtime.h"
 #include "pa32_gsim_port_adapter.h"
 #include "pa32_firmware_milestone.h"
+#include "pa32_sim_progress.h"
 
 #include <chrono>
 #include <cstdio>
@@ -161,6 +162,7 @@ int main(int argc, char** argv) {
     std::uint64_t lastPc = 0;
     std::uint64_t executedCycles = 0;
     const auto hostStart = std::chrono::steady_clock::now();
+    aethercore::pa32sim::SimProgress progress("GSIM", total, requireLinux, hostStart);
 
     for (std::uint64_t cycle = 0; cycle < total + 32; ++cycle) {
       const bool reset = cycle < 32;
@@ -221,6 +223,7 @@ int main(int argc, char** argv) {
       }
       if (commit.interrupt) ++interrupts;
       if ((cycle - 31) % 100000 == 0) {
+        progress.observe(executedCycles, retires, firmware);
         std::printf("AETHERCORE_PA32_GSIM_CHECKPOINT cycle=%llu retires=%llu"
                     " exceptions=%llu interrupts=%llu mtime=%llu"
                     " last_pc=0x%llx commit_digest=0x%llx\n",
@@ -235,6 +238,7 @@ int main(int argc, char** argv) {
       if (requireLinux && firmware.linuxPassed()) break;
     }
 
+    progress.finish(executedCycles, retires, firmware);
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - hostStart).count();
     const std::uint64_t ramDigest = memory.stateDigest();
