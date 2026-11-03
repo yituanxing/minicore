@@ -24,7 +24,7 @@ for version in 5.024 5.054; do
   bin="$TOOLCHAINS/verilator-$version/bin/verilator"
   test -x "$bin" || { echo "missing pinned tool: $bin" >&2; exit 3; }
   "$bin" --version > "$OUT/verilator-$version.txt"
-  "$bin" --compiler clang -LDFLAGS -ldl -O3 \
+  "$bin" --compiler clang -LDFLAGS "-ldl -latomic" -O3 \
     -MAKEFLAGS "CC=clang CXX=clang++ OPT=-march=native OPT_FAST=-O3 OPT_GLOBAL=-O3" \
     --cc --exe --build -Wall -Wno-fatal --top-module "$TOP" \
     -Mdir "$OUT/obj-$version" \

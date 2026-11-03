@@ -23,6 +23,7 @@ class NewAccelContracts(unittest.TestCase):
                       "diff -u", "AETHERCORE_PA32_VERILATOR_VERSION_STATE_MATCH"):
             self.assertIn(field, script)
         self.assertIn("clang", script)
+        self.assertIn('-LDFLAGS "-ldl -latomic"', script)
         self.assertNotIn("make tinyconfig", script)
 
     def test_gsim_is_frontend_probe_not_linux_claim(self):

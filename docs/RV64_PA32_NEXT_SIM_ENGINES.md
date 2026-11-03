@@ -95,3 +95,13 @@ The current PA32 Fork/COW runner also supports opt-in
 `PA32_CHECKPOINT_REPLAY_ON_FAILURE=1`: only a failed child triggers another
 fork from the frozen PID1 parent and traces the last 64 committed instructions.
 This is fault reproduction from one checkpoint, not periodic LightSSS.
+
+## Dependency corrections (second real CI pass)
+
+* Verilator v5.054 model compilation reached link, where the new runtime
+  requires `__atomic_is_lock_free`: explicit `-latomic` is used in *both*
+  version builds. The older 5.024 runtime does not require it, but the same
+  link flags preserve an apples-to-apples host comparison.
+* Pinned GSIM source clone and scoped cast patch both succeeded; the
+  Clang-19 source build failed because Ubuntu's `FlexLexer.h` is shipped
+  by `libfl-dev`, not the runtime `flex` package. CI now installs both.

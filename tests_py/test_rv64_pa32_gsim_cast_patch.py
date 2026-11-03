@@ -39,6 +39,8 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
         self.assertIn("git -C \"$src\" checkout -q --detach FETCH_HEAD", script)
         self.assertIn('python3 tools/ci/rv64_pa32_gsim_cast_patch.py "$src/src/splitNodes.cpp"', script)
         self.assertIn("gsim-scoped.patch", script)
+        workflow = (ROOT / ".github/workflows/rv64-pa32-gsim-source-patch.yml").read_text()
+        self.assertIn("libfl-dev", workflow)
         self.assertIn("AETHERCORE_PA32_GSIM_PATCHED_FRONTEND_PASS", script)
 
 if __name__ == "__main__":

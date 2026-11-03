@@ -33,7 +33,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y openjdk-17-jdk-headless python3 \
-            clang-19 bison flex libgmp-dev libjemalloc-dev git curl make
+            clang-19 bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make
       - name: Restore Scala dependencies
         uses: actions/cache/restore@v4
         with:
