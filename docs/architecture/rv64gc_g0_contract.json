@@ -842,7 +842,8 @@
       "recovery": "on validated non-head branch mispredict, stop rename and architectural retire; squash only instructions younger than surviving branch by ROB age; walk their rename undo entries in reverse order (youngest first), restore each old mapping in speculative RAT and free only their newly allocated destinations; keep older in-flight and branch; for synchronous trap, retire any permitted older prefix then unwind all uncommitted entries to committed RAT",
       "completion": "check live RobToken and producer/value allocation generation before PRF write or IQ wakeup; no stale writes after squash/reallocate; async memory transaction lifetime separate",
       "future": "G2 two-lane rename adds intra-group bypass and 2 physical destination allocators; branch snapshots optional optimization, not a G1 correctness requirement; do not change RecoveryCut interface when optimizing",
-      "rationale": "Small FPGA G1 can tolerate multi-cycle recovery and fewer read/write ports. Checkpointing all speculative mappings and free-list state per branch adds state/collision complexity and may be justified later by measured PPA/IPC, not assumed."
+      "rationale": "Small FPGA G1 can tolerate multi-cycle recovery and fewer read/write ports. Checkpointing all speculative mappings and free-list state per branch adds state/collision complexity and may be justified later by measured PPA/IPC, not assumed.",
+      "nax_alternative": "NaxRiscv commit-reschedule dual speculative/committed RAT with dirty-bit selector; may replace per-younger undo strategy only if same identity/precise recovery contracts and FPGA PPA pass; no simultaneous duplicate state owner"
     },
     {
       "id": "D06",
@@ -868,7 +869,7 @@
     "changelog": "G3 candidate integer PRF raised from 64 to 96 because ROB64 with only 32 spare integer physical registers could not accommodate 64 simultaneous destination-producing inflight uOps.",
     "required_before_code": [
       "agree on shared semantic extraction boundary",
-      "agree on reverse-undo recovery stall policy",
+      "agree on precise RecoveryCut interface and select one rename rollback strategy for G1 RTL (undo or Nax-style dual RAT), never both as duplicate owner",
       "agree on v0 frozen reference strategy"
     ],
     "scope_exclusions": [
@@ -876,6 +877,195 @@
       "No automatic Linux PASS inheritance",
       "No legacy Tiny clone into product",
       "No automatic board Fmax estimate"
+    ]
+  },
+  "naxriscv_reference": {
+    "upstream_sha": "9f452d50560d02fb391bc8039f5453c54e0911af",
+    "url": "https://github.com/SpinalHDL/NaxRiscv",
+    "primary_architecture_reference": true,
+    "source_checks": [
+      {
+        "path": "src/main/scala/naxriscv/Gen.scala",
+        "finding": "decodeCount, robSize, lq/sq, F/D/C, MMU, RAM and FPGA generation are independently configurable; defaults do not imply distro readiness"
+      },
+      {
+        "path": "src/main/scala/naxriscv/frontend/RfTranslationPlugin.scala",
+        "finding": "two physical rename maps and dirty-mask based commit-reschedule rollback"
+      },
+      {
+        "path": "src/main/scala/naxriscv/frontend/RfAllocationPlugin.scala",
+        "finding": "physical register allocator with commit-time reclamation and x0 protection"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/RobPlugin.scala",
+        "finding": "parametrized completion storage, FPGA distributed RAM alternative"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/CommitPlugin.scala",
+        "finding": "retire width and precise commit-reschedule operation"
+      },
+      {
+        "path": "src/main/scala/naxriscv/lsu2/Lsu2Plugin.scala",
+        "finding": "separate load/store lifetimes, store forwarding/hazard/replay and committed writeback"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/MmuPlugin.scala",
+        "finding": "Sv39 translation/refill"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/RegFilePlugin.scala",
+        "finding": "FPGA RAM-based physical register port/banking"
+      }
+    ],
+    "recovery_tradeoff": "G1 reverse undo is a proposed proof/reference strategy, not a permanent FPGA requirement; benchmark Nax-style speculative/committed dual RAT + dirty-mask rollback without changing RecoveryCut contract",
+    "physical_int_observation": "Nax Gen.scala uses an example ROB64 with integer physicalDepth64; our PRF96 is a throughput-capacity candidate, not correctness minimum. Allow backpressure and measure FPGA PPA."
+  },
+  "software_platform_axes": {
+    "orthogonal": [
+      "geometry",
+      "isa_abi",
+      "platform"
+    ],
+    "geometry_profiles": [
+      "G1-minimal-ooo",
+      "G2-width2",
+      "G3-product-candidate"
+    ],
+    "isa_abi_profiles": [
+      {
+        "id": "engineering-rv64ima",
+        "isa": "RV64IMA",
+        "abi": "LP64",
+        "purpose": "Initial RTL retire/memory/trap correctness; cannot claim upstream Debian"
+      },
+      {
+        "id": "upstream-debian-riscv64",
+        "isa": "RV64GC",
+        "abi": "LP64D",
+        "required_extensions": [
+          "I",
+          "M",
+          "A",
+          "F",
+          "D",
+          "C",
+          "Zicsr",
+          "Zifencei"
+        ],
+        "privilege": [
+          "M",
+          "S",
+          "U"
+        ],
+        "virtual_memory": "Sv39",
+        "required_state": [
+          "FPR",
+          "fcsr",
+          "fflags",
+          "FS Dirty/Clean",
+          "precise FP retirement",
+          "context switch preservation"
+        ],
+        "purpose": "Upstream Debian riscv64 native binaries and dynamic libraries; independent of ROB width"
+      }
+    ],
+    "platform_profiles": [
+      {
+        "id": "virtual-soc",
+        "required": [
+          "OpenSBI",
+          "Linux PID1",
+          "retirement-differential",
+          "MMU"
+        ],
+        "evidence": "simulation-only"
+      },
+      {
+        "id": "fpga-debian",
+        "required": [
+          "physical FPGA bitstream timing-closed",
+          "clock and reset",
+          "calibrated external DDR",
+          "UART",
+          "interrupt/timer",
+          "DTB",
+          "block storage SD/eMMC",
+          "persistent rootfs",
+          "OpenSBI",
+          "Linux",
+          "Debian riscv64",
+          "native glibc dynamic linking",
+          "login/shell",
+          "apt/dpkg",
+          "thread/atomics/futex",
+          "filesystem persistence after reboot"
+        ],
+        "evidence": "must be proven on actual board"
+      }
+    ],
+    "release_gates": [
+      {
+        "id": "D0",
+        "name": "board-first v0",
+        "requires": [
+          "actual FPGA board clock/reset",
+          "DDR calibration",
+          "UART/AXI real hardware"
+        ],
+        "can_parallelize_with": [
+          "D1",
+          "D2"
+        ]
+      },
+      {
+        "id": "D1",
+        "name": "small product OoO correctness",
+        "requires": [
+          "single source RTL",
+          "rename/ROB/LSQ/precise retirement",
+          "Spike differential"
+        ],
+        "can_parallelize_with": [
+          "D0"
+        ]
+      },
+      {
+        "id": "D2",
+        "name": "small geometry distro-compatible ISA/ABI",
+        "requires": [
+          "RV64GC",
+          "LP64D",
+          "F/D/C",
+          "Sv39",
+          "FCSR/FS state",
+          "atomics/futex",
+          "process context switching"
+        ],
+        "must_precede": "D3"
+      },
+      {
+        "id": "D3",
+        "name": "physical FPGA upstream Debian",
+        "requires": [
+          "D0",
+          "D2",
+          "SD/eMMC persistent storage",
+          "Linux + Debian login",
+          "dynamic userspace",
+          "package manager",
+          "reboot persistence"
+        ],
+        "must_precede": "D4"
+      },
+      {
+        "id": "D4",
+        "name": "wider OoO performance",
+        "requires": [
+          "same-source Medium/Large",
+          "FPGA PPA/IPC measured"
+        ],
+        "not_prerequisite_of": "D3"
+      }
     ]
   }
 }

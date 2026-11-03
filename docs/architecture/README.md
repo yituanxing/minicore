@@ -5,6 +5,7 @@ Source of truth for **proposed** product G0; freeze requires design decisions, a
 - [Detailed G0 data flow, owners, and same-cycle event rules](RV64GC_G0_DESIGN_AND_OWNERSHIP.md)
 - [Machine-readable owners/identities/interfaces/scenarios](rv64gc_g0_contract.json)
 - [G1 migration choices: what to change and close](RV64GC_G1_MIGRATION_DECISION.md)
+- [NaxRiscv FPGA OoO and Debian release target](RV64GC_NAXRISCV_FPGA_DEBIAN_ALIGNMENT.md)
 - [File-level migration map](rv64gc_g1_migration_map.json)
 - [Pure-Python G1 rename/undo reference model](../../tests_py/product_g1_rename_reference.py)
 - [Pre-G0 architecture gap review](../RV64GC_FPGA_PRODUCT_ARCHITECTURE_GAP_2026-11-03.md)

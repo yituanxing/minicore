@@ -9,6 +9,7 @@ on:
       - 'tests_py/test_product_g1_migration_contract.py'
       - 'tests_py/product_g1_rename_reference.py'
       - 'tests_py/test_product_g1_rename_reference.py'
+      - 'tests_py/test_product_nax_distro_target.py'
       - '.github/workflows/rv64gc-product-g0.yml'
   workflow_dispatch:
 
@@ -35,4 +36,5 @@ jobs:
           python3 -m unittest \
             tests_py.test_product_g0_contract \
             tests_py.test_product_g1_migration_contract \
-            tests_py.test_product_g1_rename_reference -v
+            tests_py.test_product_g1_rename_reference \
+            tests_py.test_product_nax_distro_target -v

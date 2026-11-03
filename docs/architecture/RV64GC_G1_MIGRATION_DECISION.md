@@ -6,6 +6,8 @@
 执行语义示例：[product_g1_rename_reference.py](../../tests_py/product_g1_rename_reference.py)（纯 Python 参考模型，非硬件）。  
 独立 PR：#379；已通过 Linux 的 AetherSoC v0 属于保留验证参考。
 
+> **FPGA Debian 产品目标修订（参照 NaxRiscv）：** [NaxRiscv 对标与真实 FPGA Debian 验收](RV64GC_NAXRISCV_FPGA_DEBIAN_ALIGNMENT.md)。G1 Small 是乱序正确性实验档，不是最终系统产品。C/F/D、LP64D、Sv39、FCSR/FS 和持久化系统必须在产品验收前完成，**不要求先把 ROB 扩到 64**。Rename 的 reverse-undo 是目前参考实现的候选策略，不排除 Nax 的 commit-reschedule dirty-mask dual RAT 方法；对外 RecoveryCut 不变。
+
 ## 0. 设计结论：在现有代码的真实边界上动刀
 
 今天的主路径是：
