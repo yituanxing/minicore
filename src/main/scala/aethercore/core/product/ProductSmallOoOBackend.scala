@@ -184,12 +184,12 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   val hasIq = freeIqMask.orR
   val chosenPhysical = PriorityEncoder(freePhysicalMask)
   val chosenIq = PriorityEncoder(freeIqMask)
-  val headEntry = rob(head)
+  private val headEntry = rob(head)
 
   // Completion matches all lifetime fields. Completion is always drained;
   // stale or killed responses never mutate a new ROB slot or destination.
   val c = io.completion.bits
-  val completionEntry = rob(c.token.index)
+  private val completionEntry = rob(c.token.index)
   val sameLifetime = completionEntry.valid &&
     !completionEntry.complete &&
     completionEntry.tokenGeneration === c.token.generation &&
@@ -246,7 +246,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   }
   val readyMask = iqReady.asUInt
   val chooseIssue = PriorityEncoder(readyMask)
-  val selected = iq(chooseIssue)
+  private val selected = iq(chooseIssue)
   io.issue.valid := readyMask.orR && !recovering && !branchMismatch && !trapFire
   io.issue.bits := 0.U.asTypeOf(io.issue.bits)
   io.issue.bits.token := selected.token
@@ -259,7 +259,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.issue.bits.pc := selected.pc
   io.issue.bits.instBytes := selected.instBytes
   io.issue.bits.immediate := selected.immediate
-  io.issue.bits.lhs := MuxLookup(selected.lhsSource.asUInt, 0.U(Xlen.W), Seq(
+  io.issue.bits.lhs := MuxLookup(selected.lhsSource.asUInt, 0.U(Xlen.W))(Seq(
     OperandSourceKind.Rs1.asUInt -> Mux(selected.src1 === 0.U, 0.U, prf(selected.src1)),
     OperandSourceKind.Pc.asUInt -> selected.pc,
     OperandSourceKind.Zero.asUInt -> 0.U(Xlen.W)))
