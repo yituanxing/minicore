@@ -8,6 +8,10 @@ on:
       - 'sim/pa32_gsim_prefix_main.cpp'
       - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
       - 'tests_py/test_rv64_pa32_gsim_host_bridge.py'
+      - 'sim/pa32_verilator_prefix_main.cpp'
+      - 'tools/ci/rv64_pa32_gsim_bare_diff.py'
+      - 'tools/ci/rv64_pa32_gsim_bare_diff.sh'
+      - 'tests_py/test_rv64_pa32_gsim_bare_diff.py'
   workflow_dispatch:
 
 permissions:
@@ -30,7 +34,7 @@ jobs:
   native:
     needs: contracts
     runs-on: ubuntu-24.04
-    timeout-minutes: 65
+    timeout-minutes: 90
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
     steps:
@@ -42,7 +46,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
-            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make zlib1g-dev
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make zlib1g-dev \
+            autoconf cmake ninja-build libssl-dev libelf-dev libreadline-dev pkg-config build-essential
       - name: Restore Scala dependency cache
         uses: actions/cache/restore@v4
         with:
@@ -52,11 +57,25 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Restore pinned Verilator 5.054 cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Validate GSIM/Verilator bare differential contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_bare_diff -v
       - name: Build isolated GSIM with supernode host callback; test real RV64I
         run: |
           set -euo pipefail
           OUT=build/rv64-pa32-gsim-host-bridge GSIM_HOST_BRIDGE_EXPERIMENT=1 \
             JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
+      - name: Compare 20k true RV64I retirement stream against Verilator 5.054
+        run: |
+          set -euo pipefail
+          JOBS=4 bash tools/ci/rv64_pa32_gsim_bare_diff.sh
       - name: Preserve both successful and failed diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -76,3 +95,8 @@ jobs:
             build/rv64-pa32-gsim-host-bridge/prefix-build.log
             build/rv64-pa32-gsim-host-bridge/prefix-bare.log
             build/rv64-pa32-gsim-host-bridge/result.txt
+            build/rv64-pa32-gsim-bare-diff/gsim-bare.log
+            build/rv64-pa32-gsim-bare-diff/verilator-bare.log
+            build/rv64-pa32-gsim-bare-diff/verilator-build.log
+            build/rv64-pa32-gsim-bare-diff/rtl.sha256
+            build/rv64-pa32-gsim-bare-diff/diff-result.txt
