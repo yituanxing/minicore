@@ -57,6 +57,10 @@ private class TranslatedProductHarness extends Module {
   decoder.io.fetchException := 0.U.asTypeOf(decoder.io.fetchException)
 
   private val core = Module(new ProductSmallTranslatedCore(config))
+  core.io.systemCsrReadData := 0.U
+  core.io.systemCsrReadImplemented := false.B
+  core.io.systemCsrReadWritable := false.B
+  core.io.systemCurrentPrivilege := PrivilegeMode.Machine.U
   core.io.dispatch.valid := io.valid
   core.io.dispatch.bits.decoded := decoder.io.decoded
   core.io.dispatch.bits.predictedNextPc := io.pc + 4.U

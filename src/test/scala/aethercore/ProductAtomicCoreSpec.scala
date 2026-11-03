@@ -47,6 +47,10 @@ private class ProductAtomicHarness extends Module {
   decode.io.fetchException := 0.U.asTypeOf(decode.io.fetchException)
 
   private val core = Module(new ProductSmallTranslatedCore(config))
+  core.io.systemCsrReadData := 0.U
+  core.io.systemCsrReadImplemented := false.B
+  core.io.systemCsrReadWritable := false.B
+  core.io.systemCurrentPrivilege := PrivilegeMode.Machine.U
   core.io.dispatch.valid := io.dispatchValid
   core.io.dispatch.bits.decoded := decode.io.decoded
   core.io.dispatch.bits.predictedNextPc := io.pc + 4.U

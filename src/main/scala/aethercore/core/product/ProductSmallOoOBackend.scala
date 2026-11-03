@@ -53,6 +53,21 @@ class ProductCompletion(val xlen: Int, val indexBits: Int, val physicalBits: Int
   val branchValid = Bool()
   val nextPc = UInt(xlen.W)
   val exception = new TrapInfo(xlen)
+  // Evaluated once at exact ROB head; only the retirement owner may apply it.
+  val privileged = new PendingPrivilegedEffect(xlen)
+}
+
+/** An exact-head SYSTEM uOp, with architectural sources read from its original
+  * pre-rename PRF mappings. The CSR file itself is owned above this backend.
+  */
+class ProductSystemHead(val xlen: Int, val indexBits: Int, val physicalBits: Int,
+                        val generationBits: Int) extends Bundle {
+  val token = new ProductRobId(indexBits, generationBits)
+  val destination = new ProductPhysicalTag(physicalBits, generationBits)
+  val hasDestination = Bool()
+  val decoded = new DecodedInstruction(xlen)
+  val rs1Value = UInt(xlen.W)
+  val rs2Value = UInt(xlen.W)
 }
 
 class ProductRetirement(val xlen: Int, val indexBits: Int, val physicalBits: Int, val generationBits: Int)
@@ -64,6 +79,7 @@ class ProductRetirement(val xlen: Int, val indexBits: Int, val physicalBits: Int
   val wroteRegister = Bool()
   val value = UInt(xlen.W)
   val exception = new TrapInfo(xlen)
+  val privileged = new PendingPrivilegedEffect(xlen)
 }
 
 class ProductRedirect(val xlen: Int, val indexBits: Int, val generationBits: Int)
@@ -85,6 +101,10 @@ private class ProductRobSlot(
   val newPhysical = new ProductPhysicalTag(physicalBits, generationBits)
   val result = UInt(xlen.W)
   val exception = new TrapInfo(xlen)
+  val privileged = new PendingPrivilegedEffect(xlen)
+  val systemIssued = Bool()
+  val systemRs1Physical = UInt(physicalBits.W)
+  val systemRs2Physical = UInt(physicalBits.W)
 }
 
 private class ProductIqSlot(
@@ -117,16 +137,18 @@ private class ProductIqSlot(
   *
   * One dispatch, one issue, one precise retirement; IQ4, ROB8, PRF48 by profile.
   * An independent execution cluster must implement ProductIssue -> ProductCompletion.
-  * Load/Store/Atomic enter a reserved LSQ via ProductSmallMemoryCore;
-  * privileged system operations and F/D remain intentionally unsupported.
-  * This module is not a complete CPU and cannot claim Linux or Debian support.
+  * Load/Store/Atomic enter a reserved LSQ via ProductSmallMemoryCore.
+  * An optional exact-head SYSTEM lane computes pending privileged effects,
+  * but the CSR owner and fetch/interrupt/F/D paths are external or absent.
+  * This is not a complete CPU and cannot claim Linux or Debian support.
   *
   * Arbitrary-age branch recovery uses youngest-first ROB undo, one slot/cycle.
   * While recovering, allocate/issue/retire stop. FU completions are
   * backpressured until undo ends; then stale lifetimes are rejected. Every ROB and physical destination reuse changes a
   * generation; external physical MemTxnId ownership is in ProductPhysicalLsq.
   */
-class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
+class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
+                             val allowSystem: Boolean = false) extends Module {
   require(geometry.decodeWidth == 1 && geometry.dispatchWidth == 1 &&
     geometry.issueWidth == 1 && geometry.retireWidth == 1,
     "this first hardware slice implements the Small one-wide backend only")
@@ -149,6 +171,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
     val memoryReserve = Decoupled(new ProductMemReservation(I, F, G))
     val memoryHead = Valid(new ProductRobId(I, G))
     val memoryKill = Valid(new ProductRobId(I, G))
+    val systemHead = Decoupled(new ProductSystemHead(Xlen, I, F, G))
     val completion = Flipped(Decoupled(new ProductCompletion(Xlen, I, F, G)))
     val retire = Decoupled(new ProductRetirement(Xlen, I, F, G))
     val redirect = Valid(new ProductRedirect(Xlen, I, G))
@@ -194,6 +217,8 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.memoryHead.bits := 0.U.asTypeOf(io.memoryHead.bits)
   io.memoryKill.valid := false.B
   io.memoryKill.bits := 0.U.asTypeOf(io.memoryKill.bits)
+  io.systemHead.valid := false.B
+  io.systemHead.bits := 0.U.asTypeOf(io.systemHead.bits)
 
   val dispatchDecoded = io.dispatch.bits.decoded
   val writes = dispatchDecoded.writesRd && dispatchDecoded.rd =/= 0.U
@@ -202,6 +227,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
     dispatchDecoded.memory.kind === MemoryOperationKind.Store ||
     dispatchDecoded.memory.kind === MemoryOperationKind.Atomic
   val atomicDispatch = dispatchDecoded.memory.kind === MemoryOperationKind.Atomic
+  val systemDispatch = dispatchDecoded.system.kind =/= SystemOperationKind.None
   // All atomic memory operations execute only at the exact ROB head in the
   // LSQ, a conservative SerializeBoth implementation of aq/rl semantics.
   // System/FENCE operations still require a separate privileged owner.
@@ -209,10 +235,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
     (atomicDispatch && (dispatchDecoded.ordering === OrderingClass.SerializeBefore ||
       dispatchDecoded.ordering === OrderingClass.SerializeAfter ||
       dispatchDecoded.ordering === OrderingClass.SerializeBoth))
-  val supported =
+  val supported = Mux(systemDispatch,
+    allowSystem.B && dispatchDecoded.memory.kind === MemoryOperationKind.None,
     (dispatchDecoded.memory.kind === MemoryOperationKind.None || memoryDispatch) &&
-      dispatchDecoded.system.kind === SystemOperationKind.None &&
-      permittedOrdering
+      permittedOrdering)
   io.unsupported := io.dispatch.valid && !supported && !exceptionOnly
 
   val freePhysicalMask = free.asUInt
@@ -222,6 +248,11 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   val chosenPhysical = PriorityEncoder(freePhysicalMask)
   val chosenIq = PriorityEncoder(freeIqMask)
   private val headEntry = rob(head)
+  // A serializing uOp is a physical ROB ownership boundary, not just a fetch
+  // hint. Blocking younger dispatch also protects SATP/PMP context snapshots
+  // used by the independently running data resolver.
+  private val serializedLive = rob.map(s => s.valid &&
+    s.decoded.system.kind =/= SystemOperationKind.None).reduce(_ || _)
 
   // Completion matches all lifetime fields. Completion is always drained;
   // stale or killed responses never mutate a new ROB slot or destination.
@@ -255,7 +286,8 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
     headEntry.complete && !recovering && !branchMismatch &&
     io.retire.ready && headEntry.exception.valid
   val canDispatch = !recovering && !branchMismatch && !trapCandidate &&
-    count < N.U && (!writes || hasPhysical) && (exceptionOnly || hasIq)
+    !serializedLive && count < N.U && (!writes || hasPhysical) &&
+    (exceptionOnly || systemDispatch || hasIq)
   io.memoryReserve.valid := io.dispatch.valid && canDispatch &&
     supported && !exceptionOnly && memoryDispatch
   io.memoryReserve.bits.token.index := tail
@@ -275,6 +307,28 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.memoryHead.bits.index := head
   io.memoryHead.bits.generation := headEntry.tokenGeneration
 
+  // System semantics are a separate head-only completion lane. An enqueue
+  // handshake marks the ROB lifetime once, even if the completion arbiter
+  // stalls while live timer/CSR inputs change.
+  val systemRs1Ready = !headEntry.decoded.usesRs1 ||
+    ready(headEntry.systemRs1Physical)
+  val systemRs2Ready = !headEntry.decoded.usesRs2 ||
+    ready(headEntry.systemRs2Physical)
+  io.systemHead.valid := allowSystem.B && count =/= 0.U && headEntry.valid &&
+    !headEntry.complete && !headEntry.systemIssued &&
+    headEntry.decoded.system.kind =/= SystemOperationKind.None &&
+    systemRs1Ready && systemRs2Ready &&
+    !recovering && !branchMismatch && !trapCandidate
+  io.systemHead.bits.token.index := head
+  io.systemHead.bits.token.generation := headEntry.tokenGeneration
+  io.systemHead.bits.destination := headEntry.newPhysical
+  io.systemHead.bits.hasDestination := headEntry.writes
+  io.systemHead.bits.decoded := headEntry.decoded
+  io.systemHead.bits.rs1Value := Mux(headEntry.systemRs1Physical === 0.U,
+    0.U, prf(headEntry.systemRs1Physical))
+  io.systemHead.bits.rs2Value := Mux(headEntry.systemRs2Physical === 0.U,
+    0.U, prf(headEntry.systemRs2Physical))
+
   val retiringFault = headEntry.exception.valid
   io.retire.valid := count =/= 0.U && headEntry.valid &&
     headEntry.complete && !recovering && !branchMismatch
@@ -287,6 +341,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.retire.bits.wroteRegister := headEntry.writes && !retiringFault
   io.retire.bits.value := headEntry.result
   io.retire.bits.exception := headEntry.exception
+  io.retire.bits.privileged := headEntry.privileged
   val trapFire = io.retire.fire && retiringFault
   io.trap.valid := trapFire
   io.trap.bits := io.retire.bits
@@ -385,13 +440,17 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
         rob(tail).newPhysical.index := Mux(writes, chosenPhysical, 0.U)
         rob(tail).newPhysical.generation := Mux(writes, newGeneration, 0.U)
         rob(tail).exception := d.exception
+        // Capture sources BEFORE the destination rename. CSRRW x1,...,x1
+        // must read the old architectural x1 value, never the new PRF tag.
+        rob(tail).systemRs1Physical := speculativeRat(d.rs1)
+        rob(tail).systemRs2Physical := speculativeRat(d.rs2)
         when(writes) {
           speculativeRat(d.rd) := chosenPhysical
           free(chosenPhysical) := false.B
           ready(chosenPhysical) := false.B
           physicalGenerations(chosenPhysical) := newGeneration
         }
-        when(!exceptionOnly) {
+        when(!exceptionOnly && !systemDispatch) {
           iq(chosenIq) := 0.U.asTypeOf(iq(chosenIq))
           iq(chosenIq).valid := true.B
           iq(chosenIq).token.index := tail
@@ -422,6 +481,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
       when(io.issue.fire) {
         iq(chooseIssue).valid := false.B
       }
+      when(io.systemHead.fire) {
+        rob(head).systemIssued := true.B
+      }
       when(normalRetire) {
         when(headEntry.writes) {
           assert(headEntry.oldPhysical =/= 0.U)
@@ -444,6 +506,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
     rob(c.token.index).complete := true.B
     rob(c.token.index).result := c.value
     rob(c.token.index).exception := c.exception
+    rob(c.token.index).privileged := c.privileged
     when(c.hasValue && !c.exception.valid) {
       prf(c.destination.index) := c.value
       ready(c.destination.index) := true.B

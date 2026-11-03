@@ -9,6 +9,7 @@ package object v2 {
   type DecodedMemoryOperation = aethercore.core.semantic.DecodedMemoryOperation
   type DecodedControlFlow = aethercore.core.semantic.DecodedControlFlow
   type DecodedSystemOperation = aethercore.core.semantic.DecodedSystemOperation
+  type PendingPrivilegedEffect = aethercore.core.semantic.PendingPrivilegedEffect
 
   val OperandSourceKind = aethercore.core.semantic.OperandSourceKind
   val ControlFlowKind = aethercore.core.semantic.ControlFlowKind

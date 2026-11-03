@@ -5,7 +5,7 @@ import chisel3.util._
 import aethercore.core.semantic.MemoryOperationKind
 import aethercore.memory.{AetherMemRequest, AetherMemResponse}
 
-/** One SmallOoO backend plus 3 FU completion ports, physical LSQ and a
+/** One SmallOoO backend plus 4 FU completion ports, physical LSQ and a
   * separately owned VA->PA/PMP/PMA resolver.
   *
   * The caller MUST resolve memoryExecute to physical paddr/attributes/fault
@@ -40,10 +40,18 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     val memoryResolved = Flipped(Decoupled(new ProductResolvedMem(PA, I, G)))
     val memoryRequest = Decoupled(new AetherMemRequest(PA, 64, Tx))
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(64, Tx)))
+    // Read-only access to the externally owned CSR bank. The system lane
+    // evaluates at exact ROB head, but never writes privileged state here.
+    val systemCsrReadAddr = Output(UInt(12.W))
+    val systemCsrReadData = Input(UInt(64.W))
+    val systemCsrReadImplemented = Input(Bool())
+    val systemCsrReadWritable = Input(Bool())
+    val systemCurrentPrivilege = Input(UInt(2.W))
     val retire = Decoupled(new ProductRetirement(64, I, P, G))
     val redirect = Valid(new ProductRedirect(64, I, G))
     val trap = Valid(new ProductRetirement(64, I, P, G))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
+    val recovering = Output(Bool())
     val loadCount = Output(UInt(log2Ceil(g.loadQueueEntries + 1).W))
     val storeCount = Output(UInt(log2Ceil(g.storeQueueEntries + 1).W))
     val outstandingTransactions = Output(UInt(log2Ceil(g.loadQueueEntries + g.storeQueueEntries + 1).W))
@@ -51,11 +59,12 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     val staleCompletion = Output(Bool())
   })
 
-  private val backend = Module(new ProductSmallOoOBackend(g))
+  private val backend = Module(new ProductSmallOoOBackend(g, allowSystem = true))
   private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC))
   private val m = Module(new ProductMUnit(g))
   private val lsq = Module(new ProductPhysicalLsq(g, PA))
-  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G), 3))
+  private val system = Module(new ProductSystemUnit(config))
+  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G), 4))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits
@@ -84,6 +93,13 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   lsq.io.memoryResponse.bits := io.memoryResponse.bits
   io.memoryResponse.ready := lsq.io.memoryResponse.ready
 
+  system.io.head <> backend.io.systemHead
+  io.systemCsrReadAddr := system.io.csrReadAddr
+  system.io.csrReadData := io.systemCsrReadData
+  system.io.csrReadImplemented := io.systemCsrReadImplemented
+  system.io.csrReadWritable := io.systemCsrReadWritable
+  system.io.currentPrivilege := io.systemCurrentPrivilege
+
   backend.io.integerAvailable := integer.io.available
   backend.io.mAvailable := m.io.available
   private val issueMemory = backend.io.issue.bits.memoryKind =/= MemoryOperationKind.None
@@ -98,6 +114,7 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   completion.io.in(0) <> integer.io.response
   completion.io.in(1) <> m.io.response
   completion.io.in(2) <> lsq.io.completion
+  completion.io.in(3) <> system.io.completion
   backend.io.completion <> completion.io.out
 
   io.retire.valid := backend.io.retire.valid
@@ -106,6 +123,7 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   io.redirect := backend.io.redirect
   io.trap := backend.io.trap
   io.occupancy := backend.io.occupancy
+  io.recovering := backend.io.recovering
   io.loadCount := lsq.io.loadCount
   io.storeCount := lsq.io.storeCount
   io.outstandingTransactions := lsq.io.outstanding

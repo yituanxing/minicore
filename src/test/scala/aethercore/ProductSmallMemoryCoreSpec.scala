@@ -7,6 +7,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import aethercore.core.product._
 import aethercore.core.semantic.SemanticDecode
+import aethercore.common.PrivilegeMode
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse}
 
 private class PhysicalProductHarness extends Module {
@@ -37,6 +38,11 @@ private class PhysicalProductHarness extends Module {
   decoder.io.fetchException := 0.U.asTypeOf(decoder.io.fetchException)
 
   private val core = Module(new ProductSmallMemoryCore(config))
+  // The old external-translation harness has no mutable CSR bank.
+  core.io.systemCsrReadData := 0.U
+  core.io.systemCsrReadImplemented := false.B
+  core.io.systemCsrReadWritable := false.B
+  core.io.systemCurrentPrivilege := PrivilegeMode.Machine.U
   core.io.dispatch.valid := io.valid
   core.io.dispatch.bits.decoded := decoder.io.decoded
   core.io.dispatch.bits.predictedNextPc := io.pc + 4.U

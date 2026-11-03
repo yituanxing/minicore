@@ -3,9 +3,9 @@ package aethercore.core.v2
 import chisel3._
 import chisel3.util._
 import chisel3.ChiselEnum
-import aethercore.common.{CsrOp, MachineExceptionCode, PrivilegeMode, XRetOp}
 import aethercore.config.{CoreConfig, IsaConfig}
 import aethercore.core.MachineCsrFile
+import aethercore.core.semantic.SystemSemanticEvaluator
 
 object PrivilegedRedirectKind extends ChiselEnum {
   val Trap, Return = Value
@@ -77,7 +77,17 @@ class TinySystemCompletion(
   private val headRecordReady = io.headDependenciesValid
   private val operandsReady = io.headDependenciesValid && io.headOperandsReady
 
-  io.csrReadAddr := decoded.system.csrAddress
+  // Pure architectural System/CSR semantics are shared with ProductCore;
+  // only this Tiny wrapper owns the backend-specific lifetime/backpressure.
+  private val evaluator = Module(new SystemSemanticEvaluator(isa, allowSfenceVma, allowWfi))
+  evaluator.io.decoded := decoded
+  evaluator.io.producesValue := io.head.bits.producesValue
+  evaluator.io.rs1Value := io.headRs1.value
+  evaluator.io.csrReadData := io.csrReadData
+  evaluator.io.csrReadImplemented := io.csrReadImplemented
+  evaluator.io.csrReadWritable := io.csrReadWritable
+  evaluator.io.currentPrivilege := io.currentPrivilege
+  io.csrReadAddr := evaluator.io.csrReadAddr
 
   // Fresh semantics are still combinational when the consumer is ready, so A8
   // does not add latency to the ordered F5/F6 path. If the completion cannot
@@ -99,135 +109,16 @@ class TinySystemCompletion(
   private val alreadyDelivered = deliveredValid && io.head.valid &&
     sameRobToken(deliveredToken, io.head.bits.robToken)
 
-  private val instructionTrapValue = if (xlen == 32) {
-    decoded.rawInst
-  } else {
-    Cat(0.U((xlen - 32).W), decoded.rawInst)
-  }
-
-  private def markIllegalInstruction(): Unit = {
-    freshCompletion.bits.exception.valid := true.B
-    freshCompletion.bits.exception.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
-    freshCompletion.bits.exception.value := instructionTrapValue
-  }
-
-  private val csrImmediate = decoded.system.csrImmediate.pad(xlen)
-  private val csrOperand = Mux(decoded.system.csrUseImmediate, csrImmediate, io.headRs1.value)
-  private val csrSourceFieldNonZero = Mux(
-    decoded.system.csrUseImmediate,
-    decoded.system.csrImmediate.orR,
-    decoded.rs1 =/= 0.U
-  )
-  private val csrWriteIntent = decoded.system.csrOp === CsrOp.Write ||
-    ((decoded.system.csrOp === CsrOp.Set || decoded.system.csrOp === CsrOp.Clear) &&
-      csrSourceFieldNonZero)
-  private val csrPrivilegeLegal = io.currentPrivilege >= decoded.system.csrAddress(9, 8)
-  private val csrLegal = isa.hasZicsr.B &&
-    io.csrReadImplemented &&
-    csrPrivilegeLegal &&
-    (!csrWriteIntent || io.csrReadWritable)
-
-  private val csrWriteData = WireDefault(csrOperand)
-  switch(decoded.system.csrOp) {
-    is(CsrOp.Set)   { csrWriteData := io.csrReadData | csrOperand }
-    is(CsrOp.Clear) { csrWriteData := io.csrReadData & ~csrOperand }
-  }
-
-  private val environmentCallCause = Mux(
-    io.currentPrivilege === PrivilegeMode.User.U,
-    MachineExceptionCode.EnvironmentCallFromU.U(xlen.W),
-    Mux(
-      io.currentPrivilege === PrivilegeMode.Supervisor.U,
-      MachineExceptionCode.EnvironmentCallFromS.U(xlen.W),
-      MachineExceptionCode.EnvironmentCallFromM.U(xlen.W)
-    )
-  )
-
-  private val machineReturnLegal =
-    decoded.system.xret === XRetOp.Machine && io.currentPrivilege === PrivilegeMode.Machine.U
-  private val supervisorReturnLegal =
-    decoded.system.xret === XRetOp.Supervisor && isa.hasS.B &&
-      io.currentPrivilege >= PrivilegeMode.Supervisor.U
-  private val xretLegal = machineReturnLegal || supervisorReturnLegal
-  private val sfenceAvailable = allowSfenceVma.B && isa.hasPagedVirtualMemory.B
-  private val wfiAvailable = allowWfi.B
-
-  private val implementedSystem =
-    systemKind === SystemOperationKind.Csr ||
-      systemKind === SystemOperationKind.Ecall ||
-      systemKind === SystemOperationKind.Ebreak ||
-      systemKind === SystemOperationKind.Xret ||
-      systemKind === SystemOperationKind.Fence ||
-      (systemKind === SystemOperationKind.FenceI && isa.hasZifencei.B) ||
-      (systemKind === SystemOperationKind.SfenceVma && sfenceAvailable) ||
-      (systemKind === SystemOperationKind.Wfi && wfiAvailable)
-
-  // A predecoded exception is already an architectural semantic fact and must
-  // not wait for a source value that the faulting instruction will never use.
-  when(headRecordReady && hasPredecodedException) {
+  // A predecoded exception is architectural fact and must not wait for rs1.
+  // Otherwise evaluate only the exact head once its sources are ready. The
+  // evaluator is combinational and has no ROB-identity or state ownership.
+  when((headRecordReady && hasPredecodedException) ||
+       (operandsReady && isSystemHead)) {
     freshCompletion.valid := true.B
-    freshCompletion.bits.exception := decoded.exception
-  }.elsewhen(operandsReady && isSystemHead) {
-    // A deferred or unavailable system operation must fail closed instead of
-    // leaving the oldest ROB entry permanently incomplete.
-    freshCompletion.valid := true.B
-    when(!implementedSystem) {
-      markIllegalInstruction()
-    }.otherwise {
-      switch(systemKind) {
-        is(SystemOperationKind.Csr) {
-          when(csrLegal && decoded.system.csrOp =/= CsrOp.None) {
-            freshCompletion.bits.hasValue := io.head.bits.producesValue
-            freshCompletion.bits.value := io.csrReadData
-            freshCompletion.bits.privileged.csrWriteValid := csrWriteIntent
-            freshCompletion.bits.privileged.csrAddress := decoded.system.csrAddress
-            freshCompletion.bits.privileged.csrWriteData := csrWriteData
-          }.otherwise {
-            markIllegalInstruction()
-          }
-        }
-        is(SystemOperationKind.Ecall) {
-          freshCompletion.bits.exception.valid := true.B
-          freshCompletion.bits.exception.cause := environmentCallCause
-          freshCompletion.bits.exception.value := 0.U
-        }
-        is(SystemOperationKind.Ebreak) {
-          freshCompletion.bits.exception.valid := true.B
-          freshCompletion.bits.exception.cause := MachineExceptionCode.Breakpoint.U(xlen.W)
-          freshCompletion.bits.exception.value := decoded.pc
-        }
-        is(SystemOperationKind.Xret) {
-          when(xretLegal) {
-            freshCompletion.bits.privileged.trapReturn := true.B
-            freshCompletion.bits.privileged.trapReturnSupervisor :=
-              decoded.system.xret === XRetOp.Supervisor
-          }.otherwise {
-            markIllegalInstruction()
-          }
-        }
-        // F7's asynchronous owner consumes the retirement event. WFI remains
-        // side-effect free here so only Commit-time state can put the frontend
-        // to sleep. U-mode is illegal in the current privileged profile.
-        is(SystemOperationKind.Wfi) {
-          when(io.currentPrivilege === PrivilegeMode.User.U) {
-            markIllegalInstruction()
-          }
-        }
-        // With strict-oldest issue and no caches in the v2 bring-up backend,
-        // FENCE/FENCE.I are conservative serialized no-ops. FENCE.I reaches
-        // this case only when Zifencei is present.
-        is(SystemOperationKind.Fence)  { }
-        is(SystemOperationKind.FenceI) { }
-        // F6 opts into a full data-side translation flush at retirement. The
-        // completion itself is side-effect free. TVM is not implemented by the
-        // current qualified MachineCsrFile, so legality is S/M privilege only.
-        is(SystemOperationKind.SfenceVma) {
-          when(io.currentPrivilege < PrivilegeMode.Supervisor.U) {
-            markIllegalInstruction()
-          }
-        }
-      }
-    }
+    freshCompletion.bits.hasValue := evaluator.io.result.hasValue
+    freshCompletion.bits.value := evaluator.io.result.value
+    freshCompletion.bits.exception := evaluator.io.result.exception
+    freshCompletion.bits.privileged := evaluator.io.result.privileged
   }
 
   private val freshEligible = freshCompletion.valid && !alreadyDelivered && !heldValid

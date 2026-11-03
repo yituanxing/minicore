@@ -37,14 +37,19 @@ class ProductSmallBackendContracts(unittest.TestCase):
                      "generations(victimIndex) := generations(victimIndex) + 1.U"):
             self.assertIn(text, source)
 
-    def test_unsupported_memory_privilege_fp_do_not_silently_execute(self):
+    def test_capability_boundaries_refuse_unowned_privilege_and_memory(self):
         source = CORE.read_text()
         self.assertIn("dispatchDecoded.memory.kind === MemoryOperationKind.Load", source)
-        self.assertIn("dispatchDecoded.system.kind === SystemOperationKind.None", source)
+        self.assertIn("allowSystem: Boolean = false", source)
+        self.assertIn("allowSystem.B && dispatchDecoded.memory.kind", source)
+        self.assertIn("!serializedLive", source)
         self.assertIn("io.memoryReserve.valid := io.dispatch.valid && canDispatch", source)
         self.assertIn("(!memoryDispatch || exceptionOnly || io.memoryReserve.ready)", source)
         self.assertIn("not a complete CPU", source)
         self.assertIn("rtlImplemented: Boolean = false", CONFIG.read_text())
+        standalone = (ROOT / "src/main/scala/aethercore/core/product/ProductIntegerBranchUnit.scala").read_text()
+        self.assertIn("new ProductSmallOoOBackend(g)", standalone)
+        self.assertIn("backend.io.systemHead.ready := false.B", standalone)
 
     def test_simulation_actually_exercises_age_recovery_and_precise_traps(self):
         test = SPEC.read_text()

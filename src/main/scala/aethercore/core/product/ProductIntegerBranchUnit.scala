@@ -127,6 +127,8 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   // work in its ROB or route it into an integer execution unit.
   backend.io.memoryAvailable := false.B
   backend.io.memoryReserve.ready := false.B
+  // Integer-only slice cannot consume a privileged completion lane.
+  backend.io.systemHead.ready := false.B
   private val issueM = ProductMOperation.isM(backend.io.issue.bits.aluOp)
   integer.io.request.valid := backend.io.issue.valid && !issueM
   integer.io.request.bits := backend.io.issue.bits

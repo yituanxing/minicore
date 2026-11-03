@@ -38,10 +38,18 @@ class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: 
     val pmaAttributes = Input(new MemoryAttributes)
     val memoryRequest = Decoupled(new AetherMemRequest(PA, 64, Tx))
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(64, Tx)))
+    // The eventual ProductPagedCore connects these to its sole MachineCsrFile.
+    // This data/execute composition never creates a second CSR authority.
+    val systemCsrReadAddr = Output(UInt(12.W))
+    val systemCsrReadData = Input(UInt(64.W))
+    val systemCsrReadImplemented = Input(Bool())
+    val systemCsrReadWritable = Input(Bool())
+    val systemCurrentPrivilege = Input(UInt(2.W))
     val retire = Decoupled(new ProductRetirement(64, I, P, G))
     val redirect = Valid(new ProductRedirect(64, I, G))
     val trap = Valid(new ProductRetirement(64, I, P, G))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
+    val recovering = Output(Bool())
     val loadCount = Output(UInt(log2Ceil(g.loadQueueEntries + 1).W))
     val storeCount = Output(UInt(log2Ceil(g.storeQueueEntries + 1).W))
     val outstandingTransactions = Output(UInt(log2Ceil(T + 1).W))
@@ -83,12 +91,19 @@ class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: 
   core.io.memoryResponse.bits := io.memoryResponse.bits
   io.memoryResponse.ready := core.io.memoryResponse.ready
 
+  io.systemCsrReadAddr := core.io.systemCsrReadAddr
+  core.io.systemCsrReadData := io.systemCsrReadData
+  core.io.systemCsrReadImplemented := io.systemCsrReadImplemented
+  core.io.systemCsrReadWritable := io.systemCsrReadWritable
+  core.io.systemCurrentPrivilege := io.systemCurrentPrivilege
+
   io.retire.valid := core.io.retire.valid
   io.retire.bits := core.io.retire.bits
   core.io.retire.ready := io.retire.ready
   io.redirect := core.io.redirect
   io.trap := core.io.trap
   io.occupancy := core.io.occupancy
+  io.recovering := core.io.recovering
   io.loadCount := core.io.loadCount
   io.storeCount := core.io.storeCount
   io.outstandingTransactions := core.io.outstandingTransactions
