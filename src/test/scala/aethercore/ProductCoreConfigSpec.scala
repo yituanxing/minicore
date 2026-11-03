@@ -37,6 +37,7 @@ class ProductCoreConfigSpec extends AnyFlatSpec with Matchers {
     small.software.isa.extensions.contains('D') shouldBe true
     small.rtlImplemented shouldBe false
     ProductCoreProfiles.smallEngineering.mabi shouldBe "lp64"
+    ProductCoreProfiles.smallEngineering.software.isa.hasZifencei shouldBe true
   }
 
   it should "reject impossible dispatch width, ROB and PRF port configurations" in {

@@ -148,6 +148,10 @@ class ProductSystemCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
   it should "hold younger dispatch behind an older Load and a head-only CSR barrier" in {
     simulate(new ProductSystemHarness) { d =>
       init(d)
+      // Hold the physical bus request while probing the younger dispatch
+      // barrier. With ready high the request would legitimately handshake
+      // during the probe loop before this test captures its transaction ID.
+      d.io.memoryRequest.ready.poke(false.B)
       val pc = BigInt("80000000", 16)
       dispatch(d, pc, BigInt("00002183", 16)) // lw x3,0(x0)
       dispatch(d, pc + 4, BigInt("30002273", 16)) // csrrs x4,mstatus,x0
@@ -166,6 +170,7 @@ class ProductSystemCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.memoryRequest.valid.expect(true.B)
       d.io.memoryRequest.bits.op.expect(AetherMemOp.Read)
       val txn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.io.memoryRequest.ready.poke(true.B)
       d.clock.step()
       d.io.memoryResponse.bits.txnId.poke(txn.U)
       d.io.memoryResponse.bits.rdata.poke(42.U)

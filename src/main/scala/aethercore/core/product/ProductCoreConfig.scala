@@ -88,7 +88,10 @@ object ProductCoreProfiles {
 
   /** Engineering target for retiring an actual SmallOoO RTL before F/D. */
   val engineeringSoftware: SoftwareTarget =
-    SoftwareTarget(reference.isa, AbiProfiles.lp64)
+    SoftwareTarget(
+      reference.isa.copy(zExtensions = reference.isa.zExtensions + "Zifencei"),
+      AbiProfiles.lp64
+    )
 
   /** Upstream Debian riscv64 target, not yet implemented by either ProductCore or v2. */
   val distroSoftware: SoftwareTarget =
