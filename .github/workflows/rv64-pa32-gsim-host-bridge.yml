@@ -70,11 +70,11 @@ jobs:
           key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
       - name: Validate GSIM/Verilator bare differential contracts
         run: python3 -m unittest tests_py.test_rv64_pa32_gsim_bare_diff -v
-      - name: Build isolated GSIM with supernode host callback; test real RV64I
+      - name: Build Clang 19 -O3 GSIM with host callback and qualify real RV64I
         run: |
           set -euo pipefail
           OUT=build/rv64-pa32-gsim-host-bridge GSIM_HOST_BRIDGE_EXPERIMENT=1 \
-            JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
+            GSIM_PREFIX_OPT=-O3 JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
       - name: Restore exact RV64 Linux/OpenSBI software cache
         uses: actions/cache/restore@v4
         with:
@@ -102,10 +102,10 @@ jobs:
           test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
       - name: Verify firmware differential regression contracts
         run: python3 -m unittest tests_py.test_rv64_pa32_gsim_firmware_diff -v
-      - name: Compare 2M real OpenSBI/Linux firmware cycles with Verilator
+      - name: Compare 20M real OpenSBI/Linux firmware cycles, RAM state and checkpoints
         run: |
           set -euo pipefail
-          CYCLES=2000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
+          CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
       - name: Preserve both successful and failed diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -134,4 +134,5 @@ jobs:
             build/rv64-pa32-gsim-firmware-diff/gsim-firmware.log
             build/rv64-pa32-gsim-firmware-diff/verilator-firmware.log
             build/rv64-pa32-gsim-firmware-diff/diff-result.txt
+            build/rv64-pa32-gsim-firmware-diff/performance.txt
             build/rv64-linux-early/result.txt

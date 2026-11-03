@@ -176,3 +176,37 @@ The CI is https://github.com/yituanxing/minicore/actions/runs/41569416797.
 No claim of OpenSBI or Linux GSIM PASS is made before that workflow
 actually completes. If it diverges, diagnose ordinary stores, LR/SC,
 AMO and page-table response/commit ordering from the first mismatch.
+
+## 8. Same-firmware two-million-cycle real OpenSBI comparison: PASS
+
+Successful workflow:
+https://github.com/yituanxing/minicore/actions/runs/41569416797
+Artifact: pa32-gsim-host-bridge-41569416797, including the exact
+same SHA256 firmware image, both runner logs and differential results.
+
+* Full source: Linux 6.6.143 \`early-banner-v1\`, OpenSBI 1.6,
+  firmware SHA256 \`f81c8d333584b3dbb49cce6e7cb614638598971205854b5fa74cb2273b11dde8\`.
+* Both ran exactly **2,000,000** guest cycles, retired **753,104**
+  instructions, counted **1 exception, 0 interrupts**, and ended at
+  \`mtime=999992\`, \`PC=0x8001cb2c\`.
+* Full retirement PC/instruction digest matched:
+  \`0x9b4338a93c18c325\`.
+* 16 initial retirement PC, inst and cause tuples also matched.
+* GSIM: **13.181075 s**, **151,732.7 cycles/s**.
+* Verilator v5.054: **19.324522 s**, **103,495.4 cycles/s**.
+* Observed **1.466x** GSIM speedup for this exact prefix. This result
+  is **preliminary**, since GSIM's runner was built using Clang-19
+  \`-O0\` whereas the Verilator model build used \`-O3\`.
+  Do not use this number as a full-Linux or equal-build-flags claim.
+
+The next 20-million-cycle CI now requires:
+1. Clang-19 \`-O3 -march=native\` runner/model flags on each engine;
+2. Equal 100,000-cycle retirement checkpoints with first mismatch location;
+3. Equal complete 256 MiB host RAM FNV-1a digests **plus LR/SC reservation**
+   state at the end; the hash is computed only after timing stops;
+4. Matching total commits, trap/IRQ count, \`mtime\`, terminal PC and
+   retirement digest; and
+5. Measured host throughput only **after** all correctness gates pass.
+
+This still is an **OpenSBI/Linux firmware prefix** test. It is not
+evidence that GSIM has booted the Linux kernel all the way to PID1.
