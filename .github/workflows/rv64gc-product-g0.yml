@@ -11,6 +11,8 @@ on:
       - 'tests_py/test_product_g1_rename_reference.py'
       - 'tests_py/test_product_nax_distro_target.py'
       - 'tests_py/test_shared_semantic_owner.py'
+      - 'tests_py/test_product_config_contract.py'
+      - 'src/main/scala/aethercore/core/product/**'
       - 'tests_py/test_v2_foundation_contract.py'
       - 'tests_py/test_v2_decode_boundary.py'
       - 'src/main/scala/aethercore/core/semantic/**'
@@ -43,5 +45,6 @@ jobs:
             tests_py.test_product_g1_rename_reference \
             tests_py.test_product_nax_distro_target \
             tests_py.test_shared_semantic_owner \
+            tests_py.test_product_config_contract \
             tests_py.test_v2_foundation_contract \
             tests_py.test_v2_decode_boundary -v

@@ -216,3 +216,7 @@ G0 单独运行 **Fast Gate**、机器可读契约和 Rename 参考模型测试�
 共享架构语义不再属于 Tiny：新增 `core/semantic/SemanticTypes.scala` 和 `SemanticDecode.scala`，`TinySemanticDecode` 只处理 v2 RobDispatch/ExecutionClass，`core/v2/package.scala` 保持旧 API 的类型别名/枚举引用，`FoundationTypes` 只拥有 ROB/Producer/Value/执行结果等后台身份。**仅一份解码算法与语义类型定义**。包含旧 v2 源码合同、直接 SharedSemanticDecodeSpec、V2F7SemanticDecodeSpec 和 v2 ELF/OpenSBI elaboration 的回归；通过前不得将此项标记为 S 批 PASS。ISA/ABI 可配置能力仍不会凭此升级到 F/D/LP64D。
 
 按 NaxRiscv 经验：Small 与 Debian ISA/ABI 是独立维度；S 完成后，下一批进入连通的 G1 Rename/PRF/ROB/IQ/Commit/Recovery/LSQ，而不是再新增另一套 Decoder。
+
+### S 批配置实现（待测试验收）
+
+`core/product/ProductCoreConfig.scala` 新增 **三根正交配置轴** 的真实 Scala 验证层：`ProductCoreGeometry` 负责 Decode/Dispatch/Issue/Retire/ROB/IQ/LQ/SQ/PRF 规模及端口检查；`SoftwareTarget` 独立描述工程 RV64IMA/LP64 与产品 RV64GC/LP64D；`PlatformConfig` 保留真实板级参数。含 `smallEngineering`、`smallDebianTarget`、`mediumDebianTarget`、`largeDebianTarget`，**均显式标为 rtlImplemented=false**。PRF 小于 32+ROB 只触发可预计的分配背压标记，不被错误判为 ISA 不合法，遵循 NaxRiscv 可配置实践。配置检查由 `ProductCoreConfigSpec` Scala 测试以及独立 Python 静态所有权测试承担；这不是 SmallOoO RTL 本体。

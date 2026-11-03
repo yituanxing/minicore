@@ -5,6 +5,8 @@ on:
     paths:
       - 'src/main/scala/aethercore/core/v2/**'
       - 'src/main/scala/aethercore/core/semantic/**'
+      - 'src/main/scala/aethercore/core/product/**'
+      - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
       - 'src/test/scala/aethercore/SharedSemanticDecodeSpec.scala'
       - 'src/test/scala/aethercore/V2FoundationTypesSpec.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
@@ -108,6 +110,7 @@ jobs:
           ./mill aethercore.test.testOnly \
             aethercore.V2F7SemanticDecodeSpec \
             aethercore.SharedSemanticDecodeSpec \
+            aethercore.ProductCoreConfigSpec \
             aethercore.V2FoundationTypesSpec \
             aethercore.V2F7BareCoreSpec \
             aethercore.V2F7PagedCoreSpec \

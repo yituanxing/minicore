@@ -9,6 +9,7 @@ Source of truth for **proposed** product G0; freeze requires design decisions, a
 - [File-level migration map](rv64gc_g1_migration_map.json)
 - [Pure-Python G1 rename/undo reference model](../../tests_py/product_g1_rename_reference.py)
 - [Shared semantic single-owner contract tests](../../tests_py/test_shared_semantic_owner.py)
+- [ProductCore config validation tests](../../tests_py/test_product_config_contract.py)
 - [Pre-G0 architecture gap review](../RV64GC_FPGA_PRODUCT_ARCHITECTURE_GAP_2026-11-03.md)
 - [Executable architecture-contract checks](../../tests_py/test_product_g0_contract.py)
 
