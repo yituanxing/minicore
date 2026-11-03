@@ -22,7 +22,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  contracts:
+    name: Validate isolated GSIM source patch and RAM binding contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Fast source and port contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_cast_patch -v
   source:
+    needs: contracts
     name: Pinned GSIM source + conservative cast support + same PA32 CHIRRTL
     runs-on: ubuntu-24.04
     timeout-minutes: 65
