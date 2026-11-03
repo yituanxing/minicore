@@ -1,16 +1,6 @@
 name: PA32 GSIM SuperNode and LLVM PGO strict 20M sweep
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/rv64-pa32-gsim-performance.yml'
-      - 'tools/ci/rv64_pa32_gsim_performance_sweep.sh'
-      - 'tools/ci/rv64_pa32_gsim_pgo_ab.sh'
-      - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
-      - 'sim/pa32_sim_progress.h'
-      - 'sim/pa32_gsim_prefix_main.cpp'
-      - 'sim/pa32_verilator_prefix_main.cpp'
-      - 'tests_py/test_rv64_pa32_gsim_performance_contract.py'
   workflow_dispatch:
 
 permissions:

@@ -8,6 +8,8 @@ on:
       - 'sim/pa32_gsim_prefix_main.cpp'
       - 'sim/pa32_firmware_milestone.h'
       - 'sim/pa32_sim_progress.h'
+      - 'sim/pa32_gsim_phase_profile.h'
+      - 'tests_py/test_rv64_pa32_gsim_phase_profile.py'
       - 'tools/ci/rv64_pa32_sim_run.sh'
       - 'tests_py/test_rv64_pa32_sim_progress.py'
       - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
@@ -49,7 +51,8 @@ jobs:
             tests_py.test_rv64_pa32_gsim_bare_diff \
             tests_py.test_rv64_pa32_gsim_firmware_diff \
             tests_py.test_rv64_pa32_gsim_memory_diff \
-            tests_py.test_rv64_pa32_sim_progress -v
+            tests_py.test_rv64_pa32_sim_progress \
+            tests_py.test_rv64_pa32_gsim_phase_profile -v
 
   native:
     needs: contracts
@@ -163,7 +166,7 @@ jobs:
       - name: Compare 20M real OpenSBI/Linux firmware cycles, RAM state and checkpoints
         run: |
           set -euo pipefail
-          CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
+          AETHERCORE_GSIM_PHASE_PROFILE=1 CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
       # Full Linux PID1 was strictly qualified at commit 39b1f628, run 41578321826.
       # PR runs the fast 20M differential. Full PID1 is manual for a selected candidate.
       - name: Build real Linux PID1 initramfs and its OpenSBI payload

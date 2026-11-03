@@ -6,6 +6,7 @@
 #include "pa32_gsim_port_adapter.h"
 #include "pa32_firmware_milestone.h"
 #include "pa32_sim_progress.h"
+#include "pa32_gsim_phase_profile.h"
 
 #include <chrono>
 #include <cstdio>
@@ -113,7 +114,8 @@ int main(int argc, char** argv) {
     Memory memory;
     std::puts("AETHERCORE_PA32_GSIM_SINGLE_STEP_TIMING_UNQUALIFIED");
     const bool memoryProbe = std::string(argv[1]) == "--memory";
-    if (std::string(argv[1]) == "--bare") {
+    const bool bareProbe = std::string(argv[1]) == "--bare";
+    if (bareProbe) {
       // RV64I: addi x1,x0,1; addi x2,x1,2; addi x3,x2,3; jal x0,0.
       const std::uint32_t program[] = {
           0x00100093U, 0x00208113U, 0x00310193U, 0x0000006fU};
@@ -133,7 +135,7 @@ int main(int argc, char** argv) {
     } else {
       memory.loadAtBase(argv[1]);
     }
-    if (std::string(argv[1]) == "--bare") {
+    if (bareProbe) {
       for (unsigned i = 0; i < 4; ++i) {
         std::printf("AETHERCORE_PA32_GSIM_RAM_SEED addr=0x%08llx inst=0x%08x\n",
                     static_cast<unsigned long long>(
@@ -163,6 +165,7 @@ int main(int argc, char** argv) {
     std::uint64_t executedCycles = 0;
     const auto hostStart = std::chrono::steady_clock::now();
     aethercore::pa32sim::SimProgress progress("GSIM", total, requireLinux, hostStart);
+    aethercore::pa32sim::GsimPhaseProfile phaseProfile;
 
     for (std::uint64_t cycle = 0; cycle < total + 32; ++cycle) {
       const bool reset = cycle < 32;
@@ -171,9 +174,13 @@ int main(int argc, char** argv) {
       // combinational eval(). Do not call it twice/three times per guest cycle.
       // The host response observed from the previous tick is delivered to
       // the next one. This provisional timing requires Verilator differential.
+      const bool sampleCycle = phaseProfile.sample(cycle, reset);
+      const auto beforeRequest = sampleCycle
+          ? aethercore::pa32sim::GsimPhaseProfile::Clock::now()
+          : aethercore::pa32sim::GsimPhaseProfile::TimePoint{};
       const Request request = ports.request();
       const Response response = readResponses(request, memory);
-      if (std::string(argv[1]) == "--bare" && cycle >= 32 && cycle < 160) {
+      if (bareProbe && cycle >= 32 && cycle < 160) {
         std::printf(
             "AETHERCORE_PA32_GSIM_RAM_TRACE guest_cycle=%llu "
             "imem_valid=%u imem_addr=0x%08x imem_bytes=%u "
@@ -189,7 +196,13 @@ int main(int argc, char** argv) {
       ports.respond(response);
       commitAcceptedMemory(request, response, memory, reset);
       ports.clock(true);
+      const auto beforeModel = sampleCycle
+          ? aethercore::pa32sim::GsimPhaseProfile::Clock::now()
+          : aethercore::pa32sim::GsimPhaseProfile::TimePoint{};
       top->step();
+      const auto afterModel = sampleCycle
+          ? aethercore::pa32sim::GsimPhaseProfile::Clock::now()
+          : aethercore::pa32sim::GsimPhaseProfile::TimePoint{};
       if (reset) continue;
       ++executedCycles;
 
@@ -203,7 +216,7 @@ int main(int argc, char** argv) {
         digest *= 1099511628211ULL;
         digest ^= commit.inst;
         digest *= 1099511628211ULL;
-        if (std::string(argv[1]) == "--bare" &&
+        if (bareProbe &&
             commit.pc >= aethercore::l32sim::kRamBase &&
             commit.pc < aethercore::l32sim::kRamBase + sizeof(kBareInst) &&
             (commit.pc - aethercore::l32sim::kRamBase) % 4 == 0) {
@@ -235,6 +248,10 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(lastPc),
                     static_cast<unsigned long long>(digest));
       }
+      if (sampleCycle)
+        phaseProfile.record(
+            beforeRequest, beforeModel, afterModel,
+            aethercore::pa32sim::GsimPhaseProfile::Clock::now());
       if (requireLinux && firmware.linuxPassed()) break;
     }
 
@@ -242,6 +259,7 @@ int main(int argc, char** argv) {
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - hostStart).count();
     const std::uint64_t ramDigest = memory.stateDigest();
+    phaseProfile.report(executedCycles);
     std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f matched_rv64i=%llu ram_digest=0x%llx uart_bytes=%llu uart_digest=0x%llx opensbi_banner=%u linux_banner=%u milestone_cycle=%llu stip=%llu seip=%llu\n",
                 static_cast<unsigned long long>(executedCycles),
                 static_cast<unsigned long long>(retires),
@@ -267,7 +285,7 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(hostContext.validFetchCalls),
                 static_cast<unsigned long long>(hostContext.nonzeroFetchReplies));
 #endif
-    if (std::string(argv[1]) == "--bare") {
+    if (bareProbe) {
       if (matchingBareInstructions != 3) {
         std::fprintf(stderr,
             "AETHERCORE_PA32_GSIM_BARE_FAIL matched_rv64i=%llu expected=3 "

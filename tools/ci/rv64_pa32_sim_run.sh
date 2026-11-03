@@ -41,7 +41,7 @@ printf 'AETHERCORE_PA32_SIM_RUN engine=%s status=START target_cycles=%s timeout_
 set +e
 timeout --signal=TERM --kill-after=10s "${SIM_TIMEOUT_SECONDS}s" \
   "${command[@]}" 2>&1 | tee "$SIM_LOG" |
-  awk '/^AETHERCORE_PA32_SIM_(STAGE|PROGRESS|MILESTONE) / {print; fflush()}'
+  awk '/^AETHERCORE_PA32_SIM_(STAGE|PROGRESS|MILESTONE) |^AETHERCORE_PA32_GSIM_PHASE_PROFILE / {print; fflush()}'
 statuses=("${PIPESTATUS[@]}")
 set -e
 if (( statuses[0] != 0 || statuses[1] != 0 || statuses[2] != 0 )); then
