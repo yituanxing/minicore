@@ -15,6 +15,12 @@ import chisel3.util._
   * active ISA remains integer I/M/A/C, plus Zicsr/Zifencei; F/D is NOT present.
   */
 object AetherCoreProductSoCProfiles {
+  // The unchanged OpenSBI/QEMU-virt-compatible DTB declares riscv,ndev=52.
+  // Product must implement that whole architectural PLIC priority/enable
+  // aperture; source 17 is used during the firmware's cold initialization.
+  // Keep the already-qualified V2 board's 16-source preset independent.
+  val OpenSbiPlicSourceCount: Int = 52
+
   def smallOpenSbiEngineering(implementedPaddrBits: Int): ProductCoreConfig = {
     require(implementedPaddrBits >= 32 && implementedPaddrBits <= 56,
       "Product SoC supports a 32..56-bit physical memory seam")
@@ -63,7 +69,9 @@ class AetherCoreProductUnifiedMemorySoC(
 
   val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits)
   private val geometry = config.geometry
-  private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform)
+  private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform).copy(
+    plicSourceCount = AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
+  )
   private val map = board.addressMap
   require(log2Ceil(geometry.loadQueueEntries + geometry.storeQueueEntries) == ClientTxnBits,
     "Product data transaction tags must match the shared platform fabric")

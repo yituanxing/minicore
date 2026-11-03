@@ -19,6 +19,18 @@ class AetherCoreProductUnifiedMemorySoCSpec
 
   private val boot = AetherSoCAddressMap.QualifiedBootRomBase
   private val ram = BigInt("80000000", 16)
+  private val plicBase = BigInt("0c000000", 16)
+  private val plicPriority17 = plicBase + 0x44
+  private val plicPriority52 = plicBase + 0xd0
+  private val plicSupervisorEnableSecondWord = plicBase + 0x2084
+
+  private def sw(rs2: Int, offset: Int, rs1: Int): BigInt = {
+    require(rs2 >= 0 && rs2 < 32 && rs1 >= 0 && rs1 < 32)
+    require(offset >= 0 && offset < 2048 && (offset & 3) == 0)
+    BigInt((((offset >> 5) & 0x7f) << 25) |
+      (rs2 << 20) | (rs1 << 15) | (2 << 12) |
+      ((offset & 0x1f) << 7) | 0x23)
+  }
 
   it should "select the ROM reset and preserve the board OpenSBI ISA/ABI and timing contract" in {
     val target = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(32)
@@ -32,6 +44,11 @@ class AetherCoreProductUnifiedMemorySoCSpec
     target.software.isa.extensions.contains('D') shouldBe false
     target.mabi shouldBe "lp64"
     target.software.isa.pmpEntries shouldBe 16
+    // The unchanged OpenSBI firmware DTB advertises riscv,ndev=52. Product
+    // implements those sources without changing the qualified V2 16-source
+    // board contract.
+    AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount shouldBe 52
+    AetherSoCBoardSpec.QualifiedPlicSourceCount shouldBe 16
     AetherSoCBoardSpec.qualifiedLinux(target.platform).addressMap.bootRomBase shouldBe boot
   }
 
@@ -45,9 +62,10 @@ class AetherCoreProductUnifiedMemorySoCSpec
       d.clock.step()
 
       // The ROM performs 0x1000 -> 0x1004 -> 0x1008 -> 0x80000000.
-      // The RAM program reads the same cacheable word twice, then writes 'A'
-      // to 16550 THR at 0x10000000, then deliberately JALRs to that MMIO
-      // address. Instruction PMA must fault without issuing external RAM IO.
+      // The RAM program reads the same cacheable word twice, writes 'A' to
+      // UART, then initializes PLIC priority IDs 17 and 52 and the second
+      // supervisor enable word (matching the unchanged OpenSBI riscv,ndev=52
+      // DTB). Finally it deliberately JALRs to UART MMIO, which must fault.
       // BootROM leaves x5 = 0x80000000.
       val words = Map[BigInt, BigInt](
         ram -> BigInt("02a00313", 16),       // addi x6,x0,42
@@ -57,8 +75,19 @@ class AetherCoreProductUnifiedMemorySoCSpec
         (ram + 16) -> BigInt("100003b7", 16), // lui x7,0x10000
         (ram + 20) -> BigInt("04100413", 16), // addi x8,x0,65
         (ram + 24) -> BigInt("00838023", 16), // sb x8,0(x7), MMIO bypass
-        (ram + 28) -> BigInt("00038067", 16), // jalr x0,x7,0 -> UART execute fault
+        (ram + 28) -> BigInt("0c0004b7", 16), // lui x9,0xc000 -> PLIC base
+        (ram + 32) -> BigInt("00300413", 16), // addi x8,x0,3
+        (ram + 36) -> sw(8, 0x44, 9),       // sw x8,0x44(x9): priority ID17
+        (ram + 40) -> sw(8, 0xd0, 9),       // sw x8,0xd0(x9): priority ID52
+        (ram + 44) -> BigInt("0c002537", 16), // lui x10,0xc002
+        (ram + 48) -> sw(8, 0x84, 10),      // sw x8,0x84(x10): S enable word1
+        (ram + 52) -> BigInt("00038067", 16), // jalr x0,x7,0 -> UART execute fault
         (ram + 64) -> BigInt("00000055", 16)
+      )
+      val plicWrites = Map(
+        (ram + 36) -> plicPriority17,
+        (ram + 40) -> plicPriority52,
+        (ram + 48) -> plicSupervisorEnableSecondWord
       )
       // Byte-accurate memory for 16/32-bit frontend fetch parcels. External
       // AetherMem reads return their first requested byte in rdata[7:0].
@@ -80,9 +109,10 @@ class AetherCoreProductUnifiedMemorySoCSpec
       var sawCachedLoad = false
       var sawUart = false
       var sawExecuteFault = false
-      for (_ <- 0 until 1000
+      var retiredPlicWrites = Set.empty[BigInt]
+      for (_ <- 0 until 1600
            if !(sawUart && sawOperand && sawFirstLoad && sawCachedLoad &&
-             retired.contains(ram + 24) && sawExecuteFault)) {
+             retiredPlicWrites.size == plicWrites.size && sawExecuteFault)) {
         val ready = pending.isEmpty
         d.io.memoryRequest.ready.poke(ready.B)
         d.io.memoryResponse.valid.poke(pending.nonEmpty.B)
@@ -118,6 +148,15 @@ class AetherCoreProductUnifiedMemorySoCSpec
             if (pc == ram + 4) sawFirstLoad = true
             else sawCachedLoad = true
           }
+          plicWrites.get(pc).foreach { address =>
+            d.io.retire.bits.exception.valid.expect(false.B)
+            d.io.retire.bits.memoryTrace.valid.expect(true.B)
+            d.io.retire.bits.memoryTrace.write.expect(true.B)
+            d.io.retire.bits.memoryTrace.paddr.expect(address.U)
+            d.io.retire.bits.memoryTrace.wdata.expect(3.U)
+            d.io.retire.bits.memoryTrace.wmask.expect(15.U)
+            retiredPlicWrites += pc
+          }
           if (pc == BigInt("10000000", 16)) {
             d.io.retire.bits.exception.valid.expect(true.B)
             d.io.retire.bits.exception.cause.expect(
@@ -140,6 +179,7 @@ class AetherCoreProductUnifiedMemorySoCSpec
       retired should contain(boot + 8)
       retired should contain(ram)
       retired should contain(ram + 24)
+      retiredPlicWrites shouldBe plicWrites.keySet
       observedExternal should contain(ram)
       observedExternal should contain(ram + 64)
       observedExternal.forall(_ >= ram) shouldBe true
