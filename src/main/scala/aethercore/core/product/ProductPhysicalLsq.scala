@@ -138,8 +138,15 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   val reserveLoad = reserveKind === MemoryOperationKind.Load
   val reserveStore = reserveKind === MemoryOperationKind.Store
   val reserveIndex = io.reserve.bits.token.index
+  // Prevent a wrapped ROB generation from aliasing an external memory
+  // transaction which is still leased after squash (memory latency unbounded).
+  val outstandingSameLifetime = transactions.map { txn =>
+    txn.active && txn.token.index === io.reserve.bits.token.index &&
+      txn.token.generation === io.reserve.bits.token.generation
+  }.reduce(_ || _)
   io.reserve.ready := (reserveLoad && loadCount < L.U ||
-                       reserveStore && storeCount < S.U) && !slots(reserveIndex).valid
+                       reserveStore && storeCount < S.U) &&
+    !slots(reserveIndex).valid && !outstandingSameLifetime
   when(io.reserve.fire) {
     assert(reserveLoad || reserveStore, "LSQ never reserves atomic/system uOps")
     slots(reserveIndex) := 0.U.asTypeOf(slots(reserveIndex))

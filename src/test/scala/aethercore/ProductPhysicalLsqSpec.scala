@@ -147,6 +147,14 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.kill.bits.generation.poke(0.U)
       d.clock.step()
       d.io.kill.valid.poke(false.B)
+      // Even if the ROB's generation counter eventually wraps, an identical
+      // lifetime may not be reserved while its old physical txn ID is live.
+      d.io.reserve.bits.token.index.poke(0.U)
+      d.io.reserve.bits.token.generation.poke(0.U)
+      d.io.reserve.bits.kind.poke(MemoryOperationKind.Load)
+      d.io.reserve.valid.poke(true.B)
+      d.io.reserve.ready.expect(false.B)
+      d.io.reserve.valid.poke(false.B)
       head(d, 0, 1)
       reserve(d, 0, MemoryOperationKind.Load, gen = 1, dest = 34, writes = true)
       // Old translation response must drain without poisoning the reused slot.
