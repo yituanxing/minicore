@@ -1,0 +1,93 @@
+name: AetherCore PA32 Verilator 5.024 vs 5.054
+
+on:
+  pull_request:
+    paths:
+      - 'tools/ensure_verilator_5_054.sh'
+      - 'tools/ci/rv64_pa32_verilator_version_ab.sh'
+      - '.github/workflows/rv64-pa32-verilator-version.yml'
+      - 'tests_py/test_rv64_pa32_new_accel_contract.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pa32-verilator-versions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ab:
+    name: Exact PA32 model on 5.024 and 5.054 with Clang Adaptive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Prepare host prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential clang \
+            libreadline-dev pkg-config curl xz-utils git python3 \
+            openjdk-17-jdk-headless device-tree-compiler dwarves
+      - name: Restore qualified tool and firmware caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: pa32-version-experiment-foundation-v1
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-fast-runtime-tools-v1-
+      - name: Restore/persist exact experimental Verilator
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Prepare immutable versions and Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_verilator_5_054.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ci/rv64_linux_early_build.sh
+          test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
+      - name: Source qualification
+        run: python3 -m unittest tests_py.test_rv64_pa32_new_accel_contract -v
+      - name: Run exact version throughput and terminal-state A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          CYCLES=12000000 REPEATS=2 JOBS="$(nproc)" \
+            bash tools/ci/rv64_pa32_verilator_version_ab.sh
+      - name: Upload complete evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-verilator-version-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/rv64-pa32-verilator-version-ab/
