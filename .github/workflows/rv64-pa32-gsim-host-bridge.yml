@@ -34,7 +34,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Source, clock and pinned GSIM patch contracts
-        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_host_bridge -v
+        run: |
+          python3 -m unittest \
+            tests_py.test_rv64_pa32_gsim_host_bridge \
+            tests_py.test_rv64_pa32_gsim_bare_diff \
+            tests_py.test_rv64_pa32_gsim_firmware_diff \
+            tests_py.test_rv64_pa32_gsim_memory_diff -v
 
   native:
     needs: contracts

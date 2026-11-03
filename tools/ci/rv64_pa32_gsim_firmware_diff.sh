@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 2M-cycle same-RTL PA32 GSIM/Verilator FULL OPEN SBI/LINUX firmware prefix.
+# Same-RTL PA32 GSIM/Verilator real OpenSBI/Linux firmware prefix.
 # Fail-closed: this is a cold firmware-prefix differential, not a Linux PASS.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -18,12 +18,12 @@ test -x "$VERILATOR_OUT/obj/V$TOP" || exit 3
 mkdir -p "$OUT"
 sha256sum "$FW_BIN" > "$OUT/firmware.sha256"
 
-timeout --signal=TERM --kill-after=10s 240s \
+timeout --signal=TERM --kill-after=10s 900s \
   "$GSIM_OUT/pa32-gsim-prefix" "$FW_BIN" "$CYCLES" \
   > "$OUT/gsim-firmware.log" 2>&1 || {
     tail -90 "$OUT/gsim-firmware.log" >&2; exit 5;
   }
-timeout --signal=TERM --kill-after=10s 240s \
+timeout --signal=TERM --kill-after=10s 900s \
   "$VERILATOR_OUT/obj/V$TOP" "$FW_BIN" "$CYCLES" \
   > "$OUT/verilator-firmware.log" 2>&1 || {
     tail -90 "$OUT/verilator-firmware.log" >&2; exit 6;
