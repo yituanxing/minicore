@@ -12,6 +12,7 @@ on:
       - 'src/test/scala/aethercore/ProductSmallMemoryCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductDataResolverSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallTranslatedCoreSpec.scala'
+      - 'src/test/scala/aethercore/ProductAtomicCoreSpec.scala'
       - 'src/main/scala/aethercore/core/ALU.scala'
       - 'src/test/scala/aethercore/ProductSmallIntegerCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
@@ -37,7 +38,7 @@ jobs:
   f7-frontier:
     name: F7 semantic/frontend frontier
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 18
     env:
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
       AETHERCORE_TOOLCHAIN_JOBS: "4"
@@ -127,6 +128,7 @@ jobs:
             aethercore.ProductSmallMemoryCoreSpec \
             aethercore.ProductDataResolverSpec \
             aethercore.ProductSmallTranslatedCoreSpec \
+            aethercore.ProductAtomicCoreSpec \
             aethercore.V2F3ExecutionSpec \
             aethercore.ALUSpec \
             aethercore.RV64MALUSpec \

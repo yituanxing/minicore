@@ -14,6 +14,7 @@ class ProductMemReservation(val indexBits: Int, val physicalBits: Int, val gener
   val kind = MemoryOperationKind()
   val size = MemSize()
   val unsigned = Bool()
+  val atomicOp = AtomicOp()
   val destination = new ProductPhysicalTag(physicalBits, generationBits)
   val hasDestination = Bool()
 }
@@ -40,6 +41,7 @@ private class ProductMemSlot(val paddrBits: Int, val indexBits: Int,
   val kind = MemoryOperationKind()
   val size = MemSize()
   val unsigned = Bool()
+  val atomicOp = AtomicOp()
   val destination = new ProductPhysicalTag(physicalBits, generationBits)
   val hasDestination = Bool()
   val resolved = Bool()
@@ -64,14 +66,14 @@ private class ProductTxnOwner(val indexBits: Int, val generationBits: Int) exten
   *   younger loads instead of requiring speculative alias prediction/replay.
   * - Full-cover youngest-older store data forwards; partial overlap stalls.
   * - Cacheable idempotent ordinary Loads can run before ROB head; MMIO Loads
-  *   and EVERY Store require exact ROB head (stores only externalize there).
+  *   and EVERY Store/Atomic require exact ROB head (side effects cannot escape).
   * - Each physical transaction leases an independent ID until LAST response.
   *   Squash removes ROB ownership but never prematurely recycles a leased ID.
   * - At most one physical request and one completion per cycle; completion is
   *   Decoupled and held. No device/Store effect can escape a wrong path.
   *
   * Requires a real upstream virtual->physical + PMP/PMA resolver. This is
-  * neither an MMU nor a complete CPU, and Atomic/F/D are not implemented.
+  * neither an MMU nor a complete CPU; F/D and privileged ops are not implemented.
   */
 class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int = 56)
     extends Module {
@@ -132,7 +134,11 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   private def age(index: UInt): UInt = (index - io.robHead.bits.index)(I - 1, 0)
 
   val loadCount = PopCount(slots.map(s => s.valid && s.kind === MemoryOperationKind.Load))
-  val storeCount = PopCount(slots.map(s => s.valid && s.kind === MemoryOperationKind.Store))
+  // Atomic instructions reserve StoreQ capacity, including LR. Their
+  // reservation and ordering effect must exist from ROB dispatch, before a
+  // younger normal Load might otherwise issue out of order.
+  val storeCount = PopCount(slots.map(s => s.valid &&
+    (s.kind === MemoryOperationKind.Store || s.kind === MemoryOperationKind.Atomic)))
   val txnCount = PopCount(transactions.map(_.active))
   io.loadCount := loadCount
   io.storeCount := storeCount
@@ -141,6 +147,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   val reserveKind = io.reserve.bits.kind
   val reserveLoad = reserveKind === MemoryOperationKind.Load
   val reserveStore = reserveKind === MemoryOperationKind.Store
+  val reserveAtomic = reserveKind === MemoryOperationKind.Atomic
   val reserveIndex = io.reserve.bits.token.index
   // Prevent a wrapped ROB generation from aliasing an external memory
   // transaction which is still leased after squash (memory latency unbounded).
@@ -149,16 +156,23 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       txn.token.generation === io.reserve.bits.token.generation
   }.reduce(_ || _)
   io.reserve.ready := (reserveLoad && loadCount < L.U ||
-                       reserveStore && storeCount < S.U) &&
+                       (reserveStore || reserveAtomic) && storeCount < S.U) &&
     !slots(reserveIndex).valid && !outstandingSameLifetime
   when(io.reserve.fire) {
-    assert(reserveLoad || reserveStore, "LSQ never reserves atomic/system uOps")
+    assert(reserveLoad || reserveStore || reserveAtomic,
+      "LSQ only reserves ordinary or atomic memory operations")
+    when(reserveAtomic) {
+      assert(io.reserve.bits.atomicOp =/= AtomicOp.None &&
+        (io.reserve.bits.size === MemSize.Word || io.reserve.bits.size === MemSize.DWord),
+        "decoded RV64 atomics must have a valid operation and W/D access width")
+    }
     slots(reserveIndex) := 0.U.asTypeOf(slots(reserveIndex))
     slots(reserveIndex).valid := true.B
     slots(reserveIndex).tokenGeneration := io.reserve.bits.token.generation
     slots(reserveIndex).kind := reserveKind
     slots(reserveIndex).size := io.reserve.bits.size
     slots(reserveIndex).unsigned := io.reserve.bits.unsigned
+    slots(reserveIndex).atomicOp := io.reserve.bits.atomicOp
     slots(reserveIndex).destination := io.reserve.bits.destination
     slots(reserveIndex).hasDestination := io.reserve.bits.hasDestination
   }
@@ -180,6 +194,10 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     slots(resolveIndex).fault := io.resolve.bits.fault
     val mask = bytesOf(resolving.size) - 1.U
     val misaligned = (io.resolve.bits.paddr & mask) =/= 0.U
+    val atomic = resolving.kind === MemoryOperationKind.Atomic
+    val atomicRead = atomic && resolving.atomicOp === AtomicOp.Lr
+    val readLike = resolving.kind === MemoryOperationKind.Load || atomicRead
+    val unsupportedAtomic = atomic && !io.resolve.bits.attributes.supportsAtomic
     // A PMA region without byte enables cannot accept a sub-word Store.
     // Fail closed before reaching AetherMem rather than widening a write or
     // silently relying on a downstream bridge to emulate read-modify-write.
@@ -188,9 +206,14 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     when(!io.resolve.bits.fault.valid) {
       when(misaligned) {
         slots(resolveIndex).fault.valid := true.B
-        slots(resolveIndex).fault.cause := Mux(resolving.kind === MemoryOperationKind.Load,
+        slots(resolveIndex).fault.cause := Mux(readLike,
           MachineExceptionCode.LoadAddressMisaligned.U,
           MachineExceptionCode.StoreAddressMisaligned.U)
+        slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
+      }.elsewhen(unsupportedAtomic) {
+        slots(resolveIndex).fault.valid := true.B
+        slots(resolveIndex).fault.cause := Mux(readLike,
+          MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
         slots(resolveIndex).fault.value := io.resolve.bits.virtualAddress
       }.elsewhen(unsupportedPartialStore) {
         slots(resolveIndex).fault.valid := true.B
@@ -229,6 +252,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     val isHead = io.robHead.valid && equal(token, io.robHead.bits)
     val isLoad = item.kind === MemoryOperationKind.Load
     val isStore = item.kind === MemoryOperationKind.Store
+    val isAtomic = item.kind === MemoryOperationKind.Atomic
     val normalRam = item.attributes.cacheable && item.attributes.idempotent &&
       !item.attributes.sideEffecting && !item.attributes.ordered
     val safeLoad = isHead || normalRam
@@ -239,6 +263,13 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       slots(k).valid && slots(k).kind === MemoryOperationKind.Store &&
         age(k.U) < age(j.U)
     }
+    // An older LR/SC/AMO is a full memory-order barrier until it leaves ROB.
+    // This conservatively implements aq/rl without permitting a younger RAM
+    // Load to observe pre-atomic state or prematurely alter a reservation.
+    val olderAtomic = (0 until N).map { k =>
+      slots(k).valid && slots(k).kind === MemoryOperationKind.Atomic &&
+        age(k.U) < age(j.U)
+    }.reduce(_ || _)
     val unknownOlder = (0 until N).map { k =>
       olderStore(k) && !slots(k).resolved
     }.reduce(_ || _)
@@ -265,9 +296,10 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       found = found || intersects(k)
     }
     val localFault = item.fault.valid
-    val forward = isLoad && found && complete && !unknownOlder && !localFault && safeLoad
-    val read = isLoad && !unknownOlder && !found && safeLoad
-    val write = isStore && isHead && !localFault
+    val forward = isLoad && found && complete && !unknownOlder &&
+      !olderAtomic && !localFault && safeLoad
+    val read = isLoad && !unknownOlder && !found && !olderAtomic && safeLoad
+    val write = (isStore || isAtomic) && isHead && !localFault
     eligible(j) := item.valid && item.resolved && !item.launched &&
       (localFault || forward || read || write) && io.robHead.valid &&
       !io.kill.valid && (hasTxn || forward || localFault)
@@ -295,14 +327,17 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   io.memoryRequest.valid := candidateValid && !immediate && hasTxn
   io.memoryRequest.bits := 0.U.asTypeOf(io.memoryRequest.bits)
   io.memoryRequest.bits.txnId := chosenTxn
-  io.memoryRequest.bits.op := Mux(candidate.kind === MemoryOperationKind.Store,
-    AetherMemOp.Write, AetherMemOp.Read)
+  io.memoryRequest.bits.op := Mux(candidate.kind === MemoryOperationKind.Atomic,
+    AetherMemOp.Atomic, Mux(candidate.kind === MemoryOperationKind.Store,
+      AetherMemOp.Write, AetherMemOp.Read))
   io.memoryRequest.bits.paddr := candidate.paddr
   io.memoryRequest.bits.size := candidate.size
   io.memoryRequest.bits.wdata := candidate.storeData
-  io.memoryRequest.bits.wmask := Mux(candidate.kind === MemoryOperationKind.Store,
-    accessMask(candidate.size), 0.U)
-  io.memoryRequest.bits.atomicOp := AtomicOp.None
+  val writePayload = candidate.kind === MemoryOperationKind.Store ||
+    (candidate.kind === MemoryOperationKind.Atomic && candidate.atomicOp =/= AtomicOp.Lr)
+  io.memoryRequest.bits.wmask := Mux(writePayload, accessMask(candidate.size), 0.U)
+  io.memoryRequest.bits.atomicOp := Mux(candidate.kind === MemoryOperationKind.Atomic,
+    candidate.atomicOp, AtomicOp.None)
   io.memoryRequest.bits.attributes := candidate.attributes
 
   when(io.memoryRequest.fire) {
@@ -310,12 +345,14 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     transactions(chosenTxn).active := true.B
     transactions(chosenTxn).token.index := candidateIndex
     transactions(chosenTxn).token.generation := candidate.tokenGeneration
-    transactions(chosenTxn).isLoad := candidate.kind === MemoryOperationKind.Load
+    transactions(chosenTxn).isLoad := candidate.kind === MemoryOperationKind.Load ||
+      (candidate.kind === MemoryOperationKind.Atomic && candidate.atomicOp === AtomicOp.Lr)
     slots(candidateIndex).launched := true.B
-    when(candidate.kind === MemoryOperationKind.Store) {
+    when(candidate.kind === MemoryOperationKind.Store ||
+      candidate.kind === MemoryOperationKind.Atomic) {
       val sameHead = io.robHead.valid && candidateIndex === io.robHead.bits.index &&
         candidate.tokenGeneration === io.robHead.bits.generation
-      assert(sameHead, "a Store must NEVER externalize before exact ROB head")
+      assert(sameHead, "Store/Atomic must NEVER externalize before exact ROB head")
     }
   }
 

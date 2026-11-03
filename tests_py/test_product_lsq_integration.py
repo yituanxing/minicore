@@ -40,11 +40,47 @@ class ProductLsqOwnershipContract(unittest.TestCase):
         s = LSQ.read_text()
         for fragment in ("unknownOlder", "youngest", "olderStore",
                          "safeLoad", "normalRam", "intersects", "forwardable",
-                         "val write = isStore && isHead",
+                         "val write = (isStore || isAtomic) && isHead",
+                         "olderAtomic",
                          "assert(sameHead", "candidateIndex",
                          "when(io.kill.valid)", "io.completion <> completions.io.deq"):
             self.assertIn(fragment, s)
         self.assertNotIn("memoryDependencyPredictor", s)
+
+    def test_atomic_uses_same_rob_resolver_lsq_transaction_owners(self):
+        backend = BACKEND.read_text()
+        lsq = LSQ.read_text()
+        resolver = RESOLVER.read_text()
+        for fragment in (
+            "io.memoryReserve.bits.atomicOp := dispatchDecoded.memory.atomicOp",
+            "io.issue.bits.atomicOp := selected.atomicOp",
+            "iq(chosenIq).atomicOp := d.memory.atomicOp",
+            "val atomicDispatch = dispatchDecoded.memory.kind === MemoryOperationKind.Atomic",
+        ):
+            self.assertIn(fragment, backend)
+        for fragment in (
+            "slots(reserveIndex).atomicOp := io.reserve.bits.atomicOp",
+            "(reserveStore || reserveAtomic) && storeCount < S.U",
+            "!olderAtomic && !localFault && safeLoad",
+            "AetherMemOp.Atomic",
+            "candidate.atomicOp, AtomicOp.None",
+            "candidate.kind === MemoryOperationKind.Atomic",
+        ):
+            self.assertIn(fragment, lsq)
+        for fragment in (
+            "selected.atomicOp === AtomicOp.Lr",
+            "post.slot.atomicOp === AtomicOp.Lr",
+            "!io.pmaAttributes.supportsAtomic",
+            "slots(freeIndex).atomicOp := io.memoryIssue.bits.atomicOp",
+        ):
+            self.assertIn(fragment, resolver)
+        self.assertNotIn("new TinyBlockingLsu", backend + lsq + resolver)
+        atomic_spec = ROOT / "src/test/scala/aethercore/ProductAtomicCoreSpec.scala"
+        for fragment in (
+            "class ProductAtomicCoreSpec", "AtomicOp.Swap", "AtomicOp.Lr",
+            "AtomicOp.Sc", "StoreAddressMisaligned", "LoadAccessFault",
+        ):
+            self.assertIn(fragment, atomic_spec.read_text())
 
     def test_faults_keep_effective_virtual_address_across_translation_and_bus(self):
         s = LSQ.read_text()

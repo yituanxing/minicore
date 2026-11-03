@@ -1,6 +1,6 @@
 package aethercore.core.product
 
-import aethercore.common.{MachineExceptionCode, MemSize, PageTableReadBusIO, PrivilegeMode}
+import aethercore.common.{AtomicOp, MachineExceptionCode, MemSize, PageTableReadBusIO, PrivilegeMode}
 import aethercore.config.PageTableGeometry
 import aethercore.core.{PhysicalAddressNarrowing, PmpAccessChecker, PmpConstants, PmpGeometry,
   PmpRangeDecoder, TranslationUnit}
@@ -29,6 +29,7 @@ private class ProductTranslationSlot(val indexBits: Int, val generationBits: Int
   val storeData = UInt(64.W)
   val kind = MemoryOperationKind()
   val size = MemSize()
+  val atomicOp = AtomicOp()
   val context = new ProductDataTranslationContext(geometry)
   // PMP CSR values are an architectural snapshot, never sampled from a later
   // CSR context while an older request is waiting for a page walk.
@@ -121,8 +122,9 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
 
   when(io.memoryIssue.fire) {
     assert(io.memoryIssue.bits.memoryKind === MemoryOperationKind.Load ||
-      io.memoryIssue.bits.memoryKind === MemoryOperationKind.Store,
-      "only ordinary Load/Store belong to ProductDataResolver")
+      io.memoryIssue.bits.memoryKind === MemoryOperationKind.Store ||
+      io.memoryIssue.bits.memoryKind === MemoryOperationKind.Atomic,
+      "only Load/Store/Atomic belong to ProductDataResolver")
     slots(freeIndex) := 0.U.asTypeOf(slots(freeIndex))
     slots(freeIndex).valid := true.B
     slots(freeIndex).token := io.memoryIssue.bits.token
@@ -131,6 +133,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
     slots(freeIndex).storeData := io.memoryIssue.bits.storeData
     slots(freeIndex).kind := io.memoryIssue.bits.memoryKind
     slots(freeIndex).size := io.memoryIssue.bits.memorySize
+    slots(freeIndex).atomicOp := io.memoryIssue.bits.atomicOp
     slots(freeIndex).context := io.context
     slots(freeIndex).pmpConfig := io.pmpConfig
     slots(freeIndex).pmpAddress := io.pmpAddress
@@ -162,11 +165,13 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   private val misaligned = (selected.virtualAddress & alignedMask) =/= 0.U
   private val localFault = candidateValid && misaligned && !selectedKilled
   private val offerTranslation = candidateValid && !misaligned && !selectedKilled
+  private val selectedRead = selected.kind === MemoryOperationKind.Load ||
+    (selected.kind === MemoryOperationKind.Atomic && selected.atomicOp === AtomicOp.Lr)
 
   translation.io.requestValid := offerTranslation
   translation.io.virtualAddress := selected.virtualAddress
   translation.io.privilege := selected.context.effectivePrivilege
-  translation.io.write := selected.kind === MemoryOperationKind.Store
+  translation.io.write := !selectedRead
   translation.io.execute := false.B
   translation.io.satpTranslationEnabled := selected.context.satpEnabled
   translation.io.satpRootPpn := selected.context.rootPpn
@@ -185,6 +190,8 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
     translation.io.responseValid && translation.io.responseReady
   private val responseIndex = Mux(activeValid, activeIndex, selectedIndex)
   private val responseSlot = slots(responseIndex)
+  private val responseRead = responseSlot.kind === MemoryOperationKind.Load ||
+    (responseSlot.kind === MemoryOperationKind.Atomic && responseSlot.atomicOp === AtomicOp.Lr)
   private val responseKilled = io.kill.valid && same(responseSlot.token, io.kill.bits)
   private val (narrowDataAddress, dataOutOfRange) =
     PhysicalAddressNarrowing(translation.io.physicalAddress, PA)
@@ -214,9 +221,9 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
         result.storeData := responseSlot.storeData
         result.fault.valid := true.B
         result.fault.cause := Mux(translation.io.pageFault,
-          Mux(responseSlot.kind === MemoryOperationKind.Load,
+          Mux(responseRead,
             MachineExceptionCode.LoadPageFault.U, MachineExceptionCode.StorePageFault.U),
-          Mux(responseSlot.kind === MemoryOperationKind.Load,
+          Mux(responseRead,
             MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U))
         result.fault.value := responseSlot.virtualAddress
       }.otherwise {
@@ -258,7 +265,9 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   dataPmp.io.privilege := post.slot.context.effectivePrivilege
   dataPmp.io.address := post.paddr
   dataPmp.io.bytes := (1.U(4.W) << post.slot.size.asUInt)
-  dataPmp.io.write := post.slot.kind === MemoryOperationKind.Store
+  private val postRead = post.slot.kind === MemoryOperationKind.Load ||
+    (post.slot.kind === MemoryOperationKind.Atomic && post.slot.atomicOp === AtomicOp.Lr)
+  dataPmp.io.write := !postRead
   dataPmp.io.execute := false.B
   io.pmaValid := postValid
   io.pmaAddress := post.paddr
@@ -273,8 +282,11 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
     result.paddr := post.paddr
     result.storeData := post.slot.storeData
     result.attributes := io.pmaAttributes
-    result.fault.valid := config.software.isa.hasPmp.B && !dataPmp.io.allow
-    result.fault.cause := Mux(post.slot.kind === MemoryOperationKind.Load,
+    val deniedPmp = config.software.isa.hasPmp.B && !dataPmp.io.allow
+    val deniedAtomicPma = post.slot.kind === MemoryOperationKind.Atomic &&
+      !io.pmaAttributes.supportsAtomic
+    result.fault.valid := deniedPmp || deniedAtomicPma
+    result.fault.cause := Mux(postRead,
       MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
     result.fault.value := post.slot.virtualAddress
     resultValid := true.B
@@ -289,7 +301,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
     result.virtualAddress := selected.virtualAddress
     result.storeData := selected.storeData
     result.fault.valid := true.B
-    result.fault.cause := Mux(selected.kind === MemoryOperationKind.Load,
+    result.fault.cause := Mux(selectedRead,
       MachineExceptionCode.LoadAddressMisaligned.U,
       MachineExceptionCode.StoreAddressMisaligned.U)
     result.fault.value := selected.virtualAddress

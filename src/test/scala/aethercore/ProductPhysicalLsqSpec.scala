@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import aethercore.common.{MachineExceptionCode, MemSize}
+import aethercore.common.{AtomicOp, MachineExceptionCode, MemSize}
 import aethercore.core.product._
 import aethercore.core.semantic.MemoryOperationKind
 import aethercore.memory.AetherMemOp
@@ -37,13 +37,15 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
 
   private def reserve(d: ProductPhysicalLsq, idx: Int, kind: MemoryOperationKind.Type,
                       size: MemSize.Type = MemSize.DWord, gen: Int = 0,
-                      dest: Int = 0, writes: Boolean = false): Unit = {
+                      dest: Int = 0, writes: Boolean = false,
+                      atomic: AtomicOp.Type = AtomicOp.None): Unit = {
     val r = d.io.reserve.bits
     r.token.index.poke(idx.U)
     r.token.generation.poke(gen.U)
     r.kind.poke(kind)
     r.size.poke(size)
     r.unsigned.poke(false.B)
+    r.atomicOp.poke(atomic)
     r.destination.index.poke(dest.U)
     r.destination.generation.poke(1.U)
     r.hasDestination.poke(writes.B)
@@ -319,6 +321,111 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.reserve.valid.poke(true.B)
       d.io.reserve.ready.expect(false.B)
       d.io.reserve.valid.poke(false.B)
+      d.io.outstanding.expect(0.U)
+    }
+  }
+
+  it should "hold younger RAM loads behind an older Atomic until its exact-head external response" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 7)
+      reserve(d, 0, MemoryOperationKind.Atomic, size = MemSize.Word,
+        dest = 34, writes = true, atomic = AtomicOp.Swap)
+      reserve(d, 1, MemoryOperationKind.Load, size = MemSize.Word,
+        dest = 35, writes = true)
+      resolve(d, 0, 0x80006000L, data = 1)
+      resolve(d, 1, 0x80008000L)
+      d.io.storeCount.expect(1.U)
+      d.io.loadCount.expect(1.U)
+      d.io.memoryRequest.valid.expect(false.B)
+      head(d, 0)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Atomic)
+      d.io.memoryRequest.bits.atomicOp.expect(AtomicOp.Swap)
+      d.io.memoryRequest.bits.wmask.expect("hf".U)
+      val atomicTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      d.io.memoryRequest.valid.expect(false.B) // younger Load remains held
+      response(d, atomicTxn, BigInt("80000001", 16))
+      d.io.memoryRequest.ready.poke(false.B)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Read)
+      val loadTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      receive(d, 0, BigInt("ffffffff80000001", 16), writes = true)
+      head(d, 1)
+      d.io.memoryRequest.ready.poke(true.B)
+      d.clock.step()
+      response(d, loadTxn, 0x55)
+      receive(d, 1, 0x55, writes = true)
+      d.io.storeCount.expect(0.U)
+      d.io.loadCount.expect(0.U)
+      d.io.outstanding.expect(0.U)
+    }
+  }
+
+  it should "drain a killed Atomic transaction and keep its new ROB generation separate" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 0)
+      reserve(d, 0, MemoryOperationKind.Atomic, size = MemSize.DWord,
+        dest = 33, writes = true, atomic = AtomicOp.Add)
+      resolve(d, 0, 0x80006000L, data = 2)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Atomic)
+      d.io.memoryRequest.bits.atomicOp.expect(AtomicOp.Add)
+      d.io.memoryRequest.bits.wmask.expect("hff".U)
+      val oldTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+
+      d.io.kill.valid.poke(true.B)
+      d.io.kill.bits.index.poke(0.U)
+      d.io.kill.bits.generation.poke(0.U)
+      d.clock.step()
+      d.io.kill.valid.poke(false.B)
+      head(d, 0, 1)
+      reserve(d, 0, MemoryOperationKind.Atomic, size = MemSize.DWord,
+        gen = 1, dest = 34, writes = true, atomic = AtomicOp.Swap)
+      resolve(d, 0, 0x80006008L, data = 3, gen = 1)
+      d.io.memoryRequest.valid.expect(true.B)
+      val newTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      newTxn should not be oldTxn
+      d.clock.step()
+
+      d.io.memoryResponse.valid.poke(true.B)
+      d.io.memoryResponse.bits.txnId.poke(oldTxn.U)
+      d.io.memoryResponse.bits.rdata.poke(0x99.U)
+      d.io.memoryResponse.bits.fault.poke(false.B)
+      d.io.memoryResponse.bits.last.poke(true.B)
+      d.io.drainedKilledResponse.expect(true.B)
+      d.clock.step()
+      d.io.memoryResponse.valid.poke(false.B)
+      d.io.completion.valid.expect(false.B)
+      response(d, newTxn, BigInt("abcdef0123456789", 16))
+      d.io.completion.valid.expect(true.B)
+      d.io.completion.bits.token.generation.expect(1.U)
+      receive(d, 0, BigInt("abcdef0123456789", 16), writes = true)
+      d.io.outstanding.expect(0.U)
+    }
+  }
+
+  it should "deny Atomic MMIO locally with original virtual fault address" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 0)
+      reserve(d, 0, MemoryOperationKind.Atomic, size = MemSize.Word,
+        dest = 34, writes = true, atomic = AtomicOp.Sc)
+      resolve(d, 0, 0x10000000L, data = 2, ram = false,
+        vaddr = Some(0x40000000L))
+      d.io.memoryRequest.valid.expect(false.B)
+      d.clock.step()
+      d.io.completion.valid.expect(true.B)
+      d.io.completion.bits.hasValue.expect(true.B)
+      d.io.completion.bits.exception.valid.expect(true.B)
+      d.io.completion.bits.exception.cause.expect(MachineExceptionCode.StoreAccessFault.U)
+      d.io.completion.bits.exception.value.expect(0x40000000L.U)
+      d.io.completion.ready.poke(true.B)
+      d.clock.step()
+      d.io.storeCount.expect(0.U)
       d.io.outstanding.expect(0.U)
     }
   }

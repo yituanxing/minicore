@@ -2,7 +2,7 @@ package aethercore.core.product
 
 import chisel3._
 import chisel3.util._
-import aethercore.common.{AluOp, BranchType, TrapInfo}
+import aethercore.common.{AluOp, AtomicOp, BranchType, TrapInfo}
 import aethercore.core.semantic._
 import aethercore.common.MemSize
 
@@ -34,6 +34,7 @@ class ProductIssue(val xlen: Int, val indexBits: Int, val physicalBits: Int, val
   val memoryKind = MemoryOperationKind()
   val memorySize = MemSize()
   val memoryUnsigned = Bool()
+  val atomicOp = AtomicOp()
   val controlFlow = ControlFlowKind()
   val branchType = BranchType()
   val lhs = UInt(xlen.W)
@@ -104,6 +105,7 @@ private class ProductIqSlot(
   val memoryKind = MemoryOperationKind()
   val memorySize = MemSize()
   val memoryUnsigned = Bool()
+  val atomicOp = AtomicOp()
   val controlFlow = ControlFlowKind()
   val branchType = BranchType()
   val immediate = UInt(xlen.W)
@@ -115,7 +117,7 @@ private class ProductIqSlot(
   *
   * One dispatch, one issue, one precise retirement; IQ4, ROB8, PRF48 by profile.
   * An independent execution cluster must implement ProductIssue -> ProductCompletion.
-  * Load/Store enter a reserved LSQ via ProductSmallMemoryCore; atomics,
+  * Load/Store/Atomic enter a reserved LSQ via ProductSmallMemoryCore;
   * privileged system operations and F/D remain intentionally unsupported.
   * This module is not a complete CPU and cannot claim Linux or Debian support.
   *
@@ -197,11 +199,20 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   val writes = dispatchDecoded.writesRd && dispatchDecoded.rd =/= 0.U
   val exceptionOnly = dispatchDecoded.exception.valid
   val memoryDispatch = dispatchDecoded.memory.kind === MemoryOperationKind.Load ||
-    dispatchDecoded.memory.kind === MemoryOperationKind.Store
+    dispatchDecoded.memory.kind === MemoryOperationKind.Store ||
+    dispatchDecoded.memory.kind === MemoryOperationKind.Atomic
+  val atomicDispatch = dispatchDecoded.memory.kind === MemoryOperationKind.Atomic
+  // All atomic memory operations execute only at the exact ROB head in the
+  // LSQ, a conservative SerializeBoth implementation of aq/rl semantics.
+  // System/FENCE operations still require a separate privileged owner.
+  val permittedOrdering = dispatchDecoded.ordering === OrderingClass.Normal ||
+    (atomicDispatch && (dispatchDecoded.ordering === OrderingClass.SerializeBefore ||
+      dispatchDecoded.ordering === OrderingClass.SerializeAfter ||
+      dispatchDecoded.ordering === OrderingClass.SerializeBoth))
   val supported =
     (dispatchDecoded.memory.kind === MemoryOperationKind.None || memoryDispatch) &&
       dispatchDecoded.system.kind === SystemOperationKind.None &&
-      dispatchDecoded.ordering === OrderingClass.Normal
+      permittedOrdering
   io.unsupported := io.dispatch.valid && !supported && !exceptionOnly
 
   val freePhysicalMask = free.asUInt
@@ -252,6 +263,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.memoryReserve.bits.kind := dispatchDecoded.memory.kind
   io.memoryReserve.bits.size := dispatchDecoded.memory.size
   io.memoryReserve.bits.unsigned := dispatchDecoded.memory.unsigned
+  io.memoryReserve.bits.atomicOp := dispatchDecoded.memory.atomicOp
   io.memoryReserve.bits.destination.index := Mux(writes, chosenPhysical, 0.U)
   io.memoryReserve.bits.destination.generation :=
     Mux(writes, physicalGenerations(chosenPhysical) + 1.U, 0.U)
@@ -303,6 +315,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   io.issue.bits.memoryKind := selected.memoryKind
   io.issue.bits.memorySize := selected.memorySize
   io.issue.bits.memoryUnsigned := selected.memoryUnsigned
+  io.issue.bits.atomicOp := selected.atomicOp
   io.issue.bits.storeData := Mux(selected.src2 === 0.U, 0.U, prf(selected.src2))
   io.issue.bits.controlFlow := selected.controlFlow
   io.issue.bits.branchType := selected.branchType
@@ -397,6 +410,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
           iq(chosenIq).memoryKind := d.memory.kind
           iq(chosenIq).memorySize := d.memory.size
           iq(chosenIq).memoryUnsigned := d.memory.unsigned
+          iq(chosenIq).atomicOp := d.memory.atomicOp
           iq(chosenIq).controlFlow := d.controlFlow.kind
           iq(chosenIq).branchType := d.controlFlow.branchType
           iq(chosenIq).immediate := d.immediate
