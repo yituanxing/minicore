@@ -115,3 +115,18 @@ build and reset/step smoke. The test drives the same complete PA32 model for
 and has no guest correctness or speedup claim. The actual generated top
 header and port manifest are retained as artifacts for the upcoming
 host DDR/commit/UART adapter. The Verilator model remains the ground truth.
+
+## Exact GSIM PA32 pin ABI qualified from generated header
+
+CI #41562232548 produced the **actual** `S AetherCoreV2OpenSbiRV64SimTop`
+model (class `SAetherCoreV2OpenSbiRV64SimTop`) and identified 12 inputs and
+56 outputs. Important public operations are `set_clock`, `set_reset`,
+`set_io$$imemInst`, `set_io$$memRdata`, `set_io$$ptwRdata`,
+`get_io$$imemAddr`, `get_io$$memAddr`, `get_io$$ptwAddr`,
+`get_io$$commit$$pc`, `get_io$$uartValid`, and `get_io$$mtime`.
+
+`sim/pa32_gsim_port_adapter.h` now holds this exact 12-input/56-output API
+boundary, with typed request/response/commit structs. An extended native smoke
+toggles low/high clock, asserts/release reset and requires architectural mtime
+progression, not merely an incrementing GSIM `cycles` counter. Correct
+memory-handshake cycle semantics still require Verilator differential.

@@ -44,6 +44,15 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
         self.assertIn("AETHERCORE_PA32_GSIM_PATCHED_FRONTEND_PASS", script)
         self.assertIn("rv64_pa32_gsim_ports.py", script)
         self.assertIn("pa32_gsim_native_smoke.cpp", script)
+        ports = (ROOT / "sim/pa32_gsim_port_adapter.h").read_text()
+        smoke = (ROOT / "sim/pa32_gsim_native_smoke.cpp").read_text()
+        for field in ("get_io$commit$pc", "get_io$ptwAddr",
+                      "set_io$imemInst", "set_io$memRdata",
+                      "get_io$uartValid", "get_io$mtime"):
+            self.assertIn(field, ports)
+        self.assertIn("ports.clock(false)", smoke)
+        self.assertIn("ports.clock(true)", smoke)
+        self.assertIn("after <= before", smoke)
         self.assertIn("AETHERCORE_PA32_GSIM_NATIVE_SMOKE_PASS", script)
 
 if __name__ == "__main__":
