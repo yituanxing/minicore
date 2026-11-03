@@ -1,0 +1,105 @@
+name: PA32 GSIM SuperNode and LLVM PGO strict 20M sweep
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rv64-pa32-gsim-performance.yml'
+      - 'tools/ci/rv64_pa32_gsim_performance_sweep.sh'
+      - 'tools/ci/rv64_pa32_gsim_pgo_ab.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pa32-gsim-performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  performance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install pinned GSIM Chisel and Linux compilation prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make zlib1g-dev \
+            autoconf cmake ninja-build libssl-dev libelf-dev libreadline-dev \
+            pkg-config build-essential bc device-tree-compiler dwarves
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Restore pinned Verilator 5.054 cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Restore RV64 Linux GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+      - name: Restore qualified RV64 Linux/OpenSBI cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+      - name: Validate strict experiment contracts and shell syntax
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_performance_contract -v
+      - name: Provision exact RV64 cross compiler
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+      - name: Build qualified OpenSBI/Linux 6.6.143 firmware
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
+      - name: Same-host SuperNode 15/24/35/48 and LLVM PGO 20M strict A/B
+        run: JOBS=4 bash tools/ci/rv64_pa32_gsim_performance_sweep.sh
+      - name: Preserve candidate and PGO evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-gsim-performance-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-pa32-gsim-performance/summary.tsv
+            build/rv64-pa32-gsim-performance/firmware.sha256
+            build/rv64-pa32-gsim-performance/bare-diff-*.log
+            build/rv64-pa32-gsim-performance/firmware-*/diff-result.txt
+            build/rv64-pa32-gsim-performance/firmware-*/performance.txt
+            build/rv64-pa32-gsim-performance/gsim-*/gsim-configuration.txt
+            build/rv64-pa32-gsim-performance/gsim-*/prefix-build.log
+            build/rv64-pa32-gsim-performance/gsim-*/gsim-compile.log
+            build/rv64-pa32-gsim-performance/pgo-*/instrument-build.log
+            build/rv64-pa32-gsim-performance/pgo-*/optimized-build.log
+            build/rv64-pa32-gsim-performance/pgo-*/train.log
+            build/rv64-pa32-gsim-performance/pgo-*/bare-diff.log
+            build/rv64-pa32-gsim-performance/pgo-*/firmware/diff-result.txt
+            build/rv64-pa32-gsim-performance/pgo-*/firmware/performance.txt
+            build/rv64-linux-early/result.txt
