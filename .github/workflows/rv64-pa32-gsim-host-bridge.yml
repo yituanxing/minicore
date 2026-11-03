@@ -88,6 +88,11 @@ jobs:
           key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
       - name: Validate GSIM/Verilator bare differential contracts
         run: python3 -m unittest tests_py.test_rv64_pa32_gsim_bare_diff -v
+      - name: Preflight Clang 19 progress header before model generation
+        run: |
+          printf '#include "pa32_sim_progress.h"\nint main(){return 0;}\n' | \
+            clang++-19 -std=gnu++20 -O3 -march=native -Werror \
+              -Dlinux=1 -fsyntax-only -x c++ - -Isim
       - name: Build Clang 19 -O3 GSIM with host callback and qualify real RV64I
         run: |
           set -euo pipefail

@@ -62,6 +62,16 @@ class SimProgressTests(unittest.TestCase):
                            text=True, capture_output=True, env=env, timeout=5)
         self.assertEqual(r.returncode, 124)
         self.assertIn("status=FAIL exit=124", r.stderr)
+    def test_clang_native_predefined_linux_macro(self):
+        clang = shutil.which("clang++-19") or shutil.which("clang++")
+        if not clang:
+            self.skipTest("Clang not installed")
+        source = '#include "pa32_sim_progress.h"\nint main(){return 0;}\n'
+        subprocess.run([clang, "-std=gnu++20", "-O3", "-march=native",
+                        "-Dlinux=1", "-Werror", "-fsyntax-only", "-x", "c++",
+                        "-", "-I", str(ROOT / "sim")],
+                       input=source, text=True, check=True, capture_output=True)
+
     def test_shared_observer_compiles_and_reports(self):
         cxx = shutil.which("c++")
         if not cxx:
@@ -83,7 +93,7 @@ int main() {
 }
 """)
         exe = self.dir / "prog"
-        subprocess.run([cxx, "-std=c++20", "-O2", "-I", str(ROOT / "sim"),
+        subprocess.run([cxx, "-std=c++20", "-O2", "-Dlinux=1", "-I", str(ROOT / "sim"),
                         str(src), "-o", str(exe)], check=True,
                        capture_output=True, text=True)
         r = subprocess.run([str(exe)], capture_output=True, text=True,

@@ -6,7 +6,14 @@ cd "$ROOT"
 OUT="${OUT:-build/rv64-pa32-gsim-source-patch}"
 REV=45a73d6afb9b1893781cfb57ccd54096987bb23d
 GSIM_URL=https://github.com/OpenXiangShan/gsim.git
+GSIM_SUPERNODE_MAX_SIZE="${GSIM_SUPERNODE_MAX_SIZE:-35}"
+if ! [[ "$GSIM_SUPERNODE_MAX_SIZE" =~ ^[1-9][0-9]*$ ]] ||
+   (( GSIM_SUPERNODE_MAX_SIZE > 128 )); then
+  echo "invalid GSIM_SUPERNODE_MAX_SIZE=$GSIM_SUPERNODE_MAX_SIZE (1..128)" >&2
+  exit 2
+fi
 mkdir -p "$OUT"
+printf "gsim_revision=%s\nsupernode_max_size=%s\n" "$REV" "$GSIM_SUPERNODE_MAX_SIZE" > "$OUT/gsim-configuration.txt"
 test -f ./mill || { echo "missing Mill launcher" >&2; exit 2; }
 chmod +x ./mill
 ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardPA32CHIRRTL \
@@ -40,7 +47,7 @@ test -x "$src/build/gsim/gsim"
 mkdir -p "$OUT/generated"
 set +e
 timeout --signal=TERM --kill-after=10s 900s \
-  "$src/build/gsim/gsim" --dir "$OUT/generated" --log-level=1 "$OUT/pa32.fir" \
+  "$src/build/gsim/gsim" --supernode-max-size="$GSIM_SUPERNODE_MAX_SIZE" --dir "$OUT/generated" --log-level=1 "$OUT/pa32.fir" \
   > "$OUT/gsim-compile.log" 2>&1
 rc=$?
 set -e

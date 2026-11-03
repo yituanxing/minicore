@@ -13,9 +13,9 @@ namespace aethercore::pa32sim {
 class SimProgress {
  public:
   using Clock = std::chrono::steady_clock;
-  SimProgress(const char* engine, std::uint64_t budget, bool linux,
+  SimProgress(const char* engine, std::uint64_t budget, bool requireLinux,
               Clock::time_point start)
-      : engine_(engine), budget_(budget), linux_(linux),
+      : engine_(engine), budget_(budget), linux_(requireLinux),
         start_(start), interval_(readInterval()), next_(interval_) {
     std::fprintf(stderr,
         "AETHERCORE_PA32_SIM_STAGE engine=%s status=START mode=%s "

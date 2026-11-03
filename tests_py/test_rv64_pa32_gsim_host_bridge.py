@@ -35,6 +35,8 @@ class HostBridgeContract(unittest.TestCase):
             self.assertIn(item, runner)
         self.assertIn("top->step();", runner)
         self.assertIn("GSIM_HOST_BRIDGE_EXPERIMENT", build)
+        self.assertIn('--supernode-max-size="$GSIM_SUPERNODE_MAX_SIZE"', build)
+        self.assertIn("gsim-configuration.txt", build)
         self.assertIn("rv64_pa32_gsim_host_bridge_patch.py", build)
         subprocess.run(["bash","-n",str(ROOT / "tools/ci/rv64_pa32_gsim_source_patch.sh")], check=True)
 
