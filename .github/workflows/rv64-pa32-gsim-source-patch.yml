@@ -7,6 +7,8 @@ on:
       - 'tools/ci/rv64_pa32_gsim_cast_patch.py'
       - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
       - 'tests_py/test_rv64_pa32_gsim_cast_patch.py'
+      - 'tools/ci/rv64_pa32_gsim_ports.py'
+      - 'sim/pa32_gsim_native_smoke.cpp'
   workflow_dispatch:
 
 permissions:
@@ -68,3 +70,8 @@ jobs:
             build/rv64-pa32-gsim-source-patch/gsim-compile.log
             build/rv64-pa32-gsim-source-patch/cpp-files.txt
             build/rv64-pa32-gsim-source-patch/result.txt
+            build/rv64-pa32-gsim-source-patch/ports.tsv
+            build/rv64-pa32-gsim-source-patch/gsim-header.sha256
+            build/rv64-pa32-gsim-source-patch/generated/AetherCoreV2OpenSbiRV64SimTop.h
+            build/rv64-pa32-gsim-source-patch/native-build.log
+            build/rv64-pa32-gsim-source-patch/native-smoke.log

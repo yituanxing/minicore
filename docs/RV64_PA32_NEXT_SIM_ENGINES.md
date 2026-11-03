@@ -105,3 +105,13 @@ This is fault reproduction from one checkpoint, not periodic LightSSS.
 * Pinned GSIM source clone and scoped cast patch both succeeded; the
   Clang-19 source build failed because Ubuntu's `FlexLexer.h` is shipped
   by `libfl-dev`, not the runtime `flex` package. CI now installs both.
+
+## Native GSIM runtime integration gate
+
+After the first **real** CHIRRTL → GSIM C++ PASS in CI #41560954232,
+this branch adds a generated-port ABI manifest plus Clang-19 native-model
+build and reset/step smoke. The test drives the same complete PA32 model for
+32 reset + 256 post-reset cycles. It does *not* inject OpenSBI/Linux yet,
+and has no guest correctness or speedup claim. The actual generated top
+header and port manifest are retained as artifacts for the upcoming
+host DDR/commit/UART adapter. The Verilator model remains the ground truth.
