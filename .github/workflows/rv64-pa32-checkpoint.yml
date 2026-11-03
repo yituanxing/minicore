@@ -81,14 +81,17 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
 
-      - name: Install hosted prerequisites on cache miss
-        if: steps.verilator-cache.outputs.cache-hit != 'true' || steps.rv64-toolchain-cache.outputs.cache-hit != 'true'
+      - name: Ensure PA32 hosted build dependencies independent of cache hits
         shell: bash
         run: |
           set -euo pipefail
+          # Caches store compilers and Linux objects, not system dependencies.
           sudo apt-get update
           sudo apt-get install -y \
-            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git curl xz-utils cpio
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves cpio
 
       - name: Validate fixed tools
         shell: bash
