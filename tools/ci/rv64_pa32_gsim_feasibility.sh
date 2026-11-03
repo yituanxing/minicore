@@ -31,6 +31,12 @@ set -e
 echo "gsim-exit=$rc" | tee "$OUT/result.txt"
 if ((rc!=0)); then
   tail -100 "$OUT/gsim-compile.log" >&2
+  if grep -Fq 'invalid opType 19' "$OUT/gsim-compile.log" &&
+     grep -Fq 'dupTreeWithBits' "$OUT/gsim-compile.log"; then
+    # From pinned GSIM include/ExpTree.h: enum 19 == OP_ASUINT.
+    echo "gsim-blocker=GSIM_splitNodes_dupTreeWithBits_OP_ASUINT_19" >> "$OUT/result.txt"
+    echo "AETHERCORE_PA32_GSIM_KNOWN_BLOCKER operator=OP_ASUINT code=19 stage=dupTreeWithBits" >&2
+  fi
   echo "AETHERCORE_PA32_GSIM_FEASIBILITY_FAIL stage=chirrtl-to-cpp rc=$rc" >&2
   exit "$rc"
 fi

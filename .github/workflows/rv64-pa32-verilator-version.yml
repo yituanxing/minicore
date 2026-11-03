@@ -72,6 +72,12 @@ jobs:
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_verilator_5_054.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
+      - name: Reuse unchanged Linux after exact GCC toolchain environment is exported
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}"
+          command -v "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}gcc"
           bash tools/ci/rv64_linux_early_build.sh
           test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
       - name: Source qualification

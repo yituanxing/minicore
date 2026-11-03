@@ -55,3 +55,22 @@ exact-state tests before running a full immutable-firmware cold-Linux
 qualification on the winning mode. An older release winning the A/B is a
 valid NO-GO outcome. Do not blindly combine speedup ratios from
 different model versions or runner hardware.
+
+## First CI diagnosis (2026-11-03)
+
+* GSIM export produced 5,357,040 bytes of actual PA32 CHIRRTL (89 modules).
+  Pinned GSIM parsed, initialized and topology-sorted the design, then aborted
+  at `src/splitNodes.cpp:658` in `dupTreeWithBits()` with
+  `invalid opType 19`. In pinned `include/ExpTree.h`, 19 is `OP_ASUINT`.
+  This is an upstream frontend operator-coverage gap, not a PA32 Linux test
+  failure. Keep the original FIRRTL and compiler provenance for reproduction.
+  Do not rewrite CPU RTL to hide the issue or claim GSIM is operational.
+* Verilator 5.054 was successfully built from fixed upstream commit. The initial
+  version-comparison CI stopped before any A/B: GNU cross compiler environment
+  exported to `GITHUB_ENV` only becomes available in the **next** Actions
+  step. The corrected workflow separates toolchain provision and Linux reuse.
+* First PA32 Fork/COW replay actually reached the Linux checkpoint at
+  425,018,087 cycles and ran two identical 705,388-cycle / 214,436-commit
+  children (STIP +9, SEIP +1 each). Job failed **after** RTL PASS because the
+  verifier read `passed` from the wrong `V2_CHECKPOINT_PASS` line instead
+  of `V2_CHECKPOINT_RESULT`. A fixture test now protects this contract.

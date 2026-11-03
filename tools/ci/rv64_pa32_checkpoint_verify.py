@@ -15,8 +15,11 @@ def main():
     data = pathlib.Path(sys.argv[1]).read_text(errors="replace")
     def rows(marker):
         return [parse(m.group(1)) for m in re.finditer(r"^" + marker + r" (.+)$", data, re.M)]
-    ready, passes, passed = rows("V2_CHECKPOINT_READY"), rows("V2_CHECKPOINT_CHILD_PASS"), rows("V2_CHECKPOINT_PASS")
-    if len(ready) != 1 or len(passes) != 2 or len(passed) != 1:
+    ready = rows("V2_CHECKPOINT_READY")
+    passes = rows("V2_CHECKPOINT_CHILD_PASS")
+    summary = rows("V2_CHECKPOINT_RESULT")
+    passed = rows("V2_CHECKPOINT_PASS")
+    if len(ready) != 1 or len(passes) != 2 or len(summary) != 1 or len(passed) != 1:
         raise RuntimeError("checkpoint needs one parent and two independently successful children")
     if [p.get("index") for p in passes] != ["0", "1"]:
         raise RuntimeError("child indices must be 0 and 1")
@@ -30,8 +33,10 @@ def main():
         raise RuntimeError("checkpoint parent did not observe STIP")
     if int(ready[0]["cycles"]) != int(passed[0]["checkpoint-cycles"]):
         raise RuntimeError("parent advanced after forking")
-    if (int(passed[0]["passed"]), int(passed[0]["failed"])) != (2, 0):
-        raise RuntimeError("incorrect child result")
+    if (int(summary[0]["passed"]), int(summary[0]["failed"])) != (2, 0):
+        raise RuntimeError("checkpoint summary pass count mismatch")
+    if int(summary[0]["checkpoint-cycles"]) != int(ready[0]["cycles"]):
+        raise RuntimeError("checkpoint summary uses a different parent cycle")
     print("PA32_CHECKPOINT_DETERMINISTIC_REPLAY_PASS", first)
 
 

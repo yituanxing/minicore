@@ -1,6 +1,7 @@
 """Old simulator acceleration interfaces migrated to the current PA32 virtual FPGA."""
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -29,6 +30,28 @@ class Pa32AccelerationContracts(unittest.TestCase):
         self.assertIn("REQUIRE_POST_CHECKPOINT_SEIP ?= 1", make)
         self.assertIn("Run /init as init process", make)
         self.assertIn("sim/pa32_checkpoint_forkserver_main.cpp", make)
+
+    def test_fork_verifier_accepts_actual_result_line_format(self):
+        # V2_CHECKPOINT_PASS deliberately does not contain passed= or failed=.
+        # These counts belong to V2_CHECKPOINT_RESULT.
+        sample = """
+V2_CHECKPOINT_READY cycles=425018087 commits=134150862 interrupts=8475 stip=4237 seip=0 trigger=Run /init as init process children=2
+V2_CHECKPOINT_CHILD_PASS index=0 delta-cycles=705388 delta-commits=214436 interrupts-delta=19 stip-delta=9 seip-delta=1
+V2_CHECKPOINT_CHILD_PASS index=1 delta-cycles=705388 delta-commits=214436 interrupts-delta=19 stip-delta=9 seip-delta=1
+V2_CHECKPOINT_RESULT children=2 passed=2 failed=0 checkpoint-cycles=425018087
+V2_CHECKPOINT_PASS children=2 checkpoint-cycles=425018087
+"""
+        checker = ROOT / "tools/ci/rv64_pa32_checkpoint_verify.py"
+        with tempfile.TemporaryDirectory() as d:
+            logfile = pathlib.Path(d) / "checkpoint.log"
+            logfile.write_text(sample)
+            ok = subprocess.run(["python3", str(checker), str(logfile)], capture_output=True, text=True)
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertIn("PA32_CHECKPOINT_DETERMINISTIC_REPLAY_PASS", ok.stdout)
+            logfile.write_text(sample.replace("index=1 delta-cycles=705388", "index=1 delta-cycles=705389"))
+            bad = subprocess.run(["python3", str(checker), str(logfile)], capture_output=True, text=True)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn("diverged", bad.stderr)
 
     def test_full_cold_signoff_remains_separate(self):
         main = (ROOT / ".github/workflows/v2-soc-virtual-fpga-linux-pid1.yml").read_text()
