@@ -99,8 +99,14 @@ class ProductG0Contract(unittest.TestCase):
         self.assertGreaterEqual(len(names), 8)
         for interface in interfaces:
             self.assertIn(interface["producer"], owners)
-            self.assertIn(interface["consumer"], owners)
-            self.assertNotEqual(interface["producer"], interface["consumer"])
+            if interface.get("external_consumer", False):
+                # Difftest is a read-only verification sink, NOT a mutable
+                # CPU state owner. It cannot alter retirement or architectural state.
+                self.assertEqual(interface["id"], "ArchitectureTrace")
+                self.assertEqual(interface["consumer"], "difftest")
+            else:
+                self.assertIn(interface["consumer"], owners)
+                self.assertNotEqual(interface["producer"], interface["consumer"])
             self.assertGreaterEqual(len(interface["fields"]), 3)
             self.assertTrue(interface["handshake"])
         for k in ("DispatchGroup", "RetireBundle", "Completion",

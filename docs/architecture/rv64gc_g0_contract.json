@@ -483,7 +483,8 @@
         "memory_effects",
         "retire_lane"
       ],
-      "handshake": "ordered per-instruction record, including simultaneous two retire and exact fault boundary"
+      "handshake": "ordered per-instruction record, including simultaneous two retire and exact fault boundary",
+      "external_consumer": true
     }
   ],
   "invariants": [

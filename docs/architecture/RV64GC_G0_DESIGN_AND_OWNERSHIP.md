@@ -77,7 +77,7 @@ The target design is **single-hart RV64GC/LP64D, Debian riscv64, M/S/U, Sv39, 2 
                   PMA, physical device/IRQ ownership in platform
 \`\`\`
 
-The data flow never requires IQ to own ROB lifetime, CSR to own the producer table, or AXI to become an instruction-level signal. A forwarding/kill/control edge may run backwards, but it **must not create a second owner** of any mutable state.
+The data flow never requires IQ to own ROB lifetime, CSR to own the producer table, or AXI to become an instruction-level signal. The independent Spike/difftest oracle is an **external read-only sink** of ArchitectureTrace, not a CPU state owner. A forwarding/kill/control edge may run backwards, but it **must not create a second owner** of any mutable state.
 
 ### Ownership table (the machine-readable JSON is normative for G0 review)
 
