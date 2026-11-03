@@ -1,0 +1,62 @@
+name: AetherCore PA32 GSIM CHIRRTL feasibility
+
+on:
+  # Historical experiment; retained only for explicit reproduction.
+  # The qualified modern path is rv64-pa32-gsim-host-bridge.yml.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pa32-gsim-feasibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    name: Export current PA32 board CHIRRTL and probe pinned GSIM frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install frontend prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 curl ca-certificates libgmp10
+      - name: Restore exact Scala dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/mill
+            ~/.cache/coursier
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Source contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_new_accel_contract -v
+      - name: Compile unchanged PA32 Chisel to CHIRRTL then GSIM C++
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_pa32_gsim_feasibility.sh
+      - name: Upload source and generated GSIM artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-gsim-feasibility-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/rv64-pa32-gsim-feasibility/chirrtl-export.log
+            build/rv64-pa32-gsim-feasibility/gsim-compile.log
+            build/rv64-pa32-gsim-feasibility/chirrtl.sha256
+            build/rv64-pa32-gsim-feasibility/gsim-provenance.txt
+            build/rv64-pa32-gsim-feasibility/cpp-files.txt
+            build/rv64-pa32-gsim-feasibility/result.txt

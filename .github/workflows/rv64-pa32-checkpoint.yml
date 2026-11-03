@@ -1,0 +1,170 @@
+name: AetherCore PA32 Linux PID1 Fork-COW Replay
+
+on:
+  pull_request:
+    paths:
+      - 'sim/pa32_checkpoint_forkserver_main.cpp'
+      - 'Makefile.rv64-pa32-checkpoint'
+      - '.github/workflows/rv64-pa32-checkpoint.yml'
+      - 'tests_py/test_rv64_pa32_acceleration_contract.py'
+      - 'tools/ci/rv64_pa32_checkpoint_verify.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-v2-linux-checkpoint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: Boot once to PID1 and replay SEIP twice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore RV64 Linux GCC cache
+        id: rv64-toolchain-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore qualified RV64 Linux/OpenSBI software cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Ensure PA32 hosted build dependencies independent of cache hits
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Caches store compilers and Linux objects, not system dependencies.
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves cpio
+
+      - name: Validate fixed tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse or build unchanged Linux 6.6.143 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+          grep -q '^linux_version=6.6.143$' build/rv64-linux-early/result.txt
+
+      - name: Build unchanged deterministic PID1 initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+
+      - name: Check PA32 migrated acceleration contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_acceleration_contract -v
+
+      - name: Compile checkpoint harness on current PA32 RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/rv64-pa32-checkpoint"
+          make -f Makefile.rv64-pa32-checkpoint \
+            BUILD_DIR="$build" \
+            JOBS="$(nproc)" \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            sim
+          echo "PA32_CHECKPOINT_BUILD=$build" >> "$GITHUB_ENV"
+
+      - name: Boot once to PID1 and replay UART SEIP twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.rv64-pa32-checkpoint \
+            BUILD_DIR="$PA32_CHECKPOINT_BUILD" \
+            FW_BIN="$GITHUB_WORKSPACE/build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin" \
+            CHECKPOINT_TRIGGER='Run /init as init process' \
+            CHILD_SUCCESS_MARKER='RV64 USER UART IRQ OK' \
+            CHILD_COUNT=2 \
+            BOOT_MAX_CYCLES=750000000 \
+            CHILD_MAX_CYCLES=20000000 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            REQUIRE_POST_CHECKPOINT_SEIP=1 \
+            run-existing
+          log="$PA32_CHECKPOINT_BUILD/logs/checkpoint.log"
+          grep -q '^V2_CHECKPOINT_READY ' "$log"
+          [[ "$(grep -c '^V2_CHECKPOINT_CHILD_PASS ' "$log")" -eq 2 ]]
+          grep -q '^V2_CHECKPOINT_PASS children=2 ' "$log"
+          python3 tools/ci/rv64_pa32_checkpoint_verify.py "$log"
+
+      - name: Upload Linux checkpoint evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-linux-pid1-checkpoint-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/rv64-pa32-checkpoint/logs/rtl-build.log
+            ${{ runner.temp }}/rv64-pa32-checkpoint/logs/verilator-build.log
+            ${{ runner.temp }}/rv64-pa32-checkpoint/logs/checkpoint.log
+            ${{ runner.temp }}/rv64-pa32-checkpoint/firmware.sha256
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt

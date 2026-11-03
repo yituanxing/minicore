@@ -48,6 +48,17 @@ class L32LinuxBootContractTest(unittest.TestCase):
         self.assertIn("MIN_INTERRUPTS", runner)
         self.assertIn("L32_FIRST_INTERRUPT", runner)
         self.assertIn("min-interrupts=", runner)
+        for phase_field in (
+            "L32_SIM_PHASE stage=",
+            'reportPhase("opensbi-banner")',
+            'reportPhase("linux-banner")',
+            'reportPhase("requested-milestone")',
+            "delta-cycles=",
+            "delta-host-seconds=",
+            "delta-cycles-per-second=",
+            "uart-bytes=",
+        ):
+            self.assertIn(phase_field, runner)
 
         makefile = (ROOT / "Makefile.l32-linux-boot").read_text()
         self.assertIn("Linux version 6.6.143", makefile)

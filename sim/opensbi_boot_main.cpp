@@ -10,6 +10,7 @@ using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -99,6 +100,14 @@ int main(int argc, char** argv) {
     Memory memory;
     memory.loadAtBase(image);
 
+    const bool reportIsa = std::getenv("AETHERCORE_ISA_COVERAGE") != nullptr;
+    std::array<std::uint64_t, 128> opcodeCounts{};
+    std::array<std::uint64_t, 128 * 8> funct3Counts{};
+    std::array<std::uint64_t, 2 * 8 * 128> arithmeticCounts{};
+    std::array<std::uint64_t, 32 * 8> atomicCounts{};
+    std::array<std::uint64_t, 4096> systemCounts{};
+    std::array<std::uint64_t, 64> exceptionCounts{};
+    std::uint64_t atomicLr = 0, atomicSc = 0, atomicAmo = 0;
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
     std::uint64_t compressedCommits = 0;
@@ -114,7 +123,9 @@ int main(int argc, char** argv) {
     std::uint64_t milestoneCommitCount = 0;
     std::string uart;
     bool sawOpenSbiBanner = false;
+    bool sawLinuxBanner = false;
     bool sawMilestone = false;
+    std::uint64_t uartOutputBytes = 0;
     bool inputStarted = !uartInput.empty() && uartTrigger.empty();
     std::size_t inputIndex = 0;
     std::uint64_t seipAtInputStart = 0;
@@ -125,6 +136,25 @@ int main(int argc, char** argv) {
     std::uint64_t postInputDeadline = 0;
     std::uint64_t nextProgressCycle = progressIntervalCycles;
     const auto hostStart = std::chrono::steady_clock::now();
+    auto previousPhaseTime = hostStart;
+    std::uint64_t previousPhaseCycle = 0;
+    const auto reportPhase = [&](const char* phase) {
+      const auto now = std::chrono::steady_clock::now();
+      const double totalSeconds = std::chrono::duration<double>(now - hostStart).count();
+      const double phaseSeconds = std::chrono::duration<double>(now - previousPhaseTime).count();
+      const std::uint64_t phaseCycles = cycles - previousPhaseCycle;
+      std::cerr << "\nL32_SIM_PHASE stage=" << phase
+                << " cycles=" << cycles
+                << " delta-cycles=" << phaseCycles
+                << " host-seconds=" << totalSeconds
+                << " delta-host-seconds=" << phaseSeconds
+                << " delta-cycles-per-second="
+                << (phaseSeconds > 0 ? phaseCycles / phaseSeconds : 0.0)
+                << " commits=" << commits
+                << " uart-bytes=" << uartOutputBytes << "\n";
+      previousPhaseCycle = cycles;
+      previousPhaseTime = now;
+    };
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
@@ -185,6 +215,7 @@ int main(int argc, char** argv) {
 
       if (top.io_uartValid) {
         const char byte = static_cast<char>(top.io_uartByte);
+        ++uartOutputBytes;
         uart.push_back(byte);
         std::cout.put(byte);
         if (byte == '\n') std::cout.flush();
@@ -192,6 +223,11 @@ int main(int argc, char** argv) {
           sawOpenSbiBanner = true;
           std::cerr << "\nL32_OPENSBI_BANNER cycles=" << cycles
                     << " commits=" << commits << "\n";
+          reportPhase("opensbi-banner");
+        }
+        if (!sawLinuxBanner && endsWith(uart, "Linux version 6.6.143")) {
+          sawLinuxBanner = true;
+          reportPhase("linux-banner");
         }
         if (!inputStarted && !uartInput.empty() && !uartTrigger.empty() &&
             endsWith(uart, uartTrigger)) {
@@ -213,11 +249,32 @@ int main(int argc, char** argv) {
                     << " stip=" << supervisorTimerInterrupts
                     << " seip=" << supervisorExternalInterrupts
                     << " marker=" << milestone << "\n";
+          reportPhase("requested-milestone");
         }
       }
 
       if (top.io_commit_valid) {
         ++commits;
+        if (reportIsa) {
+          const auto inst = static_cast<std::uint32_t>(top.io_commit_inst);
+          const auto opcode = inst & 0x7fU;
+          const auto funct3 = (inst >> 12) & 7U;
+          ++opcodeCounts[opcode];
+          ++funct3Counts[opcode * 8U + funct3];
+          if (opcode == 0x33U || opcode == 0x3bU) {
+            const auto family = opcode == 0x33U ? 0U : 1U;
+            ++arithmeticCounts[(family * 8U + funct3) * 128U + (inst >> 25)];
+          }
+          if (opcode == 0x73U && funct3 == 0)
+            ++systemCounts[(inst >> 20) & 0xfffU];
+          if (opcode == 0x2fU) {
+            const auto atomicOp = (inst >> 27) & 0x1fU;
+            ++atomicCounts[atomicOp * 8U + funct3];
+            if (atomicOp == 0x02U) ++atomicLr;
+            else if (atomicOp == 0x03U) ++atomicSc;
+            else ++atomicAmo;
+          }
+        }
         const auto commitPc = static_cast<std::uint64_t>(top.io_commit_pc);
         if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
           ++compressedCommits;
@@ -247,6 +304,10 @@ int main(int argc, char** argv) {
 
         if (top.io_commit_exception) {
           ++exceptions;
+          if (reportIsa) {
+            const auto cause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
+            if (cause < exceptionCounts.size()) ++exceptionCounts[cause];
+          }
           lastExceptionPc = commitPc;
           lastExceptionCause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
           lastExceptionValue = static_cast<std::uint64_t>(top.io_commit_exceptionValue);
@@ -342,6 +403,33 @@ int main(int argc, char** argv) {
         }
         emitAxiDataConcurrency(top);
 
+        if (reportIsa) {
+          std::cerr << "\nL32_ISA_COVERAGE version=1 commits=" << commits
+                    << " compressed=" << compressedCommits
+                    << " lr=" << atomicLr << " sc=" << atomicSc
+                    << " amo=" << atomicAmo
+                    << " stip=" << supervisorTimerInterrupts
+                    << " seip=" << supervisorExternalInterrupts;
+          for (std::size_t i = 0; i < opcodeCounts.size(); ++i)
+            if (opcodeCounts[i] != 0) std::cerr << " op_" << i << "=" << opcodeCounts[i];
+          for (std::size_t i = 0; i < exceptionCounts.size(); ++i)
+            if (exceptionCounts[i] != 0) std::cerr << " ex_" << i << "=" << exceptionCounts[i];
+          std::cerr << "\nL32_ISA_DETAIL version=1";
+          for (std::size_t i = 0; i < funct3Counts.size(); ++i)
+            if (funct3Counts[i] != 0) std::cerr << " f3_" << (i / 8U) << "_" << (i % 8U) << "=" << funct3Counts[i];
+          for (std::size_t i = 0; i < arithmeticCounts.size(); ++i)
+            if (arithmeticCounts[i] != 0) {
+              const auto family = i / (8U * 128U);
+              const auto f3 = (i / 128U) % 8U;
+              const auto f7 = i % 128U;
+              std::cerr << " arith_" << (family == 0 ? 51 : 59) << "_" << f3 << "_" << f7 << "=" << arithmeticCounts[i];
+            }
+          for (std::size_t i = 0; i < atomicCounts.size(); ++i)
+            if (atomicCounts[i] != 0) std::cerr << " atom_" << (i / 8U) << "_" << (i % 8U) << "=" << atomicCounts[i];
+          for (std::size_t i = 0; i < systemCounts.size(); ++i)
+            if (systemCounts[i] != 0) std::cerr << " sys_" << i << "=" << systemCounts[i];
+          std::cerr << "\n";
+        }
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
                   << " compressed=" << compressedCommits

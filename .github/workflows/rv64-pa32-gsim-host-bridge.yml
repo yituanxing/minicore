@@ -1,0 +1,246 @@
+name: PA32 GSIM same-tick host RAM bridge experiment
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rv64-pa32-gsim-host-bridge.yml'
+      - 'tools/ci/rv64_pa32_gsim_host_bridge_patch.py'
+      - 'sim/pa32_gsim_prefix_main.cpp'
+      - 'sim/pa32_firmware_milestone.h'
+      - 'sim/pa32_sim_progress.h'
+      - 'sim/pa32_gsim_phase_profile.h'
+      - 'tools/ci/rv64_pa32_gsim_thinlto_ab.sh'
+      - 'tests_py/test_rv64_pa32_gsim_thinlto_contract.py'
+      - 'tests_py/test_rv64_pa32_gsim_phase_profile.py'
+      - 'tools/ci/rv64_pa32_sim_run.sh'
+      - 'tests_py/test_rv64_pa32_sim_progress.py'
+      - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
+      - 'tests_py/test_rv64_pa32_gsim_host_bridge.py'
+      - 'sim/pa32_verilator_prefix_main.cpp'
+      - 'tools/ci/rv64_pa32_gsim_bare_diff.py'
+      - 'tools/ci/rv64_pa32_gsim_bare_diff.sh'
+      - 'tests_py/test_rv64_pa32_gsim_bare_diff.py'
+      - 'tools/ci/rv64_pa32_gsim_firmware_diff.sh'
+      - 'tests_py/test_rv64_pa32_gsim_firmware_diff.py'
+      - 'tools/ci/rv64_pa32_gsim_memory_diff.sh'
+      - 'tools/ci/rv64_pa32_gsim_memory_diff.py'
+      - 'tests_py/test_rv64_pa32_gsim_memory_diff.py'
+  workflow_dispatch:
+    inputs:
+      full_linux:
+        description: 'After 20M PASS, also compare real Linux PID1 and STIP/SEIP'
+        type: boolean
+        default: false
+      thinlto_ab:
+        description: 'Optional frozen ThinLTO A-B-B-A experiment (not default)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pa32-gsim-host-bridge-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Source, clock and pinned GSIM patch contracts
+        run: |
+          python3 -m unittest \
+            tests_py.test_rv64_pa32_gsim_host_bridge \
+            tests_py.test_rv64_pa32_gsim_bare_diff \
+            tests_py.test_rv64_pa32_gsim_firmware_diff \
+            tests_py.test_rv64_pa32_gsim_memory_diff \
+            tests_py.test_rv64_pa32_sim_progress \
+            tests_py.test_rv64_pa32_gsim_phase_profile \
+            tests_py.test_rv64_pa32_gsim_thinlto_contract -v
+
+  native:
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install GSIM / Chisel compilation prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make zlib1g-dev \
+            autoconf cmake ninja-build libssl-dev libelf-dev libreadline-dev pkg-config build-essential \
+            bc device-tree-compiler dwarves lld-19
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Restore pinned Verilator 5.054 cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Validate GSIM/Verilator bare differential contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_bare_diff -v
+      - name: Preflight Clang 19 progress header before model generation
+        run: |
+          printf '#include "pa32_sim_progress.h"\nint main(){return 0;}\n' | \
+            clang++-19 -std=gnu++20 -O3 -march=native -Werror \
+              -Dlinux=1 -fsyntax-only -x c++ - -Isim
+      - name: Build Clang 19 -O3 GSIM with host callback and qualify real RV64I
+        run: |
+          set -euo pipefail
+          OUT=build/rv64-pa32-gsim-host-bridge GSIM_HOST_BRIDGE_EXPERIMENT=1 \
+            GSIM_PREFIX_OPT=-O3 JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
+      - name: Restore RV64 Linux GCC cache
+        id: rv64-gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
+      - name: Restore qualified RV64 Linux/OpenSBI software cache
+        id: rv64-software-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+      - name: Compare 20k true RV64I retirement stream against Verilator 5.054
+        run: |
+          set -euo pipefail
+          JOBS=4 bash tools/ci/rv64_pa32_gsim_bare_diff.sh
+      - name: Validate RV64I/A store-load, LR/SC and AMO contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_memory_diff -v
+      - name: Real 20k-cycle store-load/LR-SC/AMO GSIM vs Verilator differential
+        run: bash tools/ci/rv64_pa32_gsim_memory_diff.sh
+      - name: Provision exact RV64 GNU cross compiler
+        id: rv64-gcc-provision
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+      - name: Save RV64 Linux GCC cache after provisioning
+        if: steps.rv64-gcc-provision.outcome == 'success' && steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+      - name: Build unchanged OpenSBI/Linux 6.6.143 firmware
+        id: rv64-linux-build
+        run: |
+          set -euo pipefail
+          test -n "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}"
+          bash tools/ci/rv64_linux_early_build.sh
+          test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
+      - name: Save qualified RV64 Linux/OpenSBI software cache
+        if: steps.rv64-linux-build.outcome == 'success' && steps.rv64-software-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+      - name: Verify firmware differential regression contracts
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_firmware_diff -v
+      - name: Compare 20M real OpenSBI/Linux firmware cycles, RAM state and checkpoints
+        run: |
+          set -euo pipefail
+          AETHERCORE_GSIM_PHASE_PROFILE=1 CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
+      - name: Historical ThinLTO A-B-B-A reproduction (manual only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.thinlto_ab }}
+        run: |
+          set -euo pipefail
+          GSIM_OUT=build/rv64-pa32-gsim-host-bridge \
+          REFERENCE=build/rv64-pa32-gsim-firmware-diff/verilator-firmware.log \
+          bash tools/ci/rv64_pa32_gsim_thinlto_ab.sh
+      # Full Linux PID1 was strictly qualified at commit 39b1f628, run 41578321826.
+      # PR runs the fast 20M differential. Full PID1 is manual for a selected candidate.
+      - name: Build real Linux PID1 initramfs and its OpenSBI payload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          grep -qx 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-minimal-init-boot/result.txt
+      - name: Compare real Linux PID1, STIP/SEIP and 256 MiB RAM on both engines
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}
+        run: |
+          set -euo pipefail
+          FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            CYCLES=450000000 TIMEOUT_SECONDS=7200 LINUX_PID1=1 \
+            OUT=build/rv64-pa32-gsim-linux-pid1 \
+            bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
+      - name: Preserve both successful and failed diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-gsim-host-bridge-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-pa32-gsim-host-bridge/chirrtl.sha256
+            build/rv64-pa32-gsim-host-bridge/gsim-host-bridge.patch
+            build/rv64-pa32-gsim-host-bridge/gsim-host-bridge.sha256
+            build/rv64-pa32-gsim-host-bridge/gsim-scoped.patch
+            build/rv64-pa32-gsim-host-bridge/gsim-build.log
+            build/rv64-pa32-gsim-host-bridge/gsim-compile.log
+            build/rv64-pa32-gsim-host-bridge/native-build.log
+            build/rv64-pa32-gsim-host-bridge/native-smoke.log
+            build/rv64-pa32-gsim-host-bridge/prefix-build.log
+            build/rv64-pa32-gsim-host-bridge/prefix-bare.log
+            build/rv64-pa32-gsim-host-bridge/result.txt
+            build/rv64-pa32-gsim-bare-diff/gsim-bare.log
+            build/rv64-pa32-gsim-bare-diff/verilator-bare.log
+            build/rv64-pa32-gsim-bare-diff/verilator-build.log
+            build/rv64-pa32-gsim-bare-diff/rtl.sha256
+            build/rv64-pa32-gsim-bare-diff/diff-result.txt
+            build/rv64-pa32-gsim-memory-diff/gsim-memory.log
+            build/rv64-pa32-gsim-memory-diff/verilator-memory.log
+            build/rv64-pa32-gsim-memory-diff/diff-result.txt
+            build/rv64-pa32-gsim-firmware-diff/firmware.sha256
+            build/rv64-pa32-gsim-firmware-diff/gsim-firmware.log
+            build/rv64-pa32-gsim-firmware-diff/verilator-firmware.log
+            build/rv64-pa32-gsim-firmware-diff/diff-result.txt
+            build/rv64-pa32-gsim-firmware-diff/performance.txt
+            build/rv64-pa32-gsim-thinlto/build.log
+            build/rv64-pa32-gsim-thinlto/firmware.sha256
+            build/rv64-pa32-gsim-thinlto/measurements.tsv
+            build/rv64-pa32-gsim-thinlto/result.txt
+            build/rv64-pa32-gsim-thinlto/*.log
+            build/rv64-pa32-gsim-thinlto/*.diff.txt
+            build/rv64-pa32-gsim-linux-pid1/firmware.sha256
+            build/rv64-pa32-gsim-linux-pid1/gsim-firmware.log
+            build/rv64-pa32-gsim-linux-pid1/verilator-firmware.log
+            build/rv64-pa32-gsim-linux-pid1/diff-result.txt
+            build/rv64-pa32-gsim-linux-pid1/performance.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
+            build/rv64-linux-early/result.txt

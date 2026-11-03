@@ -20,10 +20,20 @@ on:
       - 'src/main/scala/aethercore/ElaborateV2VirtualFpgaBoard.scala'
       - 'src/test/scala/aethercore/AetherFractionalTickGeneratorSpec.scala'
       - 'src/test/scala/aethercore/AetherUart8N1PhySpec.scala'
+      - 'sim/opensbi_boot_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+      - 'sim/v2_rv64_opensbi_shim/**'
       - 'tests_py/test_v2_virtual_fpga_board.py'
+      - 'tests_py/test_l32_sim_artifact_cache_contract.py'
+      - 'tools/ci/l32_sim_artifact_cache.py'
+      - 'Makefile.l32-linux-boot'
+      - '.github/workflows/hosted-verilator-cache.yml'
       - 'software/rv64_userspace/minimal_init.S'
       - 'tools/ci/rv64_minimal_initramfs_build.sh'
       - 'tools/ci/rv64_minimal_init_payload_build.sh'
+      - 'tools/ci/rv64_isa_fast_compare.py'
+      - 'tests_py/test_rv64_isa_fast_contract.py'
+      - 'docs/RV64_ISA_FAST_LINUX.md'
       - '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml'
   workflow_dispatch:
 
@@ -80,6 +90,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
 
       - name: Restore RV64 Linux GCC cache
+        id: rv64-gcc-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -90,6 +101,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
 
       - name: Restore Scala dependency cache
+        id: scala-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -100,6 +112,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Restore qualified RV64 software cache
+        id: rv64-software-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -110,6 +123,34 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
+
+      - name: Identify native-code simulator host
+        id: native-host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu_model="$(awk -F: '$1 ~ /^model name[[:space:]]*$/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }' /proc/cpuinfo)"
+          cpu_flags="$(awk -F: '$1 ~ /^flags[[:space:]]*$/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }' /proc/cpuinfo)"
+          compiler_version="$(g++ -dumpfullversion)"
+          fingerprint="$(printf '%s\n%s\n%s\n' "$cpu_model" "$cpu_flags" "$compiler_version" | sha256sum | cut -c1-16)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      # Same generated RTL/runner recipe can be reused after unrelated software
+      # changes. The repository's cache manifest rechecks source, compiler,
+      # CPU ISA (-march=native), Verilator and binary hashes on every hit.
+      - name: Restore compiled virtual FPGA simulator
+        id: virtual-sim-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/v2-virtual-fpga-linux-pid1-model/rtl
+            build/v2-virtual-fpga-linux-pid1-model/obj
+          # Run-attempt suffix allows a repaired cache to supersede a corrupted
+          # immutable Actions entry; restore-keys select the latest usable seed.
+          key: aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}-
+            aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-
 
       - name: Activate fixed Verilator
         shell: bash
@@ -122,16 +163,39 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x mill
-          python3 -m unittest tests_py.test_v2_virtual_fpga_board -v
+          python3 -m unittest tests_py.test_v2_virtual_fpga_board tests_py.test_l32_sim_artifact_cache_contract tests_py.test_rv64_isa_fast_contract -v
           ./mill aethercore.test.testOnly aethercore.AetherFractionalTickGeneratorSpec
           ./mill aethercore.test.testOnly aethercore.AetherUart8N1PhySpec
-          ./mill aethercore.runMain aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
-            --target-dir build/v2-virtual-fpga-linux-pid1-smoke
-          find build/v2-virtual-fpga-linux-pid1-smoke -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          # Compile-stage cache qualification also verifies successful RTL
+          # generation. A second disposable smoke elaboration is unnecessary.
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            rtl-cached
+
+      - name: Save resolved Scala dependencies
+        if: always() && steps.scala-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
 
       - name: Provision exact RV64 Linux toolchain
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Save verified RV64 Linux GCC
+        if: steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Reuse qualified Linux 6.6.143 baseline
         shell: bash
@@ -140,19 +204,33 @@ jobs:
           bash tools/ci/rv64_linux_early_build.sh
           grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
 
+      - name: Save qualified Linux/OpenSBI baseline
+        if: steps.rv64-software-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
       - name: Build deterministic PID1 payload
         shell: bash
         run: |
           set -euo pipefail
           bash tools/ci/rv64_minimal_initramfs_build.sh
           timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          # Validate the exact runner path before paying for Verilator model build.
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          grep -Fq "firmware_bin=$GITHUB_WORKSPACE/build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin" build/rv64-minimal-init-boot/result.txt
 
       - name: Run real PID1 through virtual FPGA pins
         shell: bash
         run: |
           set -euo pipefail
-          make -f Makefile.l32-linux-boot \
-            BUILD_DIR="$HOME/.cache/aethercore/v2-virtual-fpga-linux-pid1/$TARGET_SHA" \
+          AETHERCORE_ISA_COVERAGE=1 make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
             TOP=AetherCoreV2OpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
             FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
@@ -163,13 +241,134 @@ jobs:
             PROGRESS_INTERVAL_CYCLES=10000000 \
             VERILATOR='verilator -LDFLAGS -ldl' \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
-            run-local
+            run-cached
 
-          log="$HOME/.cache/aethercore/v2-virtual-fpga-linux-pid1/$TARGET_SHA/logs/boot-probe.log"
+          log="build/v2-virtual-fpga-linux-pid1-model/logs/boot-probe.log"
           grep -Fq 'OpenSBI v1.6' "$log"
           grep -Fq 'Linux version 6.6.143' "$log"
           grep -Fq 'RV64 USER UART IRQ OK' "$log"
           grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          grep -Fq 'L32_ISA_COVERAGE version=1 ' "$log"
+          cp "$log" build/v2-virtual-fpga-linux-pid1-model/logs/baseline-boot.log
+
+      # Baseline and fast run on the same model/host; software profiles have
+      # isolated build trees. Full cold boot assertions remain unchanged.
+      - name: Build and boot ISA-fast Linux on the same RTL model
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RV64_INIT_PROFILE=isa-fast
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-isa-fast-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          grep -Fq "firmware_bin=$GITHUB_WORKSPACE/build/rv64-isa-fast-boot/opensbi/platform/generic/firmware/fw_payload.bin" build/rv64-isa-fast-boot/result.txt
+          AETHERCORE_ISA_COVERAGE=1 make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            FW_BIN=build/rv64-isa-fast-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" MAX_CYCLES=950000000 \
+            MILESTONE='RV64 USER UART IRQ OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            REQUIRE_LINUX_BANNER=0 PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-cached
+          log=build/v2-virtual-fpga-linux-pid1-model/logs/boot-probe.log
+          grep -Fq 'RV64 USER UART IRQ OK' "$log"
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' "$log"
+          grep -Fq 'L32_ISA_COVERAGE version=1 ' "$log"
+          cp "$log" build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-boot.log
+          python3 tools/ci/rv64_isa_fast_compare.py \
+            build/v2-virtual-fpga-linux-pid1-model/logs/baseline-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-ab.json
+
+      # Do not overwrite the accepted fast-v1 firmware or its boot log.
+      # This third cold-boot is the controlled next iteration: no earlycon,
+      # minimal printk and additional Kconfig work reduction, same RTL model.
+      - name: Build and boot ISA-fast v2 Linux on the same RTL model
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RV64_INIT_PROFILE=isa-fast-v2
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-isa-fast-v2-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          grep -Fq "firmware_bin=$GITHUB_WORKSPACE/build/rv64-isa-fast-v2-boot/opensbi/platform/generic/firmware/fw_payload.bin" build/rv64-isa-fast-v2-boot/result.txt
+          grep -Fq 'console=ttyS0,115200 rdinit=/init quiet loglevel=0' build/rv64-isa-fast-v2-boot/result.txt
+          AETHERCORE_ISA_COVERAGE=1 make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            FW_BIN=build/rv64-isa-fast-v2-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS="$(nproc)" MAX_CYCLES=950000000 \
+            MILESTONE='RV64 USER UART IRQ OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            REQUIRE_LINUX_BANNER=0 PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-cached
+          log=build/v2-virtual-fpga-linux-pid1-model/logs/boot-probe.log
+          grep -Fq 'RV64 USER UART IRQ OK' "$log"
+          grep -Fq 'L32_RUNTIME_MILESTONE_PASS' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_TIMER_INTERRUPT' "$log"
+          grep -Fq 'L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT' "$log"
+          grep -Fq 'L32_ISA_DETAIL version=1 ' "$log"
+          cp "$log" build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-v2-boot.log
+          python3 tools/ci/rv64_isa_fast_compare.py \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-v2-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-v2-ab.json
+          python3 tools/ci/rv64_isa_fast_compare.py \
+            build/v2-virtual-fpga-linux-pid1-model/logs/baseline-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/isa-fast-v2-boot.log \
+            build/v2-virtual-fpga-linux-pid1-model/logs/baseline-v2-ab.json
+
+      # Hosted runners are not guaranteed to have the same -march=native CPU.
+      # Prove the full real model can be reused on the same qualified host,
+      # while deliberately not re-running the expensive Linux test twice.
+      - name: Prove same-host RTL and model cache HIT
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=build/v2-virtual-fpga-linux-pid1-model/logs/warm-model-qualification.log
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR=build/v2-virtual-fpga-linux-pid1-model \
+            TOP=AetherCoreV2OpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.ElaborateV2VirtualFpgaBoardPA32RV64 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/v2_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            sim-cached 2>&1 | tee "$log"
+          grep -Fq 'AETHERCORE_SIM_CACHE_HIT stage=rtl ' "$log"
+          grep -Fq 'AETHERCORE_SIM_CACHE_HIT stage=sim ' "$log"
+          echo 'AETHERCORE_SAME_HOST_CACHE_PASS stage=rtl,sim'
+
+      # Retain a qualified model even when Linux runtime later fails. Save
+      # either a rebuilt model *or* a newly elaborated RTL tree alongside an
+      # otherwise reusable model: the latter must persist across hosted runs.
+      - name: Identify newly qualified cache artifacts
+        if: always()
+        id: compiled-model
+        shell: bash
+        run: |
+          if [[ -f build/v2-virtual-fpga-linux-pid1-model/.sim-build-qualified-this-run && \
+                -s build/v2-virtual-fpga-linux-pid1-model/obj/.aethercore-sim-qualified.json ]] && \
+               grep -Eq '^AETHERCORE_SIM_CACHE_BUILD stage=(rtl|sim) result=MISS ' \
+                 build/v2-virtual-fpga-linux-pid1-model/logs/cache-stages.log; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save qualified virtual FPGA RTL and simulator
+        if: always() && steps.virtual-sim-cache.outputs.cache-hit != 'true' && steps.compiled-model.outputs.ready == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/v2-virtual-fpga-linux-pid1-model/rtl
+            build/v2-virtual-fpga-linux-pid1-model/obj
+          key: aethersoc-${{ runner.os }}-${{ runner.arch }}-vfpga-model-v2-${{ steps.native-host.outputs.fingerprint }}-${{ hashFiles('src/main/scala/**', 'build.mill', 'mill', 'sim/opensbi_boot_main.cpp', 'sim/**/*.h', 'sim/**/*.hpp', 'sim/**/*.inc', 'Makefile.l32-linux-boot', 'tools/ci/l32_sim_artifact_cache.py', '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload virtual FPGA PID1 evidence
         if: always()
@@ -182,4 +381,9 @@ jobs:
             build/rv64-linux-early/result.txt
             build/rv64-linux-initramfs/result.txt
             build/rv64-minimal-init-boot/result.txt
-            ~/.cache/aethercore/v2-virtual-fpga-linux-pid1/${{ env.TARGET_SHA }}/logs/*.log
+            build/rv64-linux-isa-fast-initramfs/result.txt
+            build/rv64-isa-fast-boot/result.txt
+            build/rv64-linux-isa-fast-v2-initramfs/result.txt
+            build/rv64-isa-fast-v2-boot/result.txt
+            build/v2-virtual-fpga-linux-pid1-model/logs/*.json
+            build/v2-virtual-fpga-linux-pid1-model/logs/*.log

@@ -1,0 +1,78 @@
+name: PA32 GSIM vs Verilator 5.054 fixed-input engine A-B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rv64-pa32-gsim-engine-ab.yml'
+      - 'tools/ci/rv64_pa32_gsim_engine_ab.sh'
+      - 'sim/pa32_sim_engine_ab_main.cpp'
+      - 'tests_py/test_rv64_pa32_gsim_engine_ab_contract.py'
+      - 'tools/ci/rv64_pa32_gsim_ports.py'
+      - 'sim/pa32_gsim_native_smoke.cpp'
+      - 'sim/pa32_gsim_port_adapter.h'
+      - 'sim/pa32_gsim_prefix_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pa32-gsim-engine-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  engine:
+    name: Same PA32 design, fixed-zero I/O and rigorous end-state comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install reproducible build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build \
+            openjdk-17-jdk-headless python3 clang-19 bison flex libfl-dev \
+            libgmp-dev libjemalloc-dev git curl make zlib1g-dev libssl-dev
+      - name: Restore Scala dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+      - name: Restore pinned Verilator 5.054 cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: pa32-verilator-5054-bbb60a4-v1-${{ runner.os }}-${{ runner.arch }}
+      - name: Contract tests
+        run: python3 -m unittest tests_py.test_rv64_pa32_gsim_engine_ab_contract -v
+      - name: Provision pinned Verilator 5.054
+        run: bash tools/ensure_verilator_5_054.sh
+      - name: Build GSIM exact frontend without unqualified bare transport
+        run: GSIM_SKIP_BARE=1 JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
+      - name: Run equal-stimulus 3-round native engine A-B
+        run: CYCLES=250000 REPEATS=3 JOBS=4 bash tools/ci/rv64_pa32_gsim_engine_ab.sh
+      - name: Upload benchmark results and native compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pa32-gsim-engine-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-pa32-gsim-engine-ab/
+            build/rv64-pa32-gsim-source-patch/gsim-scoped.patch
+            build/rv64-pa32-gsim-source-patch/chirrtl.sha256

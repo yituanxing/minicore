@@ -1,6 +1,10 @@
 #pragma once
 
+// The byte-addressed RAM and LR/SC/AMO transport are simulator-independent.
+// GSIM reuses precisely these semantics without linking a Verilator model.
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 #include "verilated.h"
+#endif
 
 #include <cerrno>
 #include <cstddef>
@@ -125,6 +129,28 @@ class Memory {
     }
   }
 
+  // Final state witness for cross-simulator comparisons. Read-only: this
+  // walks all 256 MiB of host RAM and the LR/SC reservation state ONCE
+  // after the timed prefix, never on a simulated cycle.
+  std::uint64_t stateDigest() const {
+    std::uint64_t hash = 14695981039346656037ULL;
+    constexpr std::uint64_t prime = 1099511628211ULL;
+    for (const std::uint8_t value : bytes_) {
+      hash ^= value;
+      hash *= prime;
+    }
+    const auto addWord = [&](std::uint64_t value) {
+      for (int i = 0; i < 8; ++i) {
+        hash ^= static_cast<std::uint8_t>(value >> (8 * i));
+        hash *= prime;
+      }
+    };
+    addWord(reservationValid_ ? 1 : 0);
+    addWord(reservationAddress_);
+    addWord(static_cast<std::uint64_t>(reservationSize_));
+    return hash;
+  }
+
   void write32Masked(std::uint64_t address, std::uint32_t data, std::uint8_t mask) {
     writeMasked(address, data, mask, 4);
   }
@@ -240,6 +266,7 @@ inline std::size_t dataBytesFromMemSize(std::uint32_t encoded) {
   }
 }
 
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 /** Drive the shared RV32/RV64 physical-memory boundary for one low phase. */
 template <typename Top>
 void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
@@ -427,4 +454,5 @@ void initialize(Top& top, Memory& memory) {
   top.eval();
 }
 
+#endif  // !AETHERCORE_GSIM_HOST_MEMORY_ONLY
 }  // namespace aethercore::l32sim
