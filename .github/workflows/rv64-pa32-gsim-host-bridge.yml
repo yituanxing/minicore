@@ -9,6 +9,8 @@ on:
       - 'sim/pa32_firmware_milestone.h'
       - 'sim/pa32_sim_progress.h'
       - 'sim/pa32_gsim_phase_profile.h'
+      - 'tools/ci/rv64_pa32_gsim_thinlto_ab.sh'
+      - 'tests_py/test_rv64_pa32_gsim_thinlto_contract.py'
       - 'tests_py/test_rv64_pa32_gsim_phase_profile.py'
       - 'tools/ci/rv64_pa32_sim_run.sh'
       - 'tests_py/test_rv64_pa32_sim_progress.py'
@@ -52,7 +54,8 @@ jobs:
             tests_py.test_rv64_pa32_gsim_firmware_diff \
             tests_py.test_rv64_pa32_gsim_memory_diff \
             tests_py.test_rv64_pa32_sim_progress \
-            tests_py.test_rv64_pa32_gsim_phase_profile -v
+            tests_py.test_rv64_pa32_gsim_phase_profile \
+            tests_py.test_rv64_pa32_gsim_thinlto_contract -v
 
   native:
     needs: contracts
@@ -71,7 +74,7 @@ jobs:
           sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
             bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make zlib1g-dev \
             autoconf cmake ninja-build libssl-dev libelf-dev libreadline-dev pkg-config build-essential \
-            bc device-tree-compiler dwarves
+            bc device-tree-compiler dwarves lld-19
       - name: Restore Scala dependency cache
         uses: actions/cache/restore@v4
         with:
@@ -167,6 +170,12 @@ jobs:
         run: |
           set -euo pipefail
           AETHERCORE_GSIM_PHASE_PROFILE=1 CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
+      - name: Final bounded ThinLTO A-B-B-A same-host strict 20M candidate
+        run: |
+          set -euo pipefail
+          GSIM_OUT=build/rv64-pa32-gsim-host-bridge \
+          REFERENCE=build/rv64-pa32-gsim-firmware-diff/verilator-firmware.log \
+          bash tools/ci/rv64_pa32_gsim_thinlto_ab.sh
       # Full Linux PID1 was strictly qualified at commit 39b1f628, run 41578321826.
       # PR runs the fast 20M differential. Full PID1 is manual for a selected candidate.
       - name: Build real Linux PID1 initramfs and its OpenSBI payload
@@ -216,6 +225,12 @@ jobs:
             build/rv64-pa32-gsim-firmware-diff/verilator-firmware.log
             build/rv64-pa32-gsim-firmware-diff/diff-result.txt
             build/rv64-pa32-gsim-firmware-diff/performance.txt
+            build/rv64-pa32-gsim-thinlto/build.log
+            build/rv64-pa32-gsim-thinlto/firmware.sha256
+            build/rv64-pa32-gsim-thinlto/measurements.tsv
+            build/rv64-pa32-gsim-thinlto/result.txt
+            build/rv64-pa32-gsim-thinlto/*.log
+            build/rv64-pa32-gsim-thinlto/*.diff.txt
             build/rv64-pa32-gsim-linux-pid1/firmware.sha256
             build/rv64-pa32-gsim-linux-pid1/gsim-firmware.log
             build/rv64-pa32-gsim-linux-pid1/verilator-firmware.log

@@ -42,3 +42,29 @@ device integration, and FPGA Linux bring-up.
 
 The four-SuperNode + PGO scan is **manual-dispatch only** from this point:
 ordinary PR updates must not automatically repeat the broad optimization suite.
+
+## Final GSIM performance candidate: ThinLTO
+
+The one 20M sampled profile on [run #41599349425](https://github.com/yituanxing/minicore/actions/runs/41599349425)
+reported `request_pct=5.06`, `model_pct=92.52` and
+`observe_pct=2.42` across 4886 sparse samples. Model time includes
+same-tick host-memory callback, so those are not pure generated-RTL
+function percentages. Strict 20M firmware differential PASS, 1.40419x
+GSIM vs Verilator on that runner.
+
+We will make **one last bounded optimization attempt**: compile the same
+generated SuperNode=35 GSIM model with Clang19 ThinLTO, retaining exactly
+the existing CPU RTL, firmware and host RAM bridge.
+The host-bridge CI already builds the baseline and the Verilator 20M oracle.
+A final on-host A-B-B-A trial compares 20M GSIM baseline and ThinLTO twice
+each. Every trial must independently pass the existing strict firmware
+differential (200 checkpoints, 7.824M committed instructions, full 256MiB
+RAM witness). All four runs must share the *same firmware SHA-256* and
+Verilator reference. Report median baseline and ThinLTO host seconds and
+speedup, with a 5% provisional threshold.
+
+**Decision boundary:** If gain is below 5%, do NOT enable ThinLTO or do
+further simulator work. Even if above 5%, do not promote as qualified
+until a full Linux PID1/STIP/SEIP/UART/RAM run confirms it. Return
+engineering effort to FPGA board-specific clock/PLL, DDR, pin/timing
+constraints and bitstream/LINUX hardware bring-up per docs/ROADMAP.md.
