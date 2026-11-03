@@ -123,6 +123,10 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   // a busy M unit to issue younger, dependency-ready integer/branch work.
   backend.io.integerAvailable := integer.io.available
   backend.io.mAvailable := m.io.available
+  // This compatibility core has no LSQ/resolver. Never allocate memory
+  // work in its ROB or route it into an integer execution unit.
+  backend.io.memoryAvailable := false.B
+  backend.io.memoryReserve.ready := false.B
   private val issueM = ProductMOperation.isM(backend.io.issue.bits.aluOp)
   integer.io.request.valid := backend.io.issue.valid && !issueM
   integer.io.request.bits := backend.io.issue.bits

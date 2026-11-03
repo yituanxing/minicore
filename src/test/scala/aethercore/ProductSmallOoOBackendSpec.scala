@@ -44,6 +44,9 @@ private class SmallOoOTestHarness extends Module {
   // Standalone backend injection test models both execution resources as ready.
   core.io.integerAvailable := true.B
   core.io.mAvailable := true.B
+  // The external completion harness has no memory resolver or LSQ.
+  core.io.memoryAvailable := false.B
+  core.io.memoryReserve.ready := false.B
   core.io.dispatch.valid := io.dispatchValid
   core.io.dispatch.bits.decoded := d.io.decoded
   core.io.dispatch.bits.predictedNextPc := io.predictedNextPc

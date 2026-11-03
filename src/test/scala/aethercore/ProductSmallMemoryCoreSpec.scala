@@ -126,6 +126,12 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
     simulate(new PhysicalProductHarness) { d =>
       init(d)
       decode(d, BigInt("80000000", 16), BigInt("00002183", 16)) // lw x3,0(x0)
+      // Translation capacity is a separate FU resource. It may block issue
+      // even when the Decoupled consumer has ready asserted.
+      d.io.executeAvailable.poke(false.B)
+      d.io.execute.valid.expect(false.B)
+      d.clock.step()
+      d.io.executeAvailable.poke(true.B)
       d.io.execute.valid.expect(true.B)
       d.io.execute.bits.memoryKind.expect(aethercore.core.semantic.MemoryOperationKind.Load)
       val idx = d.io.execute.bits.token.index.peek().litValue

@@ -54,7 +54,8 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
   }
 
   private def resolve(d: ProductPhysicalLsq, idx: Int, addr: BigInt, data: BigInt = 0,
-                      gen: Int = 0, ram: Boolean = true): Unit = {
+                      gen: Int = 0, ram: Boolean = true,
+                      partial: Boolean = true): Unit = {
     val p = d.io.resolve.bits
     p.token.index.poke(idx.U)
     p.token.generation.poke(gen.U)
@@ -66,7 +67,7 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
     p.attributes.ordered.poke((!ram).B)
     p.attributes.executable.poke(ram.B)
     p.attributes.supportsAtomic.poke(ram.B)
-    p.attributes.supportsPartial.poke(true.B)
+    p.attributes.supportsPartial.poke(partial.B)
     p.fault.valid.poke(false.B)
     p.fault.cause.poke(0.U)
     p.fault.value.poke(0.U)
@@ -220,11 +221,17 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.memoryRequest.valid.expect(true.B)
       val txn = d.io.memoryRequest.bits.txnId.peek().litValue
       d.clock.step()
+      // After Store ACK, the younger safe RAM Load may issue even before
+      // Store retirement. Hold ready until the test observes that request.
+      d.io.memoryRequest.ready.poke(false.B)
       response(d, txn)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Read)
       receive(d, 0)
       head(d, 1)
       d.io.memoryRequest.valid.expect(true.B)
       val loadTxn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.io.memoryRequest.ready.poke(true.B)
       d.clock.step()
       response(d, loadTxn, 0x12345aL)
       receive(d, 1, 0x12345aL, writes = true)
@@ -247,6 +254,26 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.completion.ready.poke(true.B)
       d.clock.step()
       d.io.outstanding.expect(0.U)
+    }
+  }
+
+  it should "refuse a narrow Store when the resolved PMA region disallows partial writes" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 0)
+      reserve(d, 0, MemoryOperationKind.Store, size = MemSize.Byte)
+      resolve(d, 0, 0x10000000L, data = 0x5aL, ram = false, partial = false)
+      d.io.memoryRequest.valid.expect(false.B)
+      d.clock.step()
+      d.io.completion.valid.expect(true.B)
+      d.io.completion.bits.token.index.expect(0.U)
+      d.io.completion.bits.exception.valid.expect(true.B)
+      d.io.completion.bits.exception.cause.expect(MachineExceptionCode.StoreAccessFault.U)
+      d.io.completion.bits.exception.value.expect(0x10000000L.U)
+      d.io.outstanding.expect(0.U)
+      d.io.completion.ready.poke(true.B)
+      d.clock.step()
+      d.io.storeCount.expect(0.U)
     }
   }
 

@@ -175,12 +175,23 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     slots(resolveIndex).fault := io.resolve.bits.fault
     val mask = bytesOf(resolving.size) - 1.U
     val misaligned = (io.resolve.bits.paddr & mask) =/= 0.U
-    when(misaligned && !io.resolve.bits.fault.valid) {
-      slots(resolveIndex).fault.valid := true.B
-      slots(resolveIndex).fault.cause := Mux(resolving.kind === MemoryOperationKind.Load,
-        MachineExceptionCode.LoadAddressMisaligned.U,
-        MachineExceptionCode.StoreAddressMisaligned.U)
-      slots(resolveIndex).fault.value := io.resolve.bits.paddr
+    // A PMA region without byte enables cannot accept a sub-word Store.
+    // Fail closed before reaching AetherMem rather than widening a write or
+    // silently relying on a downstream bridge to emulate read-modify-write.
+    val unsupportedPartialStore = resolving.kind === MemoryOperationKind.Store &&
+      resolving.size =/= MemSize.DWord && !io.resolve.bits.attributes.supportsPartial
+    when(!io.resolve.bits.fault.valid) {
+      when(misaligned) {
+        slots(resolveIndex).fault.valid := true.B
+        slots(resolveIndex).fault.cause := Mux(resolving.kind === MemoryOperationKind.Load,
+          MachineExceptionCode.LoadAddressMisaligned.U,
+          MachineExceptionCode.StoreAddressMisaligned.U)
+        slots(resolveIndex).fault.value := io.resolve.bits.paddr
+      }.elsewhen(unsupportedPartialStore) {
+        slots(resolveIndex).fault.valid := true.B
+        slots(resolveIndex).fault.cause := MachineExceptionCode.StoreAccessFault.U
+        slots(resolveIndex).fault.value := io.resolve.bits.paddr
+      }
     }
   }
 
