@@ -1,6 +1,10 @@
 #pragma once
 
+// The byte-addressed RAM and LR/SC/AMO transport are simulator-independent.
+// GSIM reuses precisely these semantics without linking a Verilator model.
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 #include "verilated.h"
+#endif
 
 #include <cerrno>
 #include <cstddef>
@@ -240,6 +244,7 @@ inline std::size_t dataBytesFromMemSize(std::uint32_t encoded) {
   }
 }
 
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 /** Drive the shared RV32/RV64 physical-memory boundary for one low phase. */
 template <typename Top>
 void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
@@ -427,4 +432,5 @@ void initialize(Top& top, Memory& memory) {
   top.eval();
 }
 
+#endif  // !AETHERCORE_GSIM_HOST_MEMORY_ONLY
 }  // namespace aethercore::l32sim

@@ -54,6 +54,14 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
         self.assertIn("ports.clock(false)", smoke)
         self.assertIn("ports.clock(true)", smoke)
         self.assertIn("after <= before", smoke)
+        memory = (ROOT / "sim/l32_opensbi_runtime.h").read_text()
+        probe = (ROOT / "sim/pa32_gsim_prefix_main.cpp").read_text()
+        self.assertIn("AETHERCORE_GSIM_HOST_MEMORY_ONLY", memory)
+        self.assertIn("memory.commitAtomic", probe)
+        self.assertIn("memory.writeMasked", probe)
+        self.assertIn("memory.readData", probe)
+        self.assertIn("AETHERCORE_PA32_GSIM_BARE_PASS", probe)
+        self.assertIn("AETHERCORE_PA32_GSIM_BARE_PASS", script)
         self.assertIn("AETHERCORE_PA32_GSIM_NATIVE_SMOKE_PASS", script)
 
 if __name__ == "__main__":

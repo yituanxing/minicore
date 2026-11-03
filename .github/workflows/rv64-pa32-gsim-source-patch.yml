@@ -10,6 +10,8 @@ on:
       - 'tools/ci/rv64_pa32_gsim_ports.py'
       - 'sim/pa32_gsim_native_smoke.cpp'
       - 'sim/pa32_gsim_port_adapter.h'
+      - 'sim/pa32_gsim_prefix_main.cpp'
+      - 'sim/l32_opensbi_runtime.h'
   workflow_dispatch:
 
 permissions:
@@ -76,3 +78,5 @@ jobs:
             build/rv64-pa32-gsim-source-patch/generated/AetherCoreV2OpenSbiRV64SimTop.h
             build/rv64-pa32-gsim-source-patch/native-build.log
             build/rv64-pa32-gsim-source-patch/native-smoke.log
+            build/rv64-pa32-gsim-source-patch/prefix-build.log
+            build/rv64-pa32-gsim-source-patch/prefix-bare.log

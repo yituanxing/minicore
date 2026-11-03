@@ -75,4 +75,26 @@ timeout --signal=TERM --kill-after=5s 120s \
   }
 grep -q '^AETHERCORE_PA32_GSIM_NATIVE_SMOKE_PASS ' "$OUT/native-smoke.log"
 cat "$OUT/native-smoke.log"
-echo "Only reset and native model stepping verified. Linux/RAM equivalence still pending."
+
+# Exercise the actual RV64I fetch/retire path with the exact shared host RAM.
+# This is an unqualified prefix probe, not a replacement for Verilator.
+timeout --signal=TERM --kill-after=10s 1200s \
+  clang++-19 -std=gnu++20 -O0 -pthread -lz \
+  -I"$OUT/generated" -I"$ROOT/sim" \
+  "$OUT/generated/"*.cpp "$ROOT/sim/pa32_gsim_prefix_main.cpp" \
+  -o "$OUT/pa32-gsim-prefix" > "$OUT/prefix-build.log" 2>&1 || {
+    tail -100 "$OUT/prefix-build.log" >&2
+    echo "AETHERCORE_PA32_GSIM_PREFIX_BUILD_FAIL" >&2
+    exit 24
+  }
+timeout --signal=TERM --kill-after=10s 120s \
+  "$OUT/pa32-gsim-prefix" --bare 20000 \
+  > "$OUT/prefix-bare.log" 2>&1 || {
+    tail -100 "$OUT/prefix-bare.log" >&2
+    echo "AETHERCORE_PA32_GSIM_BARE_RUNTIME_FAIL" >&2
+    exit 25
+  }
+grep -q '^AETHERCORE_PA32_GSIM_BARE_PASS
+ "$OUT/prefix-bare.log"
+cat "$OUT/prefix-bare.log"
+echo "Bare RV64 activity is experimental; exact Verilator instruction/cycle differential still required."

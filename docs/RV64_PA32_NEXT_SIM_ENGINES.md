@@ -130,3 +130,20 @@ boundary, with typed request/response/commit structs. An extended native smoke
 toggles low/high clock, asserts/release reset and requires architectural mtime
 progression, not merely an incrementing GSIM `cycles` counter. Correct
 memory-handshake cycle semantics still require Verilator differential.
+
+## First guest execution / host-memory shared-logic probe
+
+Experimental `sim/pa32_gsim_prefix_main.cpp` reuses the exact Memory class
+from `sim/l32_opensbi_runtime.h` via a GSIM-only preprocessor guard that
+excludes Verilator's clock/eval helpers; the original Verilator path retains
+identical code. This avoids copying RAM, byte masks, LR/SC reservation,
+AMO ordering or page-table reads into an independent implementation.
+
+The probe loads a 4-instruction RV64I ROM at 0x80000000 and drives the
+GSIM-generated PA32 pin ABI using a conservative low-phase response settlement
+and clock-high commit. The first gate requires real instruction retirement.
+No Linux PASS or speedup is asserted: GSIM `step()` may not implement the
+same clock-low combinational evaluation semantics as Verilator `eval()`.
+A full cycle-by-cycle commit/interrupt/port differential is mandatory before
+firmware/Linux is trusted. The bare run is only a useful intermediate
+integration test; no GSIM results will replace cold Verilator signoff.
