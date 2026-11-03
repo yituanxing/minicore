@@ -6,6 +6,17 @@ import aethercore.common.{AluOp, AtomicOp, BranchType, TrapInfo}
 import aethercore.core.semantic._
 import aethercore.common.MemSize
 
+/** Exact physical operation observed only when its ROB lifetime retires.
+  * Store data/mask use the AetherMem address-relative byte-lane convention.
+  */
+class ProductMemoryTrace(val paddrBits: Int) extends Bundle {
+  val valid = Bool()
+  val write = Bool()
+  val paddr = UInt(paddrBits.W)
+  val wdata = UInt(64.W)
+  val wmask = UInt(8.W)
+}
+
 /** Lifetime identity is owned by ROB and never inferred from a PRF address. */
 class ProductRobId(val indexBits: Int, val generationBits: Int) extends Bundle {
   val index = UInt(indexBits.W)
@@ -44,7 +55,8 @@ class ProductIssue(val xlen: Int, val indexBits: Int, val physicalBits: Int, val
   val instBytes = UInt(3.W)
 }
 
-class ProductCompletion(val xlen: Int, val indexBits: Int, val physicalBits: Int, val generationBits: Int)
+class ProductCompletion(val xlen: Int, val indexBits: Int, val physicalBits: Int,
+                        val generationBits: Int, val paddrBits: Int = 56)
   extends Bundle {
   val token = new ProductRobId(indexBits, generationBits)
   val destination = new ProductPhysicalTag(physicalBits, generationBits)
@@ -55,6 +67,7 @@ class ProductCompletion(val xlen: Int, val indexBits: Int, val physicalBits: Int
   val exception = new TrapInfo(xlen)
   // Evaluated once at exact ROB head; only the retirement owner may apply it.
   val privileged = new PendingPrivilegedEffect(xlen)
+  val memoryTrace = new ProductMemoryTrace(paddrBits)
 }
 
 /** An exact-head SYSTEM uOp, with architectural sources read from its original
@@ -70,16 +83,20 @@ class ProductSystemHead(val xlen: Int, val indexBits: Int, val physicalBits: Int
   val rs2Value = UInt(xlen.W)
 }
 
-class ProductRetirement(val xlen: Int, val indexBits: Int, val physicalBits: Int, val generationBits: Int)
+class ProductRetirement(val xlen: Int, val indexBits: Int, val physicalBits: Int,
+                        val generationBits: Int, val paddrBits: Int = 56)
   extends Bundle {
   val token = new ProductRobId(indexBits, generationBits)
   val pc = UInt(xlen.W)
   val inst = UInt(32.W)
+  val rawInst = UInt(32.W)
+  val instBytes = UInt(3.W)
   val rd = UInt(5.W)
   val wroteRegister = Bool()
   val value = UInt(xlen.W)
   val exception = new TrapInfo(xlen)
   val privileged = new PendingPrivilegedEffect(xlen)
+  val memoryTrace = new ProductMemoryTrace(paddrBits)
 }
 
 class ProductRedirect(val xlen: Int, val indexBits: Int, val generationBits: Int)
@@ -89,7 +106,8 @@ class ProductRedirect(val xlen: Int, val indexBits: Int, val generationBits: Int
 }
 
 private class ProductRobSlot(
-  val xlen: Int, val indexBits: Int, val physicalBits: Int, val generationBits: Int
+  val xlen: Int, val indexBits: Int, val physicalBits: Int, val generationBits: Int,
+  val paddrBits: Int
 ) extends Bundle {
   val valid = Bool()
   val complete = Bool()
@@ -102,6 +120,7 @@ private class ProductRobSlot(
   val result = UInt(xlen.W)
   val exception = new TrapInfo(xlen)
   val privileged = new PendingPrivilegedEffect(xlen)
+  val memoryTrace = new ProductMemoryTrace(paddrBits)
   val systemIssued = Bool()
   val systemRs1Physical = UInt(physicalBits.W)
   val systemRs2Physical = UInt(physicalBits.W)
@@ -148,7 +167,8 @@ private class ProductIqSlot(
   * generation; external physical MemTxnId ownership is in ProductPhysicalLsq.
   */
 class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
-                             val allowSystem: Boolean = false) extends Module {
+                             val allowSystem: Boolean = false,
+                             val paddrBits: Int = 56) extends Module {
   require(geometry.decodeWidth == 1 && geometry.dispatchWidth == 1 &&
     geometry.issueWidth == 1 && geometry.retireWidth == 1,
     "this first hardware slice implements the Small one-wide backend only")
@@ -172,10 +192,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
     val memoryHead = Valid(new ProductRobId(I, G))
     val memoryKill = Valid(new ProductRobId(I, G))
     val systemHead = Decoupled(new ProductSystemHead(Xlen, I, F, G))
-    val completion = Flipped(Decoupled(new ProductCompletion(Xlen, I, F, G)))
-    val retire = Decoupled(new ProductRetirement(Xlen, I, F, G))
+    val completion = Flipped(Decoupled(new ProductCompletion(Xlen, I, F, G, paddrBits)))
+    val retire = Decoupled(new ProductRetirement(Xlen, I, F, G, paddrBits))
     val redirect = Valid(new ProductRedirect(Xlen, I, G))
-    val trap = Valid(new ProductRetirement(Xlen, I, F, G))
+    val trap = Valid(new ProductRetirement(Xlen, I, F, G, paddrBits))
     val occupancy = Output(UInt(log2Ceil(N + 1).W))
     val recovering = Output(Bool())
     val acceptedCompletion = Output(Bool())
@@ -185,7 +205,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   })
 
   private val rob = RegInit(VecInit(Seq.fill(N)(
-    0.U.asTypeOf(new ProductRobSlot(Xlen, I, F, G)))))
+    0.U.asTypeOf(new ProductRobSlot(Xlen, I, F, G, paddrBits)))))
   private val iq = RegInit(VecInit(Seq.fill(Q)(
     0.U.asTypeOf(new ProductIqSlot(Xlen, I, F, G)))))
   private val generations = RegInit(VecInit(Seq.fill(N)(0.U(G.W))))
@@ -337,11 +357,15 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   io.retire.bits.token.generation := headEntry.tokenGeneration
   io.retire.bits.pc := headEntry.decoded.pc
   io.retire.bits.inst := headEntry.decoded.inst
+  io.retire.bits.rawInst := headEntry.decoded.rawInst
+  io.retire.bits.instBytes := headEntry.decoded.instBytes
   io.retire.bits.rd := headEntry.decoded.rd
   io.retire.bits.wroteRegister := headEntry.writes && !retiringFault
   io.retire.bits.value := headEntry.result
   io.retire.bits.exception := headEntry.exception
   io.retire.bits.privileged := headEntry.privileged
+  io.retire.bits.memoryTrace := headEntry.memoryTrace
+  io.retire.bits.memoryTrace.valid := headEntry.memoryTrace.valid && !retiringFault
   val trapFire = io.retire.fire && retiringFault
   io.trap.valid := trapFire
   io.trap.bits := io.retire.bits
@@ -507,6 +531,7 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
     rob(c.token.index).result := c.value
     rob(c.token.index).exception := c.exception
     rob(c.token.index).privileged := c.privileged
+    rob(c.token.index).memoryTrace := c.memoryTrace
     when(c.hasValue && !c.exception.valid) {
       prf(c.destination.index) := c.value
       ready(c.destination.index) := true.B

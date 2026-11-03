@@ -13,6 +13,7 @@ import chisel3.util._
   * backend performs any CSR write; effects commit only at retire.fire above.
   */
 class ProductSystemUnit(val config: ProductCoreConfig) extends Module {
+  private val PA = config.platform.paddrBits
   private val g = config.geometry
   private val Xlen = 64
   private val I = log2Ceil(g.robEntries)
@@ -26,7 +27,7 @@ class ProductSystemUnit(val config: ProductCoreConfig) extends Module {
     val csrReadImplemented = Input(Bool())
     val csrReadWritable = Input(Bool())
     val currentPrivilege = Input(UInt(2.W))
-    val completion = Decoupled(new ProductCompletion(Xlen, I, P, G))
+    val completion = Decoupled(new ProductCompletion(Xlen, I, P, G, PA))
   })
 
   private val evaluator = Module(new SystemSemanticEvaluator(
@@ -41,7 +42,7 @@ class ProductSystemUnit(val config: ProductCoreConfig) extends Module {
   io.csrReadAddr := evaluator.io.csrReadAddr
 
   private val snapshot = Module(new Queue(
-    new ProductCompletion(Xlen, I, P, G), entries = 1, pipe = false, flow = false))
+    new ProductCompletion(Xlen, I, P, G, PA), entries = 1, pipe = false, flow = false))
   snapshot.io.enq.valid := io.head.valid
   io.head.ready := snapshot.io.enq.ready
   snapshot.io.enq.bits := 0.U.asTypeOf(snapshot.io.enq.bits)

@@ -96,7 +96,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     val droppedStaleResolution = Output(Bool())
     val memoryRequest = Decoupled(new AetherMemRequest(paddrBits, 64, TxBits))
     val memoryResponse = Flipped(Decoupled(new AetherMemResponse(64, TxBits)))
-    val completion = Decoupled(new ProductCompletion(64, I, P, G))
+    val completion = Decoupled(new ProductCompletion(64, I, P, G, paddrBits))
     val loadCount = Output(UInt(log2Ceil(L + 1).W))
     val storeCount = Output(UInt(log2Ceil(S + 1).W))
     val outstanding = Output(UInt(log2Ceil(T + 1).W))
@@ -130,6 +130,37 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       }
     }
     out
+  }
+  // The AetherMem atomic response contains the pre-RMW memory value. Rebuild
+  // exactly the successful write value for architectural trace observation;
+  // AMO.W arithmetic and comparisons are 32-bit, not sign-extended XLEN ops.
+  private def atomicWriteValue(old: UInt, rhs: UInt, size: MemSize.Type,
+                               op: AtomicOp.Type): UInt = {
+    val oldWord = old(31, 0)
+    val rhsWord = rhs(31, 0)
+    val word = WireDefault(rhsWord)
+    switch(op) {
+      is(AtomicOp.Add) { word := oldWord + rhsWord }
+      is(AtomicOp.Xor) { word := oldWord ^ rhsWord }
+      is(AtomicOp.And) { word := oldWord & rhsWord }
+      is(AtomicOp.Or) { word := oldWord | rhsWord }
+      is(AtomicOp.Min) { word := Mux(oldWord.asSInt < rhsWord.asSInt, oldWord, rhsWord) }
+      is(AtomicOp.Max) { word := Mux(oldWord.asSInt > rhsWord.asSInt, oldWord, rhsWord) }
+      is(AtomicOp.Minu) { word := Mux(oldWord < rhsWord, oldWord, rhsWord) }
+      is(AtomicOp.Maxu) { word := Mux(oldWord > rhsWord, oldWord, rhsWord) }
+    }
+    val dword = WireDefault(rhs)
+    switch(op) {
+      is(AtomicOp.Add) { dword := old + rhs }
+      is(AtomicOp.Xor) { dword := old ^ rhs }
+      is(AtomicOp.And) { dword := old & rhs }
+      is(AtomicOp.Or) { dword := old | rhs }
+      is(AtomicOp.Min) { dword := Mux(old.asSInt < rhs.asSInt, old, rhs) }
+      is(AtomicOp.Max) { dword := Mux(old.asSInt > rhs.asSInt, old, rhs) }
+      is(AtomicOp.Minu) { dword := Mux(old < rhs, old, rhs) }
+      is(AtomicOp.Maxu) { dword := Mux(old > rhs, old, rhs) }
+    }
+    Mux(size === MemSize.Word, word.pad(64), dword)
   }
   private def age(index: UInt): UInt = (index - io.robHead.bits.index)(I - 1, 0)
 
@@ -362,7 +393,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   // completion and deadlock precise trap handling.
   // Exactly one accepted completion per cycle; backpressure is held by Queue.
   private val completions = Module(new Queue(
-    new ProductCompletion(64, I, P, G), entries = N, pipe = false, flow = false
+    new ProductCompletion(64, I, P, G, paddrBits), entries = N, pipe = false, flow = false
   ))
   io.completion <> completions.io.deq
   completions.io.enq.valid := false.B
@@ -394,6 +425,25 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       completions.io.enq.bits.exception.cause := Mux(owner.isLoad,
         MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
       completions.io.enq.bits.exception.value := returningSlot.virtualAddress
+      val successful = !io.memoryResponse.bits.fault
+      val sc = returningSlot.kind === MemoryOperationKind.Atomic &&
+        returningSlot.atomicOp === AtomicOp.Sc
+      val atomicRmw = returningSlot.kind === MemoryOperationKind.Atomic &&
+        returningSlot.atomicOp =/= AtomicOp.Lr && !sc
+      val scSucceeded = sc && io.memoryResponse.bits.rdata === 0.U
+      val physicalTrace = completions.io.enq.bits.memoryTrace
+      // Failed SC never writes memory and, like the existing Tiny contract,
+      // does not advertise a successful physical operation.
+      physicalTrace.valid := successful && (!sc || scSucceeded)
+      physicalTrace.write := successful &&
+        (returningSlot.kind === MemoryOperationKind.Store || atomicRmw || scSucceeded)
+      physicalTrace.paddr := returningSlot.paddr
+      physicalTrace.wdata := Mux(atomicRmw,
+        atomicWriteValue(io.memoryResponse.bits.rdata, returningSlot.storeData,
+          returningSlot.size, returningSlot.atomicOp),
+        Mux(physicalTrace.write, returningSlot.storeData, 0.U))
+      physicalTrace.wmask := Mux(physicalTrace.write,
+        accessMask(returningSlot.size), 0.U)
     }.otherwise {
       io.drainedKilledResponse := true.B
     }
@@ -411,6 +461,11 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     completions.io.enq.bits.hasValue := candidate.hasDestination
     completions.io.enq.bits.value := extended(candidateForwardData, candidate.size, candidate.unsigned)
     completions.io.enq.bits.exception := candidate.fault
+    completions.io.enq.bits.memoryTrace.valid := candidateForward && !candidate.fault.valid
+    completions.io.enq.bits.memoryTrace.write := false.B
+    completions.io.enq.bits.memoryTrace.paddr := candidate.paddr
+    completions.io.enq.bits.memoryTrace.wdata := 0.U
+    completions.io.enq.bits.memoryTrace.wmask := 0.U
     io.forwarded := candidateForward
   }
 

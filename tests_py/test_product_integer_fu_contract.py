@@ -42,7 +42,7 @@ class ProductIntegerExecutionContract(unittest.TestCase):
     def test_fu_availability_is_observed_before_iq_choice(self):
         source = INT.read_text()
         backend = BACKEND.read_text()
-        for fragment in ("class ProductSmallIntegerCore", "new ProductMUnit(g)",
+        for fragment in ("class ProductSmallIntegerCore", "new ProductMUnit(g, PA)",
                          "new ProductIntegerBranchUnit(g",
                          "completion.io.in(0) <> integer.io.response",
                          "completion.io.in(1) <> m.io.response",

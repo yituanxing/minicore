@@ -1,6 +1,6 @@
 package aethercore.core.product
 
-import aethercore.common.{InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
+import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.PageTableGeometry
 import aethercore.core.{InstructionFetchAdapter, MachineCsrBit, MachineCsrFile,
   PmpAccessChecker, PmpConstants, PmpRangeDecoder, PtwArbiter, RvcParcelController}
@@ -18,8 +18,8 @@ import chisel3.util._
   * and for branch/exception recovery; no Tiny ROB/LSU is instantiated here.
   *
   * This is a CPU integration boundary, not a Linux boot claim: it still needs
-  * platform memory, a hardware elaboration/runtime gate, retirement memory
-  * tracing, and full RV64GC F/D support before Debian/FPGA qualification.
+  * platform memory, a hardware elaboration/runtime gate, externally qualified
+  * retirement tracing, and full RV64GC F/D before Debian/FPGA qualification.
   */
 class ProductSmallPagedCore(
     val config: ProductCoreConfig,
@@ -64,7 +64,10 @@ class ProductSmallPagedCore(
     val supervisorExternalInterrupt =
       if (withSupervisorExternalInterrupt) Some(Input(Bool())) else None
 
-    val retire = Valid(new ProductRetirement(Xlen, I, P, G))
+    val retire = Valid(new ProductRetirement(Xlen, I, P, G, PA))
+    // CommitTrace.valid means one instruction retired. An asynchronous
+    // interrupt is a separate clean-boundary event and may have valid=false.
+    val commit = Output(new CommitTrace(Xlen, PA, Xlen))
     val currentPrivilege = Output(UInt(2.W))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
     val recovering = Output(Bool())
@@ -176,6 +179,29 @@ class ProductSmallPagedCore(
     core.io.outstandingTransactions === 0.U && core.io.resolverPending === 0.U
   private val interruptTake = qualifiedInterrupt && cleanBoundary &&
     !privilegedRedirect && !branchRedirect
+
+  // Memory evidence travels with the completing ROB lifetime (not a bus
+  // response pulse). Only exact-head, nonfaulting retirement exposes it.
+  io.commit := 0.U.asTypeOf(io.commit)
+  io.commit.valid := retiring
+  io.commit.pc := core.io.retire.bits.pc
+  io.commit.inst := core.io.retire.bits.inst
+  io.commit.rawInst := core.io.retire.bits.rawInst
+  io.commit.instBytes := core.io.retire.bits.instBytes
+  io.commit.rd := core.io.retire.bits.rd
+  io.commit.rdWrite := retiring && core.io.retire.bits.wroteRegister
+  io.commit.rdData := core.io.retire.bits.value
+  io.commit.memValid := retiring && core.io.retire.bits.memoryTrace.valid && !retireFault
+  io.commit.memWrite := io.commit.memValid && core.io.retire.bits.memoryTrace.write
+  io.commit.memAddr := core.io.retire.bits.memoryTrace.paddr
+  io.commit.memWdata := core.io.retire.bits.memoryTrace.wdata
+  io.commit.memWmask := core.io.retire.bits.memoryTrace.wmask
+  io.commit.exception := retireFault
+  io.commit.exceptionCause := core.io.retire.bits.exception.cause
+  io.commit.exceptionValue := core.io.retire.bits.exception.value
+  io.commit.interrupt := interruptTake
+  io.commit.interruptCause := Mux(interruptTake, interruptCause, 0.U)
+  io.commit.interruptPc := Mux(interruptTake, pc, 0.U)
   private val redirect = interruptTake || privilegedRedirect || branchRedirect
   private val redirectTarget = Mux(interruptTake, csrFile.io.trapVector,
     Mux(privilegedRedirect,

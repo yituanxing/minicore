@@ -29,14 +29,14 @@ object ProductMOperation {
   * One in-flight M request. Busy DIV never blocks independent Integer/Branch
   * work, because IQ receives distinct resource-availability inputs.
   */
-class ProductMUnit(val geometry: ProductCoreGeometry) extends Module {
+class ProductMUnit(val geometry: ProductCoreGeometry, val paddrBits: Int = 56) extends Module {
   private val I = log2Ceil(geometry.robEntries)
   private val P = log2Ceil(geometry.integerPhysicalRegisters)
   private val G = 16
   private val Xlen = 64
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(new ProductIssue(Xlen, I, P, G)))
-    val response = Decoupled(new ProductCompletion(Xlen, I, P, G))
+    val response = Decoupled(new ProductCompletion(Xlen, I, P, G, paddrBits))
     val available = Output(Bool())
   })
   private val req = io.request.bits
@@ -56,7 +56,7 @@ class ProductMUnit(val geometry: ProductCoreGeometry) extends Module {
   private val activeDivide = RegInit(false.B)
   private val multiplyHolding = RegInit(false.B)
   private val saved = Reg(new ProductIssue(Xlen, I, P, G))
-  private val multiplyResponse = Reg(new ProductCompletion(Xlen, I, P, G))
+  private val multiplyResponse = Reg(new ProductCompletion(Xlen, I, P, G, paddrBits))
   private val negativeQuotient = Reg(Bool())
   private val negativeRemainder = Reg(Bool())
   private val useRemainder = Reg(Bool())
@@ -111,7 +111,7 @@ class ProductMUnit(val geometry: ProductCoreGeometry) extends Module {
   private val divideValue = Mux(saved.wordOp,
     Cat(Fill(32, selected(31)), selected(31, 0)), selected)
 
-  private val divideResponse = Wire(new ProductCompletion(Xlen, I, P, G))
+  private val divideResponse = Wire(new ProductCompletion(Xlen, I, P, G, paddrBits))
   divideResponse := 0.U.asTypeOf(divideResponse)
   divideResponse.token := saved.token
   divideResponse.destination := saved.destination

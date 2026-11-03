@@ -106,13 +106,13 @@ class ProductLsqOwnershipContract(unittest.TestCase):
                          "io.issue.bits.storeData :=", "io.issue.bits.memoryKind :="):
             self.assertIn(fragment, b)
         top = TOP.read_text()
-        for fragment in ("new ProductSmallOoOBackend(g, allowSystem = true)",
+        for fragment in ("new ProductSmallOoOBackend(g, allowSystem = true, paddrBits = PA)",
                          "new ProductPhysicalLsq(g, PA)",
                          "lsq.io.reserve <> backend.io.memoryReserve",
                          "lsq.io.robHead := backend.io.memoryHead",
                          "lsq.io.kill := backend.io.memoryKill",
                          "io.resolverKill := backend.io.memoryKill",
-                         "new RRArbiter(new ProductCompletion(64, I, P, G), 4)",
+                         "new RRArbiter(new ProductCompletion(64, I, P, G, PA), 4)",
                          "completion.io.in(2) <> lsq.io.completion",
                          "completion.io.in(3) <> system.io.completion",
                          "system.io.head <> backend.io.systemHead",

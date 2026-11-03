@@ -48,7 +48,7 @@ class ProductSmallBackendContracts(unittest.TestCase):
         self.assertIn("not a complete CPU", source)
         self.assertIn("rtlImplemented: Boolean = false", CONFIG.read_text())
         standalone = (ROOT / "src/main/scala/aethercore/core/product/ProductIntegerBranchUnit.scala").read_text()
-        self.assertIn("new ProductSmallOoOBackend(g)", standalone)
+        self.assertIn("new ProductSmallOoOBackend(g, paddrBits = PA)", standalone)
         self.assertIn("backend.io.systemHead.ready := false.B", standalone)
 
     def test_simulation_actually_exercises_age_recovery_and_precise_traps(self):

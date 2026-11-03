@@ -10,7 +10,8 @@ import aethercore.core.semantic.{ControlFlowKind, MemoryOperationKind}
   * datapaths: M uses a separate future iterative unit. The shared ALU has its
   * multiplier/divider elaboration physically disabled for FPGA efficiency.
   */
-class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompressed: Boolean)
+class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompressed: Boolean,
+                               val paddrBits: Int = 56)
   extends Module {
   private val I = log2Ceil(geometry.robEntries)
   private val P = log2Ceil(geometry.integerPhysicalRegisters)
@@ -18,7 +19,7 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
   private val Xlen = 64
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(new ProductIssue(Xlen, I, P, G)))
-    val response = Decoupled(new ProductCompletion(Xlen, I, P, G))
+    val response = Decoupled(new ProductCompletion(Xlen, I, P, G, paddrBits))
     val unsupportedM = Output(Bool())
     val available = Output(Bool())
   })
@@ -60,7 +61,7 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
   val misaligned = taken && ((jumpTarget & alignmentMask) =/= 0.U)
 
   private val held = RegInit(false.B)
-  private val responseReg = Reg(new ProductCompletion(Xlen, I, P, G))
+  private val responseReg = Reg(new ProductCompletion(Xlen, I, P, G, paddrBits))
   io.available := !held || io.response.ready
   io.request.ready := io.available && !mInstruction
   io.response.valid := held
@@ -92,15 +93,16 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
   */
 class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   private val g = config.geometry
+  private val PA = config.platform.paddrBits
   private val I = log2Ceil(g.robEntries)
   private val P = log2Ceil(g.integerPhysicalRegisters)
   private val G = 16
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new ProductDispatch(64)))
-    val retire = Decoupled(new ProductRetirement(64, I, P, G))
+    val retire = Decoupled(new ProductRetirement(64, I, P, G, PA))
     val redirect = Valid(new ProductRedirect(64, I, G))
-    val trap = Valid(new ProductRetirement(64, I, P, G))
+    val trap = Valid(new ProductRetirement(64, I, P, G, PA))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
     val unsupported = Output(Bool())
     // Kept for pre-M test harness compatibility: there is now a real M unit.
@@ -110,10 +112,10 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
     val staleCompletion = Output(Bool())
   })
 
-  private val backend = Module(new ProductSmallOoOBackend(g))
-  private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC))
-  private val m = Module(new ProductMUnit(g))
-  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G), 2))
+  private val backend = Module(new ProductSmallOoOBackend(g, paddrBits = PA))
+  private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC, PA))
+  private val m = Module(new ProductMUnit(g, PA))
+  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA), 2))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits

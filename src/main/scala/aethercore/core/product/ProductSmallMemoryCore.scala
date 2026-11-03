@@ -47,9 +47,9 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     val systemCsrReadImplemented = Input(Bool())
     val systemCsrReadWritable = Input(Bool())
     val systemCurrentPrivilege = Input(UInt(2.W))
-    val retire = Decoupled(new ProductRetirement(64, I, P, G))
+    val retire = Decoupled(new ProductRetirement(64, I, P, G, PA))
     val redirect = Valid(new ProductRedirect(64, I, G))
-    val trap = Valid(new ProductRetirement(64, I, P, G))
+    val trap = Valid(new ProductRetirement(64, I, P, G, PA))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
     val recovering = Output(Bool())
     val loadCount = Output(UInt(log2Ceil(g.loadQueueEntries + 1).W))
@@ -59,12 +59,12 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     val staleCompletion = Output(Bool())
   })
 
-  private val backend = Module(new ProductSmallOoOBackend(g, allowSystem = true))
-  private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC))
-  private val m = Module(new ProductMUnit(g))
+  private val backend = Module(new ProductSmallOoOBackend(g, allowSystem = true, paddrBits = PA))
+  private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC, PA))
+  private val m = Module(new ProductMUnit(g, PA))
   private val lsq = Module(new ProductPhysicalLsq(g, PA))
   private val system = Module(new ProductSystemUnit(config))
-  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G), 4))
+  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA), 4))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits
