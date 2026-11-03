@@ -54,6 +54,36 @@ bool sameResponse(const Response& a, const Response& b) {
          a.ptwRdata == b.ptwRdata && a.ptwFault == b.ptwFault;
 }
 
+#ifdef AETHERCORE_GSIM_HOST_BRIDGE
+struct HostBridgeContext {
+  Ports* ports;
+  const Memory* memory;
+  std::uint64_t calls = 0;
+  std::uint64_t validFetchCalls = 0;
+  std::uint64_t nonzeroFetchReplies = 0;
+};
+void hostBridge(void* opaque) {
+  auto& ctx = *static_cast<HostBridgeContext*>(opaque);
+  const Request req = ctx.ports->request();
+  const Response resp = readResponses(req, *ctx.memory);
+  ++ctx.calls;
+  if (req.imemValid) {
+    ++ctx.validFetchCalls;
+    if (!resp.imemFault && resp.imemInst) ++ctx.nonzeroFetchReplies;
+  }
+  if (ctx.calls <= 24 || (req.imemValid && ctx.validFetchCalls <= 12)) {
+    std::printf("AETHERCORE_PA32_GSIM_BRIDGE_EVENT index=%llu"
+                " imem_valid=%u imem_addr=0x%08x imem_inst=0x%08x"
+                " ptw_valid=%u mem_valid=%u\n",
+                static_cast<unsigned long long>(ctx.calls),
+                static_cast<unsigned>(req.imemValid), req.imemAddr,
+                resp.imemInst, static_cast<unsigned>(req.ptwValid),
+                static_cast<unsigned>(req.memValid));
+  }
+  ctx.ports->respond(resp);
+}
+#endif
+
 void commitAcceptedMemory(const Request& req, const Response& res,
                           Memory& memory, bool reset) {
   if (reset || !req.memValid || !res.memReady || res.memFault) return;
@@ -98,6 +128,12 @@ int main(int argc, char** argv) {
     }
     auto top = std::make_unique<Model>();
     Ports ports(*top);
+#ifdef AETHERCORE_GSIM_HOST_BRIDGE
+    HostBridgeContext hostContext{&ports, &memory};
+    top->pa32HostBridge = &hostBridge;
+    top->pa32HostContext = &hostContext;
+    std::puts("AETHERCORE_PA32_GSIM_BRIDGE_ENABLED");
+#endif
     ports.rx(false, 0);
     ports.reset(true);
     ports.respond({});
@@ -180,6 +216,12 @@ int main(int argc, char** argv) {
                 elapsed, elapsed > 0 ? total / elapsed : 0.0,
                 static_cast<unsigned long long>(matchingBareInstructions));
 
+#ifdef AETHERCORE_GSIM_HOST_BRIDGE
+    std::printf("AETHERCORE_PA32_GSIM_BRIDGE_METRICS calls=%llu valid_fetch=%llu nonzero_fetch_replies=%llu\n",
+                static_cast<unsigned long long>(hostContext.calls),
+                static_cast<unsigned long long>(hostContext.validFetchCalls),
+                static_cast<unsigned long long>(hostContext.nonzeroFetchReplies));
+#endif
     if (std::string(argv[1]) == "--bare") {
       if (matchingBareInstructions != 3) {
         std::fprintf(stderr,

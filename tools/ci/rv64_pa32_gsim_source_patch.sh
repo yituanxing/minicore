@@ -22,6 +22,12 @@ git -C "$src" fetch --quiet --depth=1 origin "$REV"
 git -C "$src" checkout -q --detach FETCH_HEAD
 test "$(git -C "$src" rev-parse HEAD)" = "$REV"
 python3 tools/ci/rv64_pa32_gsim_cast_patch.py "$src/src/splitNodes.cpp"
+if [[ "${GSIM_HOST_BRIDGE_EXPERIMENT:-0}" == "1" ]]; then
+  python3 tools/ci/rv64_pa32_gsim_host_bridge_patch.py "$src/src/cppEmitter.cpp"
+  git -C "$src" diff -- src/cppEmitter.cpp > "$OUT/gsim-host-bridge.patch"
+  test -s "$OUT/gsim-host-bridge.patch"
+  sha256sum "$OUT/gsim-host-bridge.patch" > "$OUT/gsim-host-bridge.sha256"
+fi
 git -C "$src" diff -- src/splitNodes.cpp > "$OUT/gsim-scoped.patch"
 test -s "$OUT/gsim-scoped.patch"
 sha256sum "$OUT/gsim-scoped.patch" > "$OUT/gsim-patch.sha256"
@@ -83,10 +89,16 @@ if [[ "${GSIM_SKIP_BARE:-0}" == "1" ]]; then
   exit 0
 fi
 
+bridge_compile_flags=()
+if [[ "${GSIM_HOST_BRIDGE_EXPERIMENT:-0}" == "1" ]]; then
+  bridge_compile_flags=(-DAETHERCORE_GSIM_HOST_BRIDGE)
+fi
+
 # Exercise the actual RV64I fetch/retire path with the exact shared host RAM.
 # This is an unqualified prefix probe, not a replacement for Verilator.
 timeout --signal=TERM --kill-after=10s 1200s \
   clang++-19 -std=gnu++20 -O0 -pthread -lz \
+  "${bridge_compile_flags[@]}" \
   -I"$OUT/generated" -I"$ROOT/sim" \
   "$OUT/generated/"*.cpp "$ROOT/sim/pa32_gsim_prefix_main.cpp" \
   -o "$OUT/pa32-gsim-prefix" > "$OUT/prefix-build.log" 2>&1 || {
