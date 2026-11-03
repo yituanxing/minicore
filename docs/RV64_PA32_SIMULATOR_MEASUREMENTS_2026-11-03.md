@@ -58,7 +58,7 @@ GSIM native model compiled by Clang 19 -O3; Verilator 5.054 pinned to
   semantics are cycle-by-cycle equivalent.
 * The GSIM/Verilator speedups from different workloads cannot be multiplied.
 
-## 3. GSIM real-RV64I transport gate: still FAIL
+## 3. Historical GSIM host-RAM timing failure (now fixed for bare RV64I)
 
 CI diagnostic:
 https://github.com/yituanxing/minicore/actions/runs/41566002892
@@ -81,7 +81,7 @@ Actual captured boundary sequence:
 * This run is deliberately FAIL and its 213,281 native cycles/sec is
   not a valid guest-speed result.
 
-**Conclusion:** GSIM's exposed `step()` advances a full hardware tick;
+**Historical conclusion:** GSIM's exposed `step()` advances a full hardware tick;
 it cannot replace the qualified Verilator low-clock `eval()` sequence
 that observes current RAM request and feeds a same-cycle combinational
 response. The next step is an exact simulator-host combinational callback
@@ -97,9 +97,82 @@ RTL or Linux configuration to hide this discrepancy.
    cold-run qualification.
 2. **Go for research only:** GSIM shows 1.84x **engine-only** throughput
    on this particular matched zero-response workload.
-3. **No-Go for Linux yet:** GSIM's current external host RAM bridge fails
-   actual RV64I retirement; no claimed Linux speedup, no substitution
-   for reset-to-PID1 Verilator signoff.
+3. **GSIM bare RV64I execution is now qualified, Linux remains a NO-GO:**
+   A new same-tick host-RAM bridge fixes real instruction retirement and
+   passes a strict Verilator v5.054 differential. Data stores, atomics,
+   page-table walking and live Linux remain independent acceptance gates.
 
 Artifacts from both CI runs provide original TSV files, terminal state
 snapshots, full logs and independent source/toolchain manifests.
+
+## 5. Actual host RAM / RV64I GSIM / Verilator differential PASS
+
+* Host callback integration CI: https://github.com/yituanxing/minicore/actions/runs/41568066719
+* Independent 20k-cycle Verilator differential CI:
+  https://github.com/yituanxing/minicore/actions/runs/41568779809
+
+The pinned GSIM C++ emitter can invoke a native host callback **within**
+an existing `subStep0()` supernode computation. The unchanged PA32 RAM
+responds to imem/data/PTW requests in the same abstract hardware tick,
+rather than delaying the response by another `step()`. The CPU RTL,
+existing physical memory algorithm and Linux configuration are unchanged.
+
+20,000 cycles, byte-identical four-instruction RV64I image at
+`0x80000000`:
+
+| Metric | GSIM | Verilator 5.054 |
+|---|---:|---:|
+| Genuine retired events | 9,987 | 9,987 |
+| Exceptions | 0 | 0 |
+| Interrupts | 0 | 0 |
+| mtime | 9,992 | 9,992 |
+| Retired PC/instruction digest | 0x233f18bc7d6d98a8 | 0x233f18bc7d6d98a8 |
+
+* Both simulators retired real ROM `0x1000` instructions and RAM
+  `0x00100093`, `0x00208113`, `0x00310193`, then repeatedly retired
+  the valid `0x0000006f` loop.
+* First 16 retired PC / inst / exception / cause records matched.
+* Full-stream retirement FNV digest matched.
+* GSIM host callback: **112 calls**, **8 valid instruction-fetch calls**,
+  all 8 with nonzero instruction data.
+* GSIM ran `clang++-19 -O0` in this correctness mode, so its 20k-cycle
+  wall time is **not comparable** with the earlier `-O3` 1.84x
+  fixed-zero GSIM engine microbenchmark.
+
+Thus the fundamental GSIM same-cycle host fetch issue has been solved for
+actual RV64I instruction execution. **Do not extrapolate this proof to
+MMU/CSR, PTW, atomics, interrupts or Linux.**
+
+## 6. Full OpenSBI/Linux 6.6.143 PID1: Verilator v5.054 qualification
+
+CI: https://github.com/yituanxing/minicore/actions/runs/41565619428
+
+Both models ran the *exact same firmware* and complete PA32 RTL, with
+Clang -O3 plus Adaptive Settle. STIP and SEIP interrupt and ISA coverage
+summaries matched; `AETHERCORE_PA32_FULL_LINUX_STATE_MATCH` passed.
+
+| Measure | Verilator 5.024 | Verilator 5.054 |
+|---|---:|---:|
+| Guest cycles | 340,397,416 | 340,397,416 |
+| Retired instructions | 107,360,309 | 107,360,309 |
+| STIP | 3,378 | 3,378 |
+| SEIP | 1 | 1 |
+| Wall time (s) | 748.188 | 560.917 |
+
+Verilator v5.054 delivers **1.33387x** speedup, or **25.03% shorter
+full Linux cold start** with no CPU architecture or guest software
+changes. Keep v5.024 as regression reference. This figure is a real
+Linux result, **not** the GSIM speedup.
+
+## 7. Next real firmware GSIM gate
+
+The PA32 GSIM/Verilator differential has now been extended to the same
+unmodified OpenSBI+Linux firmware binary, from identical 256 MiB host
+RAM, for 2,000,000 initial cycles. It compares every-run retirement
+digest and the first 16 retired instructions as well as mtime,
+interrupts and exceptions, with an immutable firmware SHA256.
+The CI is https://github.com/yituanxing/minicore/actions/runs/41569416797.
+
+No claim of OpenSBI or Linux GSIM PASS is made before that workflow
+actually completes. If it diverges, diagnose ordinary stores, LR/SC,
+AMO and page-table response/commit ordering from the first mismatch.
