@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Same-RTL PA32 GSIM/Verilator real OpenSBI/Linux firmware prefix.
-# Fail-closed: this is a cold firmware-prefix differential, not a Linux PASS.
+# Same-RTL PA32 GSIM/Verilator real OpenSBI/Linux firmware differential.
+# A prefix test is NOT a Linux PASS. LINUX_PID1=1 adds strict PID1 gates.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 FW_BIN="${FW_BIN:-build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin}"
 CYCLES="${CYCLES:-2000000}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-900}"
+LINUX_PID1="${LINUX_PID1:-0}"
 GSIM_OUT="${GSIM_OUT:-build/rv64-pa32-gsim-host-bridge}"
 VERILATOR_OUT="${VERILATOR_OUT:-build/rv64-pa32-gsim-bare-diff}"
 OUT="${OUT:-build/rv64-pa32-gsim-firmware-diff}"
@@ -15,26 +17,34 @@ test -s "$FW_BIN" || { echo "missing real firmware: $FW_BIN" >&2; exit 2; }
 test -x "$GSIM_OUT/pa32-gsim-prefix" || exit 3
 test -x "$VERILATOR_OUT/obj/V$TOP" || exit 3
 [[ "$CYCLES" =~ ^[1-9][0-9]*$ ]] || exit 4
+[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || exit 4
+[[ "$LINUX_PID1" == 0 || "$LINUX_PID1" == 1 ]] || exit 4
+runner_args=()
+diff_args=(--firmware)
+if [[ "$LINUX_PID1" == 1 ]]; then
+  runner_args+=(--linux)
+  diff_args+=(--linux)
+fi
 mkdir -p "$OUT"
 sha256sum "$FW_BIN" > "$OUT/firmware.sha256"
 
-timeout --signal=TERM --kill-after=10s 900s \
-  "$GSIM_OUT/pa32-gsim-prefix" "$FW_BIN" "$CYCLES" \
+timeout --signal=TERM --kill-after=10s "${TIMEOUT_SECONDS}s" \
+  "$GSIM_OUT/pa32-gsim-prefix" "$FW_BIN" "$CYCLES" "${runner_args[@]}" \
   > "$OUT/gsim-firmware.log" 2>&1 || {
     tail -90 "$OUT/gsim-firmware.log" >&2; exit 5;
   }
-timeout --signal=TERM --kill-after=10s 900s \
-  "$VERILATOR_OUT/obj/V$TOP" "$FW_BIN" "$CYCLES" \
+timeout --signal=TERM --kill-after=10s "${TIMEOUT_SECONDS}s" \
+  "$VERILATOR_OUT/obj/V$TOP" "$FW_BIN" "$CYCLES" "${runner_args[@]}" \
   > "$OUT/verilator-firmware.log" 2>&1 || {
     tail -90 "$OUT/verilator-firmware.log" >&2; exit 6;
   }
 
 python3 tools/ci/rv64_pa32_gsim_bare_diff.py \
-  "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" --firmware \
+  "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" "${diff_args[@]}" \
   | tee "$OUT/diff-result.txt"
 # Compute throughput only after the complete architectural and host-RAM
 # differential has passed. The clocks and host are identical.
-python3 - "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" <<'PY' | tee "$OUT/performance.txt"
+python3 - "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" "$LINUX_PID1" <<'PY' | tee "$OUT/performance.txt"
 import pathlib
 import re
 import sys
@@ -55,5 +65,5 @@ print(f"AETHERCORE_PA32_GSIM_FIRMWARE_AB_RESULT "
       f"verilator_seconds={vl:.6f} gsim_cps={gs_cycles/gs:.1f} "
       f"verilator_cps={vl_cycles/vl:.1f} "
       f"gsim_speedup={vl/gs:.5f}x "
-      "workload=real-firmware-not-full-linux")
+      f"workload={'full-linux-pid1' if sys.argv[3] == '1' else 'real-firmware-prefix'}")
 PY

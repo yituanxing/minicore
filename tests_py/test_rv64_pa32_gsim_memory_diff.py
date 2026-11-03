@@ -26,6 +26,8 @@ def sample(engine, ram="0x123456", success=True):
     lines.append(f"AETHERCORE_PA32_{engine}_PREFIX "
                  "guest_cycles=20000 retires=9987 exceptions=0 interrupts=0 "
                  f"mtime=9992 last_pc=0x8000002c commit_digest=0x9988 ram_digest={ram} "
+                 "uart_bytes=0 uart_digest=0xabc opensbi_banner=0 linux_banner=0 "
+                 "milestone_cycle=0 stip=0 seip=0 "
                  "host_seconds=1.0 host_cps=20000")
     if success:
         lines.append(f"AETHERCORE_PA32_{engine}_MEMORY_PASS final_word=85")

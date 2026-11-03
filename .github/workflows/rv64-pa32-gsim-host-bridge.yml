@@ -6,6 +6,7 @@ on:
       - '.github/workflows/rv64-pa32-gsim-host-bridge.yml'
       - 'tools/ci/rv64_pa32_gsim_host_bridge_patch.py'
       - 'sim/pa32_gsim_prefix_main.cpp'
+      - 'sim/pa32_firmware_milestone.h'
       - 'tools/ci/rv64_pa32_gsim_source_patch.sh'
       - 'tests_py/test_rv64_pa32_gsim_host_bridge.py'
       - 'sim/pa32_verilator_prefix_main.cpp'
@@ -18,6 +19,11 @@ on:
       - 'tools/ci/rv64_pa32_gsim_memory_diff.py'
       - 'tests_py/test_rv64_pa32_gsim_memory_diff.py'
   workflow_dispatch:
+    inputs:
+      full_linux:
+        description: 'After 20M PASS, also compare real Linux PID1 and STIP/SEIP'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -44,7 +50,7 @@ jobs:
   native:
     needs: contracts
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 210
     env:
       AETHERCORE_MILL_NO_DAEMON: '1'
     steps:
@@ -118,6 +124,13 @@ jobs:
         run: |
           set -euo pipefail
           CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
+      - name: Compare real Linux PID1, STIP/SEIP and 256 MiB RAM on both engines
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}
+        run: |
+          set -euo pipefail
+          CYCLES=450000000 TIMEOUT_SECONDS=7200 LINUX_PID1=1 \
+            OUT=build/rv64-pa32-gsim-linux-pid1 \
+            bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
       - name: Preserve both successful and failed diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -150,4 +163,9 @@ jobs:
             build/rv64-pa32-gsim-firmware-diff/verilator-firmware.log
             build/rv64-pa32-gsim-firmware-diff/diff-result.txt
             build/rv64-pa32-gsim-firmware-diff/performance.txt
+            build/rv64-pa32-gsim-linux-pid1/firmware.sha256
+            build/rv64-pa32-gsim-linux-pid1/gsim-firmware.log
+            build/rv64-pa32-gsim-linux-pid1/verilator-firmware.log
+            build/rv64-pa32-gsim-linux-pid1/diff-result.txt
+            build/rv64-pa32-gsim-linux-pid1/performance.txt
             build/rv64-linux-early/result.txt

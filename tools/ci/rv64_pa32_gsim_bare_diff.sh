@@ -33,7 +33,7 @@ sha256sum "$OUT/rtl-model/rtl/"*.sv > "$OUT/rtl.sha256"
   -MAKEFLAGS 'CC=clang-19 CXX=clang++-19 OPT=-march=native OPT_FAST=-O3 OPT_GLOBAL=-O3' \
   --cc --exe --build -Wall -Wno-fatal --top-module "$TOP" \
   -Mdir "$OUT/obj" \
-  -CFLAGS "-std=c++20 -O3 -march=native -I$ROOT/sim" \
+  -CFLAGS "-std=c++20 -O3 -march=native -DAETHERCORE_SIM_ADAPTIVE_SETTLE -I$ROOT/sim" \
   "$OUT/rtl-model/rtl/"*.sv "$ROOT/sim/pa32_verilator_prefix_main.cpp" \
   -j "$JOBS" > "$OUT/verilator-build.log" 2>&1 || {
     tail -100 "$OUT/verilator-build.log" >&2; exit 4;

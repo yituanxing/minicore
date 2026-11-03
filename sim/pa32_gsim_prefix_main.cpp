@@ -4,6 +4,7 @@
 #define AETHERCORE_GSIM_HOST_MEMORY_ONLY
 #include "l32_opensbi_runtime.h"
 #include "pa32_gsim_port_adapter.h"
+#include "pa32_firmware_milestone.h"
 
 #include <chrono>
 #include <cstdio>
@@ -99,11 +100,13 @@ void commitAcceptedMemory(const Request& req, const Response& res,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::fprintf(stderr, "usage: pa32_gsim_prefix_main [--bare|FIRMWARE] CYCLES\n");
+  if (argc != 3 && argc != 4) {
+    std::fprintf(stderr, "usage: pa32_gsim_prefix_main [--bare|--memory|FIRMWARE] MAX_CYCLES [--linux]\n");
     return 2;
   }
   try {
+    const bool requireLinux = argc == 4 && std::string(argv[3]) == "--linux";
+    if (argc == 4 && !requireLinux) return 2;
     const auto total = std::stoull(argv[2]);
     if (total < 1 || total > 1000000000ULL) return 3;
     Memory memory;
@@ -153,8 +156,10 @@ int main(int argc, char** argv) {
     std::uint64_t matchingBareInstructions = 0;
     constexpr std::uint32_t kBareInst[] = {0x00100093U, 0x00208113U, 0x00310193U};
     std::uint64_t digest = 14695981039346656037ULL;
+    aethercore::pa32sim::FirmwareMilestone firmware;
     ports.clock(true);
     std::uint64_t lastPc = 0;
+    std::uint64_t executedCycles = 0;
     const auto hostStart = std::chrono::steady_clock::now();
 
     for (std::uint64_t cycle = 0; cycle < total + 32; ++cycle) {
@@ -184,8 +189,11 @@ int main(int argc, char** argv) {
       ports.clock(true);
       top->step();
       if (reset) continue;
+      ++executedCycles;
 
       const auto commit = ports.commit();
+      firmware.observeUart(ports.uartValid(), ports.uartByte(), executedCycles);
+      firmware.observeInterrupt(commit.interrupt, commit.interruptCause);
       if (commit.valid) {
         ++retires;
         lastPc = commit.pc;
@@ -224,22 +232,30 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(lastPc),
                     static_cast<unsigned long long>(digest));
       }
+      if (requireLinux && firmware.linuxPassed()) break;
     }
 
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - hostStart).count();
     const std::uint64_t ramDigest = memory.stateDigest();
-    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f matched_rv64i=%llu ram_digest=0x%llx\n",
-                static_cast<unsigned long long>(total),
+    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f matched_rv64i=%llu ram_digest=0x%llx uart_bytes=%llu uart_digest=0x%llx opensbi_banner=%u linux_banner=%u milestone_cycle=%llu stip=%llu seip=%llu\n",
+                static_cast<unsigned long long>(executedCycles),
                 static_cast<unsigned long long>(retires),
                 static_cast<unsigned long long>(exceptions),
                 static_cast<unsigned long long>(interrupts),
                 static_cast<unsigned long long>(ports.mtime()),
                 static_cast<unsigned long long>(lastPc),
                 static_cast<unsigned long long>(digest),
-                elapsed, elapsed > 0 ? total / elapsed : 0.0,
+                elapsed, elapsed > 0 ? executedCycles / elapsed : 0.0,
                 static_cast<unsigned long long>(matchingBareInstructions),
-                static_cast<unsigned long long>(ramDigest));
+                static_cast<unsigned long long>(ramDigest),
+                static_cast<unsigned long long>(firmware.uartBytes),
+                static_cast<unsigned long long>(firmware.uartDigest),
+                static_cast<unsigned>(firmware.opensbiBanner),
+                static_cast<unsigned>(firmware.linuxBanner),
+                static_cast<unsigned long long>(firmware.milestoneCycle),
+                static_cast<unsigned long long>(firmware.stip),
+                static_cast<unsigned long long>(firmware.seip));
 
 #ifdef AETHERCORE_GSIM_HOST_BRIDGE
     std::printf("AETHERCORE_PA32_GSIM_BRIDGE_METRICS calls=%llu valid_fetch=%llu nonzero_fetch_replies=%llu\n",
@@ -265,6 +281,19 @@ int main(int argc, char** argv) {
         return 13;
       }
       std::printf("AETHERCORE_PA32_GSIM_MEMORY_PASS final_word=%u\n", finalWord);
+    } else if (requireLinux) {
+      if (!firmware.linuxPassed()) {
+        std::fprintf(stderr, "AETHERCORE_PA32_GSIM_LINUX_MILESTONE_FAIL cycles=%llu marker=%llu stip=%llu seip=%llu\n",
+                     static_cast<unsigned long long>(executedCycles),
+                     static_cast<unsigned long long>(firmware.milestoneCycle),
+                     static_cast<unsigned long long>(firmware.stip),
+                     static_cast<unsigned long long>(firmware.seip));
+        return 14;
+      }
+      std::printf("AETHERCORE_PA32_GSIM_LINUX_MILESTONE_PASS cycles=%llu marker=RV64_USER_UART_IRQ_OK stip=%llu seip=%llu\n",
+                  static_cast<unsigned long long>(executedCycles),
+                  static_cast<unsigned long long>(firmware.stip),
+                  static_cast<unsigned long long>(firmware.seip));
     } else {
       std::puts("AETHERCORE_PA32_GSIM_FIRMWARE_PREFIX_OBSERVED_UNQUALIFIED");
     }

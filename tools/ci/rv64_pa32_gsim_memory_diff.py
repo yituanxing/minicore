@@ -13,8 +13,8 @@ EXPECTED = (
     ("0x80000028","0x0003a503"),  # LW x10,0(x7)
 )
 def compare(gs, vl):
-    gf, gcommits, _ = parse(gs,"GSIM")
-    vf, vcommits, _ = parse(vl,"VERILATOR")
+    gf, gcommits, _, _ = parse(gs,"GSIM")
+    vf, vcommits, _, _ = parse(vl,"VERILATOR")
     for key in FIELDS:
         if gf.get(key) != vf.get(key):
             raise ValueError(f"{key} mismatch: GSIM={gf.get(key)} Verilator={vf.get(key)}")
