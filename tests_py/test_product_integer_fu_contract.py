@@ -52,7 +52,8 @@ class ProductIntegerExecutionContract(unittest.TestCase):
                          "io.mBusy := !m.io.available",
                          "io.mUnitNeeded := false.B"):
             self.assertIn(fragment, source)
-        self.assertIn("val fuAvailable = Mux(ProductMOperation.isM(e.aluOp)", backend)
+        self.assertIn("val fuAvailable = Mux(e.memoryKind =/= MemoryOperationKind.None", backend)
+        self.assertIn("io.mAvailable, io.integerAvailable", backend)
         self.assertIn("iqReady(j) := e.valid && fuAvailable", backend)
         self.assertIn("private val prf = RegInit", backend)
 

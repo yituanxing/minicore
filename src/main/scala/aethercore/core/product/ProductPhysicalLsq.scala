@@ -153,7 +153,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   }
 
   val resolveIndex = io.resolve.bits.token.index
-  val resolving = slots(resolveIndex)
+  private val resolving = slots(resolveIndex)
   // The MMU/translator may finish AFTER ROB squash and slot reuse. Drain
   // stale responses instead of backpressuring the resolver indefinitely.
   val resolutionLive = resolving.valid && !resolving.resolved &&
@@ -267,7 +267,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   val candidateForwardData = forwardedData(candidateIndex)
   val candidateLocalFault = faulted(candidateIndex)
 
-  val candidate = slots(candidateIndex)
+  private val candidate = slots(candidateIndex)
   val immediate = candidateForward || candidateLocalFault
   io.memoryRequest.valid := candidateValid && !immediate && hasTxn
   io.memoryRequest.bits := 0.U.asTypeOf(io.memoryRequest.bits)
@@ -307,8 +307,8 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   io.drainedKilledResponse := false.B
 
   val responseIndex = io.memoryResponse.bits.txnId
-  val owner = transactions(responseIndex)
-  val returningSlot = slots(owner.token.index)
+  private val owner = transactions(responseIndex)
+  private val returningSlot = slots(owner.token.index)
   val matchingLive = returningSlot.valid && returningSlot.launched &&
     returningSlot.tokenGeneration === owner.token.generation &&
     !(io.kill.valid && equal(io.kill.bits, owner.token))
