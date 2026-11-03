@@ -164,3 +164,20 @@ request until a properly qualified GSIM mid-cycle host callback exists.
 A bare retirement PASS does *not* prove memory-timing equivalence or Linux
 correctness. This limit is reported explicitly, rather than silently
 fast-forwarding the CPU or removing MMU/atomic complexity.
+
+## Measured GSIM guest transport failure (CI #41563864009)
+
+The 5.36-MB PA32 CHIRRTL compiled, generated model and Clang-19 native
+program both PASS. One GSIM `step()` per hardware cycle gives timebase
+`mtime_delta=120` over the 256-cycle smoke, consistent with 20-MHz source /
+10-MHz architectural timebase. The *first* real host-RAM instruction access
+still failed: after the 0x1000 boot ROM, `pc=0x80000000 inst=0` caused a
+zero-instruction exception loop (4993 exceptions in 20,000 cycles; 4996
+commit events). This is NOT a qualified Linux or speedup benchmark.
+
+A stricter bare-RV64I gate now requires exact retirement of 3 seeded RV64I
+instructions, rather than any PC in RAM. The next CI prints both RAM seed
+contents and the first 128 real address/response transactions so we can
+identify whether a GSIM one-tick input latency, a port mapping, or a
+combinational path is responsible. Until proven, don't treat GSIM's
+`step()` as a drop-in for Verilator's low-phase `eval()`.

@@ -62,7 +62,12 @@ ExpTree* dupTreeWithBits(ExpTree* tree, int _hi, int _lo) {
         self.assertIn("memory.writeMasked", probe)
         self.assertIn("mem.readData", probe)
         self.assertIn("AETHERCORE_PA32_GSIM_BARE_PASS", probe)
+        self.assertIn("AETHERCORE_PA32_GSIM_RAM_TRACE", probe)
+        self.assertIn("AETHERCORE_PA32_GSIM_RAM_SEED", probe)
+        self.assertIn("matchingBareInstructions != 3", probe)
         self.assertIn("AETHERCORE_PA32_GSIM_BARE_PASS", script)
+        import subprocess
+        subprocess.run(["bash", "-n", str(ROOT / "tools/ci/rv64_pa32_gsim_source_patch.sh")], check=True)
         self.assertIn("AETHERCORE_PA32_GSIM_NATIVE_SMOKE_PASS", script)
 
 if __name__ == "__main__":

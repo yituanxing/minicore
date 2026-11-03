@@ -88,6 +88,14 @@ int main(int argc, char** argv) {
     } else {
       memory.loadAtBase(argv[1]);
     }
+    if (std::string(argv[1]) == "--bare") {
+      for (unsigned i = 0; i < 4; ++i) {
+        std::printf("AETHERCORE_PA32_GSIM_RAM_SEED addr=0x%08llx inst=0x%08x\n",
+                    static_cast<unsigned long long>(
+                        aethercore::l32sim::kRamBase + 4*i),
+                    memory.read32(aethercore::l32sim::kRamBase + 4*i));
+      }
+    }
     auto top = std::make_unique<Model>();
     Ports ports(*top);
     ports.rx(false, 0);
@@ -95,6 +103,8 @@ int main(int argc, char** argv) {
     ports.respond({});
 
     std::uint64_t retires = 0, interrupts = 0, exceptions = 0;
+    std::uint64_t matchingBareInstructions = 0;
+    constexpr std::uint32_t kBareInst[] = {0x00100093U, 0x00208113U, 0x00310193U};
     std::uint64_t digest = 14695981039346656037ULL;
     ports.clock(true);
     std::uint64_t lastPc = 0;
@@ -109,6 +119,19 @@ int main(int argc, char** argv) {
       // the next one. This provisional timing requires Verilator differential.
       const Request request = ports.request();
       const Response response = readResponses(request, memory);
+      if (std::string(argv[1]) == "--bare" && cycle >= 32 && cycle < 160) {
+        std::printf(
+            "AETHERCORE_PA32_GSIM_RAM_TRACE guest_cycle=%llu "
+            "imem_valid=%u imem_addr=0x%08x imem_bytes=%u "
+            "reply_inst=0x%08x reply_fault=%u "
+            "mem_valid=%u mem_addr=0x%08x ptw_valid=%u ptw_addr=0x%08x\n",
+            static_cast<unsigned long long>(cycle - 32),
+            static_cast<unsigned>(request.imemValid), request.imemAddr,
+            static_cast<unsigned>(request.imemBytes), response.imemInst,
+            static_cast<unsigned>(response.imemFault),
+            static_cast<unsigned>(request.memValid), request.memAddr,
+            static_cast<unsigned>(request.ptwValid), request.ptwAddr);
+      }
       ports.respond(response);
       commitAcceptedMemory(request, response, memory, reset);
       ports.clock(true);
@@ -123,10 +146,22 @@ int main(int argc, char** argv) {
         digest *= 1099511628211ULL;
         digest ^= commit.inst;
         digest *= 1099511628211ULL;
-        if (retires <= 8)
-          std::printf("AETHERCORE_PA32_GSIM_COMMIT index=%llu pc=0x%llx inst=0x%08x\n",
+        if (std::string(argv[1]) == "--bare" &&
+            commit.pc >= aethercore::l32sim::kRamBase &&
+            commit.pc < aethercore::l32sim::kRamBase + sizeof(kBareInst) &&
+            (commit.pc - aethercore::l32sim::kRamBase) % 4 == 0) {
+          const auto idx = static_cast<std::size_t>(
+              (commit.pc - aethercore::l32sim::kRamBase)/4);
+          if (idx < 3 && commit.inst == kBareInst[idx] &&
+              matchingBareInstructions == idx)
+            ++matchingBareInstructions;
+        }
+        if (retires <= 16)
+          std::printf("AETHERCORE_PA32_GSIM_COMMIT index=%llu pc=0x%llx inst=0x%08x exception=%u cause=0x%llx\n",
                       static_cast<unsigned long long>(retires),
-                      static_cast<unsigned long long>(commit.pc), commit.inst);
+                      static_cast<unsigned long long>(commit.pc), commit.inst,
+                      static_cast<unsigned>(commit.exception),
+                      static_cast<unsigned long long>(commit.exceptionCause));
         if (commit.exception) ++exceptions;
       }
       if (commit.interrupt) ++interrupts;
@@ -134,7 +169,7 @@ int main(int argc, char** argv) {
 
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - hostStart).count();
-    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f\n",
+    std::printf("AETHERCORE_PA32_GSIM_PREFIX guest_cycles=%llu retires=%llu exceptions=%llu interrupts=%llu mtime=%llu last_pc=0x%llx commit_digest=0x%llx host_seconds=%.6f host_cps=%.1f matched_rv64i=%llu\n",
                 static_cast<unsigned long long>(total),
                 static_cast<unsigned long long>(retires),
                 static_cast<unsigned long long>(exceptions),
@@ -142,11 +177,15 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(ports.mtime()),
                 static_cast<unsigned long long>(lastPc),
                 static_cast<unsigned long long>(digest),
-                elapsed, elapsed > 0 ? total / elapsed : 0.0);
+                elapsed, elapsed > 0 ? total / elapsed : 0.0,
+                static_cast<unsigned long long>(matchingBareInstructions));
 
     if (std::string(argv[1]) == "--bare") {
-      if (retires < 3 || lastPc < aethercore::l32sim::kRamBase) {
-        std::fprintf(stderr, "AETHERCORE_PA32_GSIM_BARE_FAIL no real RV64 instruction retirement\n");
+      if (matchingBareInstructions != 3) {
+        std::fprintf(stderr,
+            "AETHERCORE_PA32_GSIM_BARE_FAIL matched_rv64i=%llu expected=3 "
+            "real_RV64I_instructions_not_retired\n",
+            static_cast<unsigned long long>(matchingBareInstructions));
         return 11;
       }
       std::puts("AETHERCORE_PA32_GSIM_BARE_PASS");
