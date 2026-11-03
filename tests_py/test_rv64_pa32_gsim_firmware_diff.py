@@ -154,5 +154,29 @@ int main() {
                       "Linux version 6.6.143", "uartDigest", "stip", "seip"):
             self.assertIn(token, shared)
 
+    def test_gsim_ci_reuses_qualified_cache_and_real_pid1_payload(self):
+        gsim = (ROOT / ".github/workflows/rv64-pa32-gsim-host-bridge.yml").read_text()
+        baseline = (ROOT / ".github/workflows/rv64-minimal-initramfs-v1.yml").read_text()
+
+        def cache_paths(workflow, step):
+            block = workflow.split("      - name: " + step + "\n", 1)[1]
+            block = block.split("          path: |\n", 1)[1]
+            return tuple(line.strip() for line in block.split("          key:", 1)[0].splitlines()
+                         if line.strip())
+
+        self.assertEqual(
+            cache_paths(gsim, "Restore RV64 Linux GCC cache"),
+            cache_paths(baseline, "Restore RV64 Linux GCC cache"))
+        self.assertEqual(
+            cache_paths(gsim, "Restore qualified RV64 Linux/OpenSBI software cache"),
+            cache_paths(baseline, "Restore qualified RV64 software cache"))
+        self.assertNotIn("pa32-gsim-opensbi-software-foundation-v1", gsim)
+        self.assertIn("Save qualified RV64 Linux/OpenSBI software cache", gsim)
+        self.assertIn("Save RV64 Linux GCC cache after provisioning", gsim)
+        self.assertIn("bash tools/ci/rv64_minimal_initramfs_build.sh", gsim)
+        self.assertIn("bash tools/ci/rv64_minimal_init_payload_build.sh", gsim)
+        self.assertIn("FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin", gsim)
+        self.assertIn("CYCLES=450000000 TIMEOUT_SECONDS=7200 LINUX_PID1=1", gsim)
+
 if __name__ == "__main__":
     unittest.main()

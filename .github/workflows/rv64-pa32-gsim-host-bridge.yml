@@ -89,16 +89,26 @@ jobs:
           set -euo pipefail
           OUT=build/rv64-pa32-gsim-host-bridge GSIM_HOST_BRIDGE_EXPERIMENT=1 \
             GSIM_PREFIX_OPT=-O3 JOBS=4 bash tools/ci/rv64_pa32_gsim_source_patch.sh
-      - name: Restore exact RV64 Linux/OpenSBI software cache
+      - name: Restore RV64 Linux GCC cache
+        id: rv64-gcc-cache
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
             ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-toolchains-v1-
+      - name: Restore qualified RV64 Linux/OpenSBI software cache
+        id: rv64-software-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
             ~/.cache/aethercore/rv64/linux
             ~/.cache/aethercore/rv64/linux-build
             ~/.cache/aethercore/l32/opensbi
-          key: pa32-gsim-opensbi-software-foundation-v1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v1-
@@ -111,24 +121,55 @@ jobs:
       - name: Real 20k-cycle store-load/LR-SC/AMO GSIM vs Verilator differential
         run: bash tools/ci/rv64_pa32_gsim_memory_diff.sh
       - name: Provision exact RV64 GNU cross compiler
+        id: rv64-gcc-provision
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+      - name: Save RV64 Linux GCC cache after provisioning
+        if: steps.rv64-gcc-provision.outcome == 'success' && steps.rv64-gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
       - name: Build unchanged OpenSBI/Linux 6.6.143 firmware
+        id: rv64-linux-build
         run: |
           set -euo pipefail
           test -n "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}"
           bash tools/ci/rv64_linux_early_build.sh
           test -s build/rv64-linux-early/opensbi/platform/generic/firmware/fw_payload.bin
+      - name: Save qualified RV64 Linux/OpenSBI software cache
+        if: steps.rv64-linux-build.outcome == 'success' && steps.rv64-software-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
       - name: Verify firmware differential regression contracts
         run: python3 -m unittest tests_py.test_rv64_pa32_gsim_firmware_diff -v
       - name: Compare 20M real OpenSBI/Linux firmware cycles, RAM state and checkpoints
         run: |
           set -euo pipefail
           CYCLES=20000000 bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
-      - name: Compare real Linux PID1, STIP/SEIP and 256 MiB RAM on both engines
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_linux }}
+      # First full-system qualification is required on this PR before GSIM is
+      # offered as a normal simulator engine; subsequent signoff is manual.
+      - name: Build real Linux PID1 initramfs and its OpenSBI payload
+        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full_linux) }}
         run: |
           set -euo pipefail
-          CYCLES=450000000 TIMEOUT_SECONDS=7200 LINUX_PID1=1 \
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s bash tools/ci/rv64_minimal_init_payload_build.sh
+          grep -qx 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-minimal-init-boot/result.txt
+      - name: Compare real Linux PID1, STIP/SEIP and 256 MiB RAM on both engines
+        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full_linux) }}
+        run: |
+          set -euo pipefail
+          FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            CYCLES=450000000 TIMEOUT_SECONDS=7200 LINUX_PID1=1 \
             OUT=build/rv64-pa32-gsim-linux-pid1 \
             bash tools/ci/rv64_pa32_gsim_firmware_diff.sh
       - name: Preserve both successful and failed diagnostic evidence
@@ -168,4 +209,6 @@ jobs:
             build/rv64-pa32-gsim-linux-pid1/verilator-firmware.log
             build/rv64-pa32-gsim-linux-pid1/diff-result.txt
             build/rv64-pa32-gsim-linux-pid1/performance.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
             build/rv64-linux-early/result.txt
