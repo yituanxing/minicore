@@ -32,3 +32,28 @@ timeout --signal=TERM --kill-after=10s 240s \
 python3 tools/ci/rv64_pa32_gsim_bare_diff.py \
   "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" --firmware \
   | tee "$OUT/diff-result.txt"
+# Compute throughput only after the complete architectural and host-RAM
+# differential has passed. The clocks and host are identical.
+python3 - "$OUT/gsim-firmware.log" "$OUT/verilator-firmware.log" <<'PY' | tee "$OUT/performance.txt"
+import pathlib
+import re
+import sys
+def metrics(path,engine):
+    prefix=f"AETHERCORE_PA32_{engine}_PREFIX "
+    lines=[line for line in pathlib.Path(path).read_text().splitlines()
+           if line.startswith(prefix)]
+    if len(lines)!=1: raise SystemExit(f"{engine}: missing unique prefix")
+    found=dict(re.findall(r"([\w-]+)=([^\s]+)", lines[0]))
+    if "host_seconds" not in found or "guest_cycles" not in found:
+        raise SystemExit(f"{engine}: missing performance metrics")
+    return float(found["host_seconds"]),float(found["guest_cycles"])
+gs,gs_cycles=metrics(sys.argv[1],"GSIM")
+vl,vl_cycles=metrics(sys.argv[2],"VERILATOR")
+if gs_cycles!=vl_cycles: raise SystemExit("guest-cycle mismatch")
+print(f"AETHERCORE_PA32_GSIM_FIRMWARE_AB_RESULT "
+      f"cycles={int(gs_cycles)} gsim_seconds={gs:.6f} "
+      f"verilator_seconds={vl:.6f} gsim_cps={gs_cycles/gs:.1f} "
+      f"verilator_cps={vl_cycles/vl:.1f} "
+      f"gsim_speedup={vl/gs:.5f}x "
+      "workload=real-firmware-not-full-linux")
+PY
