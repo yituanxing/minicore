@@ -296,6 +296,10 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     }
   }
 
+  // hasValue denotes the ROB's ALLOCATED destination identity, even on a
+  // fault. The backend validates that identity and suppresses PRF writes when
+  // exception.valid. Clearing hasValue on a fault would silently drop the
+  // completion and deadlock precise trap handling.
   // Exactly one accepted completion per cycle; backpressure is held by Queue.
   private val completions = Module(new Queue(
     new ProductCompletion(64, I, P, G), entries = N, pipe = false, flow = false
@@ -323,8 +327,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       completions.io.enq.valid := true.B
       completions.io.enq.bits.token := owner.token
       completions.io.enq.bits.destination := returningSlot.destination
-      completions.io.enq.bits.hasValue := returningSlot.hasDestination &&
-        !io.memoryResponse.bits.fault
+      completions.io.enq.bits.hasValue := returningSlot.hasDestination
       completions.io.enq.bits.value := extended(io.memoryResponse.bits.rdata,
         returningSlot.size, returningSlot.unsigned)
       completions.io.enq.bits.exception.valid := io.memoryResponse.bits.fault
@@ -345,7 +348,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     completions.io.enq.bits.token.index := candidateIndex
     completions.io.enq.bits.token.generation := candidate.tokenGeneration
     completions.io.enq.bits.destination := candidate.destination
-    completions.io.enq.bits.hasValue := candidate.hasDestination && !candidateLocalFault
+    completions.io.enq.bits.hasValue := candidate.hasDestination
     completions.io.enq.bits.value := extended(candidateForwardData, candidate.size, candidate.unsigned)
     completions.io.enq.bits.exception := candidate.fault
     io.forwarded := candidateForward

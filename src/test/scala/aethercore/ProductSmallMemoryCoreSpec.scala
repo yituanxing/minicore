@@ -25,6 +25,7 @@ private class PhysicalProductHarness extends Module {
     val physicalRequest = Decoupled(new AetherMemRequest(PA, 64, T))
     val physicalResponse = Flipped(Decoupled(new AetherMemResponse(64, T)))
     val retirement = Decoupled(new ProductRetirement(64, I, P, 16))
+    val trap = Valid(new ProductRetirement(64, I, P, 16))
     val occupancy = Output(UInt(log2Ceil(config.geometry.robEntries + 1).W))
   })
   private val decoder = Module(new SemanticDecode(config.software.isa))
@@ -53,6 +54,7 @@ private class PhysicalProductHarness extends Module {
   io.physicalResponse.ready := core.io.memoryResponse.ready
   io.retirement.valid := core.io.retire.valid
   io.retirement.bits := core.io.retire.bits
+  io.trap := core.io.trap
   core.io.retire.ready := io.retirement.ready
   io.occupancy := core.io.occupancy
 }
@@ -104,10 +106,11 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
     d.io.resolved.valid.poke(false.B)
   }
 
-  private def physicalResponse(d: PhysicalProductHarness, txn: BigInt, data: BigInt): Unit = {
+  private def physicalResponse(d: PhysicalProductHarness, txn: BigInt, data: BigInt,
+                               fault: Boolean = false): Unit = {
     d.io.physicalResponse.bits.txnId.poke(txn.U)
     d.io.physicalResponse.bits.rdata.poke(data.U)
-    d.io.physicalResponse.bits.fault.poke(false.B)
+    d.io.physicalResponse.bits.fault.poke(fault.B)
     d.io.physicalResponse.bits.last.poke(true.B)
     d.io.physicalResponse.valid.poke(true.B)
     d.io.physicalResponse.ready.expect(true.B)
@@ -181,4 +184,34 @@ class ProductSmallMemoryCoreSpec extends AnyFlatSpec with Matchers with ChiselSi
       d.io.occupancy.expect(0.U)
     }
   }
+  it should "turn a physical Load access fault into a precise ROB trap, without PRF write" in {
+    simulate(new PhysicalProductHarness) { d =>
+      init(d)
+      decode(d, BigInt("80000000", 16), BigInt("00002183", 16)) // lw x3,0(x0)
+      d.io.execute.valid.expect(true.B)
+      val idx = d.io.execute.bits.token.index.peek().litValue
+      val gen = d.io.execute.bits.token.generation.peek().litValue
+      d.clock.step()
+      resolve(d, idx, gen, BigInt("80005000", 16))
+      d.io.physicalRequest.valid.expect(true.B)
+      val tx = d.io.physicalRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      physicalResponse(d, tx, 0, fault = true)
+      var faulted = false
+      for (_ <- 0 until 25) {
+        if (d.io.retirement.valid.peek().litToBoolean) {
+          d.io.retirement.bits.exception.valid.expect(true.B)
+          d.io.retirement.bits.wroteRegister.expect(false.B)
+          d.io.retirement.bits.exception.cause.expect(
+            aethercore.common.MachineExceptionCode.LoadAccessFault.U)
+          d.io.trap.valid.expect(true.B)
+          faulted = true
+        }
+        d.clock.step()
+      }
+      faulted shouldBe true
+      d.io.occupancy.expect(0.U)
+    }
+  }
+
 }

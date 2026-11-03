@@ -115,13 +115,14 @@ private class ProductIqSlot(
   *
   * One dispatch, one issue, one precise retirement; IQ4, ROB8, PRF48 by profile.
   * An independent execution cluster must implement ProductIssue -> ProductCompletion.
-  * Memory, atomics, privileged operations and F/D are intentionally NOT accepted.
+  * Load/Store enter a reserved LSQ via ProductSmallMemoryCore; atomics,
+  * privileged system operations and F/D remain intentionally unsupported.
   * This module is not a complete CPU and cannot claim Linux or Debian support.
   *
   * Arbitrary-age branch recovery uses youngest-first ROB undo, one slot/cycle.
   * While recovering, allocate/issue/retire stop. FU completions are
   * backpressured until undo ends; then stale lifetimes are rejected. Every ROB and physical destination reuse changes a
-  * generation; transport responses will require separate MemTxnId ownership.
+  * generation; external physical MemTxnId ownership is in ProductPhysicalLsq.
   */
 class ProductSmallOoOBackend(val geometry: ProductCoreGeometry) extends Module {
   require(geometry.decodeWidth == 1 && geometry.dispatchWidth == 1 &&
