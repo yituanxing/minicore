@@ -108,11 +108,22 @@ int main(int argc, char** argv) {
     if (total < 1 || total > 1000000000ULL) return 3;
     Memory memory;
     std::puts("AETHERCORE_PA32_GSIM_SINGLE_STEP_TIMING_UNQUALIFIED");
+    const bool memoryProbe = std::string(argv[1]) == "--memory";
     if (std::string(argv[1]) == "--bare") {
       // RV64I: addi x1,x0,1; addi x2,x1,2; addi x3,x2,3; jal x0,0.
       const std::uint32_t program[] = {
           0x00100093U, 0x00208113U, 0x00310193U, 0x0000006fU};
       for (unsigned i = 0; i < 4; ++i)
+        memory.write32Masked(aethercore::l32sim::kRamBase + i*4,
+                             program[i], 0xFU);
+    } else if (memoryProbe) {
+      // RV64IM/A transport: store -> load -> LR.W -> SC.W -> AMOADD.W.
+      // Expected final word at 0x80000080: (42 + 1) + 42 = 85.
+      constexpr std::uint32_t program[] = {
+          0x00000097U, 0x02a00113U, 0x08008393U, 0x0023a023U,
+          0x0003a183U, 0x00118213U, 0x1003a2afU, 0x1843a32fU,
+          0x0003a403U, 0x0023a4afU, 0x0003a503U, 0x0000006fU};
+      for (std::size_t i = 0; i < sizeof(program)/sizeof(program[0]); ++i)
         memory.write32Masked(aethercore::l32sim::kRamBase + i*4,
                              program[i], 0xFU);
     } else {
@@ -245,6 +256,15 @@ int main(int argc, char** argv) {
         return 11;
       }
       std::puts("AETHERCORE_PA32_GSIM_BARE_PASS");
+    } else if (memoryProbe) {
+      const std::uint32_t finalWord = memory.read32(aethercore::l32sim::kRamBase + 128);
+      if (finalWord != 85 || exceptions != 0) {
+        std::fprintf(stderr,
+            "AETHERCORE_PA32_GSIM_MEMORY_FAIL final_word=%u exceptions=%llu\n",
+            finalWord, static_cast<unsigned long long>(exceptions));
+        return 13;
+      }
+      std::printf("AETHERCORE_PA32_GSIM_MEMORY_PASS final_word=%u\n", finalWord);
     } else {
       std::puts("AETHERCORE_PA32_GSIM_FIRMWARE_PREFIX_OBSERVED_UNQUALIFIED");
     }

@@ -17,6 +17,7 @@ int main(int argc, char** argv) {
   if (argc != 2 && argc != 3) return 2;
   try {
     const bool bare = argc == 2;
+    const bool memoryProbe = argc == 3 && std::string(argv[1]) == "--memory";
     const auto guestCycles = std::stoull(argv[bare ? 1 : 2]);
     if (guestCycles < 1 || guestCycles > 1000000000ULL) return 3;
     Memory memory;
@@ -26,6 +27,14 @@ int main(int argc, char** argv) {
       for (unsigned i = 0; i < 4; ++i)
         memory.write32Masked(aethercore::l32sim::kRamBase + i*4,
                              program[i], 0xFU);
+    } else if (memoryProbe) {
+      constexpr std::uint32_t atomicProgram[] = {
+          0x00000097U, 0x02a00113U, 0x08008393U, 0x0023a023U,
+          0x0003a183U, 0x00118213U, 0x1003a2afU, 0x1843a32fU,
+          0x0003a403U, 0x0023a4afU, 0x0003a503U, 0x0000006fU};
+      for (std::size_t i = 0; i < sizeof(atomicProgram)/sizeof(atomicProgram[0]); ++i)
+        memory.write32Masked(aethercore::l32sim::kRamBase + i*4,
+                             atomicProgram[i], 0xFU);
     } else {
       memory.loadAtBase(argv[1]);
     }
@@ -87,6 +96,16 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(digest),
         sec, sec>0 ? guestCycles/sec : 0.0,
         static_cast<unsigned long long>(ramDigest));
+    if (memoryProbe) {
+      const std::uint32_t finalWord = memory.read32(aethercore::l32sim::kRamBase + 128);
+      if (finalWord != 85 || exceptions != 0) {
+        std::fprintf(stderr,
+            "AETHERCORE_PA32_VERILATOR_MEMORY_FAIL final_word=%u exceptions=%llu\n",
+            finalWord, static_cast<unsigned long long>(exceptions));
+        return 13;
+      }
+      std::printf("AETHERCORE_PA32_VERILATOR_MEMORY_PASS final_word=%u\n", finalWord);
+    }
     return 0;
   } catch (const std::exception& e) {
     std::fprintf(stderr,"AETHERCORE_PA32_VERILATOR_REFERENCE_FAIL %s\n",e.what());
