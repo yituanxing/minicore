@@ -72,6 +72,35 @@ class SimProgressTests(unittest.TestCase):
                         "-", "-I", str(ROOT / "sim")],
                        input=source, text=True, check=True, capture_output=True)
 
+    def test_heartbeat_preserves_complete_retirement_records(self):
+        cxx = shutil.which("c++")
+        if not cxx:
+            self.skipTest("no C++ compiler")
+        src = self.dir / "coherent.cpp"
+        src.write_text(r"""
+#include "pa32_sim_progress.h"
+#include <chrono>
+#include <cstdio>
+int main() {
+  aethercore::pa32sim::FirmwareMilestone fw;
+  std::puts("AETHERCORE_PA32_GSIM_COMMIT index=5 pc=0x80000004 inst=0x02a00113 exception=0 cause=0x0");
+  aethercore::pa32sim::SimProgress p("GSIM", 100, false,
+      std::chrono::steady_clock::now());
+  p.observe(100, 5, fw);
+}
+""")
+        exe = self.dir / "coherent"
+        subprocess.run([cxx, "-std=c++20", "-O2", "-Dlinux=1", "-I",
+                        str(ROOT / "sim"), str(src), "-o", str(exe)],
+                       check=True, text=True, capture_output=True)
+        r = subprocess.run([str(exe)], check=True, text=True,
+                           capture_output=True,
+                           env={**os.environ, "AETHERCORE_SIM_PROGRESS_CYCLES": "100"})
+        self.assertIn("AETHERCORE_PA32_GSIM_COMMIT index=5 pc=0x80000004 "
+                      "inst=0x02a00113 exception=0 cause=0x0", r.stdout)
+        self.assertIn("AETHERCORE_PA32_SIM_PROGRESS engine=GSIM", r.stdout)
+        self.assertEqual(r.stderr, "")
+
     def test_shared_observer_compiles_and_reports(self):
         cxx = shutil.which("c++")
         if not cxx:
@@ -101,7 +130,7 @@ int main() {
                                "AETHERCORE_SIM_PROGRESS_CYCLES": "5"})
         for token in ("name=OPENSBI", "name=LINUX", "name=PID1",
                       "name=STIP", "name=SEIP", "cycles=5", "status=END"):
-            self.assertIn(token, r.stderr)
+            self.assertIn(token, r.stdout)
 
 if __name__ == "__main__":
     unittest.main()

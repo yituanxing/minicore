@@ -1,6 +1,8 @@
 #pragma once
 // Both RTL engines report guest progress at existing 100k-cycle checkpoints.
 // Host-only reporting: never mutates the guest state or guest clock.
+// Progress and COMMIT/CHECKPOINT must use the same stdout FILE* to prevent
+// interleaved stderr from splitting a strict retirement record.
 #include "pa32_firmware_milestone.h"
 #include <cerrno>
 #include <chrono>
@@ -17,13 +19,13 @@ class SimProgress {
               Clock::time_point start)
       : engine_(engine), budget_(budget), linux_(requireLinux),
         start_(start), interval_(readInterval()), next_(interval_) {
-    std::fprintf(stderr,
+    std::fprintf(stdout,
         "AETHERCORE_PA32_SIM_STAGE engine=%s status=START mode=%s "
         "target_cycles=%llu interval=%llu\n",
         engine_, linux_ ? "linux-pid1" : "prefix",
         static_cast<unsigned long long>(budget_),
         static_cast<unsigned long long>(interval_));
-    std::fflush(stderr);
+    std::fflush(stdout);
   }
   void observe(std::uint64_t cycles, std::uint64_t retires,
                const FirmwareMilestone& state) {
@@ -38,7 +40,7 @@ class SimProgress {
     const double cps = seconds > 0.0 ? cycles / seconds : 0.0;
     const double eta = cps > 0.0 && cycles < budget_
         ? (budget_ - cycles) / cps : 0.0;
-    std::fprintf(stderr,
+    std::fprintf(stdout,
         "AETHERCORE_PA32_SIM_PROGRESS engine=%s cycles=%llu "
         "target_cycles=%llu percent=%.2f host_seconds=%.2f "
         "host_cps=%.1f budget_eta_seconds=%.1f retires=%llu "
@@ -52,13 +54,13 @@ class SimProgress {
         static_cast<unsigned>(state.milestoneCycle != 0),
         static_cast<unsigned long long>(state.stip),
         static_cast<unsigned long long>(state.seip));
-    std::fflush(stderr);
+    std::fflush(stdout);
     next_ = (cycles / interval_ + 1) * interval_;
   }
   void finish(std::uint64_t cycles, std::uint64_t retires,
               const FirmwareMilestone& state) {
     observe(cycles, retires, state);
-    std::fprintf(stderr,
+    std::fprintf(stdout,
         "AETHERCORE_PA32_SIM_STAGE engine=%s status=%s "
         "guest_cycles=%llu retires=%llu opensbi=%u linux=%u "
         "pid1=%u stip=%llu seip=%llu\n",
@@ -70,7 +72,7 @@ class SimProgress {
         static_cast<unsigned>(state.milestoneCycle != 0),
         static_cast<unsigned long long>(state.stip),
         static_cast<unsigned long long>(state.seip));
-    std::fflush(stderr);
+    std::fflush(stdout);
   }
  private:
   static std::uint64_t readInterval() {
@@ -86,10 +88,10 @@ class SimProgress {
   void event(bool active, bool& seen, const char* name, std::uint64_t cycles) {
     if (!active || seen) return;
     seen = true;
-    std::fprintf(stderr,
+    std::fprintf(stdout,
         "AETHERCORE_PA32_SIM_MILESTONE engine=%s name=%s cycle=%llu\n",
         engine_, name, static_cast<unsigned long long>(cycles));
-    std::fflush(stderr);
+    std::fflush(stdout);
   }
   const char* engine_;
   std::uint64_t budget_;
