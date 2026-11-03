@@ -58,12 +58,12 @@
       "retire": 2,
       "rob": 64,
       "iq": 16,
-      "physical_int": 64,
+      "physical_int": 96,
       "loadq": 16,
       "storeq": 16,
       "fp_enabled": true,
       "qualified": false,
-      "note": "IQ32, wider PRFs and cache sizes remain measured alternatives, not implied requirements."
+      "note": "IQ32, wider PRFs and cache sizes remain measured alternatives, not implied requirements. 96 integer PRF is a provisional sizing to avoid 32-spare-register pressure against ROB64, not FPGA-resource qualification."
     }
   ],
   "owners": [
@@ -819,5 +819,63 @@
       "owner": "maintainer",
       "must_close_before": "G1 RTL"
     }
-  ]
+  ],
+  "g1_selected_decisions": [
+    {
+      "id": "D02",
+      "status": "selected-for-G1-review-not-RTL-frozen",
+      "decision": "explicit integer PRF + speculative/committed RAT + bitset FreeList + per-destination reverse undo log",
+      "initial": {
+        "integer_arch_registers": 32,
+        "integer_prf": 48,
+        "rob_entries": 8,
+        "issue_width": 1,
+        "retire_width": 1,
+        "rename_width": 1,
+        "prf_read_ports": 2,
+        "prf_write_ports": 1,
+        "fp_enabled": false
+      },
+      "reset": "x0 fixed to physical 0; integer architectural x1..x31 map to phys1..31; FreeList contains physical 32..N-1; x0 never allocates, releases, or writes",
+      "allocation": "rename lane order: read sources from speculative RAT including prior accepted lane writes, reserve free physical destination, retain old mapping in ROB undo entry, then set speculative RAT; grant is atomic with ROB/IQ/LSQ permits",
+      "commit": "update committed RAT on normal in-order retirement, free stale destination once when its replacing instruction commits; no free when completion merely arrives; no free on instruction that does not write",
+      "recovery": "on validated non-head branch mispredict, stop rename and architectural retire; invalidate only instructions younger than surviving branch by ROB age; walk their rename undo entries in reverse order (youngest first), restore each old mapping in speculative RAT and free only their newly allocated destinations; keep older in-flight and branch; for synchronous trap, retire any permitted older prefix then unwind all uncommitted entries to committed RAT",
+      "completion": "check live RobToken and producer/value allocation generation before PRF write or IQ wakeup; no stale writes after squash/reallocate; async memory transaction lifetime separate",
+      "future": "G2 two-lane rename adds intra-group bypass and 2 physical destination allocators; branch snapshots optional optimization, not a G1 correctness requirement; do not change RecoveryCut interface when optimizing",
+      "rationale": "Small FPGA G1 can tolerate multi-cycle recovery and fewer read/write ports. Checkpointing all speculative mappings and free-list state per branch adds state/collision complexity and may be justified later by measured PPA/IPC, not assumed."
+    },
+    {
+      "id": "D06",
+      "status": "selected-for-G1-review-not-RTL-frozen",
+      "decision": "new one-source product core namespace, stable semantic/platform seams extracted once; retain Tiny v2 as independent qualified regression/golden reference",
+      "product_root": "src/main/scala/aethercore/core/product/",
+      "shared_roots": [
+        "src/main/scala/aethercore/common/",
+        "src/main/scala/aethercore/config/",
+        "src/main/scala/aethercore/memory/",
+        "src/main/scala/aethercore/core/"
+      ],
+      "boundary": "ProductCore must not instantiate or inherit TinyRob, TinyDependencyBackend, TinyMemoryBackend, TinyLoadQueueMemoryBackend or TinyPagedCore. A temporary named semantic adapter may consume TinySemanticDecode only until its shared owner extraction, but no product backend state may come from v2.",
+      "first_code_change": "extract DecodedInstruction/semantic decode ownership exactly once with a v2 compatibility adapter, not a parallel copied C decoder; keep existing CoreConfig.capability check intact so F/D is not falsely advertised",
+      "software_and_soc": "keep AetherSoC v0 boot/AXI/UART/PLIC/ACLINT platform frozen; add a separately selectable ProductCoreComplex/SoC adapter only after minimal core retirement test passes, never silently replace the v0 build",
+      "target_config": "new ProductCoreConfig initially IMA(M/S/U, Sv39) with F/D false until implemented. Preserve ISA vs ABI separation and verify new LP64D profile only at G3.",
+      "no_legacy_mutation": "G1 product PR must not modify v2 Tiny ROB/rename/LSU in order to make product backend compile; any shared semantic extraction must run the v2 regression suite."
+    }
+  ],
+  "g1_release_gates": {
+    "contract_review": "The D02/D06 approach is selected and must be reviewed before a production RTL branch. D01/D03/D04/D05 remain unresolved; no claim of completed G0 freeze until maintainers accept architecture and proof obligations.",
+    "initial_geometry_rule": "For no destination-pressure stalls at full ROB occupancy, integer PRF must have at least 32 + ROB entries. Smaller PRFs are legal but must encode dispatch backpressure; proposed 8/48, 16/64, 64/96 avoid this unnecessary first-order limit.",
+    "changelog": "G3 candidate integer PRF raised from 64 to 96 because ROB64 with only 32 spare integer physical registers could not accommodate 64 simultaneous destination-producing inflight uOps.",
+    "required_before_code": [
+      "agree on shared semantic extraction boundary",
+      "agree on reverse-undo recovery stall policy",
+      "agree on v0 frozen reference strategy"
+    ],
+    "scope_exclusions": [
+      "No built product RTL",
+      "No automatic Linux PASS inheritance",
+      "No legacy Tiny clone into product",
+      "No automatic board Fmax estimate"
+    ]
+  }
 }

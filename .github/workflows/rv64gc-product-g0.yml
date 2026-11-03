@@ -6,6 +6,9 @@ on:
       - 'docs/architecture/**'
       - 'docs/RV64GC_FPGA_PRODUCT_ARCHITECTURE_GAP_2026-11-03.md'
       - 'tests_py/test_product_g0_contract.py'
+      - 'tests_py/test_product_g1_migration_contract.py'
+      - 'tests_py/product_g1_rename_reference.py'
+      - 'tests_py/test_product_g1_rename_reference.py'
       - '.github/workflows/rv64gc-product-g0.yml'
   workflow_dispatch:
 
@@ -24,6 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate machine-readable G0 contract JSON
-        run: python3 -m json.tool docs/architecture/rv64gc_g0_contract.json >/dev/null
+        run: |
+          python3 -m json.tool docs/architecture/rv64gc_g0_contract.json >/dev/null
+          python3 -m json.tool docs/architecture/rv64gc_g1_migration_map.json >/dev/null
       - name: Run exact G0 architecture-contract tests (no RTL claim)
-        run: python3 -m unittest tests_py.test_product_g0_contract -v
+        run: |
+          python3 -m unittest \
+            tests_py.test_product_g0_contract \
+            tests_py.test_product_g1_migration_contract \
+            tests_py.test_product_g1_rename_reference -v

@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "status": "selected-G1-migration-plan-not-implemented",
+  "baseline": "main@7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "legacy_frozen": "src/main/scala/aethercore/core/v2/",
+  "product_namespace": "src/main/scala/aethercore/core/product/",
+  "invariant": "All product mutable state has one owner; share semantic algorithms and platform seams, never copy Tiny backend implementations.",
+  "modules": [
+    {
+      "source": "src/main/scala/aethercore/core/Decoder.scala",
+      "target": "src/main/scala/aethercore/core/semantic/SemanticDecode.scala",
+      "mode": "extract-once",
+      "batch": "S",
+      "reason": "Share exact ISA decode semantics between v2 and product. Keep a v2 adapter; no copy-pasted second decoder."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinySemanticDecode.scala",
+      "target": "src/main/scala/aethercore/core/semantic/SemanticDecode.scala",
+      "mode": "extract-once",
+      "batch": "S",
+      "reason": "Move backend-neutral interpreted instruction semantics once; adapt result to v2 RobDispatch and product decoded bundle separately."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/FoundationTypes.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductTypes.scala",
+      "mode": "extract-once",
+      "batch": "S",
+      "reason": "Shared semantic DecodedInstruction/operation enums should be defined outside v2, while product RobToken/physical identities get independent widths and contracts."
+    },
+    {
+      "source": "src/main/scala/aethercore/config/CoreConfig.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductCoreConfig.scala",
+      "mode": "reuse-boundary",
+      "batch": "S",
+      "reason": "Reuse ISA/software-target logic, but add a separate product-core capability gate. Do not advertise F/D in v2 CoreConfig."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyRobCommit.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductRob.scala",
+      "mode": "replace",
+      "batch": "B",
+      "reason": "Only order/lifetime owner; no wide ROB4 age projection. Include arbitrary-age recovery and 1-2-wide retirement interface."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyDependency.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductRename.scala",
+      "mode": "replace",
+      "batch": "B",
+      "reason": "Explicit speculative/committed RAT, stale-pdst undo metadata and FreeList, not scoreboard values in ROB."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyPhysicalIssue.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductIssueQueue.scala",
+      "mode": "replace",
+      "batch": "B",
+      "reason": "IQ owns bounded wait entries only; receives slim tags and ready bits, no all-wide ROB broadcast MUX."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyExecution.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductExecution.scala",
+      "mode": "extract-once",
+      "batch": "B",
+      "reason": "Reuse arithmetic algorithms through independent tagged request/response wrappers; do not hardwire TinyRobGeometry widths."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductLsq.scala",
+      "mode": "replace",
+      "batch": "B",
+      "reason": "Replace single exact-head LSU ownership; speculative Load and commitment of Store/SC/AMO are explicit, not inherited mutable policies."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductLsq.scala",
+      "mode": "replace",
+      "batch": "B",
+      "reason": "No subclass last-connect or hardcoded 0/1/2 external txn namespace; independent LSQ/transport response tables."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/v2/TinyPagedCore.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductCore.scala",
+      "mode": "replace",
+      "batch": "B",
+      "reason": "One selectable product pipeline and the same-source G1/G2/G3 presets; old paged core remains qualified reference."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/MachineCsrFile.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductCommit.scala",
+      "mode": "reuse-boundary",
+      "batch": "B",
+      "reason": "Reuse privileged CSR meanings through explicit ordered Commit effect adapter, no CSR mutation at speculative FU completion."
+    },
+    {
+      "source": "src/main/scala/aethercore/core/TranslationUnit.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductMmuAdapter.scala",
+      "mode": "reuse-boundary",
+      "batch": "B",
+      "reason": "Reuse Sv39/PMP translation as a typed customer, later ensure PTW observes dirty D-cache PTE and replay/flush."
+    },
+    {
+      "source": "src/main/scala/aethercore/memory/AetherMemLink.scala",
+      "target": "src/main/scala/aethercore/core/product/ProductMemoryTransport.scala",
+      "mode": "reuse-boundary",
+      "batch": "B",
+      "reason": "Keep AetherMemRequest/Response and PMA separation. Product transport owns live TxnId, ROB owns RobToken."
+    },
+    {
+      "source": "src/main/scala/aethercore/soc/AetherCoreV2Complex.scala",
+      "target": "src/main/scala/aethercore/soc/ProductCoreComplex.scala",
+      "mode": "retain-reference",
+      "batch": "I",
+      "reason": "v0 complex remains unchanged; later opt-in adapter to identical semantic memory, IRQ and instruction trace seams."
+    },
+    {
+      "source": "src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala",
+      "target": "src/main/scala/aethercore/soc/ProductFpgaSoC.scala",
+      "mode": "retain-reference",
+      "batch": "I",
+      "reason": "No replacement until standalone product core Spike differential, memory ordering and board-neutral interface pass."
+    }
+  ],
+  "batches": [
+    {
+      "id": "S",
+      "name": "Shared-meaning boundary",
+      "deliver": "One backend-neutral semantic instruction owner, v2 compatibility adapter, product identities/config, zero CPU behavior change",
+      "gates": [
+        "v2 existing decode+ISA tests",
+        "v2 virtual-FPGA Linux regressions unchanged",
+        "product semantic equivalence vectors"
+      ]
+    },
+    {
+      "id": "B",
+      "name": "Coherent G1 backend and minimum memory",
+      "deliver": "ProductRename+PRF+FreeList+ROB+IQ+Execution+Commit+Recovery+minimal LSQ + one ProductCore, all connected, 1-wide/ROB8 geometry",
+      "gates": [
+        "source-specific arbitration assertions",
+        "rename undo and precise interrupt/exception directed tests",
+        "Spike per-retirement differential on RV64IMA mini programs",
+        "kill/late response and no speculative write"
+      ]
+    },
+    {
+      "id": "I",
+      "name": "Product opt-in SoC integration after G1",
+      "deliver": "Opt-in ProductCoreComplex behind explicit profile selection; original V2Complex untouched",
+      "gates": [
+        "bare memory/UART/PLIC/ACLINT",
+        "OpenSBI bringup",
+        "G1 Linux only after all core checks pass",
+        "real DDR FPGA line independently progresses"
+      ]
+    }
+  ],
+  "forbidden": [
+    "ProductCore importing or instantiating TinyRob, TinyDependencyBackend, TinyMemoryBackend or TinyLoadQueueMemoryBackend",
+    "Keeping duplicated C/ISA decode and semantic exception logic in v2 and product",
+    "Using a physical ROB slot number as a unique long-lived MemTxnId",
+    "Writing physical destination or waking IQ before full live completion validation",
+    "Storing the only canonical result value in ROB for product instead of PRF",
+    "Publishing RV64GC/LP64D or real-FPGA qualification before tests exist"
+  ],
+  "closure": [
+    "D02/D06 G1 technical direction reviewed",
+    "all input-to-output owners, resource budgets and restore event priorities mapped",
+    "Fast Gate and G0 contract tests pass",
+    "legacy v2 code unchanged until a tested shared semantic extraction",
+    "implementation work staged as coherent S/B/I batches with no speculative rewrite of v0"
+  ]
+}

@@ -200,7 +200,7 @@ No **same-cycle** event is allowed to bypass a still-live older instruction's pr
 | --- | --- | --- | --- | --- |
 | G1-minimal-ooo | 1 / 1 / 1 / 1 | 8 / 4 / 2 / 2 | 48 | Build ownership correctness with full rename/ROB/kill |
 | G2-width2 | 2 / 2 / 1 / 2 | 16 / 8 / 4 / 4 | 64 | Validate atomic paired decode and retirement; do not prematurely widen FU |
-| G3-product-candidate | 2 / 2 / 2 / 2 | 64 / 16 / 16 / 16 | 64 | RV64GC/LP64D and performance / PPA candidate |
+| G3-product-candidate | 2 / 2 / 2 / 2 | 64 / 16 / 16 / 16 | **96** | RV64GC/LP64D and performance / PPA candidate |
 
 **IQ32** is a measured alternative; **FP PRF and FU counts, predictor geometry and board clocks are unresolved**, not accidentally omitted. Naming geometry does not force an arbitrary cross-product generator. Maintain one product microarchitecture implementation with named compatible presets and a small always-qualified reduced profile; keep v0's old v2 as independent reference/diagnostic line.
 
@@ -209,11 +209,13 @@ No **same-cycle** event is allowed to bypass a still-live older instruction's pr
 | ID | What must be decided | Gate |
 | --- | --- | --- |
 | D01 | Concrete FPGA, DDR/IP, clock/timing and license budget | G4 board |
-| D02 | RAT checkpoint versus replay; PRF read/write geometry and FP mapping | **before G1 RTL** |
+| D02 | **G1 chosen for review:** speculative/committed RAT + integer PRF48 (2R/1W) + reverse undo; future G2/FP geometry still open | **before G1 RTL** |
 | D03 | Resource widths, ROB/IQ/LSQ/issue/completion port costs, actual PPA | G2 |
 | D04 | DMA noncoherence, dirty-PTE/PTW and I-cache fence visibility | G3 |
 | D05 | FP unit / FCSR / FS context management | G3 |
-| D06 | New product package versus carefully selected v2 reuse and test ownership | **before G1 RTL** |
+| D06 | **G1 chosen for review:** independent product package + single shared semantic decode owner; v2 retained unchanged as reference | **before G1 RTL** |
+
+G1-specific direction for D02/D06 is now recorded in [G1 migration decision](RV64GC_G1_MIGRATION_DECISION.md), with a [file-by-file map](rv64gc_g1_migration_map.json). G1 source-ownership strategy is selected, but still **pending review** and not yet committed to hardware.
 
 G0 is **reviewable, not auto-approved**. In particular, the decision whether to reuse v2 backend implementation or only its semantics/tests must be explicit and evidenced. D02/D06 are *blocking* for G1; D01 can proceed in a separate board effort. No new CPU RTL is authorized by this document alone.
 
