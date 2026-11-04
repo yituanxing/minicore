@@ -1,4 +1,4 @@
-name: Verified one-shot branch pruning (2026-11-04 batch 2)
+name: Verified one-shot branch pruning (2026-11-04 batch 3)
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   prune:
-    name: Archive and delete twenty-one verified merged refs
+    name: Archive and delete ten verified duplicate-tip aliases
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -36,29 +36,18 @@ jobs:
             }
             const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
             const product = 'design/rv64gc-product-architecture-20261103';
-            const archivePrefix = 'branch-archive/2026-11-04/batch2/';
+            const archivePrefix = 'branch-archive/2026-11-04/batch3/';
             const targets = [
-              ['area/compute-postselect-operands-ab', 'bd5c96afbe59b6c402674a008e65db44fdc13b93'],
-              ['area/dcache-bytevalid-single-write-ab', '289b4c803e74c511672ffe1d2b7705cb1de6ed8f'],
-              ['area/pa32-tlb-storage-ab', 'bd8a5d97967c4f20d1f0354a1e3edebb2205fb5e'],
-              ['area/plic16-ab', '37fe6fdd64f5de7aadbfb16ff742a1eb6720abc1'],
-              ['area/plic16-address22-ab', 'c467fb251de4d4c5b319af343eb87eaba1f8a7af'],
-              ['area/rename-live-producer-ram-ab', 'c72f266bf5145d41fafa8b66ef0ea642552ca854'],
-              ['area/rob4-physical-slot-scheduling', '4273e2639c40cca2b9d93468f09b5d0d366ed10b'],
-              ['area/share-frontend-pmp-range-decode-ab', '40141301bd1e1ba02b813563a569fa8494dabcc3'],
-              ['area/shared-data-translation-v2', 'e9a2896149fb005dbf474b8a631e9e340182fc05'],
-              ['measure/aethersoc-data-read-concurrency', '70ef5ef16660cb46f118bca417e006ee5c0f11d8'],
-              ['perf/aethercore-v2-branch-flowthrough-cycle-fix', 'd75b95184a6efd964085b4cba31eaad4db41b2cb'],
-              ['perf/aethersoc-axi4-read-concurrency', '3c365e904e1a108594f907f0ad6c7a51119a17ea'],
-              ['perf/aethersoc-platform-ram-concurrency', 'cb41973c4f65f68858ffb3b3a7033f0f059b5c44'],
-              ['perf/aethersoc-v0-register-file-lutram', '2ab7488ca9a1e7c003e491963b0b2a2facd84cfb'],
-              ['perf/aethersoc-v0-shared-load-pmp', 'fb3942f12d418350395c48e38061a1be02c61086'],
-              ['soc/aethersoc-v0-axi4-port', '255469bd58e0a8be3c90ddd24c0ccf39a5d72c92'],
-              ['soc/aethersoc-v0-bootrom', 'b486397365500f509960a1bdfce2c92cc7367d86'],
-              ['soc/aethersoc-v0-dts', 'fd91b138ce8d77acc8ae462850da374c56cbb572'],
-              ['soc/aethersoc-v0-fpga-synth-proxy', 'ff473149b98792392482de9e8199d6d48ea7554a'],
-              ['soc/aethersoc-v0-physical-seams-v2', 'cbb96b9059a4f5e9961dc227c6d9f758e974e1cf'],
-              ['soc/aethersoc-v0-uart-phy', 'd750ab03382a69375ead3e12e81b9d890420d7f2'],
+              ['arch/aethercore-v2-p8-2-r4-integrated', '88eee934df2b6387dc8bc81b639cba68560ee0ce', 'arch/aethercore-v2-p8-2-generalized-recovery'],
+              ['arch/aethercore-v2-p8-4-nonblocking-memory', '02e912bac4632c32fc18082999f9af19b1ef6a16', 'arch/aethercore-v2-p8-3-completion-overlap'],
+              ['feature/aethercore-v2-f1-clean', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['feature/aethercore-v2-f1-final', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['feature/aethercore-v2-f1-review', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['feature/aethercore-v2-f1-rob-commit-pr', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['feature/aethercore-v2-f1-safe', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['feature/aethercore-v2-f1-temp', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['feature/aethercore-v2-f1-tests', '958aa89a7f78a606b4bed184382ab6ea6671b8ef', 'feature/aethercore-v2-f1-actual'],
+              ['tmp/replay-data-misaligned-onto-mprv', 'd28bafcf1ccc8f0bcc16d950189043f01940a9af', 'fix/data-address-misaligned'],
             ];
             const getRef = async ref => (await github.rest.git.getRef({owner, repo, ref})).data;
             const getOpenPRs = async () => github.paginate(github.rest.pulls.list, {owner, repo, state:'open', per_page:100});
@@ -88,19 +77,20 @@ jobs:
             const prs = await getOpenPRs();
             const reserved = prRefs(prs);
             const running = await activeRuns();
-            for (const [name, sha] of targets) {
-              if (reserved.has(name) || running.has(name)) {
+            const namesToPrune = new Set(targets.map(target => target[0]));
+            for (const [name, sha, keeper] of targets) {
+              if (reserved.has(name) || running.has(name) || name === keeper || namesToPrune.has(keeper)) {
                 throw new Error('Target now in use: ' + name);
               }
               const branch = (await github.rest.repos.getBranch({owner,repo,branch:name})).data;
               if (branch.protected || branch.commit.sha !== sha) {
                 throw new Error('Protected/changed target ' + name + ' got ' + branch.commit.sha);
               }
-              const compare = (await github.rest.repos.compareCommits({owner,repo,base:sha,head:main})).data;
-              if (!['ahead','identical'].includes(compare.status)) {
-                throw new Error('Target is not fully reachable from main: ' + name);
+              const retained = (await github.rest.repos.getBranch({owner,repo,branch:keeper})).data;
+              if (retained.commit.sha !== sha) {
+                throw new Error('Keeper is not an exact SHA twin: ' + keeper);
               }
-              console.log('PREFLIGHT PASS', name, sha, 'main ancestor');
+              console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper);
             }
             console.log('PREFLIGHT_ALL_PASS', targets.length, 'open_prs', prs.length);
 
@@ -124,7 +114,7 @@ jobs:
             console.log('ARCHIVE_ALL_PASS', targets.length);
 
             let deleted = 0;
-            for (const [name, sha] of targets) {
+            for (const [name, sha, keeper] of targets) {
               const latest = await getRef('heads/' + name);
               if (latest.object.sha !== sha) throw new Error('STOP changed ref: ' + name);
               const nowPRs = prRefs(await getOpenPRs());
@@ -133,6 +123,9 @@ jobs:
               }
               if ((await getRef('tags/' + archivePrefix + name)).object.sha !== sha) {
                 throw new Error('STOP archive tag changed: ' + name);
+              }
+              if ((await getRef('heads/' + keeper)).object.sha !== sha) {
+                throw new Error('STOP keeper changed: ' + keeper);
               }
               const nowRunning = await activeRuns();
               if (nowRunning.has(name)) throw new Error('STOP active CI: ' + name);
