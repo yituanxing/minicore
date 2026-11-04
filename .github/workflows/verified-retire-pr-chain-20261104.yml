@@ -1,4 +1,4 @@
-name: Verified retire PR chain batch 11 retry (2026-11-04)
+name: Verified retire PR chain batch 12 (2026-11-04)
 on:
   push:
     branches:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Batch 11: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
+            // Batch 12: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
             const {owner,repo}=context.repo;
             const maintenance='maintenance/verified-branch-prune-20261104';
             if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+maintenance)
@@ -39,62 +39,62 @@ jobs:
             const archivePrefix='branch-archive/2026-11-04/chain-125-74/';
             const targets=[
               [
-                125,
-                "explore/rv64a-v1",
-                "2c708adc07d770e583cc9667a6f6a586416147f7"
+                114,
+                "feature/rv32c-linux-userspace",
+                "528a4a6f840ee04ca25cb53be9246b57e4a9e38c"
               ],
               [
-                124,
-                "explore/rv64-sv39-core-v1",
-                "b247e14925597a3edd01f071bb12516fa8d7e2a6"
+                113,
+                "feature/rv32c-linux-kernel",
+                "2fc5fe0f5ac60fedafc713def088194950ea9864"
               ],
               [
-                123,
-                "explore/rv64-satp-csr-v1",
-                "848da9400cc9cae3a749ef5b0dc55b331c21be1a"
+                112,
+                "feature/rv32c-nuttx-sv32",
+                "8f5d1988cfafd1ff96e9d16461cc6bb29f9369b0"
               ],
               [
-                122,
-                "explore/rv64-sv39-csr-v1",
-                "9b13bdd8f4e76fbf40a25c4824e3e4dd18e33049"
+                111,
+                "feature/rv32c-freertos",
+                "49009442b38f53c4dfc9d75d8111ba2c2f67c9eb"
               ],
               [
-                121,
-                "explore/shared-vm-adapters-v1",
-                "eab1526d492afcb4a3598cc2888781da4ba57fbb"
+                110,
+                "fix/rv32-spike-reference-abi",
+                "eebeb0cbd37ae8f425ce976a964cb47f7bb2673f"
               ],
               [
-                120,
-                "explore/shared-translation-unit-v1",
-                "a65d8d82f587829488a07d1a1254050b0d1bf8ca"
+                108,
+                "feature/rv32c-coremark",
+                "1c8ffaac4fec541a744f08c4e4279a3a661faa7f"
               ],
               [
-                119,
-                "explore/rv64-vm-shared-contract-v1",
-                "641e71020d46035742bd1461056e9ef3a0242d04"
+                109,
+                "refactor/rv32c-spike-reference",
+                "047eb0ef8ddb36092403d6b81f557cdf2a382329"
               ],
               [
-                118,
-                "explore/shared-vm-walker-tlb-v1",
-                "16e3ce216bad5fce9fde11d01bdda74e265475de"
+                107,
+                "feature/rv32c-parcel-fetch",
+                "80682b10ff9111379fd72636f779015a45cae00b"
               ],
               [
-                117,
-                "explore/rv64-vm-geometry-v1",
-                "88ceb67c7342ff584e4819ae3d637b71dc2bec72"
+                106,
+                "feature/rv32c-parcel-controller",
+                "d03bc35a56c80036aa86e9e1daf93ca208cab2aa"
               ],
               [
-                116,
-                "explore/rv64-pmp-v1",
-                "4b0bef0b52bd97a4ca4d32823f5c40d2d8275203"
+                105,
+                "feature/rv32c-decompressor",
+                "d5bcf7c93d5d19dfadf6528d8ad7301c11b23b76"
               ],
               [
-                115,
-                "explore/rv64-supervisor-v1",
-                "f46cf0cb0d3b5e7db40480eaa7a6d3342f51bc06"
+                104,
+                "refactor/rv32c-raw-instruction",
+                "eb47d542763ed0161f0c3c46da07551372b13b7a"
               ]
             ];
-            const nextBase='feature/rv32c-linux-userspace'; // PR #114 head, NOT touched in this batch
+            const nextBase='refactor/rv32c-fetch-fault-address'; // PR #103 head, NOT touched in this batch
             const staleRunIds=new Set([32217536226,32216610620]);
             const staleEvidence=new Map([
              [32217536226,['2c708adc07d770e583cc9667a6f6a586416147f7','2026-08-19T04:55:52Z',32224026646]],
