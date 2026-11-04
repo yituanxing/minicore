@@ -1,0 +1,94 @@
+name: Exact archive of eight historic measurement-only PRs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-historic-measure-prs-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-measure-prs-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verify each obsolete PR and archive its unique workflow commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Wrong repository or maintenance ref');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const prefix='branch-archive/2026-11-04/historic-measure-prs-259-292/';
+            const targets=[[259,"measure/aethersoc-post-pmp-full-area","b748c2901bddd5929078c0c25d30d20581fe8fb1"],[260,"measure/aethersoc-post-pmp-hier-area","dd1a6d275ea1dde3090d8c26a1e66761c8b0c037"],[261,"measure/aethersoc-v0-post-pmp-full-area","2d61b8f6e24799a4739d73144a6cec8ae067fa22"],[287,"measure/aethersoc-current-hier-area","dd37d580b007adc53ec312c35c89d6b9c31024ea"],[288,"measure/current-area-heatmap","62ab02d9983c4d272a6c209811088265cdd9d885"],[290,"measure/current-main-area-census","307f4d4f29526af333600cb37c62211008ca6df4"],[291,"measure/current-main-hierarchy-area","ed9191e8c6ceaef6cab9ad0415d2c1b5d19120c2"],[292,"measure/current-main-hierarchy-census","c1b26b82ce6103014548e53cdcb1284efd9011d6"]];
+            const retry=async(label,fn)=>{
+              for(let n=0;n<5;n++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||n===4)throw e;
+                  console.log('TRANSIENT_READ_RETRY',label,n+1);
+                  await new Promise(resolve=>setTimeout(resolve,450*(2**n)));
+                }
+              }
+            };
+            const ref=async s=>(await retry('ref '+s,()=>github.rest.git.getRef({owner,repo,ref:s}))).data;
+            const getPR=async n=>(await retry('PR '+n,()=>github.rest.pulls.get({owner,repo,pull_number:n}))).data;
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('main/Product changed '+m+'/'+p);
+            };
+            const getOpen=async()=>retry('all open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            await pin();
+            const open=await getOpen();
+            const active=[];
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              active.push(...await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100})));
+            }
+            for(const [number,name,sha] of targets){
+              const p=await getPR(number);
+              if(p.state!=='open'||p.merged_at||p.base.ref!=='main'||p.head.ref!==name||p.head.sha!==sha||
+                 p.head.repo?.full_name!==owner+'/'+repo)
+                throw new Error('PR changed #'+number);
+              if(open.some(q=>q.number!==number&&(q.head.ref===name||q.base.ref===name)))
+                throw new Error('Dependent PR on #'+number);
+              const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+              if(b.protected||b.commit.sha!==sha)throw new Error('Head protected/moved '+name);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:main,head:sha}))).data;
+              if(cmp.ahead_by!==1||!['diverged','ahead'].includes(cmp.status))
+                throw new Error('Unique history no longer exact 1 commit '+name);
+              const files=await retry('files #'+number,()=>github.paginate(github.rest.pulls.listFiles,{owner,repo,pull_number:number,per_page:100}));
+              if(files.length!==1||!files[0].filename.startsWith('.github/workflows/'))
+                throw new Error('Not precisely a one-workflow PR #'+number);
+              if(active.some(r=>r.head_branch===name||(r.pull_requests||[]).some(q=>q.number===number)))
+                throw new Error('Active CI #'+number);
+              try{
+                const a=await ref('tags/'+prefix+name);
+                if(a.object.sha!==sha)throw new Error('Conflicting archive #'+number);
+              }catch(e){if(e.status!==404)throw e;}
+              console.log('MEASURE_PREFLIGHT',number,name,sha,files[0].filename,'unique_commits=1');
+            }
+            console.log('MEASURE_PREFLIGHT_ALL_PASS',targets.length);
+            await pin();
+            let created=0,previous=0;
+            for(const [number,name,sha] of targets){
+              await pin();
+              const p=await getPR(number);
+              if(p.state!=='open'||p.head.sha!==sha||p.head.ref!==name)throw new Error('PR changed during tag #'+number);
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Head changed during tag '+name);
+              const tag='tags/'+prefix+name;
+              let exists=false;
+              try{const a=await ref(tag);if(a.object.sha!==sha)throw new Error('Archive mismatch '+name);exists=true;}
+              catch(e){if(e.status!==404)throw e;}
+              if(!exists){await github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha});created++;}
+              else previous++;
+              if((await ref(tag)).object.sha!==sha)throw new Error('Tag verify failed '+name);
+              console.log('MEASURE_ARCHIVE_VERIFIED',number,name,sha);
+            }
+            console.log('MEASURE_ARCHIVE_DONE','verified='+targets.length,'created='+created,'previous='+previous,'PRs_closed=0','branches_deleted=0');
