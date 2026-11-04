@@ -1,30 +1,6 @@
 name: AetherSoC Virtual FPGA Linux PID1
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
-      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
-      - 'src/main/scala/aethercore/soc/AetherSoCDts.scala'
-      - 'src/main/scala/aethercore/soc/peripheral/AetherPlic.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
-      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
-      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
-      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
-      - 'src/main/scala/aethercore/config/CoreConfig.scala'
-      - 'src/main/scala/aethercore/soc/phy/**'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2VirtualFpgaBoardSimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherSoCAxi4HostMemoryAdapter.scala'
-      - 'src/main/scala/aethercore/ElaborateV2VirtualFpgaBoard.scala'
-      - 'src/test/scala/aethercore/AetherFractionalTickGeneratorSpec.scala'
-      - 'src/test/scala/aethercore/AetherUart8N1PhySpec.scala'
-      - 'tests_py/test_v2_virtual_fpga_board.py'
-      - 'software/rv64_userspace/minimal_init.S'
-      - 'tools/ci/rv64_minimal_initramfs_build.sh'
-      - 'tools/ci/rv64_minimal_init_payload_build.sh'
-      - '.github/workflows/v2-soc-virtual-fpga-linux-pid1.yml'
   workflow_dispatch:
 
 permissions:

@@ -12,6 +12,7 @@ on:
       - 'tests_py/test_v2_soc_axi4_top.py'
       - 'tests_py/test_v2_soc_axi4_linux_path.py'
       - '.github/workflows/v2-soc-axi4-linux-runtime.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

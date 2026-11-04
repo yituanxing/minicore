@@ -1,15 +1,6 @@
 name: AetherCore V2 Fast Runtime Adaptive A-B
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/v2-fast-adaptive-ab.yml'
-      - 'sim/l32_opensbi_runtime.h'
-      - 'sim/opensbi_boot_main.cpp'
-      - 'tools/ci/v2_fast_adaptive_ab.sh'
-      - 'src/main/scala/aethercore/**'
-      - 'Makefile.l32-linux-boot'
-      - 'build.mill'
   workflow_dispatch:
 
 permissions:

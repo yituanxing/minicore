@@ -1,18 +1,6 @@
 name: AetherSoC Unified V2 Linux PID1
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/soc/**'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2UnifiedMemoryCompatSimTop.scala'
-      - 'src/main/scala/aethercore/sim/AetherSoCUnifiedHostMemoryAdapter.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2HostPerformance.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2TopDown.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2AttributionV11.scala'
-      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
-      - '.github/workflows/v2-soc-unified-linux-pid1.yml'
   workflow_dispatch:
 
 permissions:

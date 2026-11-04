@@ -38,10 +38,24 @@ jobs:
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_BEFORE_SHA: ${{ github.event.before }}
+          PR_AFTER_SHA: ${{ github.event.after }}
         run: |
           set -euo pipefail
           if [[ -n "${PR_BASE_SHA:-}" ]]; then
             classified_base="${PR_BASE_SHA}"
+            # Native pull_request.paths is cumulative over the full PR.  A
+            # synchronize event provides the old/new PR heads, so development
+            # checks should route the actual new batch; a missing/non-ancestor
+            # head (force-push, reopened PR) safely falls back to the full PR.
+            if [[ "${PR_ACTION:-}" == synchronize &&
+                  "${PR_AFTER_SHA:-}" == "$(git rev-parse HEAD)" &&
+                  "${PR_BEFORE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] &&
+               git cat-file -e "${PR_BEFORE_SHA}^{commit}" 2>/dev/null &&
+               git merge-base --is-ancestor "${PR_BEFORE_SHA}" HEAD; then
+              classified_base="${PR_BEFORE_SHA}"
+            fi
             changed="$(git diff --name-only "${classified_base}" HEAD)"
           else
             classified_base="HEAD^1"

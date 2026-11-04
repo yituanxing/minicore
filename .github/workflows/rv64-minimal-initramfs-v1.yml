@@ -1,22 +1,6 @@
 name: RV64 Linux Minimal Initramfs V1
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/hosted-verilator-cache.yml
-      - .github/workflows/rv64-minimal-initramfs-v1.yml
-      - software/rv64/linux_early.env
-      - software/rv64/opensbi_first_exec.env
-      - software/rv64_userspace/minimal_init.S
-      - tools/ensure_verilator_5_024.sh
-      - tools/ensure_riscv64_linux_gcc_13_3.sh
-      - tools/ci/rv64_linux_early_build.sh
-      - tools/ci/rv64_minimal_initramfs_build.sh
-      - tools/ci/rv64_minimal_init_payload_build.sh
-      - tests_py/test_rv64_minimal_initramfs_contract.py
-      - Makefile.l32-linux-boot
-      - sim/opensbi_boot_main.cpp
-      - src/main/scala/aethercore/**
   workflow_dispatch:
 
 permissions:

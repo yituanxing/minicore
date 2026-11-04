@@ -21,6 +21,7 @@ on:
       - 'src/test/scala/aethercore/AetherFractionalTickGeneratorSpec.scala'
       - 'tests_py/test_v2_virtual_fpga_board.py'
       - '.github/workflows/v2-soc-virtual-fpga-linux-runtime.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

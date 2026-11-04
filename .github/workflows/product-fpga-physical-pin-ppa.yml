@@ -8,6 +8,8 @@ on:
       - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
       - 'tools/compare_product_fpga_pin_cost.sh'
       - 'tools/report_product_fpga_pin_cost.py'
+      - 'tools/ci/collect_product_physical_ppa.py'
+      - 'tests_py/test_product_fpga_ppa_artifact_collection.py'
   workflow_dispatch:
     inputs:
       capacity:
@@ -28,15 +30,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  fpga-physical-ppa:
-    name: Full-SoC IMAC/GC x physical/probe synthesis
+  validate-product-rtl:
+    name: Validate the single shared Product CPU/SoC topology
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 30
     steps:
       - name: Checkout exact selected commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
       - name: Restore Scala dependency cache
@@ -49,7 +51,44 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
-      - name: Install synthesis proxy and validate prerequisites
+      - name: Validate exact product and physical pin RTL
+        shell: bash
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly \
+            aethercore.AetherCoreProductSoCElaborationSpec \
+            aethercore.ProductCoreConfigSpec
+
+  fpga-physical-synthesis:
+    name: ${{ matrix.isa }} / ${{ matrix.boundary }} full-SoC ECP5 proxy
+    needs: validate-product-rtl
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      # Each variant uses the same source recipe and selected Product geometry.
+      # One runner shutdown must not cancel three already completed netlists.
+      fail-fast: false
+      matrix:
+        isa: [integer, floating]
+        boundary: [probe, pins]
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis proxy
         shell: bash
         run: |
           set -euo pipefail
@@ -59,32 +98,95 @@ jobs:
           yosys -Q -p 'help ltp' | grep -q -- '-noff'
           chmod +x mill
 
-      - name: Validate exact product and physical pin RTL
-        shell: bash
-        run: |
-          ./mill aethercore.test.testOnly \
-            aethercore.AetherCoreProductSoCElaborationSpec \
-            aethercore.ProductCoreConfigSpec
-
-      - name: Compare complete product SoC variants
+      - name: Synthesize one exact Product SoC variant
         shell: bash
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/aethercore-product-physical-ppa"
-          echo "PRODUCT_PHYSICAL_PPA_OUT=$out" >> "$GITHUB_ENV"
           bash tools/compare_product_fpga_pin_cost.sh \
-            '${{ inputs.capacity || 'small' }}' "$out"
+            '${{ inputs.capacity || 'small' }}' "$out" \
+            '${{ matrix.isa }}' '${{ matrix.boundary }}'
 
-      - name: Report exact FPGA resource deltas
-        if: success()
+      - name: Preserve partial variant evidence
+        if: always()
         shell: bash
         run: |
+          set -euo pipefail
+          capacity='${{ inputs.capacity || 'small' }}'
+          source="$RUNNER_TEMP/aethercore-product-physical-ppa/$capacity/${{ matrix.isa }}/${{ matrix.boundary }}"
+          target="build/product-physical-ppa-evidence/$capacity/${{ matrix.isa }}/${{ matrix.boundary }}"
+          mkdir -p "$target"
+          for item in metrics.json yosys.log; do
+            if [[ -f "$source/$item" ]]; then
+              cp "$source/$item" "$target/$item"
+            fi
+          done
+          git rev-parse HEAD > "$target/commit.sha"
+
+      - name: Upload independent synthesis artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-physical-fpga-ppa-${{ inputs.capacity || 'small' }}-${{ matrix.isa }}-${{ matrix.boundary }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/product-physical-ppa-evidence/
+
+  report-physical-ppa:
+    name: Compare four completed netlists and preserve all evidence
+    needs: [validate-product-rtl, fpga-physical-synthesis]
+    # A failed or interrupted matrix lane must still leave an explicit report
+    # failure and preserve all artifacts from the lanes that did finish.
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Download all four independent synthesis artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Include earlier attempts: rerun-failed-jobs reuses successful
+          # matrix artifacts from its original attempt.
+          pattern: product-physical-fpga-ppa-${{ inputs.capacity || 'small' }}-*-${{ github.run_id }}-*
+          merge-multiple: false
+          path: build/product-physical-ppa-downloads
+
+      - name: Select newest artifact for each exact synthesis lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/collect_product_physical_ppa.py \
+            '${{ inputs.capacity || 'small' }}' \
+            '${{ github.run_id }}' \
+            build/product-physical-ppa-downloads \
+            build/product-physical-ppa-evidence
+
+      - name: Report exact FPGA resource deltas
+        shell: bash
+        run: |
+          set -euo pipefail
+          capacity='${{ inputs.capacity || 'small' }}'
+          root="build/product-physical-ppa-evidence"
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          for isa in integer floating; do
+            for boundary in probe pins; do
+              dir="$root/$capacity/$isa/$boundary"
+              test -s "$dir/metrics.json"
+              test "$(cat "$dir/commit.sha")" = "$expected"
+            done
+          done
+          python3 tools/report_product_fpga_pin_cost.py "$capacity" "$root"
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          root = Path(os.environ['PRODUCT_PHYSICAL_PPA_OUT'])
+          root = Path('build/product-physical-ppa-evidence')
           capacity = '${{ inputs.capacity || 'small' }}'
           report = json.loads((root / capacity / 'summary.json').read_text())
           keys = ('port_bits', 'lut4', 'ff', 'bram', 'dpr', 'dsp', 'depth')
@@ -106,10 +208,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: product-physical-fpga-ppa-${{ inputs.capacity || 'small' }}-${{ github.run_id }}
+          name: product-physical-fpga-ppa-summary-${{ inputs.capacity || 'small' }}-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/aethercore-product-physical-ppa/*/summary.json
-            ${{ runner.temp }}/aethercore-product-physical-ppa/*/*/*/metrics.json
-            ${{ runner.temp }}/aethercore-product-physical-ppa/*/*/*/yosys.log
+          path: build/product-physical-ppa-evidence/

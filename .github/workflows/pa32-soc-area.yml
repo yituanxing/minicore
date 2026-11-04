@@ -1,22 +1,6 @@
 name: AetherSoC PA32 Area A/B
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/config/CoreConfig.scala'
-      - 'src/main/scala/aethercore/core/InstructionFetchAdapter.scala'
-      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
-      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
-      - 'src/main/scala/aethercore/core/PtwArbiter.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyBlockingLsu.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreV2LinuxSoC.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreV2UnifiedMemorySoC.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreV2Axi4SoC.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreV2FpgaSoC.scala'
-      - 'src/main/scala/aethercore/ElaborateV2FpgaSoCPA32.scala'
-      - '.github/workflows/pa32-soc-area.yml'
   workflow_dispatch:
 
 permissions:

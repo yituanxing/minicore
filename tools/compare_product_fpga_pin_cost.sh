@@ -4,9 +4,22 @@
 # Neither Yosys synth_ecp5 nor its ltp proxy establishes real-board Fmax.
 set -euo pipefail
 
-if [[ $# -ne 2 || ( "${1:-}" != small && "${1:-}" != expanded ) ]]; then
-  echo "Usage: $0 small|expanded OUTPUT_DIRECTORY" >&2
+if [[ ( $# -ne 2 && $# -ne 4 ) ||
+      ( "${1:-}" != small && "${1:-}" != expanded ) ]]; then
+  echo "Usage: $0 small|expanded OUTPUT_DIRECTORY [integer|floating probe|pins]" >&2
   exit 2
+fi
+
+# The two-argument interface remains the local, complete 4-way comparison.
+# CI isolates the same four variants into independent runners so a killed
+# synthesis host cannot discard the other variants' completed measurements.
+selected_isa="${3:-}"
+selected_boundary="${4:-}"
+if [[ $# -eq 4 ]]; then
+  case "${selected_isa}/${selected_boundary}" in
+    integer/probe|integer/pins|floating/probe|floating/pins) ;;
+    *) echo 'ERROR: invalid ISA/boundary variant' >&2; exit 2 ;;
+  esac
 fi
 
 capacity="$1"
@@ -20,7 +33,9 @@ mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 
 for isa in integer floating; do
+  [[ -z "$selected_isa" || "$isa" == "$selected_isa" ]] || continue
   for boundary in probe pins; do
+    [[ -z "$selected_boundary" || "$boundary" == "$selected_boundary" ]] || continue
     run_dir="$output_dir/$capacity/$isa/$boundary"
     rtl_dir="$run_dir/rtl"
     mkdir -p "$rtl_dir"
@@ -69,4 +84,9 @@ for isa in integer floating; do
   done
 done
 
-python3 tools/report_product_fpga_pin_cost.py "$capacity" "$output_dir"
+if [[ $# -eq 2 ]]; then
+  python3 tools/report_product_fpga_pin_cost.py "$capacity" "$output_dir"
+else
+  test -s "$output_dir/$capacity/$selected_isa/$selected_boundary/metrics.json"
+  echo "PRODUCT_FPGA_PHYSICAL_VARIANT_PASS: capacity=$capacity isa=$selected_isa boundary=$selected_boundary"
+fi
