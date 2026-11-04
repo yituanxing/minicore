@@ -1,0 +1,171 @@
+name: Verified SHA-CAS delete 33 archived area A-B branch refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-area33-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-delete-area33-20261104
+  cancel-in-progress: false
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout maintenance tree with exact-SHA push authorization
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Check immutable tags and qualification refs, CAS-delete only 33 area A-B experiments
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Wrong repository/ref');
+            const fs=require('fs'),cp=require('child_process');
+            const manifest=JSON.parse(fs.readFileSync('maintenance/area34-ab-head-manifest-20261104.json','utf8'));
+            const decision=JSON.parse(fs.readFileSync('maintenance/area34-ab-retain5-delete33-20261104.json','utf8'));
+            const evidence=JSON.parse(fs.readFileSync('maintenance/area34-ab-ci-evidence-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/area-ab-34/';
+            if(manifest.repository!==owner+'/'+repo||decision.repository!==owner+'/'+repo||
+               manifest.total!==34||manifest.targets?.length!==34||
+               manifest.main_pin!==main||manifest.product_pin!==product||
+               decision.main_pin!==main||decision.product_pin!==product||
+               manifest.live_anchor_pr!==305||decision.delete_count!==33||
+               decision.delete_targets?.length!==33||decision.protected_area_refs?.length!==5||
+               manifest.cas_delete_allowed_prs?.length!==33||
+               manifest.archive_prefix!==prefix||decision.tag_prefix!==prefix||
+               evidence.total_runs!==867||evidence.heads!==34)
+              throw new Error('Pinned evidence/manifest mismatch');
+            const all=new Map(manifest.targets.map(t=>[t.pr,t]));
+            const selected=new Set(decision.delete_targets.map(t=>t.pr));
+            if(all.size!==34||selected.size!==33||selected.has(305)||
+               decision.delete_targets.some(t=>{
+                 const m=all.get(t.pr);
+                 return !m||m.head!==t.head||m.sha!==t.sha||!t.head.startsWith('area/');
+               })||
+               manifest.cas_delete_allowed_prs.some(n=>!selected.has(n))||
+               manifest.targets.filter(t=>!selected.has(t.pr)).length!==1)
+              throw new Error('Deletion allowlist deviates from 33 reviewed PR heads');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async n=>(await retry('ref '+n,()=>github.rest.git.getRef({owner,repo,ref:n}))).data;
+            const pins=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('main/Product changed');
+            };
+            const archive=async t=>{
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                throw new Error('Archive SHA altered '+t.head);
+            };
+            const protectedAnchors=async()=>{
+              for(const a of decision.protected_area_refs){
+                if((await ref('heads/'+a.name)).object.sha!==a.sha)
+                  throw new Error('Qualified area anchor moved '+a.name);
+              }
+            };
+            const noOpen=async name=>{
+              const prs=await retry('open PRs',()=>github.paginate(
+                github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+              if(prs.length!==14||prs.some(p=>p.head.ref===name||p.base.ref===name))
+                throw new Error('Current active PR dependency or count changed '+name);
+            };
+            const noActive=async name=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry('CI '+name+' '+status,()=>github.paginate(
+                  github.rest.actions.listWorkflowRunsForRepo,{owner,repo,branch:name,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name))
+                  throw new Error('Active CI on '+name+' '+status);
+              }
+            };
+            const noHardcoded=t=>{
+              const args=['grep','-n','-F','--',t.head,'--','.',':(exclude)maintenance/**'];
+              const result=cp.spawnSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              if(result.error)throw result.error;
+              if(result.status===0)
+                throw new Error('Tracked source/workflow/doc references '+t.head+' '+String(result.stdout).slice(0,450));
+              if(result.status!==1)
+                throw new Error('Failed to inspect hard references '+t.head+' '+String(result.stderr).slice(0,450));
+            };
+            const isLive=async t=>{
+              try{
+                const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+                if(b.protected||b.commit.sha!==t.sha)
+                  throw new Error('Protected or moved branch '+t.head);
+                return true;
+              }catch(e){if(e.status===404)return false;throw e;}
+            };
+            const checked=async t=>{
+              await pins();
+              await archive(t);
+              noHardcoded(t);
+              await noOpen(t.head);
+              await noActive(t.head);
+              const p=(await retry('PR '+t.pr,()=>github.rest.pulls.get({owner,repo,pull_number:t.pr}))).data;
+              if(p.state!=='closed'||p.merged_at)
+                throw new Error('Historical PR reopened/merged '+t.pr);
+              return await isLive(t);
+            };
+            await pins();
+            await protectedAnchors();
+            for(const t of manifest.targets)await archive(t);
+            let live=0;
+            for(const t of decision.delete_targets){
+              if(await checked(t))live++;
+              console.log('AREA33_DELETE_PREFLIGHT',t.pr,t.head,t.sha);
+            }
+            await pins();
+            await protectedAnchors();
+            console.log('AREA33_PREFLIGHT_ALL_PASS','count=33','live='+live,
+                        'archive_tags=34','retained_qualified_area_anchors=5');
+            let deleted=0,previous=0;
+            for(let i=0;i<decision.delete_targets.length;i++){
+              const t=decision.delete_targets[i];
+              if(i%6===0)await protectedAnchors();
+              const exists=await checked(t);
+              if(!exists){previous++;console.log('AREA33_ALREADY_DELETED',t.pr,t.head);continue;}
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Ref changed immediately before CAS '+t.head);
+              const args=['push','--force-with-lease=refs/heads/'+t.head+':'+t.sha,
+                'origin',':refs/heads/'+t.head];
+              try{
+                cp.execFileSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              }catch(e){
+                throw new Error('Exact-SHA CAS deletion refused '+t.head+' '+String(e.stderr||e.message).slice(0,500));
+              }
+              let gone=false;
+              for(let k=0;k<8;k++){
+                try{await ref('heads/'+t.head);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(k<7)await new Promise(ok=>setTimeout(ok,1200));
+              }
+              if(!gone)throw new Error('Branch still live '+t.head);
+              await archive(t);
+              deleted++;
+              console.log('AREA33_CAS_DELETED',i+1,t.pr,t.head,t.sha);
+            }
+            await pins();
+            await protectedAnchors();
+            for(const t of manifest.targets)await archive(t);
+            if(deleted+previous!==33)throw new Error('Final deleted count mismatch');
+            console.log('AREA33_DELETE_DONE','deleted='+deleted,'previous='+previous,
+                        'archive_tags=34','qualified_anchor_refs_kept=5','open_prs_untouched=14');
