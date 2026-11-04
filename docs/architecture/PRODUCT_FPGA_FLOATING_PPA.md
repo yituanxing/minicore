@@ -38,8 +38,9 @@ Important qualification limits:
   real optional FPR/ROB/LSQ path. Having synthesizable IP is **not** proof of
   ISA-complete numerical behavior: rounding, NaN, exceptions and recovery
   still require independent directed and differential verification.
-- `ProductSmallPagedCore` still rejects F/D. This experiment cannot run
-  OpenSBI or Debian, nor qualify supervisor FS context switching.
+- `ProductSmallPagedCore` now elaborates an opt-in RV64GC/LP64D configuration,
+  but this **isolated core measurement** never executes OpenSBI or Debian and
+  cannot qualify supervisor FS context switching or real hardware.
 - `synth_ecp5` and `ltp -noff` are a board-neutral **area/depth proxy**, not
   routed device Fmax, timing closure or physical FPGA DDR/PLL feasibility.
 - The floating RTL uses `io.github.ucb-substrate::hardfloat:0.1.1` with a
@@ -48,3 +49,41 @@ Important qualification limits:
   the published Maven POM license label alone is not a sufficient audit.
 - This opt-in test deliberately does not run on every PR push: synthesis is
   expensive, and broad architecture batches should trigger it when meaningful.
+
+## Whole-SoC physical pin versus verification-probe boundary
+
+The existing `AetherCoreProductFpgaSoC` exports large architectural CommitTrace,
+retirement and profiling buses for exact simulation. Yosys must preserve
+observable logic on those top-level ports, so its LUT count is **not** a
+credible estimate of a production board with only AXI and UART pins. Do not
+silently remove these buses from the verification top: retire-by-retire
+correctness and the historical Linux regressions still need them.
+
+`AetherCoreProductFpgaPins` is a separate top **wrapping the exact same
+Product SoC**, using the same selected CPU/PA32/AXI/BootROM/interrupt
+configuration. Only the external observation boundary differs. Its board
+interface retains the AXI master, serial RX/TX, UART clock tick and timebase
+tick. Physical DDR/PLL/reset constraints and measurable Fmax remain pending.
+
+An explicit, expensive four-netlist measurement is available for each
+implemented one-wide capacity:
+
+```sh
+bash tools/compare_product_fpga_pin_cost.sh small /tmp/product-full-fpga
+bash tools/compare_product_fpga_pin_cost.sh expanded /tmp/product-full-fpga
+```
+
+The opt-in GitHub workflow `product-fpga-physical-pin-ppa.yml` runs one selected
+capacity. Each capacity synthesizes all four **full SoC** combinations:
+
+| ISA/ABI | Verification probe top | Physical pin-only top |
+| --- | --- | --- |
+| RV64IMAC / LP64 | original, instrumented reference | same hardware without external probes |
+| RV64GC / LP64D | HardFloat + probes | HardFloat + physical pins |
+
+The summary gives two **separate** effects: the probe-port overhead for each
+ISA, and F/D-on minus F/D-off for each boundary. Never mix these with the
+isolated `ProductSmallMemoryCore` F/D numbers or the earlier 70,277/90,080 LUT4
+probe-top geometry comparison. LUT4, FF, DPR, BRAM, DSP and `ltp` are
+unrouted ECP5 synthesis proxies, **not** a board timing, DDR, Linux, IEEE
+instruction-differential or Debian acceptance test.

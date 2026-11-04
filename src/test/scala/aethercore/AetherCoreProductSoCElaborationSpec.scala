@@ -3,7 +3,8 @@ package aethercore
 import _root_.circt.stage.ChiselStage
 import aethercore.core.product.ProductCoreProfiles
 import aethercore.sim.AetherCoreProductOpenSbiRV64SimTop
-import aethercore.soc.{AetherCoreProductAxi4SoC, AetherCoreProductFpgaSoC,
+import aethercore.soc.{AetherCoreProductAxi4SoC, AetherCoreProductFpgaPins,
+  AetherCoreProductFpgaSoC,
   AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -61,6 +62,29 @@ class AetherCoreProductSoCElaborationSpec extends AnyFlatSpec with Matchers {
       ChiselStage.emitCHIRRTL(new AetherCoreProductFpgaSoC(
         implementedPaddrBits = 56,
         productConfigOverride = Some(target)))
+    }
+    rejected.getMessage should include("physical address width")
+  }
+
+  it should "share the exact IMAC or RV64GC machine behind a physical pin-only FPGA boundary" in {
+    val physical = ChiselStage.emitCHIRRTL(new AetherCoreProductFpgaPins(
+      implementedPaddrBits = 32))
+    physical should include("AetherCoreProductFpgaPins")
+    physical should include("AetherCoreProductFpgaSoC")
+    physical should include("AetherUart8N1Phy")
+    physical should include("AetherMemToAxi4Bridge")
+
+    val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(
+      32, ProductCoreProfiles.expandedSingleLaneGeometry)
+    val rv64gc = ChiselStage.emitCHIRRTL(new AetherCoreProductFpgaPins(
+      implementedPaddrBits = 32, productConfigOverride = Some(target)))
+    rv64gc should include("AetherCoreProductFpgaPins")
+    rv64gc should include("ProductFpArithmetic")
+    rv64gc should include("id : UInt<5>")
+
+    val rejected = intercept[IllegalArgumentException] {
+      ChiselStage.emitCHIRRTL(new AetherCoreProductFpgaPins(
+        implementedPaddrBits = 56, productConfigOverride = Some(target)))
     }
     rejected.getMessage should include("physical address width")
   }

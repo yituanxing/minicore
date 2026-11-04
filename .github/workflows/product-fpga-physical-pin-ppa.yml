@@ -1,0 +1,107 @@
+name: AetherCore Product Physical FPGA Pin and RV64GC Cost
+
+on:
+  workflow_dispatch:
+    inputs:
+      capacity:
+        description: One implemented single-lane Product CPU geometry
+        required: true
+        default: small
+        type: choice
+        options:
+          - small
+          - expanded
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-physical-ppa-${{ github.ref }}-${{ inputs.capacity }}
+  cancel-in-progress: true
+
+jobs:
+  fpga-physical-ppa:
+    name: Full-SoC IMAC/GC x physical/probe synthesis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install synthesis proxy and validate prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+          chmod +x mill
+
+      - name: Validate exact product and physical pin RTL
+        shell: bash
+        run: |
+          ./mill aethercore.test.testOnly \
+            aethercore.AetherCoreProductSoCElaborationSpec \
+            aethercore.ProductCoreConfigSpec
+
+      - name: Compare complete product SoC variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethercore-product-physical-ppa"
+          echo "PRODUCT_PHYSICAL_PPA_OUT=$out" >> "$GITHUB_ENV"
+          bash tools/compare_product_fpga_pin_cost.sh \
+            '${{ inputs.capacity }}' "$out"
+
+      - name: Report exact FPGA resource deltas
+        if: success()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ['PRODUCT_PHYSICAL_PPA_OUT'])
+          capacity = '${{ inputs.capacity }}'
+          report = json.loads((root / capacity / 'summary.json').read_text())
+          keys = ('port_bits', 'lut4', 'ff', 'bram', 'dpr', 'dsp', 'depth')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(f'## Full Product FPGA SoC: {capacity}\n\n')
+              f.write('| Metric | IMAC probe | IMAC pins | RV64GC probe | RV64GC pins |\n')
+              f.write('| --- | ---: | ---: | ---: | ---: |\n')
+              m = report['measurements']
+              for key in keys:
+                  f.write(f'| {key} | {m["integer"]["probe"][key]} | '
+                          f'{m["integer"]["pins"][key]} | '
+                          f'{m["floating"]["probe"][key]} | '
+                          f'{m["floating"]["pins"][key]} |\n')
+              f.write('\nThis is an unrouted ECP5 proxy, not FPGA Fmax, '
+                      'DDR, IEEE differential or Debian signoff.\n')
+          PY
+
+      - name: Upload exact-head synthesis evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-physical-fpga-ppa-${{ inputs.capacity }}-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/aethercore-product-physical-ppa/*/summary.json
+            ${{ runner.temp }}/aethercore-product-physical-ppa/*/*/*/metrics.json
+            ${{ runner.temp }}/aethercore-product-physical-ppa/*/*/*/yosys.log

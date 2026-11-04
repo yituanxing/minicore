@@ -15,6 +15,11 @@ on:
       - 'tests_py/test_product_small_backend_contract.py'
       - 'tests_py/test_product_integer_fu_contract.py'
       - 'tests_py/test_product_lsq_integration.py'
+      - 'tests_py/test_product_fpga_pin_cost.py'
+      - 'tools/compare_product_fpga_pin_cost.sh'
+      - 'tools/report_product_fpga_pin_cost.py'
+      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
+      - '.github/workflows/product-fpga-physical-pin-ppa.yml'
       - 'src/main/scala/aethercore/core/ALU.scala'
       - 'src/main/scala/aethercore/core/arith/**'
       - 'src/test/scala/aethercore/ProductMUnitSpec.scala'
@@ -55,5 +60,6 @@ jobs:
             tests_py.test_product_small_backend_contract \
             tests_py.test_product_integer_fu_contract \
             tests_py.test_product_lsq_integration \
+            tests_py.test_product_fpga_pin_cost \
             tests_py.test_v2_foundation_contract \
             tests_py.test_v2_decode_boundary -v

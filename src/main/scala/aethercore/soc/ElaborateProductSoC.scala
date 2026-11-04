@@ -71,3 +71,38 @@ object ElaborateProductFpgaSoCRv64gc extends App {
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }
+
+/** The physical pin-only shell is deliberately separate from the fully
+  * instrumented FPGA verification top. Both instantiate the identical CPU,
+  * SoC, target configuration and board-neutral PA32 AXI interface.
+  */
+object ElaborateProductFpgaPinsGeometry extends App {
+  require(args.nonEmpty, "Product FPGA pin PPA needs small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown Product FPGA pin geometry: $other")
+  }
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaPins(implementedPaddrBits = 32,
+      productGeometry = geometry),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+object ElaborateProductFpgaPinsRv64gc extends App {
+  require(args.nonEmpty, "RV64GC FPGA pin emission needs small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC FPGA pin geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaPins(implementedPaddrBits = 32,
+      productConfigOverride = Some(target)),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}

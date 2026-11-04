@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/main/scala/aethercore/core/product/**'
       - 'src/main/scala/aethercore/soc/AetherCoreProduct*.scala'
+      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
       - 'src/main/scala/aethercore/soc/AetherSoC*.scala'
       - 'src/main/scala/aethercore/soc/AetherMemToAxi4Bridge.scala'
       - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
