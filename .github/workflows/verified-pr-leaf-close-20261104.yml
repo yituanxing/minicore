@@ -35,7 +35,7 @@ jobs:
             }
             const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
             const productBranch = 'design/rv64gc-product-architecture-20261103';
-            const productExpected = '087a3ed9588cfe4ff99b682957f3adbe70230aa';
+            const productExpected = '087a3ed9588c8fe4ff99b682957f3adbe70230aa';
             const archivePrefix = 'branch-archive/2026-11-04/batch6/';
             const targets = [
               [190, 'perf/aethercore-v2-p8-static-controlflow-prediction', '85f46d1901bdff0dc93f596c2e905c3d0223b908'],
