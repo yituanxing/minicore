@@ -1,0 +1,133 @@
+name: Verified archive legacy PR135 subtree 86 exact SHA tips (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-legacy-pr135-86-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-archive-legacy-pr135-86-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout pinned audit manifest
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify graph and preserve all 86 exact HEAD commits as immutable tags
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected GitHub context');
+            const fs=require('fs');
+            const snapshot=JSON.parse(fs.readFileSync('maintenance/legacy-pr135-86-head-manifest-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50',product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/legacy-pr135-86/';
+            if(snapshot.repository!=='yituanxing/minicore'||snapshot.root_pr!==135||snapshot.total!==86||
+               snapshot.targets?.length!==86||snapshot.main_pin!==main||snapshot.product_pin!==product)
+              throw new Error('Manifest metadata changed');
+            const targets=snapshot.targets;
+            if(new Set(targets.map(x=>x.head)).size!==86||
+               new Set(targets.map(x=>x.pr)).size!==86||
+               targets.some(x=>!Number.isInteger(x.pr)||!x.head||!x.base||!/^[a-f0-9]{40}$/.test(x.sha)||
+                 !/^[a-f0-9]{40}$/.test(x.base_current_sha)))
+              throw new Error('Invalid or duplicated manifest entries');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('RETRY',label,i+1);
+                  await new Promise(resolve=>setTimeout(resolve,500*(2**i)));
+                }
+              }
+            };
+            const ref=async name=>(await retry('ref '+name,()=>github.rest.git.getRef({owner,repo,ref:name}))).data;
+            const pins=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('Protected main/Product SHA moved');
+            };
+            await pins();
+            const open=await retry('open PR list',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            const byHead=new Map(open.map(p=>[p.head.ref,p]));
+            const root=p=>{
+              const seen=new Set();
+              while(byHead.has(p.base.ref)){
+                if(seen.has(p.number))throw new Error('PR dependency cycle');
+                seen.add(p.number);
+                p=byHead.get(p.base.ref);
+              }
+              return p.number;
+            };
+            const subtree=open.filter(p=>root(p)===135);
+            if(subtree.length!==86||open.length!==123)throw new Error('Open PR graph count changed '+subtree.length+'/'+open.length);
+            const manifestByPR=new Map(targets.map(x=>[x.pr,x]));
+            const manifestHeads=new Set(targets.map(x=>x.head));
+            if(open.some(p=>root(p)!==135&&(manifestHeads.has(p.head.ref)||manifestHeads.has(p.base.ref))))
+              throw new Error('An outside open PR now depends on legacy subtree');
+            for(const p of subtree){
+              const t=manifestByPR.get(p.number);
+              if(!t||p.state!=='open'||p.merged_at||p.head.repo?.full_name!==owner+'/'+repo||
+                 p.head.ref!==t.head||p.head.sha!==t.sha||p.base.ref!==t.base||
+                 Date.parse(p.updated_at)>Date.parse('2026-09-01T00:00:00Z'))
+                throw new Error('Unexpected modified PR #'+p.number);
+              if((await ref('heads/'+t.base)).object.sha!==t.base_current_sha)
+                throw new Error('Legacy base moved #'+p.number+' '+t.base);
+              const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+              if(b.protected||b.commit.sha!==t.sha)throw new Error('Moved/protected HEAD '+t.head);
+              try{
+                const archived=await ref('tags/'+prefix+t.head);
+                if(archived.object.sha!==t.sha)throw new Error('Conflicting archive tag '+t.head);
+              }catch(e){if(e.status!==404)throw e;}
+            }
+            const active=[];
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              active.push(...await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100})));
+            }
+            for(const run of active){
+              if(manifestHeads.has(run.head_branch)|| (run.pull_requests||[]).some(p=>manifestByPR.has(p.number)))
+                throw new Error('Active CI on protected legacy PR head '+run.id+' '+run.head_branch);
+            }
+            console.log('LEGACY86_PREFLIGHT_ALL_PASS','prs=86','heads=86','external=0','active_ci=0','main_pin='+main);
+            let created=0,previous=0;
+            for(let i=0;i<targets.length;i++){
+              const t=targets[i];
+              if(i%10===0)await pins();
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)throw new Error('Head changed during archiving '+t.head);
+              const tag='tags/'+prefix+t.head;
+              let exists=false;
+              try{
+                const old=await ref(tag);
+                if(old.object.sha!==t.sha)throw new Error('Archive conflict '+t.head);
+                exists=true;
+              }catch(e){if(e.status!==404)throw e;}
+              if(!exists){
+                await retry('create '+t.head,()=>github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha:t.sha}));
+                created++;
+              }else previous++;
+              let verified=false;
+              for(let a=0;a<8;a++){
+                try{if((await ref(tag)).object.sha!==t.sha)throw new Error('Tag mismatch '+t.head);verified=true;break;}
+                catch(e){if(e.status!==404||a===7)throw e;await new Promise(resolve=>setTimeout(resolve,1300));}
+              }
+              if(!verified)throw new Error('Archive tag invisible '+t.head);
+              console.log('LEGACY86_ARCHIVED',i+1,t.pr,t.head,t.sha);
+            }
+            await pins();
+            for(const t of targets){
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)throw new Error('Final tag conflict '+t.head);
+            }
+            console.log('LEGACY86_ARCHIVE_DONE','verified=86','created='+created,'previous='+previous,'PRs_closed=0','branches_deleted=0');
