@@ -117,25 +117,25 @@ class TranslationUnit(
   } else false.B
 
   tlb.io.lookupValid := lookupActive || probeActive
-  tlb.io.virtualAddress :=
-    if (withHitProbe) Mux(probeActive, io.hitProbe.get.virtualAddress, io.virtualAddress)
-    else io.virtualAddress
-  tlb.io.rootPpn :=
-    if (withHitProbe) Mux(probeActive, io.hitProbe.get.rootPpn, io.satpRootPpn)
-    else io.satpRootPpn
-  tlb.io.privilege :=
-    if (withHitProbe) Mux(probeActive, io.hitProbe.get.privilege, io.privilege)
-    else io.privilege
-  tlb.io.write :=
-    if (withHitProbe) Mux(probeActive, io.hitProbe.get.write, io.write)
-    else io.write
+  tlb.io.virtualAddress := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.virtualAddress, io.virtualAddress)
+  } else io.virtualAddress)
+  tlb.io.rootPpn := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.rootPpn, io.satpRootPpn)
+  } else io.satpRootPpn)
+  tlb.io.privilege := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.privilege, io.privilege)
+  } else io.privilege)
+  tlb.io.write := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.write, io.write)
+  } else io.write)
   tlb.io.execute := Mux(probeActive, false.B, io.execute)
-  tlb.io.sum :=
-    if (withHitProbe) Mux(probeActive, io.hitProbe.get.sum, io.sum)
-    else io.sum
-  tlb.io.mxr :=
-    if (withHitProbe) Mux(probeActive, io.hitProbe.get.mxr, io.mxr)
-    else io.mxr
+  tlb.io.sum := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.sum, io.sum)
+  } else io.sum)
+  tlb.io.mxr := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.mxr, io.mxr)
+  } else io.mxr)
   tlb.io.flush := io.flush
   if (withHitProbe) {
     io.hitProbe.get.hit := probeActive && tlb.io.hit
