@@ -73,8 +73,11 @@ bash tools/compare_product_fpga_pin_cost.sh small /tmp/product-full-fpga
 bash tools/compare_product_fpga_pin_cost.sh expanded /tmp/product-full-fpga
 ```
 
-The opt-in GitHub workflow `product-fpga-physical-pin-ppa.yml` runs one selected
-capacity. Each capacity synthesizes all four **full SoC** combinations:
+The GitHub workflow `product-fpga-physical-pin-ppa.yml` automatically measures
+**Small only when this physical boundary or measurement recipe changes** on a
+PR. Once available on the default branch, `workflow_dispatch` can select
+Small or Expanded independently. Each capacity synthesizes all four **full
+SoC** combinations:
 
 | ISA/ABI | Verification probe top | Physical pin-only top |
 | --- | --- | --- |

@@ -50,7 +50,9 @@ class ProductPhysicalFpgaContract(unittest.TestCase):
         self.assertIn("report_product_fpga_pin_cost.py", script)
         workflow = WORKFLOW.read_text()
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertNotIn("pull_request:", workflow)
+        self.assertIn("pull_request:", workflow)
+        self.assertIn("inputs.capacity || 'small'", workflow)
+        self.assertIn("'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'", workflow)
         self.assertIn("compare_product_fpga_pin_cost.sh", workflow)
 
     def test_report_keeps_probe_and_fp_cost_separate(self):

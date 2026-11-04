@@ -1,6 +1,13 @@
 name: AetherCore Product Physical FPGA Pin and RV64GC Cost
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/product-fpga-physical-pin-ppa.yml'
+      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
+      - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
+      - 'tools/compare_product_fpga_pin_cost.sh'
+      - 'tools/report_product_fpga_pin_cost.py'
   workflow_dispatch:
     inputs:
       capacity:
@@ -16,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: aethercore-product-physical-ppa-${{ github.ref }}-${{ inputs.capacity }}
+  group: aethercore-product-physical-ppa-${{ github.ref }}-${{ inputs.capacity || 'small' }}
   cancel-in-progress: true
 
 jobs:
@@ -65,7 +72,7 @@ jobs:
           out="$RUNNER_TEMP/aethercore-product-physical-ppa"
           echo "PRODUCT_PHYSICAL_PPA_OUT=$out" >> "$GITHUB_ENV"
           bash tools/compare_product_fpga_pin_cost.sh \
-            '${{ inputs.capacity }}' "$out"
+            '${{ inputs.capacity || 'small' }}' "$out"
 
       - name: Report exact FPGA resource deltas
         if: success()
@@ -77,7 +84,7 @@ jobs:
           from pathlib import Path
 
           root = Path(os.environ['PRODUCT_PHYSICAL_PPA_OUT'])
-          capacity = '${{ inputs.capacity }}'
+          capacity = '${{ inputs.capacity || 'small' }}'
           report = json.loads((root / capacity / 'summary.json').read_text())
           keys = ('port_bits', 'lut4', 'ff', 'bram', 'dpr', 'dsp', 'depth')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
@@ -98,7 +105,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: product-physical-fpga-ppa-${{ inputs.capacity }}-${{ github.run_id }}
+          name: product-physical-fpga-ppa-${{ inputs.capacity || 'small' }}-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
           path: |
