@@ -1,0 +1,112 @@
+name: Verified CAS delete four covered archived history refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-covered-four-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-covered-four-delete-20261104
+  cancel-in-progress: false
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout maintenance branch for exact SHA lease deletion
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Recheck retained descendant coverage and lease-delete only exact four refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const targets=[["agent/rv32im-preemptive-scheduler-rebased","430a32b63d232227893e1e89c4a09748f4eece3c","agent/rv32im-preemptive-scheduler","f9fd6c934503a923c5ce4b4e656803892de4c343"],["arch/aethercore-v2-p8-2-rebuild","7b507903bbd22c1bd874d709f94bd9c6bdad828a","arch/aethercore-v2-p8-2-integration","6f00207ae79254114032de7c76531ebd5aec0339"],["explore/validation-throughput-v1","8f80aa76009f83acb7d146791eb07022e934d2cc","explore/validation-artifacts-v1","21a27bed39d294f784009899af29b05bc3821cb6"],["feature/aethercore-v2-f1-rob-commit-base","3715d7cf29862c8c2fb5299234479485a8ed3b69","feature/aethercore-v2-f1-actual","958aa89a7f78a606b4bed184382ab6ea6671b8ef"]];
+            const prefix='branch-archive/2026-11-04/covered-dormant-four/';
+            const cp=require('child_process');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(resolve=>setTimeout(resolve,450*(2**i)));
+                }
+              }
+            };
+            const ref=async s=>(await retry('ref '+s,()=>github.rest.git.getRef({owner,repo,ref:s}))).data;
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('Main/Product moved');
+              for(const [name,sha,desc,descsha] of targets){
+                if((await ref('heads/'+desc)).object.sha!==descsha)
+                  throw new Error('Retained descendant moved '+desc);
+              }
+            };
+            const noOpen=async name=>{
+              const open=await retry('open PR',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+              if(open.some(p=>p.head.ref===name||p.base.ref===name))throw new Error('Open PR depends '+name);
+            };
+            const noActive=async name=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name))throw new Error('Active CI '+name+' '+status);
+              }
+            };
+            const archiveSHA=async name=>(await ref('tags/'+prefix+name)).object.sha;
+            const validate=async(name,sha,desc,descsha)=>{
+              if(await archiveSHA(name)!==sha)throw new Error('Archive moved '+name);
+              await noOpen(name);
+              await noActive(name);
+              if((await ref('heads/'+desc)).object.sha!==descsha)
+                throw new Error('Descendant moved '+desc);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:sha,head:descsha}))).data;
+              if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
+                throw new Error('Commit no longer covered '+name);
+              try{
+                const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Head moved/protected '+name);
+                return true;
+              }catch(e){if(e.status!==404)throw e;return false;}
+            };
+            await pin();
+            let live=0;
+            for(const [name,sha,desc,descsha] of targets){
+              const exists=await validate(name,sha,desc,descsha);
+              if(exists)live++;
+              console.log('COVERED_DELETE_PREFLIGHT',name,sha,'descendant='+desc,exists?'live':'already_gone');
+            }
+            console.log('COVERED_DELETE_PREFLIGHT_ALL_PASS',targets.length,'live='+live);
+            await pin();
+            let deleted=0,previous=0;
+            for(const [name,sha,desc,descsha] of targets){
+              await pin();
+              const exists=await validate(name,sha,desc,descsha);
+              if(!exists){previous++;console.log('ALREADY_DELETED',name);continue;}
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Head moved '+name);
+              const args=['push','--force-with-lease=refs/heads/'+name+':'+sha,'origin',':refs/heads/'+name];
+              try{cp.execFileSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});}
+              catch(e){throw new Error('CAS refused '+name+' '+String(e.stderr||e.message).slice(0,500));}
+              let gone=false;
+              for(let i=0;i<8;i++){
+                try{await ref('heads/'+name);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(i<7)await new Promise(resolve=>setTimeout(resolve,1500));
+              }
+              if(!gone)throw new Error('Ref still live '+name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive changed '+name);
+              deleted++;console.log('COVERED_CAS_DELETED',name,sha);
+            }
+            await pin();
+            if(deleted+previous!==targets.length)throw new Error('Final count mismatch');
+            console.log('COVERED_DELETE_DONE','deleted='+deleted,'previous='+previous,'archives_verified='+targets.length);
