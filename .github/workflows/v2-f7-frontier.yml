@@ -48,7 +48,10 @@ jobs:
   f7-frontier:
     name: F7 semantic/frontend frontier
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    # Full HardFloat F32/F64 arithmetic plus the pre-existing F7 Verilator
+    # suites ran with zero observed assertion failures but hit 18 minutes
+    # before all 28 test classes finished. Keep every correctness suite.
+    timeout-minutes: 32
     env:
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
       AETHERCORE_TOOLCHAIN_JOBS: "4"

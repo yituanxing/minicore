@@ -35,7 +35,7 @@ class ProductGeometrySoCSpec extends AnyFlatSpec with Matchers with ChiselSim {
     g.integerWritePorts shouldBe 1
   }
 
-  it should "reject an unimplemented F/D Debian profile while accepting the real RV64IMAC hardware slice" in {
+  it should "elaborate IMAC and explicitly selected RV64GC in the same paged Small hardware" in {
     val compressed = ProductCoreProfiles.smallCompressedEngineering
     compressed.software.isa.hasC shouldBe true
     compressed.software.isa.extensions.contains('F') shouldBe false
@@ -44,10 +44,16 @@ class ProductGeometrySoCSpec extends AnyFlatSpec with Matchers with ChiselSim {
     ChiselStage.emitCHIRRTL(new ProductSmallPagedCore(compressed)) should
       include("ProductSmallPagedCore")
 
-    intercept[IllegalArgumentException] {
-      ChiselStage.emitCHIRRTL(new ProductSmallPagedCore(
-        ProductCoreProfiles.smallDebianTarget))
-    }
+    // F/D is now a real opt-in HardFloat-backed hardware construction, not a
+    // separate paged core. RTL emission is still NOT IEEE/FPGA/Linux signoff.
+    val distro = ProductCoreProfiles.smallDebianTarget
+    distro.mabi shouldBe "lp64d"
+    distro.software.isa.extensions.contains('F') shouldBe true
+    distro.software.isa.extensions.contains('D') shouldBe true
+    val rv64gc = ChiselStage.emitCHIRRTL(new ProductSmallPagedCore(distro))
+    rv64gc should include("ProductSmallPagedCore")
+    rv64gc should include("ProductFpArithmetic")
+    rv64gc should include("MachineCsrFile")
   }
 
   it should "elaborate both capacities across unified, AXI4 and FPGA compositions" in {
