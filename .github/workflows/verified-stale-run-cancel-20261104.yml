@@ -1,0 +1,95 @@
+name: Cancel two explicitly approved August orphan queues only (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-stale-run-cancel-20261104.yml
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write
+concurrency:
+  group: verified-stale-run-cancel-20261104
+  cancel-in-progress: false
+jobs:
+  cancel-stale-queues-only:
+    name: Verify and cancel two exact stale queued runs, touch nothing else
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check exact IDs, old queue, empty jobs, successors, and frozen refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Cancel ONLY two explicitly approved Aug-19 orphaned queue records.
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||
+               context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected repository or maintenance branch');
+            const pins={main:'7ff35c6acdc3068754292bba814e4ec52ba4ec50',
+              product:'087a3ed9588c8fe4ff99b682957f3adbe70230aa',
+              productRef:'design/rv64gc-product-architecture-20261103',
+              pr125:'2c708adc07d770e583cc9667a6f6a586416147f7'};
+            const targets=[
+              {id:32217536226,sha:'2c708adc07d770e583cc9667a6f6a586416147f7',
+               created:'2026-08-19T04:55:52Z',successor:32224026646},
+              {id:32216610620,sha:'c9478de262e56dea2f8c9e75590e5f61c3f4ae56',
+               created:'2026-08-19T04:40:26Z',successor:32224026615}
+            ];
+            const ref=async name=>(await github.rest.git.getRef({owner,repo,ref:'heads/'+name})).data.object.sha;
+            const protect=async()=>{
+              const [main,product,pr125]=await Promise.all([ref('main'),ref(pins.productRef),ref('explore/rv64a-v1')]);
+              if(main!==pins.main||product!==pins.product||pr125!==pins.pr125)
+                throw new Error('Frozen main/Product/#125 refs moved');
+            };
+            await protect();
+            const validated=[];
+            for(const item of targets){
+              const run=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:item.id})).data;
+              if(run.status==='completed'&&run.conclusion==='cancelled'){
+                console.log('ALREADY_CANCELLED',item.id);
+                validated.push({...item,already:true});continue;
+              }
+              if(run.status!=='queued'||run.head_branch!=='explore/rv64a-v1'||
+                 run.head_sha!==item.sha||run.created_at!==item.created||
+                 run.updated_at!==item.created||run.run_attempt!==1)
+                throw new Error('Stale queue identity/state mismatch: '+item.id);
+              const jobs=(await github.rest.actions.listJobsForWorkflowRun({owner,repo,run_id:item.id,per_page:100})).data;
+              if(jobs.total_count!==0)throw new Error('Run has jobs, refuse cancellation: '+item.id);
+              if(Date.now()-Date.parse(run.created_at)<35*86400000)
+                throw new Error('Run younger than maximum workflow horizon: '+item.id);
+              const later=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:item.successor})).data;
+              if(later.status!=='completed'||later.conclusion!=='success'||
+                 later.workflow_id!==run.workflow_id||later.head_sha!==pins.pr125||
+                 Date.parse(later.created_at)<=Date.parse(run.created_at))
+                throw new Error('Later workflow evidence changed: '+item.id);
+              console.log('STALE_QUEUE_PREFLIGHT',item.id,run.workflow_id,run.head_sha,
+                'jobs',jobs.total_count,'later_workflow_success',item.successor);
+              validated.push({...item,already:false});
+            }
+            console.log('CANCEL_PREFLIGHT_ALL_PASS',validated.length);
+            await protect();
+            for(const item of validated){
+              if(item.already)continue;
+              const now=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:item.id})).data;
+              if(now.status!=='queued'||now.head_sha!==item.sha)
+                throw new Error('Queue changed before cancellation: '+item.id);
+              await github.rest.actions.cancelWorkflowRun({owner,repo,run_id:item.id});
+              console.log('CANCEL_REQUESTED',item.id);
+            }
+            for(let attempt=0;attempt<8;attempt++){
+              const states=await Promise.all(targets.map(async item=>{
+                const now=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:item.id})).data;
+                return [item.id,now.status,now.conclusion];
+              }));
+              console.log('CANCEL_CHECK',attempt,JSON.stringify(states));
+              if(states.every(x=>x[1]==='completed'&&x[2]==='cancelled')){
+                console.log('STALE_QUEUE_CANCEL_DONE',targets.length);
+                break;
+              }
+              if(attempt<7)await new Promise(resolve=>setTimeout(resolve,2500));
+              else throw new Error('Cancellation not yet confirmed for both runs; no PRs touched');
+            }
+            await protect();
+            console.log('CI_CANCEL_SCOPE_VERIFIED','only',targets.map(x=>x.id).join(','));
