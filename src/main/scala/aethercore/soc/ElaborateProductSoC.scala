@@ -49,3 +49,25 @@ object ElaborateProductFpgaSoCGeometry extends App {
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }
+
+/** Opt-in RV64GC/LP64D FPGA emission through the same selected CPU target.
+  *
+  * The established IMAC engineering entrypoint above remains unchanged. This
+  * emits a candidate full SoC netlist for qualification, not a DDR/Fmax or
+  * Debian boot pass.
+  */
+object ElaborateProductFpgaSoCRv64gc extends App {
+  require(args.nonEmpty, "RV64GC FPGA emission needs small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC FPGA geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaSoC(implementedPaddrBits = 32,
+      productConfigOverride = Some(target)),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}

@@ -7,12 +7,12 @@ import aethercore.memory.{AetherDirectMappedReadCache, AetherMemRequest, AetherM
 import chisel3._
 import chisel3.util._
 
-/** The implementation-specific OpenSBI bring-up configuration for SmallOoO.
+/** The OpenSBI board binding for a selected SmallOoO software target.
   *
-  * It intentionally does not modify the generic engineering preset: this
-  * board chooses its own reset ROM, 32/56-bit physical seam, compressed fetch,
-  * architectural TIME and machine-provided supervisor timer delivery. The
-  * active ISA remains integer I/M/A/C, plus Zicsr/Zifencei; F/D is NOT present.
+  * This chooses reset ROM, physical seam, architectural TIME and
+  * machine-provided supervisor timer without conflating an ISA request with
+  * implemented hardware. The default engineering target remains RV64IMAC;
+  * the separately requested RV64GC/LP64D target still needs RTL qualification.
   */
 object AetherCoreProductSoCProfiles {
   // The unchanged OpenSBI/QEMU-virt-compatible DTB declares riscv,ndev=52.
@@ -31,18 +31,54 @@ object AetherCoreProductSoCProfiles {
   def externalTransactionBits(geometry: ProductCoreGeometry): Int =
     clientTransactionBits(geometry) + log2Ceil(MemoryClientCount)
 
+  /** Once a board-level CPU target is chosen, every enclosing shell must
+    * forward this exact target into the paged core.  A geometry preset or a
+    * software ISA is not itself a hardware qualification.
+    */
+  def requireBoardCompatible(config: ProductCoreConfig, implementedPaddrBits: Int): Unit = {
+    require(implementedPaddrBits >= 32 && implementedPaddrBits <= 56,
+      "Product SoC supports a 32..56-bit physical memory seam")
+    require(config.platform.paddrBits == implementedPaddrBits,
+      "Product SoC target physical address width must match its board shell")
+    require(config.platform.resetVector == AetherSoCAddressMap.QualifiedBootRomBase,
+      "Product SoC target must reset at the connected OpenSBI BootROM")
+    val g = config.geometry
+    require(g.decodeWidth == 1 && g.dispatchWidth == 1 &&
+      g.issueWidth == 1 && g.retireWidth == 1,
+      "Product SmallOoO SoC implements one-wide execution and retirement")
+  }
+
   def smallOpenSbiEngineering(
       implementedPaddrBits: Int,
       productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
+  ): ProductCoreConfig = bindOpenSbiBoard(
+    ProductCoreProfiles.smallCompressedEngineering,
+    "small-imac-opensbi-product", implementedPaddrBits, productGeometry)
+
+  /** Construct the explicit RV64GC/LP64D board target once at the top.
+    * It is not the default and is not a claim that numerical, privileged or
+    * board-level RV64GC correctness has already been qualified.
+    */
+  def smallOpenSbiDistroTarget(
+      implementedPaddrBits: Int,
+      productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
+  ): ProductCoreConfig = bindOpenSbiBoard(
+    ProductCoreProfiles.smallDebianTarget,
+    "small-rv64gc-opensbi-product", implementedPaddrBits, productGeometry)
+
+  private def bindOpenSbiBoard(
+      base: ProductCoreConfig,
+      name: String,
+      implementedPaddrBits: Int,
+      productGeometry: ProductCoreGeometry
   ): ProductCoreConfig = {
     require(implementedPaddrBits >= 32 && implementedPaddrBits <= 56,
       "Product SoC supports a 32..56-bit physical memory seam")
     require(productGeometry.decodeWidth == 1 && productGeometry.dispatchWidth == 1 &&
       productGeometry.issueWidth == 1 && productGeometry.retireWidth == 1,
       "Product SmallOoO SoC implements one-wide execution and retirement")
-    val base = ProductCoreProfiles.smallCompressedEngineering
     base.copy(
-      name = "small-imac-opensbi-product",
+      name = name,
       geometry = productGeometry,
       software = SoftwareTarget(
         base.software.isa.copy(
@@ -75,18 +111,21 @@ object AetherCoreProductSoCProfiles {
 class AetherCoreProductUnifiedMemorySoC(
     val externalPhysicalSeams: Boolean = false,
     val implementedPaddrBits: Int = 56,
-    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
+    // Legacy geometry selection is used only when no exact CPU target is given.
+    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
+    val productConfigOverride: Option[ProductCoreConfig] = None
 ) extends Module {
+  val config: ProductCoreConfig = productConfigOverride.getOrElse(
+    AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
+  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  private val geometry = config.geometry
   private val Xlen = 64
   private val DataBits = 64
-  private val ClientTxnBits = AetherCoreProductSoCProfiles.clientTransactionBits(productGeometry)
+  private val ClientTxnBits = AetherCoreProductSoCProfiles.clientTransactionBits(geometry)
   private val ClientCount = AetherCoreProductSoCProfiles.MemoryClientCount
   private val SourceBits = log2Ceil(ClientCount)
   val externalTxnIdBits: Int = ClientTxnBits + SourceBits
 
-  val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
-    implementedPaddrBits, productGeometry)
-  private val geometry = config.geometry
   private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform).copy(
     plicSourceCount = AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
   )

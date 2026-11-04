@@ -29,14 +29,14 @@ def report(capacity: str, root: Path) -> dict:
         "capacity": capacity,
         "paddr_bits": 32,
         "issue_width": 1,
-        "comparison": "RV64IMA(LP64) versus partial RV64GC(LP64D) hardware slice",
+        "comparison": "RV64IMA(LP64) versus HardFloat-backed RV64GC(LP64D) core slice",
         "proxy": "Yosys synth_ecp5 + ltp -noff (board-neutral)",
         "integer": integer,
         "floating": floating,
         "floating_overhead": delta,
         "qualification": (
-            "Area/depth proxy only; ProductSmallPagedCore still rejects F/D; "
-            "IEEE arithmetic, Linux distro and board Fmax not qualified"
+            "Area/depth proxy only; RV64GC paged/full-SoC support is opt-in; "
+            "IEEE differential, Linux distro and board Fmax not qualified"
         ),
     }
     (work / "summary.json").write_text(json.dumps(comparison, indent=2) + "\n")

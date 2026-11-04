@@ -1,7 +1,7 @@
 package aethercore.soc
 
 import aethercore.common.CommitTrace
-import aethercore.core.product.{ProductCoreGeometry, ProductCoreProfiles, ProductRetirement}
+import aethercore.core.product.{ProductCoreConfig, ProductCoreGeometry, ProductCoreProfiles, ProductRetirement}
 import chisel3._
 import chisel3.util._
 
@@ -13,14 +13,17 @@ import chisel3.util._
   */
 class AetherCoreProductAxi4SoC(
     val implementedPaddrBits: Int = 56,
-    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry
+    // Legacy geometry selection is used only when no exact CPU target is given.
+    val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
+    val productConfigOverride: Option[ProductCoreConfig] = None
 ) extends Module {
+  val config: ProductCoreConfig = productConfigOverride.getOrElse(
+    AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
+  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  private val geometry = config.geometry
   private val Xlen = 64
   private val DataBits = 64
-  private val TxnIdBits = AetherCoreProductSoCProfiles.externalTransactionBits(productGeometry)
-  private val config = AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
-    implementedPaddrBits, productGeometry)
-  private val geometry = config.geometry
+  private val TxnIdBits = AetherCoreProductSoCProfiles.externalTransactionBits(geometry)
 
   val io = IO(new Bundle {
     val axi = new Axi4MasterIO(implementedPaddrBits, DataBits, TxnIdBits)
@@ -65,7 +68,7 @@ class AetherCoreProductAxi4SoC(
   val soc = Module(new AetherCoreProductUnifiedMemorySoC(
     externalPhysicalSeams = true,
     implementedPaddrBits = implementedPaddrBits,
-    productGeometry = productGeometry
+    productConfigOverride = Some(config)
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = implementedPaddrBits,

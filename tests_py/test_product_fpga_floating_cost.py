@@ -68,7 +68,9 @@ class FloatingFpgaCostContract(unittest.TestCase):
             self.assertEqual(report["paddr_bits"], 32)
             self.assertEqual(report["floating_overhead"], {
                 metric: 5 for metric in module.METRICS})
-            self.assertIn("still rejects F/D", report["qualification"])
+            self.assertIn("support is opt-in", report["qualification"])
+            self.assertIn("Linux distro and board Fmax not qualified",
+                          report["qualification"])
             self.assertTrue((capacity / "summary.json").is_file())
 
 

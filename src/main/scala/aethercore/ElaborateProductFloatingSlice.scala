@@ -7,8 +7,9 @@ import aethercore.core.product.{ProductCoreProfiles, ProductSmallMemoryCore}
   *
   * Compare the same executable SmallOoO geometry with its architectural F/D
   * resources off/on. The FP-enabled lane contains HardFloat F/D arithmetic
-  * as well as FPR/IQ/LSQ; the full ProductSmallPagedCore still rejects F/D
-  * until numerical, privileged and physical-platform qualification completes.
+  * as well as FPR/IQ/LSQ. The paged/full-SoC F/D variant has a separate
+  * opt-in elaboration path and must pass its own privileged/runtime gates;
+  * this isolated core PPA is never its FPGA platform qualification.
   *
   * Usage: ... ElaborateProductFloatingSlice small|expanded integer|floating
   *        --target-dir PATH

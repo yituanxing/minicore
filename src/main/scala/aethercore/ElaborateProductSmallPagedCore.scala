@@ -15,3 +15,17 @@ object ElaborateProductSmallPagedCore extends App {
     )
   )
 }
+
+/** Explicit RV64GC/LP64D variant of the *same* Small paged CPU.
+  * Do not mutate the established soft-float engineering elaboration or
+  * infer distro/board qualification from successful RTL generation.
+  */
+object ElaborateProductSmallPagedRv64gc extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new ProductSmallPagedCore(ProductCoreProfiles.smallDebianTarget),
+    args,
+    Array(
+      "--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket"
+    )
+  )
+}

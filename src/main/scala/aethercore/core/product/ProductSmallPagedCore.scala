@@ -19,7 +19,8 @@ import chisel3.util._
   *
   * This is a CPU integration boundary, not a Linux boot claim: it still needs
   * platform memory, a hardware elaboration/runtime gate, externally qualified
-  * retirement tracing, and full RV64GC F/D before Debian/FPGA qualification.
+  * retirement tracing, F/D numerical differentials and FPGA/LP64D software
+  * qualification before any Debian-on-board claim.
   */
 class ProductSmallPagedCore(
     val config: ProductCoreConfig,
@@ -43,8 +44,10 @@ class ProductSmallPagedCore(
     "ProductSmallPagedCore requires the real RV64 Sv39 hardware profile")
   require(isa.hasS && isa.hasU,
     "ProductSmallPagedCore requires machine, supervisor and user privilege")
-  require(!isa.extensions.contains('F') && !isa.extensions.contains('D'),
-    "ProductSmallPagedCore F/D is not yet qualified with paged privilege/FS and LP64D; use LP64")
+  // Both LP64 engineering and RV64GC/LP64D targets use the SAME privileged
+  // frontend and ROB. Requested F/D enables the existing single-owner FCSR,
+  // FS legality, precise floating retirement and FP-aware RVC decode; it
+  // does not imply that FPGA timing or Debian execution is qualified.
   require(!withSupervisorExternalInterrupt || isa.hasS,
     "supervisor external interrupt requires implemented S-mode")
 

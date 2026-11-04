@@ -11,6 +11,7 @@ on:
       - 'src/test/scala/aethercore/SystemSemanticEvaluatorSpec.scala'
       - 'src/test/scala/aethercore/ProductSystemCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallPagedCoreSpec.scala'
+      - 'src/test/scala/aethercore/ProductSmallPagedFloatingSpec.scala'
       - 'src/test/scala/aethercore/FloatingCsrFileSpec.scala'
       - '.github/workflows/product-g1-privileged.yml'
 
@@ -108,9 +109,10 @@ jobs:
             aethercore.SystemSemanticEvaluatorSpec \
             aethercore.FloatingCsrFileSpec \
             aethercore.ProductSystemCoreSpec \
-            aethercore.ProductSmallPagedCoreSpec
+            aethercore.ProductSmallPagedCoreSpec \
+            aethercore.ProductSmallPagedFloatingSpec
 
-      - name: Elaborate Product SmallPagedCore RTL
+      - name: Elaborate soft-float and RV64GC Product SmallPagedCore RTL
         shell: bash
         run: |
           set -euo pipefail
@@ -118,6 +120,10 @@ jobs:
           mkdir -p "$target"
           ./mill aethercore.runMain aethercore.ElaborateProductSmallPagedCore --target-dir "$target"
           find "$target" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          floating_target="$RUNNER_TEMP/aethercore-product-g1/paged-rv64gc-rtl"
+          mkdir -p "$floating_target"
+          ./mill aethercore.runMain aethercore.ElaborateProductSmallPagedRv64gc --target-dir "$floating_target"
+          find "$floating_target" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
 
       - name: Save validated G1 Mill output accelerator
         if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'

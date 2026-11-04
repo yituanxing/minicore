@@ -124,3 +124,17 @@ ISA 也须独立声明：当前可实例化的工程硬件为带 **C** 的 RV64I
 产品能力要越过该阻断，必须先有 FPGA 可综合且可审计的 IEEE-754 F/D 算术 IP（例如经过许可、版本固定并实测的 HardFloat 集成），补齐动态舍入模式、转换、异常标志与 NaN 的指令级正确性；然后把 FP 指令加入 Spike 对照、旁路/回滚、FS 切换、线程/进程上下文切换和内核 `ptrace`/信号处理的验证集合，再解除 `PagedCore` F/D 拒绝。**IP 接入不是复用整数 ALU 的简单优化，也不应触发重做 ROB/LSQ 架构。**
 
 这一切仍只对应 **D2 的候选实现**。D3 必须独立提供目标 FPGA 的布局布线 Fmax/BRAM/LUT/FF、DDR 与持久存储、真实 DTB/固件、上游 Debian riscv64（LP64D）动态链接、shell/apt/dpkg、文件持久化与复位重启证据。即使 Small 上的 RV64GC 指令级差分全部通过，也不能代替板级发行版实测。
+
+## 9. F/D 算术与整个 SoC 的统一配置入口（2026-11-04，待 CI 资格）
+
+上节描述的是 **HardFloat 算术集成之前** 的状态，不能再把“没有 F/D 算术”或“PagedCore 必然拒绝 F/D”当作新代码的静态事实。本批引入 HardFloat 0.1.1 的 F32/F64 加减乘、真正融合乘加、迭代除法/开方、整数与格式转换及 IEEE `fflags`，与已有浮点位操作、FPR 重命名、精确 ROB 退休和 CSR 唯一所有者连接。同一个 Small/Expanded 单发射核按 ISA 生成 F/D 或关闭 F/D；不创建第二套 FP 后端。
+
+本次架构切口不再允许 FPGA、AXI4、统一内存三层各自重建固定的 `rv64imac/lp64` 配置：顶层显式选择一个 `ProductCoreConfig`，下层沿用这个对象及其 `geometry`、ISA/ABI、PA 和启动 ROM 约束。保留既有 IMAC 工程默认，另提供显式 `smallOpenSbiDistroTarget` 以**尝试**生成 RV64GC/LP64D SoC。PagedCore 的 F/D 配置拒绝转为 G1 真实取指→FS/CSR→浮点执行/LSQ→精确退休测试，新增独立 RV64GC paged RTL elaboration；G2 在 FPGA 最外层检查 ISA/ABI 与 AXI 事务 ID 同源。
+
+这里有三层不同的资格，不应混为一谈：
+
+1. **构造/编译/RTL**：同一配置贯通顶层、HardFloat 模块被真正实例化并能生成 Verilog；这只证明可构造。
+2. **功能**：F7 数值与恢复、G1 分页特权态/FS Dirty/陷阱、G2 总线连接及 Spike/SoftFloat 独立差分全部有通过记录；在门禁完成前保留“待验证”标记。
+3. **产品**：目标 FPGA 全 SoC 的布局布线及容量、运行真实 OpenSBI→Linux→Debian LP64D 与持久化软件；**这层仍未完成**。
+
+FPU 单精度/双精度模块、三读口 FP PRF 对 LUT、FF、BRAM、Fmax 的实际压力尚无本轮板级数据。此阶段不会为“优化面积”提前改变 PRF 读取时序或增加第二套 ISA 核；先看同配置 F-off/F-on 的综合结果，再决定可度量的结构改动。
