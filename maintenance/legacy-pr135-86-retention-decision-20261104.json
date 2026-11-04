@@ -6,10 +6,10 @@
   "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
   "product_pin": "087a3ed9588c8fe4ff99b682957f3adbe70230aa",
   "archive_tag_prefix": "branch-archive/2026-11-04/legacy-pr135-86/",
-  "decision": "Historical PRs closed unmerged; preserve frozen/unique/qualification branches; CAS delete only 17 fully in main, individually archived redundant refs",
+  "decision": "Independent architecture and CI review narrowed the CAS delete candidates from 17 to 6; preserve 11 additional Linux/RTL architecture/qualification milestones.",
   "total": 86,
-  "retain_count": 69,
-  "delete_count": 17,
+  "retain_count": 80,
+  "delete_count": 6,
   "retention_categories": {
     "frozen_exact_head": [
       {
@@ -708,6 +708,63 @@
         "updated_at": "2026-08-28T13:34:52Z",
         "draft": false
       }
+    ],
+    "qualification_and_soc_milestones": [
+      {
+        "pr": 153,
+        "head": "perf/aethercore-v2-sim-speed",
+        "sha": "25e2899de149ac38cac57cf6718e1f781d32a022"
+      },
+      {
+        "pr": 160,
+        "head": "perf/aethercore-v2-lsu-intake-flowthrough",
+        "sha": "040cb17de319a0c5ab8d4b34ed5e957b158d9673"
+      },
+      {
+        "pr": 164,
+        "head": "arch/aethercore-v2-a8-profile-matrix",
+        "sha": "caee74a97da8d2cbd787c9b9b6a5f77b06be9696"
+      },
+      {
+        "pr": 187,
+        "head": "perf/aethercore-v2-p8-prehead-load-v2",
+        "sha": "021d95650d6d808c47c2d0108bd9fedff57019a3"
+      },
+      {
+        "pr": 194,
+        "head": "perf/aethercore-v2-completed-branch-load-overlap",
+        "sha": "f3b630355ed6b432086107a19de6baac0c101e2b"
+      },
+      {
+        "pr": 198,
+        "head": "fix/aethercore-v2-prehead-load-exception-deferral",
+        "sha": "5216c1450aaf7991cd90376f859c08a0c5acc683"
+      },
+      {
+        "pr": 214,
+        "head": "fix/aethercore-v2-data-wait-runtime-contract",
+        "sha": "4990fc35fb093700d4166e41d6a4bdd9b6e312aa"
+      },
+      {
+        "pr": 220,
+        "head": "soc/aethercore-v0-product-shell",
+        "sha": "e82a7f894840b4415aa84e4f9e4796148affb5ef"
+      },
+      {
+        "pr": 221,
+        "head": "soc/aethercore-v0-memory-hub",
+        "sha": "4b262a115eb39282c3e9cf3df54f0c1a24cbcff8"
+      },
+      {
+        "pr": 222,
+        "head": "soc/aethercore-v0-unified-memory-adapters",
+        "sha": "532daa8713276148f90aad87af6b90cb0e09d6d7"
+      },
+      {
+        "pr": 223,
+        "head": "soc/aethercore-v0-unified-memory-soc",
+        "sha": "ec02ba5f4b263a6936d3b557f56e945075b2ff86"
+      }
     ]
   },
   "delete_candidates": [
@@ -726,51 +783,9 @@
       "archive_exact_required": true
     },
     {
-      "pr": 153,
-      "head": "perf/aethercore-v2-sim-speed",
-      "sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 160,
-      "head": "perf/aethercore-v2-lsu-intake-flowthrough",
-      "sha": "040cb17de319a0c5ab8d4b34ed5e957b158d9673",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 164,
-      "head": "arch/aethercore-v2-a8-profile-matrix",
-      "sha": "caee74a97da8d2cbd787c9b9b6a5f77b06be9696",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 187,
-      "head": "perf/aethercore-v2-p8-prehead-load-v2",
-      "sha": "021d95650d6d808c47c2d0108bd9fedff57019a3",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
       "pr": 191,
       "head": "perf/aethercore-v2-p8-btfnt-static-conditional",
       "sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 194,
-      "head": "perf/aethercore-v2-completed-branch-load-overlap",
-      "sha": "f3b630355ed6b432086107a19de6baac0c101e2b",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 198,
-      "head": "fix/aethercore-v2-prehead-load-exception-deferral",
-      "sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
       "already_in_main": true,
       "archive_exact_required": true
     },
@@ -794,42 +809,8 @@
       "sha": "396061547800a2673424be8b09937edd8e457dd6",
       "already_in_main": true,
       "archive_exact_required": true
-    },
-    {
-      "pr": 214,
-      "head": "fix/aethercore-v2-data-wait-runtime-contract",
-      "sha": "4990fc35fb093700d4166e41d6a4bdd9b6e312aa",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 220,
-      "head": "soc/aethercore-v0-product-shell",
-      "sha": "e82a7f894840b4415aa84e4f9e4796148affb5ef",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 221,
-      "head": "soc/aethercore-v0-memory-hub",
-      "sha": "4b262a115eb39282c3e9cf3df54f0c1a24cbcff8",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 222,
-      "head": "soc/aethercore-v0-unified-memory-adapters",
-      "sha": "532daa8713276148f90aad87af6b90cb0e09d6d7",
-      "already_in_main": true,
-      "archive_exact_required": true
-    },
-    {
-      "pr": 223,
-      "head": "soc/aethercore-v0-unified-memory-soc",
-      "sha": "ec02ba5f4b263a6936d3b557f56e945075b2ff86",
-      "already_in_main": true,
-      "archive_exact_required": true
     }
   ],
-  "safety": "Never delete retained refs; never delete when PR open or active CI, branch moved, tag SHA moved, main/Product moved, or upstream references exist."
+  "safety": "Never delete retained refs; never delete when PR open or active CI, branch moved, tag SHA moved, main/Product moved, or upstream references exist.",
+  "review_note": "Supersedes earlier 17-candidate audit. Four SoC #220-223 and Linux, architecture, validation milestones #153,#160,#164,#187,#194,#198,#214 must remain live refs. Only 6 performance/microbenchmark intermediate refs are eligible for guarded deletion."
 }
