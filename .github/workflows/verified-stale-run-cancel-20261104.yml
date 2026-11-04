@@ -82,7 +82,7 @@ jobs:
                 if (error.status !== 409) throw error;
                 console.log('NORMAL_CANCEL_409',item.id,'attempting force cancellation');
                 try {
-                  await github.rest.actions.forceCancelWorkflowRun({owner,repo,run_id:item.id});
+                  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel',{owner,repo,run_id:item.id});
                   console.log('FORCE_CANCEL_REQUESTED',item.id);
                 } catch (forceError) {
                   if (forceError.status !== 409) throw forceError;
