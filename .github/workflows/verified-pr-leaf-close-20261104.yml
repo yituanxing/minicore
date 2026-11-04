@@ -1,4 +1,4 @@
-name: Verified archive and close six obsolete leaf PRs (2026-11-04)
+name: Verified archive and retire four newly exposed leaf PRs (2026-11-04)
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   archive-close-prune:
-    name: Verify, archive, close six old PRs, then prune heads
+    name: Verify, archive, retire four safe leaf-chain PRs
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -26,7 +26,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // This run changes only six explicit PRs and their archived head refs.
+            // This run changes only four explicit PRs, ordered child before parent.
             const {owner,repo} = context.repo;
             const maintenance = 'maintenance/verified-branch-prune-20261104';
             if (owner !== 'yituanxing' || repo !== 'minicore' ||
@@ -36,14 +36,12 @@ jobs:
             const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
             const productBranch = 'design/rv64gc-product-architecture-20261103';
             const productExpected = '087a3ed9588c8fe4ff99b682957f3adbe70230aa';
-            const archivePrefix = 'branch-archive/2026-11-04/batch6/';
+            const archivePrefix = 'branch-archive/2026-11-04/batch7/';
             const targets = [
-              [190, 'perf/aethercore-v2-p8-static-controlflow-prediction', '85f46d1901bdff0dc93f596c2e905c3d0223b908'],
-              [133, 'explore/rv64-linux-timer-v1', 'f9c0246a923b6adab36ca519d781782a8635cf9b'],
-              [68, 'agent/l32-busybox-multiprocess', 'a6d1e47f120c9695def2c87f5e035ab4d5731937'],
-              [54, 'agent/smode-v1-minimal-trap', '9b80add28ef212cc9db2924926b2dc8f10f1a58f'],
-              [53, 'agent/nuttx-protected-p3-fault-isolation', '09d1ecfa467bb54e7ed657f85fa2e3ae6083f76b'],
-              [47, 'agent/freertos-machine-external-interrupt', '69d862344ee1964db2d319c36603cac58d40e5b3'],
+              [131, 'explore/rv64-linux-early-v1', 'a96c3f7b6db0029011ef45ce2a43c43d45216fe8'],
+              [52, 'agent/umode-preemption', '56fe8aedc5a5d71ac778b3dd2dade0907daf6b8a'],
+              [130, 'explore/rv64-opensbi-first-exec-v1', '814c524dcab6a26905c4aff9d9b2c617acdc808a'],
+              [127, 'explore/rv64-opensbi-platform-v1', 'be05c45c8acb2a6b85b971f3ae13c6d411a9bfad'],
             ];
             const getRef = async ref => (await github.rest.git.getRef({owner,repo,ref})).data;
             const getPR = async num => (await github.rest.pulls.get({owner,repo,pull_number:num})).data;
@@ -66,6 +64,16 @@ jobs:
               prs.some(p => p.number !== ownNumber &&
                 (p.base.ref === name ||
                   (p.head.repo && p.head.repo.full_name === owner + '/' + repo && p.head.ref === name)));
+            const targetOrder = new Map(targets.map(([number],index) => [number,index]));
+            const referencesExternalOpenPR = (prs,name,ownNumber) =>
+              prs.some(p => p.number !== ownNumber && !targetOrder.has(p.number) &&
+                (p.base.ref === name ||
+                  (p.head.repo && p.head.repo.full_name === owner + '/' + repo && p.head.ref === name)));
+            const breaksChildFirstOrder = (prs,name,ownNumber) =>
+              prs.some(p => p.number !== ownNumber && targetOrder.has(p.number) &&
+                (p.base.ref === name ||
+                  (p.head.repo && p.head.repo.full_name === owner + '/' + repo && p.head.ref === name)) &&
+                targetOrder.get(p.number) >= targetOrder.get(ownNumber));
             const getArchive = async name => getRef('tags/' + archivePrefix + name);
             const archiveMatches = async (name,sha) => (await getArchive(name)).object.sha === sha;
             const mainActual = (await getRef('heads/main')).object.sha;
@@ -81,7 +89,7 @@ jobs:
             const alreadyDeleted = new Set();
             for (const [num,name,sha] of targets) {
               if (['main',maintenance,productBranch].includes(name) ||
-                  referencesAnotherOpenPR(prs,name,num) ||
+                  referencesExternalOpenPR(prs,name,num) || breaksChildFirstOrder(prs,name,num) ||
                   active.branches.has(name) || active.prNumbers.has(num)) {
                 throw new Error('Target has active dependency or CI: #' + num);
               }
