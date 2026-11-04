@@ -1,4 +1,4 @@
-name: Verified retire PR chain batch 13 (2026-11-04)
+name: Verified retire PR chain batch 14 final (2026-11-04)
 on:
   push:
     branches:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Batch 13: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
+            // Batch 14 FINAL: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
             const {owner,repo}=context.repo;
             const maintenance='maintenance/verified-branch-prune-20261104';
             if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+maintenance)
@@ -39,62 +39,62 @@ jobs:
             const archivePrefix='branch-archive/2026-11-04/chain-125-74/';
             const targets=[
               [
-                103,
-                "refactor/rv32c-fetch-fault-address",
-                "56d88ecb8a80f2ca28a2af41261d574448ece751"
+                87,
+                "fix/data-address-misaligned-v2",
+                "3c3c697bccb978e4dec418f7595c21ffc555dea5"
               ],
               [
-                102,
-                "refactor/rv32c-retire-length",
-                "f4da0d703b10c7746a3d116b54c8b86b432f4a36"
+                85,
+                "feat/mprv-effective-data-privilege",
+                "aee6cb44e62f288b2273e394bf6202e70cf773f5"
               ],
               [
-                101,
-                "refactor/rv32c-instruction-transaction-width",
-                "1c8bdfef0b58e5d7600785535ff15a939e943c0c"
+                83,
+                "fix/instruction-address-misaligned",
+                "4a793d047ae77a219ddfd1847be89aa70415d2de"
               ],
               [
-                100,
-                "refactor/rv32c-instruction-length",
-                "35aa3b0a4f68ab861fa13f806cc1589dd7398c7c"
+                82,
+                "fix/core-capability-fail-closed",
+                "ac682913676e20e63241d031699b4d33f14bfd00"
               ],
               [
-                99,
-                "ci/l32-transactional-linux-cache",
-                "fac1d322a9d4c40a9bfef8c22baa0e6b6c54f19b"
+                81,
+                "refactor/l32-sim-runtime-foundation",
+                "d34fec5c816d8e29dcc7ec2df782fc5e91df30a3"
               ],
               [
-                98,
-                "frontier/sv32-pmp-linux",
-                "19ead0c9bb5b8562871f263e072f4a19c16b9319"
+                80,
+                "ci/l32-canonical-linux-signoff",
+                "cef3693c3e024aedba3009a8b254027c82398bab"
               ],
               [
-                97,
-                "refactor/sv32-pmp-vertical-composition",
-                "996ab09eb728c38afa7ce3421b03354ad02e9464"
+                78,
+                "fix/l32-frozen-linux-cache-integrity",
+                "16d30e85523f68614317029525270e47924802da"
               ],
               [
-                96,
-                "refactor/physical-fetch-request-valid",
-                "2c1fc6deff8f5212911b49beaa740391b70dcfe9"
+                77,
+                "refactor/typed-xret-retirement",
+                "ced1830cf4fbd3c5b6164ba2fd2201d8dce9826d"
               ],
               [
-                95,
-                "refactor/pmp-production-pa-geometry",
-                "6582777bb8734ad46411b28881cbeacf86874d9a"
+                76,
+                "test/shared-core-cross-xlen-fast-gate",
+                "ede42228eb207fb0f1804367312ad631acbe3f85"
               ],
               [
-                89,
-                "agent/umode-pmp16-surface",
-                "990497c35db94a715a8cea4a9e08d900dbee4166"
+                75,
+                "test/l32-linux-libpng",
+                "5cb53b364ffced2be365189153a7efe54f4e96a6"
               ],
               [
-                88,
-                "refactor/pmp-physical-address-geometry",
-                "080627b915f966bc3c947794f115155e82083323"
+                74,
+                "perf/l32-real-program-component-cache",
+                "7f7f02f6a4989ceb2d30a03edad23b27d3b52652"
               ]
             ];
-            const nextBase='fix/data-address-misaligned-v2'; // PR #87 head, NOT touched in this batch
+            const nextBase='test/l32-linux-real-programs'; // PR #72 head, must remain OPEN/untouched
             const staleRunIds=new Set([32217536226,32216610620]);
             const staleEvidence=new Map([
              [32217536226,['2c708adc07d770e583cc9667a6f6a586416147f7','2026-08-19T04:55:52Z',32224026646]],
