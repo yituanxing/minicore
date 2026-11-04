@@ -1,0 +1,88 @@
+name: Verified archive four covered dormant history refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-covered-four-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-covered-four-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Confirm four tips fully covered by retained descendants and archive
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const targets=[["agent/rv32im-preemptive-scheduler-rebased","430a32b63d232227893e1e89c4a09748f4eece3c","agent/rv32im-preemptive-scheduler","f9fd6c934503a923c5ce4b4e656803892de4c343"],["arch/aethercore-v2-p8-2-rebuild","7b507903bbd22c1bd874d709f94bd9c6bdad828a","arch/aethercore-v2-p8-2-integration","6f00207ae79254114032de7c76531ebd5aec0339"],["explore/validation-throughput-v1","8f80aa76009f83acb7d146791eb07022e934d2cc","explore/validation-artifacts-v1","21a27bed39d294f784009899af29b05bc3821cb6"],["feature/aethercore-v2-f1-rob-commit-base","3715d7cf29862c8c2fb5299234479485a8ed3b69","feature/aethercore-v2-f1-actual","958aa89a7f78a606b4bed184382ab6ea6671b8ef"]];
+            const prefix='branch-archive/2026-11-04/covered-dormant-four/';
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('READ_RETRY',label,i+1);
+                  await new Promise(resolve=>setTimeout(resolve,450*(2**i)));
+                }
+              }
+            };
+            const ref=async name=>(await retry('ref '+name,()=>github.rest.git.getRef({owner,repo,ref:name}))).data;
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('Main/Product moved');
+              for(const [name,sha,desc,descsha] of targets){
+                if((await ref('heads/'+desc)).object.sha!==descsha)
+                  throw new Error('Retained descendant moved '+desc);
+              }
+            };
+            await pin();
+            const open=await retry('open',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            const active=[];
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              active.push(...await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100})));
+            }
+            for(const [name,sha,desc,descsha] of targets){
+              const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+              if(b.protected||b.commit.sha!==sha)throw new Error('Branch moved/protected '+name);
+              if(open.some(p=>p.head.ref===name||p.base.ref===name))throw new Error('Open PR depends '+name);
+              if(active.some(r=>r.head_branch===name))throw new Error('Active CI '+name);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:sha,head:descsha}))).data;
+              if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
+                throw new Error('Not fully covered '+name+' by '+desc);
+              try{const t=await ref('tags/'+prefix+name);if(t.object.sha!==sha)throw new Error('Conflicting tag '+name);}
+              catch(e){if(e.status!==404)throw e;}
+              console.log('COVERED_PREFLIGHT',name,sha,'retained='+desc,'ahead='+cmp.ahead_by);
+            }
+            console.log('COVERED_PREFLIGHT_ALL_PASS',targets.length);
+            await pin();
+            let created=0,previous=0;
+            for(const [name,sha] of targets){
+              await pin();
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Head moved '+name);
+              const tag='tags/'+prefix+name;
+              let exists=false;
+              try{const t=await ref(tag);if(t.object.sha!==sha)throw new Error('Tag mismatch '+name);exists=true;}
+              catch(e){if(e.status!==404)throw e;}
+              if(!exists){await github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha});created++;}
+              else previous++;
+              let visible=false;
+              for(let i=0;i<8;i++){
+                try{if((await ref(tag)).object.sha!==sha)throw new Error('Tag changed '+name);visible=true;break;}
+                catch(e){if(e.status!==404||i===7)throw e;await new Promise(resolve=>setTimeout(resolve,1300));}
+              }
+              if(!visible)throw new Error('Tag invisible '+name);
+              console.log('COVERED_ARCHIVE_VERIFIED',name,sha);
+            }
+            console.log('COVERED_ARCHIVE_DONE','verified='+targets.length,'created='+created,'previous='+previous,'branches_deleted=0');
