@@ -1,0 +1,257 @@
+{
+  "description": "Exact SHA manifest of 23 dormant unmerged open PRs; archive only, then guarded close; do not delete branches",
+  "snapshot_date": "2026-11-04",
+  "repository": "yituanxing/minicore",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "087a3ed9588c8fe4ff99b682957f3adbe70230aa",
+  "initial_open_prs": 37,
+  "preserve_open_prs": [
+    379,
+    378,
+    73,
+    72,
+    71,
+    70,
+    69,
+    49,
+    45,
+    44,
+    43,
+    42,
+    41,
+    40
+  ],
+  "total": 23,
+  "targets": [
+    {
+      "pr": 377,
+      "head": "perf/inactive-mul-host-gate",
+      "sha": "299a1a641a076e73112293564c9873c262703a34",
+      "base": "perf/icache-safe-fullbeat-clean",
+      "base_current_sha": "a190b6070793c972e5b78e265002218bcdec5309",
+      "updated_at": "2026-09-09T06:19:09Z",
+      "created_at": "2026-09-09T06:19:09Z",
+      "draft": true
+    },
+    {
+      "pr": 376,
+      "head": "perf/dependency-central-values-v2",
+      "sha": "b95fb5ab82fc8f5e4ae8212d364e464973278101",
+      "base": "perf/icache-safe-fullbeat-clean",
+      "base_current_sha": "a190b6070793c972e5b78e265002218bcdec5309",
+      "updated_at": "2026-09-09T06:09:03Z",
+      "created_at": "2026-09-09T06:09:03Z",
+      "draft": true
+    },
+    {
+      "pr": 374,
+      "head": "measure/verilator-host-compiler-matrix",
+      "sha": "41ed7eaa8cb14074e91adb1e808da9efbbb20040",
+      "base": "perf/icache-safe-fullbeat-clean",
+      "base_current_sha": "a190b6070793c972e5b78e265002218bcdec5309",
+      "updated_at": "2026-09-09T06:12:50Z",
+      "created_at": "2026-09-09T05:04:36Z",
+      "draft": true
+    },
+    {
+      "pr": 373,
+      "head": "perf/icache-safe-fullbeat-clean",
+      "sha": "a190b6070793c972e5b78e265002218bcdec5309",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-09-08T07:47:31Z",
+      "created_at": "2026-09-08T07:47:31Z",
+      "draft": false
+    },
+    {
+      "pr": 368,
+      "head": "perf/icache-safe-fullbeat-inline-pmp",
+      "sha": "b51af003ae4cdbf3cd071578c0528d76f690ef85",
+      "base": "perf/icache-safe-fullbeat-lower-half",
+      "base_current_sha": "8c781d7a7b4ebc870a28296d4212ebdfa034bb43",
+      "updated_at": "2026-09-08T04:04:58Z",
+      "created_at": "2026-09-07T16:29:32Z",
+      "draft": true
+    },
+    {
+      "pr": 365,
+      "head": "perf/icache-safe-fullbeat-lower-half",
+      "sha": "8c781d7a7b4ebc870a28296d4212ebdfa034bb43",
+      "base": "measure/rv64-v2-busybox-shell-baseline",
+      "base_current_sha": "98eef6df7a2ba237499b171b4e6e071121a2f9d5",
+      "updated_at": "2026-09-07T16:53:46Z",
+      "created_at": "2026-09-07T16:11:35Z",
+      "draft": true
+    },
+    {
+      "pr": 356,
+      "head": "measure/rv64-v2-busybox-shell-baseline",
+      "sha": "98eef6df7a2ba237499b171b4e6e071121a2f9d5",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-09-07T14:45:01Z",
+      "created_at": "2026-09-06T14:08:00Z",
+      "draft": true
+    },
+    {
+      "pr": 355,
+      "head": "area/dependency-central-wake-value-ab",
+      "sha": "4299b0bc75865885dd7ddb4d0289fb9e2724560a",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-09-06T04:29:15Z",
+      "created_at": "2026-09-06T04:27:56Z",
+      "draft": true
+    },
+    {
+      "pr": 353,
+      "head": "measure/post-42k-area-ranking",
+      "sha": "5dc13f99277adddaf382c45f0a35410503e69cc9",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-09-06T04:18:48Z",
+      "created_at": "2026-09-06T04:08:44Z",
+      "draft": true
+    },
+    {
+      "pr": 301,
+      "head": "area/compact-rob-lifetime-v1",
+      "sha": "466101700d2e969e119013030db91da2e48371f5",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-31T07:16:40Z",
+      "created_at": "2026-08-31T07:16:40Z",
+      "draft": true
+    },
+    {
+      "pr": 295,
+      "head": "area/shared-load-translation-v1",
+      "sha": "85060817a36db22067cf468380f6f6d008845f5a",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-30T16:44:34Z",
+      "created_at": "2026-08-30T16:40:40Z",
+      "draft": true
+    },
+    {
+      "pr": 293,
+      "head": "area/unified-ptw-pmp-ab",
+      "sha": "8ebb657a8f3985706ce600925e4a2f97f4e7e366",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-30T15:59:07Z",
+      "created_at": "2026-08-30T13:09:34Z",
+      "draft": true
+    },
+    {
+      "pr": 280,
+      "head": "measure/parent-pmp-area-ceiling",
+      "sha": "99ce6e8fd3fecf91a0e37f2145baaad5a40444ee",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-30T06:28:21Z",
+      "created_at": "2026-08-30T06:28:21Z",
+      "draft": true
+    },
+    {
+      "pr": 272,
+      "head": "measure/fpga-arch-opportunity-gate",
+      "sha": "b34b3b54442f1b98e82a2e9debf17d0a42e1f063",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-30T05:52:06Z",
+      "created_at": "2026-08-30T04:44:00Z",
+      "draft": false
+    },
+    {
+      "pr": 265,
+      "head": "area/register-file-mem-ab",
+      "sha": "ee8e485a12d9bcc27558442e29a2aa00e5796974",
+      "base": "measure/aethercore-register-file-area",
+      "base_current_sha": "613460b256eab1e2c9a148510920df08ae9d7276",
+      "updated_at": "2026-08-30T04:03:24Z",
+      "created_at": "2026-08-30T03:45:08Z",
+      "draft": true
+    },
+    {
+      "pr": 264,
+      "head": "measure/aethercore-register-file-area",
+      "sha": "613460b256eab1e2c9a148510920df08ae9d7276",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-30T03:38:34Z",
+      "created_at": "2026-08-30T03:38:34Z",
+      "draft": false
+    },
+    {
+      "pr": 257,
+      "head": "measure/aethersoc-pmp-checker-area-ab",
+      "sha": "adc8678708656ccc2324018c98272bbf0a5de7c2",
+      "base": "perf/aethersoc-v0-pmp-napot-compact",
+      "base_current_sha": "1fbf2cc09f98d9d1e56daeef7a941e1fb04dfac3",
+      "updated_at": "2026-08-29T11:48:27Z",
+      "created_at": "2026-08-29T11:48:27Z",
+      "draft": false
+    },
+    {
+      "pr": 136,
+      "head": "docs/aethercore-v2-design-notes",
+      "sha": "c525a3d156c8bb0e6fd276e9f45a11f1d4e9c0b3",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-21T14:28:49Z",
+      "created_at": "2026-08-20T11:11:19Z",
+      "draft": true
+    },
+    {
+      "pr": 134,
+      "head": "trigger/rv64-linux-deeper-hosted-v1",
+      "sha": "cddec5f06480c71fe47e5893702b85f51ca12df5",
+      "base": "explore/rv64-linux-deeper-v1",
+      "base_current_sha": "140b226bfe09157610406c339c18fc783305f37b",
+      "updated_at": "2026-08-20T06:21:57Z",
+      "created_at": "2026-08-20T03:52:28Z",
+      "draft": true
+    },
+    {
+      "pr": 129,
+      "head": "explore/linux-frontier-policy-v1",
+      "sha": "af2657a66290e256e71791814e4eb0b74e7a12a2",
+      "base": "explore/linux-frontier-first-v1",
+      "base_current_sha": "ca4d94febc199a1a8580ddeb6ac8a64dd7b8b499",
+      "updated_at": "2026-08-19T08:38:10Z",
+      "created_at": "2026-08-19T08:38:10Z",
+      "draft": true
+    },
+    {
+      "pr": 128,
+      "head": "explore/linux-frontier-first-v1",
+      "sha": "ca4d94febc199a1a8580ddeb6ac8a64dd7b8b499",
+      "base": "explore/validation-artifacts-v1",
+      "base_current_sha": "21a27bed39d294f784009899af29b05bc3821cb6",
+      "updated_at": "2026-08-19T09:20:41Z",
+      "created_at": "2026-08-19T08:30:30Z",
+      "draft": true
+    },
+    {
+      "pr": 39,
+      "head": "agent/runner-resilience-cache",
+      "sha": "1662e93ebbe8737cec5ec5132bce8d7ff0392c13",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-18T14:29:36Z",
+      "created_at": "2026-08-03T09:20:28Z",
+      "draft": true
+    },
+    {
+      "pr": 38,
+      "head": "agent/os-validation-ladder",
+      "sha": "1cf91b047abb8a148c3da5bf079b605a75b54f74",
+      "base": "main",
+      "base_current_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+      "updated_at": "2026-08-18T14:29:37Z",
+      "created_at": "2026-08-03T08:58:01Z",
+      "draft": false
+    }
+  ]
+}
