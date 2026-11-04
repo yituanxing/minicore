@@ -1,4 +1,4 @@
-name: Verified retire PR chain batch 12 (2026-11-04)
+name: Verified retire PR chain batch 13 (2026-11-04)
 on:
   push:
     branches:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Batch 12: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
+            // Batch 13: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
             const {owner,repo}=context.repo;
             const maintenance='maintenance/verified-branch-prune-20261104';
             if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+maintenance)
@@ -39,62 +39,62 @@ jobs:
             const archivePrefix='branch-archive/2026-11-04/chain-125-74/';
             const targets=[
               [
-                114,
-                "feature/rv32c-linux-userspace",
-                "528a4a6f840ee04ca25cb53be9246b57e4a9e38c"
+                103,
+                "refactor/rv32c-fetch-fault-address",
+                "56d88ecb8a80f2ca28a2af41261d574448ece751"
               ],
               [
-                113,
-                "feature/rv32c-linux-kernel",
-                "2fc5fe0f5ac60fedafc713def088194950ea9864"
+                102,
+                "refactor/rv32c-retire-length",
+                "f4da0d703b10c7746a3d116b54c8b86b432f4a36"
               ],
               [
-                112,
-                "feature/rv32c-nuttx-sv32",
-                "8f5d1988cfafd1ff96e9d16461cc6bb29f9369b0"
+                101,
+                "refactor/rv32c-instruction-transaction-width",
+                "1c8bdfef0b58e5d7600785535ff15a939e943c0c"
               ],
               [
-                111,
-                "feature/rv32c-freertos",
-                "49009442b38f53c4dfc9d75d8111ba2c2f67c9eb"
+                100,
+                "refactor/rv32c-instruction-length",
+                "35aa3b0a4f68ab861fa13f806cc1589dd7398c7c"
               ],
               [
-                110,
-                "fix/rv32-spike-reference-abi",
-                "eebeb0cbd37ae8f425ce976a964cb47f7bb2673f"
+                99,
+                "ci/l32-transactional-linux-cache",
+                "fac1d322a9d4c40a9bfef8c22baa0e6b6c54f19b"
               ],
               [
-                108,
-                "feature/rv32c-coremark",
-                "1c8ffaac4fec541a744f08c4e4279a3a661faa7f"
+                98,
+                "frontier/sv32-pmp-linux",
+                "19ead0c9bb5b8562871f263e072f4a19c16b9319"
               ],
               [
-                109,
-                "refactor/rv32c-spike-reference",
-                "047eb0ef8ddb36092403d6b81f557cdf2a382329"
+                97,
+                "refactor/sv32-pmp-vertical-composition",
+                "996ab09eb728c38afa7ce3421b03354ad02e9464"
               ],
               [
-                107,
-                "feature/rv32c-parcel-fetch",
-                "80682b10ff9111379fd72636f779015a45cae00b"
+                96,
+                "refactor/physical-fetch-request-valid",
+                "2c1fc6deff8f5212911b49beaa740391b70dcfe9"
               ],
               [
-                106,
-                "feature/rv32c-parcel-controller",
-                "d03bc35a56c80036aa86e9e1daf93ca208cab2aa"
+                95,
+                "refactor/pmp-production-pa-geometry",
+                "6582777bb8734ad46411b28881cbeacf86874d9a"
               ],
               [
-                105,
-                "feature/rv32c-decompressor",
-                "d5bcf7c93d5d19dfadf6528d8ad7301c11b23b76"
+                89,
+                "agent/umode-pmp16-surface",
+                "990497c35db94a715a8cea4a9e08d900dbee4166"
               ],
               [
-                104,
-                "refactor/rv32c-raw-instruction",
-                "eb47d542763ed0161f0c3c46da07551372b13b7a"
+                88,
+                "refactor/pmp-physical-address-geometry",
+                "080627b915f966bc3c947794f115155e82083323"
               ]
             ];
-            const nextBase='refactor/rv32c-fetch-fault-address'; // PR #103 head, NOT touched in this batch
+            const nextBase='fix/data-address-misaligned-v2'; // PR #87 head, NOT touched in this batch
             const staleRunIds=new Set([32217536226,32216610620]);
             const staleEvidence=new Map([
              [32217536226,['2c708adc07d770e583cc9667a6f6a586416147f7','2026-08-19T04:55:52Z',32224026646]],
