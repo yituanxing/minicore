@@ -1,0 +1,191 @@
+{
+  "repository": "yituanxing/minicore",
+  "date": "2026-11-04",
+  "purpose": "Archive 22 exact SHA performance/measurement experimental heads; preserve Unified Linux Path success live anchor #367 and CAS delete at most 21 branches after independent verification",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "087a3ed9588c8fe4ff99b682957f3adbe70230aa",
+  "open_pr_count": 14,
+  "tag_prefix": "branch-archive/2026-11-04/measure-perf-22/",
+  "total": 22,
+  "preserve_live_ref": "perf/fast-host-data-multislot",
+  "delete_count": 21,
+  "delete_branches": [
+    "measure/axi4-data-latency-overlap",
+    "measure/dual-load-lsu-area",
+    "measure/loadq2-saturation-after-host-concurrency",
+    "measure/post-42k-dependency-wake-value-ceiling",
+    "measure/rf-dependency-cam-full-soc",
+    "measure/rob4-physical-slot-area",
+    "measure/shared-pmp-full-soc",
+    "measure/shared-pmp-xc7-proxy",
+    "measure/unified-data-pmp-full-soc",
+    "measure/verilator-thread-count-ab",
+    "perf/aethercore-v2-bht64-ras4-btb16",
+    "perf/aethercore-v2-branchsafe-hotpath-cut",
+    "perf/aethercore-v2-dual-compute-int-shadow",
+    "perf/aethercore-v2-dual-integer-launch",
+    "perf/aethercore-v2-dual-integer-shadow",
+    "perf/aethercore-v2-memory-decomposition",
+    "perf/aethercore-v2-p8-completed-branch-load-bypass",
+    "perf/aethercore-v2-p8-loadq3-opportunity",
+    "perf/aethercore-v2-rob8-ab",
+    "perf/aethercore-v2-rob8-window",
+    "perf/aethercore-v2-rob8-window4-ab"
+  ],
+  "targets": [
+    {
+      "head": "measure/axi4-data-latency-overlap",
+      "sha": "5348d25e4b39e7e67ef383a7322dbee4cb222b06",
+      "pr": 371,
+      "preserve_live_name": false,
+      "historical_runs": 7
+    },
+    {
+      "head": "measure/dual-load-lsu-area",
+      "sha": "a9ab5fc5d93320105ed7072da60f88050cc1877b",
+      "pr": 273,
+      "preserve_live_name": false,
+      "historical_runs": 9
+    },
+    {
+      "head": "measure/loadq2-saturation-after-host-concurrency",
+      "sha": "00b8ff8dc771d7bf94d013e18a987e398ed2b7cf",
+      "pr": 369,
+      "preserve_live_name": false,
+      "historical_runs": 14
+    },
+    {
+      "head": "measure/post-42k-dependency-wake-value-ceiling",
+      "sha": "614d567cb2ec79634c4fd17af7c866ef043af053",
+      "pr": 354,
+      "preserve_live_name": false,
+      "historical_runs": 11
+    },
+    {
+      "head": "measure/rf-dependency-cam-full-soc",
+      "sha": "5ab03cf22f0583b3e5fc117eed565ee07704577c",
+      "pr": 271,
+      "preserve_live_name": false,
+      "historical_runs": 2
+    },
+    {
+      "head": "measure/rob4-physical-slot-area",
+      "sha": "958b628e0d76849a90d571592be3d57e2b1d0410",
+      "pr": null,
+      "preserve_live_name": false,
+      "historical_runs": 0
+    },
+    {
+      "head": "measure/shared-pmp-full-soc",
+      "sha": "a5c10f4ef795b24b844a05df8f3b372e78e7963c",
+      "pr": 275,
+      "preserve_live_name": false,
+      "historical_runs": 11
+    },
+    {
+      "head": "measure/shared-pmp-xc7-proxy",
+      "sha": "d87acadc11649d68eedce7448f08d0158f66078c",
+      "pr": 277,
+      "preserve_live_name": false,
+      "historical_runs": 40
+    },
+    {
+      "head": "measure/unified-data-pmp-full-soc",
+      "sha": "6b6fb46c5e4072afdcdc65a258e4bdbe5c6b865d",
+      "pr": 283,
+      "preserve_live_name": false,
+      "historical_runs": 10
+    },
+    {
+      "head": "measure/verilator-thread-count-ab",
+      "sha": "9a4841ea5774fd77aef331d2c34e6dde52a47091",
+      "pr": 364,
+      "preserve_live_name": false,
+      "historical_runs": 20
+    },
+    {
+      "head": "perf/aethercore-v2-bht64-ras4-btb16",
+      "sha": "7a3b20667e034a1b0dacebe4bd514a7a8d7ff931",
+      "pr": 207,
+      "preserve_live_name": false,
+      "historical_runs": 16
+    },
+    {
+      "head": "perf/aethercore-v2-branchsafe-hotpath-cut",
+      "sha": "257c524eca0dab8889eb3ee8a9f9445c91597085",
+      "pr": 206,
+      "preserve_live_name": false,
+      "historical_runs": 14
+    },
+    {
+      "head": "perf/aethercore-v2-dual-compute-int-shadow",
+      "sha": "354f362a046d3744d357f2ec485fdd291d231251",
+      "pr": null,
+      "preserve_live_name": false,
+      "historical_runs": 0
+    },
+    {
+      "head": "perf/aethercore-v2-dual-integer-launch",
+      "sha": "5cdc6ea10506b84d72607642fdbdd965a3db167e",
+      "pr": 209,
+      "preserve_live_name": false,
+      "historical_runs": 7
+    },
+    {
+      "head": "perf/aethercore-v2-dual-integer-shadow",
+      "sha": "e3ee5ae7cb79241a7780d59322849eeae2109762",
+      "pr": 208,
+      "preserve_live_name": false,
+      "historical_runs": 7
+    },
+    {
+      "head": "perf/aethercore-v2-memory-decomposition",
+      "sha": "3dcc61b2af3387aef76378230010fdc8e05a3ce6",
+      "pr": 162,
+      "preserve_live_name": false,
+      "historical_runs": 3
+    },
+    {
+      "head": "perf/aethercore-v2-p8-completed-branch-load-bypass",
+      "sha": "d9a9a4e71be2393f7962aa89638d207b2e46fec6",
+      "pr": null,
+      "preserve_live_name": false,
+      "historical_runs": 0
+    },
+    {
+      "head": "perf/aethercore-v2-p8-loadq3-opportunity",
+      "sha": "57fccf93fb9de095a67e485b6ac859b226b8acfe",
+      "pr": null,
+      "preserve_live_name": false,
+      "historical_runs": 0
+    },
+    {
+      "head": "perf/aethercore-v2-rob8-ab",
+      "sha": "f01bcf70a440cdbe13789f6109a91cffda41c061",
+      "pr": null,
+      "preserve_live_name": false,
+      "historical_runs": 11
+    },
+    {
+      "head": "perf/aethercore-v2-rob8-window",
+      "sha": "67396c5b10d3113e1f465d14c505985626b53c86",
+      "pr": 159,
+      "preserve_live_name": false,
+      "historical_runs": 45
+    },
+    {
+      "head": "perf/aethercore-v2-rob8-window4-ab",
+      "sha": "d2572d32344772380edefe02ffa2de3f073e4639",
+      "pr": null,
+      "preserve_live_name": false,
+      "historical_runs": 1
+    },
+    {
+      "head": "perf/fast-host-data-multislot",
+      "sha": "f94ccf460d5619aef62f05f6cdb231311b260d42",
+      "pr": 367,
+      "preserve_live_name": true,
+      "historical_runs": 35
+    }
+  ]
+}
