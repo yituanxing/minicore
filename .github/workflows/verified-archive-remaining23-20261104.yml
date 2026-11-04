@@ -1,0 +1,128 @@
+name: Verified archive 23 dormant unmerged PR heads (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-remaining23-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-archive-remaining23-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout original SHA manifest
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify dormant open PR graph and archive all 23 original HEAD commits
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected repository/ref');
+            const fs=require('fs');
+            const manifest=JSON.parse(fs.readFileSync('maintenance/remaining23-historic-pr-manifest-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/remaining23/';
+            const keep=new Set([379,378,73,72,71,70,69,49,45,44,43,42,41,40]);
+            if(manifest.repository!==owner+'/'+repo||manifest.total!==23||
+               manifest.initial_open_prs!==37||manifest.targets?.length!==23||
+               manifest.main_pin!==main||manifest.product_pin!==product||
+               new Set(manifest.targets.map(x=>x.pr)).size!==23||
+               new Set(manifest.targets.map(x=>x.head)).size!==23||
+               manifest.preserve_open_prs?.length!==14||
+               manifest.preserve_open_prs.some(n=>!keep.has(n)))
+              throw new Error('Manifest or protected PR set mismatch');
+            const byPR=new Map(manifest.targets.map(x=>[x.pr,x]));
+            const heads=new Set(manifest.targets.map(x=>x.head));
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async n=>(await retry('ref '+n,()=>github.rest.git.getRef({owner,repo,ref:n}))).data;
+            const pin=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('main/Product moved');
+            };
+            await pin();
+            const open=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            if(open.length!==37||keep.size!==14||
+               open.filter(p=>keep.has(p.number)).length!==14||
+               open.filter(p=>byPR.has(p.number)).length!==23||
+               open.some(p=>!byPR.has(p.number)&&!keep.has(p.number)))
+              throw new Error('PR cohort changed');
+            if(open.some(p=>!byPR.has(p.number)&&(heads.has(p.base.ref)||heads.has(p.head.ref))))
+              throw new Error('An active outside PR depends on archival head');
+            for(const t of manifest.targets){
+              const p=open.find(x=>x.number===t.pr);
+              if(!p||p.merged_at||p.head.ref!==t.head||p.head.sha!==t.sha||
+                 p.head.repo?.full_name!==owner+'/'+repo||p.base.ref!==t.base||
+                 Date.parse(p.updated_at)>Date.parse('2026-09-10T00:00:00Z')||
+                 !/^[a-f0-9]{40}$/.test(t.sha)||!/^[a-f0-9]{40}$/.test(t.base_current_sha))
+                throw new Error('Changed historical PR #'+t.pr);
+              if((await ref('heads/'+t.head)).object.sha!==t.sha||
+                 (await ref('heads/'+t.base)).object.sha!==t.base_current_sha)
+                throw new Error('Changed branch/base #'+t.pr);
+              const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+              if(b.protected||b.commit.sha!==t.sha)throw new Error('Protected/moved head #'+t.pr);
+              try{
+                const old=await ref('tags/'+prefix+t.head);
+                if(old.object.sha!==t.sha)throw new Error('Conflicting tag #'+t.pr);
+              }catch(e){if(e.status!==404)throw e;}
+            }
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              const runs=await retry('runs '+status,()=>github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+              if(runs.some(r=>heads.has(r.head_branch)||(r.pull_requests||[]).some(p=>byPR.has(p.number))))
+                throw new Error('Active CI on archival target '+status);
+            }
+            console.log('REMAINING23_ARCHIVE_PREFLIGHT_ALL_PASS','targets=23','open=37','outside=0','active_ci=0');
+            let created=0,previous=0;
+            for(let i=0;i<manifest.targets.length;i++){
+              const t=manifest.targets[i];
+              if(i%5===0)await pin();
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)throw new Error('Source head moved '+t.head);
+              const tag='tags/'+prefix+t.head;
+              let exists=false;
+              try{
+                const old=await ref(tag);
+                if(old.object.sha!==t.sha)throw new Error('Tag conflict '+t.head);
+                exists=true;
+              }catch(e){if(e.status!==404)throw e;}
+              if(!exists){
+                await retry('tag '+t.head,()=>github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha:t.sha}));
+                created++;
+              }else previous++;
+              let verified=false;
+              for(let k=0;k<8;k++){
+                try{if((await ref(tag)).object.sha!==t.sha)throw new Error('Wrong SHA tag '+t.head);verified=true;break;}
+                catch(e){if(e.status!==404||k===7)throw e;await new Promise(ok=>setTimeout(ok,1000));}
+              }
+              if(!verified)throw new Error('Tag not visible '+t.head);
+              console.log('REMAINING23_ARCHIVED',i+1,t.pr,t.head,t.sha);
+            }
+            await pin();
+            for(const t of manifest.targets){
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                throw new Error('Archive disappeared '+t.head);
+            }
+            console.log('REMAINING23_ARCHIVE_DONE','tags_verified=23','created='+created,
+                        'already='+previous,'prs_closed=0','branches_deleted=0');
