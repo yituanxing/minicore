@@ -1,0 +1,252 @@
+{
+  "repository": "yituanxing/minicore",
+  "date": "2026-11-04",
+  "purpose": "Index 263 historical Actions runs for 22 performance/measurement experiments, including four branches with zero CI; latest overall conclusion is not functional Linux PASS",
+  "manifest": "maintenance/measure-perf22-head-manifest-20261104.json",
+  "heads": 22,
+  "runs": 263,
+  "entries": [
+    {
+      "branch": "measure/axi4-data-latency-overlap",
+      "sha": "5348d25e4b39e7e67ef383a7322dbee4cb222b06",
+      "pr": 371,
+      "runs": 7,
+      "latest_run_id": 34180683609,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/34180683609",
+      "error": false
+    },
+    {
+      "branch": "measure/dual-load-lsu-area",
+      "sha": "a9ab5fc5d93320105ed7072da60f88050cc1877b",
+      "pr": 273,
+      "runs": 9,
+      "latest_run_id": 33293808115,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33293808115",
+      "error": false
+    },
+    {
+      "branch": "measure/loadq2-saturation-after-host-concurrency",
+      "sha": "00b8ff8dc771d7bf94d013e18a987e398ed2b7cf",
+      "pr": 369,
+      "runs": 14,
+      "latest_run_id": 34144817169,
+      "latest_status": "completed",
+      "latest_conclusion": "cancelled",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/34144817169",
+      "error": false
+    },
+    {
+      "branch": "measure/post-42k-dependency-wake-value-ceiling",
+      "sha": "614d567cb2ec79634c4fd17af7c866ef043af053",
+      "pr": 354,
+      "runs": 11,
+      "latest_run_id": 34011051384,
+      "latest_status": "completed",
+      "latest_conclusion": "cancelled",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/34011051384",
+      "error": false
+    },
+    {
+      "branch": "measure/rf-dependency-cam-full-soc",
+      "sha": "5ab03cf22f0583b3e5fc117eed565ee07704577c",
+      "pr": 271,
+      "runs": 2,
+      "latest_run_id": 33292002999,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33292002999",
+      "error": false
+    },
+    {
+      "branch": "measure/rob4-physical-slot-area",
+      "sha": "958b628e0d76849a90d571592be3d57e2b1d0410",
+      "pr": null,
+      "runs": 0,
+      "latest_run_id": null,
+      "latest_status": null,
+      "latest_conclusion": null,
+      "latest_url": null,
+      "error": false
+    },
+    {
+      "branch": "measure/shared-pmp-full-soc",
+      "sha": "a5c10f4ef795b24b844a05df8f3b372e78e7963c",
+      "pr": 275,
+      "runs": 11,
+      "latest_run_id": 33294984704,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33294984704",
+      "error": false
+    },
+    {
+      "branch": "measure/shared-pmp-xc7-proxy",
+      "sha": "d87acadc11649d68eedce7448f08d0158f66078c",
+      "pr": 277,
+      "runs": 40,
+      "latest_run_id": 33296883237,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33296883237",
+      "error": false
+    },
+    {
+      "branch": "measure/unified-data-pmp-full-soc",
+      "sha": "6b6fb46c5e4072afdcdc65a258e4bdbe5c6b865d",
+      "pr": 283,
+      "runs": 10,
+      "latest_run_id": 33298267199,
+      "latest_status": "completed",
+      "latest_conclusion": "cancelled",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33298267199",
+      "error": false
+    },
+    {
+      "branch": "measure/verilator-thread-count-ab",
+      "sha": "9a4841ea5774fd77aef331d2c34e6dde52a47091",
+      "pr": 364,
+      "runs": 20,
+      "latest_run_id": 34144592889,
+      "latest_status": "completed",
+      "latest_conclusion": "failure",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/34144592889",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-bht64-ras4-btb16",
+      "sha": "7a3b20667e034a1b0dacebe4bd514a7a8d7ff931",
+      "pr": 207,
+      "runs": 16,
+      "latest_run_id": 33067105040,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33067105040",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-branchsafe-hotpath-cut",
+      "sha": "257c524eca0dab8889eb3ee8a9f9445c91597085",
+      "pr": 206,
+      "runs": 14,
+      "latest_run_id": 33066500157,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33066500157",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-dual-compute-int-shadow",
+      "sha": "354f362a046d3744d357f2ec485fdd291d231251",
+      "pr": null,
+      "runs": 0,
+      "latest_run_id": null,
+      "latest_status": null,
+      "latest_conclusion": null,
+      "latest_url": null,
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-dual-integer-launch",
+      "sha": "5cdc6ea10506b84d72607642fdbdd965a3db167e",
+      "pr": 209,
+      "runs": 7,
+      "latest_run_id": 33070416183,
+      "latest_status": "completed",
+      "latest_conclusion": "failure",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33070416183",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-dual-integer-shadow",
+      "sha": "e3ee5ae7cb79241a7780d59322849eeae2109762",
+      "pr": 208,
+      "runs": 7,
+      "latest_run_id": 33069201204,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/33069201204",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-memory-decomposition",
+      "sha": "3dcc61b2af3387aef76378230010fdc8e05a3ce6",
+      "pr": 162,
+      "runs": 3,
+      "latest_run_id": 32691434812,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/32691434812",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-p8-completed-branch-load-bypass",
+      "sha": "d9a9a4e71be2393f7962aa89638d207b2e46fec6",
+      "pr": null,
+      "runs": 0,
+      "latest_run_id": null,
+      "latest_status": null,
+      "latest_conclusion": null,
+      "latest_url": null,
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-p8-loadq3-opportunity",
+      "sha": "57fccf93fb9de095a67e485b6ac859b226b8acfe",
+      "pr": null,
+      "runs": 0,
+      "latest_run_id": null,
+      "latest_status": null,
+      "latest_conclusion": null,
+      "latest_url": null,
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-rob8-ab",
+      "sha": "f01bcf70a440cdbe13789f6109a91cffda41c061",
+      "pr": null,
+      "runs": 11,
+      "latest_run_id": 32639656115,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/32639656115",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-rob8-window",
+      "sha": "67396c5b10d3113e1f465d14c505985626b53c86",
+      "pr": 159,
+      "runs": 45,
+      "latest_run_id": 32682077702,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/32682077702",
+      "error": false
+    },
+    {
+      "branch": "perf/aethercore-v2-rob8-window4-ab",
+      "sha": "d2572d32344772380edefe02ffa2de3f073e4639",
+      "pr": null,
+      "runs": 1,
+      "latest_run_id": 32639771420,
+      "latest_status": "completed",
+      "latest_conclusion": "success",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/32639771420",
+      "error": false
+    },
+    {
+      "branch": "perf/fast-host-data-multislot",
+      "sha": "f94ccf460d5619aef62f05f6cdb231311b260d42",
+      "pr": 367,
+      "runs": 35,
+      "latest_run_id": 34143832458,
+      "latest_status": "completed",
+      "latest_conclusion": "cancelled",
+      "latest_url": "https://github.com/yituanxing/minicore/actions/runs/34143832458",
+      "error": false
+    }
+  ]
+}
