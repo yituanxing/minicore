@@ -1,0 +1,173 @@
+name: Verified CAS delete six archived redundant legacy refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-legacy-pr135-six-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-legacy-pr135-six-delete-20261104
+  cancel-in-progress: false
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout pinned branch and preserve GitHub token for SHA-CAS deletion
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Independently recheck every protected anchor and CAS-delete only six redundant refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Wrong repository/ref');
+            const fs=require('fs'),cp=require('child_process');
+            const snapshot=JSON.parse(fs.readFileSync('maintenance/legacy-pr135-86-head-manifest-20261104.json','utf8'));
+            const decision=JSON.parse(fs.readFileSync('maintenance/legacy-pr135-86-retention-decision-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const tagPrefix='branch-archive/2026-11-04/legacy-pr135-86/';
+            const accepted=[150,151,191,204,205,213];
+            if(snapshot.repository!==owner+'/'+repo||decision.repository!==owner+'/'+repo||
+               snapshot.total!==86||snapshot.targets.length!==86||snapshot.root_pr!==135||
+               snapshot.main_pin!==main||snapshot.product_pin!==product||
+               decision.main_pin!==main||decision.product_pin!==product||
+               decision.total!==86||decision.retain_count!==80||decision.delete_count!==6||
+               decision.archive_tag_prefix!==tagPrefix)
+              throw new Error('Pinned snapshot/retention policy mismatch');
+            const targets=decision.delete_candidates;
+            if(targets.length!==6||new Set(targets.map(t=>t.pr)).size!==6||
+               targets.some(t=>!accepted.includes(t.pr))||
+               accepted.some(n=>!targets.some(t=>t.pr===n)))
+              throw new Error('Six-candidate allowlist mismatch');
+            const byPR=new Map(snapshot.targets.map(t=>[t.pr,t]));
+            for(const t of targets){
+              const old=byPR.get(t.pr);
+              if(!old||old.sha!==t.sha||old.head!==t.head||!t.already_in_main||!t.archive_exact_required)
+                throw new Error('Original exact SHA missing '+t.pr);
+            }
+            const chosen=new Set(targets.map(t=>t.pr));
+            const retained=snapshot.targets.filter(t=>!chosen.has(t.pr));
+            if(retained.length!==80||new Set(retained.map(t=>t.head)).size!==80)
+              throw new Error('Protected retention set invalid');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('RETRY',label,i+1);
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async name=>(await retry('ref '+name,()=>github.rest.git.getRef({owner,repo,ref:name}))).data;
+            const pins=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('Main/Product changed');
+            };
+            const archive=async t=>{
+              if((await ref('tags/'+tagPrefix+t.head)).object.sha!==t.sha)
+                throw new Error('Exact archival tag missing or moved for '+t.head);
+            };
+            const activeStatuses=['queued','in_progress','waiting','pending','requested'];
+            const noActive=async name=>{
+              for(const status of activeStatuses){
+                const runs=await retry('active '+name+' '+status,()=>github.paginate(
+                  github.rest.actions.listWorkflowRunsForRepo,{owner,repo,branch:name,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name))
+                  throw new Error('Still-active CI '+name+' status='+status);
+              }
+            };
+            const open=await retry('open PRs',()=>github.paginate(
+              github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            if(open.length!==37)throw new Error('Open PR count changed '+open.length);
+            for(const t of targets){
+              if(open.some(p=>p.head.ref===t.head||p.base.ref===t.head))
+                throw new Error('A live PR uses '+t.head);
+              const p=(await retry('PR '+t.pr,()=>github.rest.pulls.get({owner,repo,pull_number:t.pr}))).data;
+              if(p.state!=='closed'||p.merged_at||p.head.ref!==t.head||p.head.sha!==t.sha)
+                throw new Error('Historical PR state changed '+t.pr);
+            }
+            const checkNoLiveReference=t=>{
+              const args=['grep','-n','-F','--',t.head,'--','.',' :(exclude)maintenance/**'.trim()];
+              const res=cp.spawnSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              if(res.error)throw res.error;
+              if(res.status===0)
+                throw new Error('Tracked source/docs/workflow still mention '+t.head+' '+String(res.stdout).slice(0,400));
+              if(res.status!==1)
+                throw new Error('Unable to scan hardcoded refs '+t.head+' '+String(res.stderr).slice(0,400));
+            };
+            const isLive=async t=>{
+              try{
+                const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+                if(b.protected||b.commit.sha!==t.sha)throw new Error('Ref moved/protected '+t.head);
+                return true;
+              }catch(e){if(e.status===404)return false;throw e;}
+            };
+            const covered=async t=>{
+              const cmp=(await retry('main contains '+t.head,()=>github.rest.repos.compareCommits(
+                {owner,repo,base:t.sha,head:main}))).data;
+              if(cmp.behind_by!==0||!['ahead','identical'].includes(cmp.status))
+                throw new Error('Unique commits not in main '+t.head);
+            };
+            const checked=async t=>{
+              await pins();
+              await archive(t);
+              checkNoLiveReference(t);
+              await covered(t);
+              await noActive(t.head);
+              return await isLive(t);
+            };
+            await pins();
+            for(const t of snapshot.targets)await archive(t);
+            for(const t of retained){
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Protected historical anchor moved '+t.head);
+            }
+            let live=0;
+            for(const t of targets){
+              if(await checked(t))live++;
+              console.log('LEGACY6_PREFLIGHT',t.pr,t.head,t.sha);
+            }
+            console.log('LEGACY6_PREFLIGHT_ALL_PASS','count=6','live='+live,'retained=80','tags=86');
+            let deleted=0,already=0;
+            for(const t of targets){
+              const exists=await checked(t);
+              if(!exists){already++;continue;}
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)throw new Error('Ref moved '+t.head);
+              try{
+                cp.execFileSync('git',['push','--force-with-lease=refs/heads/'+t.head+':'+t.sha,
+                  'origin',':refs/heads/'+t.head],{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              }catch(e){
+                throw new Error('CAS push refused '+t.head+' '+String(e.stderr||e.message).slice(0,500));
+              }
+              let gone=false;
+              for(let a=0;a<8;a++){
+                try{await ref('heads/'+t.head);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(a<7)await new Promise(ok=>setTimeout(ok,1200));
+              }
+              if(!gone)throw new Error('Ref still live after CAS '+t.head);
+              await archive(t);
+              deleted++;
+              console.log('LEGACY6_CAS_DELETED',t.pr,t.head,t.sha);
+            }
+            await pins();
+            for(const t of retained)
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Retained anchor changed after deletion '+t.head);
+            for(const t of snapshot.targets)await archive(t);
+            if(deleted+already!==6)throw new Error('Final counts invalid');
+            console.log('LEGACY6_DELETE_DONE','deleted='+deleted,'already='+already,
+                        'remaining_legacy_branches=80','archives_verified=86','main_product_unchanged=true');
