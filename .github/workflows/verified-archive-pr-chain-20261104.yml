@@ -1,0 +1,309 @@
+name: Archive 44 integrated PR chain tips without modifying PRs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-pr-chain-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: archive-pr-chain-125-74-20261104
+  cancel-in-progress: false
+jobs:
+  archive-only:
+    name: Verify and archive exact tips of 44 linked PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Preflight the whole chain before creating recoverable tags
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Archive ONLY. No PR closure, branch deletion, cancellation, or code modification.
+            const {owner,repo} = context.repo;
+            const branch='maintenance/verified-branch-prune-20261104';
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+branch)
+              throw new Error('Unexpected repository or workflow ref');
+            const expectedMain='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='design/rv64gc-product-architecture-20261103';
+            const expectedProduct='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/chain-125-74/';
+            const plan=[
+              [
+                125,
+                "explore/rv64a-v1",
+                "2c708adc07d770e583cc9667a6f6a586416147f7"
+              ],
+              [
+                124,
+                "explore/rv64-sv39-core-v1",
+                "b247e14925597a3edd01f071bb12516fa8d7e2a6"
+              ],
+              [
+                123,
+                "explore/rv64-satp-csr-v1",
+                "848da9400cc9cae3a749ef5b0dc55b331c21be1a"
+              ],
+              [
+                122,
+                "explore/rv64-sv39-csr-v1",
+                "9b13bdd8f4e76fbf40a25c4824e3e4dd18e33049"
+              ],
+              [
+                121,
+                "explore/shared-vm-adapters-v1",
+                "eab1526d492afcb4a3598cc2888781da4ba57fbb"
+              ],
+              [
+                120,
+                "explore/shared-translation-unit-v1",
+                "a65d8d82f587829488a07d1a1254050b0d1bf8ca"
+              ],
+              [
+                119,
+                "explore/rv64-vm-shared-contract-v1",
+                "641e71020d46035742bd1461056e9ef3a0242d04"
+              ],
+              [
+                118,
+                "explore/shared-vm-walker-tlb-v1",
+                "16e3ce216bad5fce9fde11d01bdda74e265475de"
+              ],
+              [
+                117,
+                "explore/rv64-vm-geometry-v1",
+                "88ceb67c7342ff584e4819ae3d637b71dc2bec72"
+              ],
+              [
+                116,
+                "explore/rv64-pmp-v1",
+                "4b0bef0b52bd97a4ca4d32823f5c40d2d8275203"
+              ],
+              [
+                115,
+                "explore/rv64-supervisor-v1",
+                "f46cf0cb0d3b5e7db40480eaa7a6d3342f51bc06"
+              ],
+              [
+                114,
+                "feature/rv32c-linux-userspace",
+                "528a4a6f840ee04ca25cb53be9246b57e4a9e38c"
+              ],
+              [
+                113,
+                "feature/rv32c-linux-kernel",
+                "2fc5fe0f5ac60fedafc713def088194950ea9864"
+              ],
+              [
+                112,
+                "feature/rv32c-nuttx-sv32",
+                "8f5d1988cfafd1ff96e9d16461cc6bb29f9369b0"
+              ],
+              [
+                111,
+                "feature/rv32c-freertos",
+                "49009442b38f53c4dfc9d75d8111ba2c2f67c9eb"
+              ],
+              [
+                110,
+                "fix/rv32-spike-reference-abi",
+                "eebeb0cbd37ae8f425ce976a964cb47f7bb2673f"
+              ],
+              [
+                108,
+                "feature/rv32c-coremark",
+                "1c8ffaac4fec541a744f08c4e4279a3a661faa7f"
+              ],
+              [
+                109,
+                "refactor/rv32c-spike-reference",
+                "047eb0ef8ddb36092403d6b81f557cdf2a382329"
+              ],
+              [
+                107,
+                "feature/rv32c-parcel-fetch",
+                "80682b10ff9111379fd72636f779015a45cae00b"
+              ],
+              [
+                106,
+                "feature/rv32c-parcel-controller",
+                "d03bc35a56c80036aa86e9e1daf93ca208cab2aa"
+              ],
+              [
+                105,
+                "feature/rv32c-decompressor",
+                "d5bcf7c93d5d19dfadf6528d8ad7301c11b23b76"
+              ],
+              [
+                104,
+                "refactor/rv32c-raw-instruction",
+                "eb47d542763ed0161f0c3c46da07551372b13b7a"
+              ],
+              [
+                103,
+                "refactor/rv32c-fetch-fault-address",
+                "56d88ecb8a80f2ca28a2af41261d574448ece751"
+              ],
+              [
+                102,
+                "refactor/rv32c-retire-length",
+                "f4da0d703b10c7746a3d116b54c8b86b432f4a36"
+              ],
+              [
+                101,
+                "refactor/rv32c-instruction-transaction-width",
+                "1c8bdfef0b58e5d7600785535ff15a939e943c0c"
+              ],
+              [
+                100,
+                "refactor/rv32c-instruction-length",
+                "35aa3b0a4f68ab861fa13f806cc1589dd7398c7c"
+              ],
+              [
+                99,
+                "ci/l32-transactional-linux-cache",
+                "fac1d322a9d4c40a9bfef8c22baa0e6b6c54f19b"
+              ],
+              [
+                98,
+                "frontier/sv32-pmp-linux",
+                "19ead0c9bb5b8562871f263e072f4a19c16b9319"
+              ],
+              [
+                97,
+                "refactor/sv32-pmp-vertical-composition",
+                "996ab09eb728c38afa7ce3421b03354ad02e9464"
+              ],
+              [
+                96,
+                "refactor/physical-fetch-request-valid",
+                "2c1fc6deff8f5212911b49beaa740391b70dcfe9"
+              ],
+              [
+                95,
+                "refactor/pmp-production-pa-geometry",
+                "6582777bb8734ad46411b28881cbeacf86874d9a"
+              ],
+              [
+                89,
+                "agent/umode-pmp16-surface",
+                "990497c35db94a715a8cea4a9e08d900dbee4166"
+              ],
+              [
+                88,
+                "refactor/pmp-physical-address-geometry",
+                "080627b915f966bc3c947794f115155e82083323"
+              ],
+              [
+                87,
+                "fix/data-address-misaligned-v2",
+                "3c3c697bccb978e4dec418f7595c21ffc555dea5"
+              ],
+              [
+                85,
+                "feat/mprv-effective-data-privilege",
+                "aee6cb44e62f288b2273e394bf6202e70cf773f5"
+              ],
+              [
+                83,
+                "fix/instruction-address-misaligned",
+                "4a793d047ae77a219ddfd1847be89aa70415d2de"
+              ],
+              [
+                82,
+                "fix/core-capability-fail-closed",
+                "ac682913676e20e63241d031699b4d33f14bfd00"
+              ],
+              [
+                81,
+                "refactor/l32-sim-runtime-foundation",
+                "d34fec5c816d8e29dcc7ec2df782fc5e91df30a3"
+              ],
+              [
+                80,
+                "ci/l32-canonical-linux-signoff",
+                "cef3693c3e024aedba3009a8b254027c82398bab"
+              ],
+              [
+                78,
+                "fix/l32-frozen-linux-cache-integrity",
+                "16d30e85523f68614317029525270e47924802da"
+              ],
+              [
+                77,
+                "refactor/typed-xret-retirement",
+                "ced1830cf4fbd3c5b6164ba2fd2201d8dce9826d"
+              ],
+              [
+                76,
+                "test/shared-core-cross-xlen-fast-gate",
+                "ede42228eb207fb0f1804367312ad631acbe3f85"
+              ],
+              [
+                75,
+                "test/l32-linux-libpng",
+                "5cb53b364ffced2be365189153a7efe54f4e96a6"
+              ],
+              [
+                74,
+                "perf/l32-real-program-component-cache",
+                "7f7f02f6a4989ceb2d30a03edad23b27d3b52652"
+              ]
+            ];
+            const getRef=async ref=>(await github.rest.git.getRef({owner,repo,ref})).data;
+            const expectPins=async()=>{
+              const main=(await getRef('heads/main')).object.sha;
+              const productSHA=(await getRef('heads/'+product)).object.sha;
+              if(main!==expectedMain||productSHA!==expectedProduct)
+                throw new Error('Main or Product moved: '+main+' / '+productSHA);
+              return main;
+            };
+            const main=await expectPins();
+            const prs=await github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100});
+            const prsByNum=new Map(prs.map(p=>[p.number,p]));
+            const existing=new Set();
+            for(let i=0;i<plan.length;i++){
+              const [number,name,sha]=plan[i];
+              const p=prsByNum.get(number);
+              const expectedBase=i+1<plan.length?plan[i+1][1]:'test/l32-linux-real-programs';
+              if(!p||p.state!=='open'||p.head.ref!==name||p.head.sha!==sha||
+                 !p.head.repo||p.head.repo.full_name!==owner+'/'+repo||p.base.ref!==expectedBase)
+                throw new Error('Changed PR identity/head/base: #'+number+' '+name);
+              const b=(await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+              if(b.commit.sha!==sha)throw new Error('Head moved: '+name);
+              const cmp=(await github.rest.repos.compareCommits({owner,repo,base:sha,head:main})).data;
+              if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
+                throw new Error('Commit not in main ancestry: '+number);
+              const tag=prefix+name;
+              try{
+                const old=await getRef('tags/'+tag);
+                if(old.object.sha!==sha)throw new Error('Archive SHA collision: '+tag);
+                existing.add(tag);
+              }catch(e){if(e.status!==404)throw e;}
+              console.log('PREFLIGHT_PASS',number,name,sha,'base',expectedBase,
+                          existing.has(tag)?'tag-exists':'tag-new');
+            }
+            console.log('PREFLIGHT_ALL_PASS',plan.length,'openPRs',prs.length,'existing',existing.size);
+            await expectPins();
+            let created=0;
+            for(const [number,name,sha] of plan){
+              const tag=prefix+name;
+              const current=(await getRef('heads/'+name)).object.sha;
+              if(current!==sha)throw new Error('Branch moved before archive: '+name);
+              const pr=(await github.rest.pulls.get({owner,repo,pull_number:number})).data;
+              if(pr.state!=='open'||pr.head.sha!==sha||pr.head.ref!==name)
+                throw new Error('PR changed before archive: '+number);
+              if(!existing.has(tag)){
+                await github.rest.git.createRef({owner,repo,ref:'refs/tags/'+tag,sha});
+                created++;
+              }
+              const stored=(await getRef('tags/'+tag)).object.sha;
+              if(stored!==sha)throw new Error('Archive verification failed: '+name);
+              console.log('ARCHIVE_VERIFIED',number,tag,sha);
+            }
+            await expectPins();
+            console.log('CHAIN_ARCHIVE_DONE', 'verified='+plan.length,'new_tags='+created,
+                        'previous_tags='+existing.size,'PRs_closed=0','branches_deleted=0');
