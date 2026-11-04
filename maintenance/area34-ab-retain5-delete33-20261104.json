@@ -1,0 +1,200 @@
+{
+  "repository": "yituanxing/minicore",
+  "date": "2026-11-04",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "087a3ed9588c8fe4ff99b682957f3adbe70230aa",
+  "source_manifest": "maintenance/area34-ab-head-manifest-20261104.json",
+  "ci_evidence": "maintenance/area34-ab-ci-evidence-20261104.json",
+  "tag_prefix": "branch-archive/2026-11-04/area-ab-34/",
+  "description": "Four area qualification/freeze anchors and PA32 Stage1 300-run milestone stay live. CAS-delete only the other 33 archived experimental refs after rechecking docs, active CI, open PR, SHA and tags.",
+  "protected_area_refs": [
+    {
+      "name": "area/plic10-ab",
+      "sha": "037c8787932a6c19903b76e719ecb0614fdc17c2"
+    },
+    {
+      "name": "area/plic16-address22-qualification",
+      "sha": "830b1b717a47587dfbf16ce40528006e28118b96"
+    },
+    {
+      "name": "area/plic16-qualification",
+      "sha": "8a7f7106ed364a8cf7d166688a1a9fc4b05919e2"
+    },
+    {
+      "name": "area/rob4-physical-scheduling-v1",
+      "sha": "345592d6164c0a66905ce6b7d413db5bf20cf9de"
+    },
+    {
+      "name": "area/pa32-stage1-ab",
+      "sha": "a2b1273c5f5825797f2f87fdfea059b0ee31e9b5"
+    }
+  ],
+  "delete_count": 33,
+  "delete_targets": [
+    {
+      "pr": 269,
+      "head": "area/dependency-producer-cam-ab",
+      "sha": "6f8fe04ccdb4e3e069636a015f52a3b70fe8731b"
+    },
+    {
+      "pr": 270,
+      "head": "area/rf-dependency-cam-integrated",
+      "sha": "c860ff62dd1b51e8df0c0caf503cb4b5e56c2b1b"
+    },
+    {
+      "pr": 274,
+      "head": "area/dual-load-shared-pmp-ab",
+      "sha": "9f2349493bf1f7b2c164cc6af2000145d6356c0c"
+    },
+    {
+      "pr": 282,
+      "head": "area/unified-data-pmp-ab",
+      "sha": "fd049b058264afe59848ea853eab6cdda45a2960"
+    },
+    {
+      "pr": 289,
+      "head": "area/aethersoc-plic10-ab",
+      "sha": "d74a6e4cac8ee1a017a472f5cf7a1ebe05016a93"
+    },
+    {
+      "pr": 303,
+      "head": "area/tlb4-ab",
+      "sha": "778b75e13d08554ff59c6a39662c88eedad24f1a"
+    },
+    {
+      "pr": 304,
+      "head": "area/fpga-physical-top-ab",
+      "sha": "93ed612854ab44a5cce6a3bd98683c606c2a878d"
+    },
+    {
+      "pr": 306,
+      "head": "area/pa32-stage2-compact-tlb",
+      "sha": "4ddcc15185a99233867f53c071491eee97378236"
+    },
+    {
+      "pr": 313,
+      "head": "area/plic-address22-ab",
+      "sha": "19e151dfafc9d3c9cc872aca7622b62c44918e48"
+    },
+    {
+      "pr": 314,
+      "head": "area/plic-priority1-ab",
+      "sha": "0692c2b4aff736b9cc95b9b4291536f821243d71"
+    },
+    {
+      "pr": 315,
+      "head": "area/power2-platform-decode-ab",
+      "sha": "c72550a01299bfefa1a99fb430a6acbff95fe846"
+    },
+    {
+      "pr": 317,
+      "head": "area/plic16-address22-priority1-ab",
+      "sha": "b0f07b0f7b2e9403b56e8dc03c1d082559a766ce"
+    },
+    {
+      "pr": 318,
+      "head": "area/plic16-address22-prefix-ab",
+      "sha": "223aba1ecb0f6c2fea4eae1d13c55b8aac4e1974"
+    },
+    {
+      "pr": 320,
+      "head": "area/plic15-ab",
+      "sha": "39445e662895534d32f67216766f2d175c093b01"
+    },
+    {
+      "pr": 322,
+      "head": "area/plic-priority-index-decode-ab",
+      "sha": "aa7e6ee8bb8213d4cfda18888d44efc4f7f4da91"
+    },
+    {
+      "pr": 324,
+      "head": "area/plic-wired-source-ab",
+      "sha": "da76d29161f68e46325dc9ffa47eecb0860f0503"
+    },
+    {
+      "pr": 326,
+      "head": "area/axi-sparse-read-slots-ab",
+      "sha": "a90da9fe6f47de39329e20a4ec6bdb1c79c44934"
+    },
+    {
+      "pr": 327,
+      "head": "area/compact-txn3-ab",
+      "sha": "42b9aa5e389cc1cdc8be7b981daadba8531463f7"
+    },
+    {
+      "pr": 328,
+      "head": "area/bootrom-local-offset-ab",
+      "sha": "e1bd2b16da67571740ab5c50ee2069a91346213a"
+    },
+    {
+      "pr": 329,
+      "head": "area/bootrom-prefix-hit-ab",
+      "sha": "1a32ce78ba9ffac51a31ca06cb24d6161cec416b"
+    },
+    {
+      "pr": 330,
+      "head": "area/ram-prefix-only-ab",
+      "sha": "e725b3727c80247cb51bc83fbe6338dd22a3a597"
+    },
+    {
+      "pr": 331,
+      "head": "area/uart-prefix-only-ab",
+      "sha": "216372d1eb206857b38656c9ff5c4c3d0b1f6c03"
+    },
+    {
+      "pr": 332,
+      "head": "area/plic-prefix-only-ab",
+      "sha": "ed0fe5ca0a745897ebbcd939a5d8630afec41ca7"
+    },
+    {
+      "pr": 333,
+      "head": "area/uart-countdown-phy-ab",
+      "sha": "c8d9599697e2b8e2c7849ed82a3a0c28cf9c0162"
+    },
+    {
+      "pr": 334,
+      "head": "area/fpga-disable-sim-exit-ab",
+      "sha": "01066066fee254a88a76a97e77c2eca672b06f7e"
+    },
+    {
+      "pr": 335,
+      "head": "area/icache-single-read-port-refill-ab",
+      "sha": "ae51f78162cc59993b9352a65a2b838a5f904645"
+    },
+    {
+      "pr": 336,
+      "head": "area/icache-tag-mask-single-read-ab",
+      "sha": "f9bfe6b35abf2c3c676bf32437a46016a9d15e55"
+    },
+    {
+      "pr": 337,
+      "head": "area/fpga-disable-cache-counters-ab",
+      "sha": "5f818ecc3b1e369bd08e05f5d842728423ff13bf"
+    },
+    {
+      "pr": 342,
+      "head": "area/dcache-lineepoch-ram-ab",
+      "sha": "b05f3c742030bfebcb0a9797925d35402846820c"
+    },
+    {
+      "pr": 343,
+      "head": "area/integer-word-single-datapath-ab",
+      "sha": "52129932b0feb55e8b601bef19f74c52b6571df7"
+    },
+    {
+      "pr": 347,
+      "head": "area/share-ptw-pmp-after-arbiter-ab",
+      "sha": "3d911d96880838724146cd86fae12fbe04372dbf"
+    },
+    {
+      "pr": 349,
+      "head": "area/share-ptw-pmp-post-44k-ab",
+      "sha": "334bd0f42f07af91b60bed8584dd47ba49b12021"
+    },
+    {
+      "pr": 350,
+      "head": "area/share-data-pmp-range-decode-ab",
+      "sha": "131e29c089c7fa77dd500f4e1934503dd2e80575"
+    }
+  ]
+}
