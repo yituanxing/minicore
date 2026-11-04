@@ -1,0 +1,100 @@
+name: Verified archive six historic measurement harness PRs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-measure-harness-six-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-measure-harness-six-archive-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Archive six historical measurement harness commits without deleting anything
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const basePins={"soc/aethercore-v0-icache":"a502a71df7aac98d3997615e71b29661939ebb5e"};
+            const targets=[[230,"measure/aethercore-v0-icache-cost","1fff2e5d426ba2012b17ac46be41cb964643cd61","soc/aethercore-v0-icache",3],[262,"measure/aethercore-translation-unit-area","855a7b1af12804e09851137f9bb0484b23d833d7","main",2],[263,"measure/aethercore-translation-parts-area","e747f5de3e13d98010780baea6c6910b16936064","main",3],[267,"measure/aethercore-dependency-state-area","d4b8d7a6d4c71d9a6fffac4fb3455f5aab2a9c4f","main",2],[298,"measure/rob4-wide-mux-cost","2cce3249656c2122da9f1c456948b60956672fab","main",2],[299,"measure/rob4-crossbar-area","cd6178a35809d3f8405feaa57f52efb548fc640a","main",2]];
+            const expectedFiles={230:[".github/workflows/v2-soc-icache-cost.yml","src/main/scala/aethercore/ElaborateV2ICacheSynthesisRV64.scala"],262:[".github/workflows/v2-translation-unit-area.yml","src/main/scala/aethercore/ElaborateTranslationUnitSynthesisRV64.scala"],263:[".github/workflows/v2-translation-parts-area.yml","src/main/scala/aethercore/ElaboratePageTableWalkerSynthesisRV64.scala","src/main/scala/aethercore/ElaborateTranslationTlbSynthesisRV64.scala"],267:[".github/workflows/v2-dependency-state-area.yml","src/main/scala/aethercore/ElaborateTinyDependencyStateSynthesisRV64.scala"],298:[".github/workflows/rob4-wide-mux-cost.yml","src/main/scala/aethercore/RobMuxCost.scala"],299:[".github/workflows/rob4-crossbar-area.yml","src/main/scala/aethercore/ElaborateRobArea.scala"]};            const prefix='branch-archive/2026-11-04/historic-measure-harness-six/';
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('READ_RETRY',label,i+1);
+                  await new Promise(resolve=>setTimeout(resolve,450*(2**i)));
+                }
+              }
+            };
+            const ref=async s=>(await retry('ref '+s,()=>github.rest.git.getRef({owner,repo,ref:s}))).data;
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('main/Product changed '+m+'/'+p);
+              for(const [base,sha] of Object.entries(basePins)){
+                if((await ref('heads/'+base)).object.sha!==sha)throw new Error('Base branch moved '+base);
+              }
+            };
+            await pin();
+            const open=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            const active=[];
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              active.push(...await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100})));
+            }
+            for(const [n,name,sha,base,unique] of targets){
+              const p=(await retry('PR '+n,()=>github.rest.pulls.get({owner,repo,pull_number:n}))).data;
+              if(p.state!=='open'||p.merged_at||p.head.ref!==name||p.head.sha!==sha||
+                 p.head.repo?.full_name!==owner+'/'+repo||p.base.ref!==base)
+                throw new Error('PR changed #'+n);
+              if(open.some(q=>q.number!==n&&(q.head.ref===name||q.base.ref===name)))
+                throw new Error('Dependent open PR #'+n);
+              const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+              if(b.protected||b.commit.sha!==sha)throw new Error('Head moved '+name);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base,head:sha}))).data;
+              if(cmp.ahead_by!==unique||!['ahead','diverged'].includes(cmp.status))
+                throw new Error('Unique commits changed #'+n+' found='+cmp.ahead_by);
+              const files=await retry('files '+n,()=>github.paginate(github.rest.pulls.listFiles,{owner,repo,pull_number:n,per_page:100}));
+              if(files.map(f=>f.filename).sort().join('|')!==expectedFiles[n].slice().sort().join('|')||files.some(f=>f.status!=='added'))
+                throw new Error('Unexpected measurement file diff in #'+n);
+              if(Date.parse(p.updated_at)>Date.parse('2026-09-03T00:00:00Z'))throw new Error('PR recently updated #'+n);
+              if(active.some(r=>r.head_branch===name||(r.pull_requests||[]).some(q=>q.number===n)))
+                throw new Error('Active CI #'+n);
+              try{const a=await ref('tags/'+prefix+name);if(a.object.sha!==sha)throw new Error('Conflicting tag '+name);}
+              catch(e){if(e.status!==404)throw e;}
+              console.log('MEASURE_SIX_PREFLIGHT',n,name,sha,'unique='+unique,'base='+base);
+            }
+            console.log('MEASURE_SIX_PREFLIGHT_ALL_PASS',targets.length);
+            await pin();
+            let created=0,previous=0;
+            for(const [n,name,sha] of targets){
+              await pin();
+              const p=(await retry('PR '+n,()=>github.rest.pulls.get({owner,repo,pull_number:n}))).data;
+              if(p.state!=='open'||p.head.ref!==name||p.head.sha!==sha)throw new Error('PR changed during archiving #'+n);
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Head moved '+name);
+              const tag='tags/'+prefix+name;
+              let exists=false;
+              try{const x=await ref(tag);if(x.object.sha!==sha)throw new Error('Tag mismatch '+name);exists=true;}
+              catch(e){if(e.status!==404)throw e;}
+              if(!exists){await github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha});created++;}
+              else previous++;
+              let verified=false;
+              for(let i=0;i<8;i++){
+                try{if((await ref(tag)).object.sha!==sha)throw new Error('Archive changed '+name);verified=true;break;}
+                catch(e){if(e.status!==404||i===7)throw e;await new Promise(resolve=>setTimeout(resolve,1300));}
+              }
+              if(!verified)throw new Error('Archive invisible '+name);
+              console.log('MEASURE_SIX_ARCHIVE_VERIFIED',n,name,sha);
+            }
+            console.log('MEASURE_HARNESS_SIX_ARCHIVE_DONE','verified='+targets.length,'created='+created,'previous='+previous,'PRs_closed=0','branches_deleted=0');
