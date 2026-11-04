@@ -1,0 +1,115 @@
+name: Verified CAS delete two merged and archived redundant refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-fully-in-main-two-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-in-main-two-delete-20261104
+  cancel-in-progress: false
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout maintenance branch for exact SHA lease deletion
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Recheck main coverage, archive tags and lease-delete two redundant refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const targets=[["ci/github-hosted-cache-v1-checkpoint","ea59394855992c489d45d880e2879eae7aeb5558","main","7ff35c6acdc3068754292bba814e4ec52ba4ec50"],["release/aethersoc-v0-post-promote-docs","3baf54d444fc1978164fb5c44014d08c11c6366b","main","7ff35c6acdc3068754292bba814e4ec52ba4ec50"]];
+            const prefix='branch-archive/2026-11-04/fully-in-main-two/';
+            const cp=require('child_process');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(resolve=>setTimeout(resolve,450*(2**i)));
+                }
+              }
+            };
+            const ref=async s=>(await retry('ref '+s,()=>github.rest.git.getRef({owner,repo,ref:s}))).data;
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('Main/Product moved');
+              for(const [name,sha,desc,descsha] of targets){
+                if((await ref('heads/'+desc)).object.sha!==descsha)
+                  throw new Error('Retained descendant moved '+desc);
+              }
+            };
+            const noOpen=async name=>{
+              const open=await retry('open PR',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+              if(open.some(p=>p.head.ref===name||p.base.ref===name))throw new Error('Open PR depends '+name);
+            };
+            const noActive=async name=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name))throw new Error('Active CI '+name+' '+status);
+              }
+            };
+            const archiveSHA=async name=>(await ref('tags/'+prefix+name)).object.sha;
+            const validate=async(name,sha,desc,descsha)=>{
+              if(await archiveSHA(name)!==sha)throw new Error('Archive moved '+name);
+              await noOpen(name);
+              await noActive(name);
+              if((await ref('heads/'+desc)).object.sha!==descsha)
+                throw new Error('Descendant moved '+desc);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:sha,head:descsha}))).data;
+              if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
+                throw new Error('Commit no longer covered '+name);
+              try{
+                const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Head moved/protected '+name);
+                return true;
+              }catch(e){if(e.status!==404)throw e;return false;}
+            };
+            await pin();
+            const mergedPR=(await retry('merged PR 258',()=>github.rest.pulls.get({owner,repo,pull_number:258}))).data;
+            if(mergedPR.state!=='closed'||!mergedPR.merged_at||mergedPR.head.ref!=='release/aethersoc-v0-post-promote-docs'||mergedPR.head.sha!=='3baf54d444fc1978164fb5c44014d08c11c6366b')
+              throw new Error('Historic release PR #258 changed');
+            let live=0;
+            for(const [name,sha,desc,descsha] of targets){
+              const exists=await validate(name,sha,desc,descsha);
+              if(exists)live++;
+              console.log('COVERED_DELETE_PREFLIGHT',name,sha,'descendant='+desc,exists?'live':'already_gone');
+            }
+            console.log('COVERED_DELETE_PREFLIGHT_ALL_PASS',targets.length,'live='+live);
+            await pin();
+            let deleted=0,previous=0;
+            for(const [name,sha,desc,descsha] of targets){
+              await pin();
+              const exists=await validate(name,sha,desc,descsha);
+              if(!exists){previous++;console.log('ALREADY_DELETED',name);continue;}
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Head moved '+name);
+              const args=['push','--force-with-lease=refs/heads/'+name+':'+sha,'origin',':refs/heads/'+name];
+              try{cp.execFileSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});}
+              catch(e){throw new Error('CAS refused '+name+' '+String(e.stderr||e.message).slice(0,500));}
+              let gone=false;
+              for(let i=0;i<8;i++){
+                try{await ref('heads/'+name);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(i<7)await new Promise(resolve=>setTimeout(resolve,1500));
+              }
+              if(!gone)throw new Error('Ref still live '+name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive changed '+name);
+              deleted++;console.log('COVERED_CAS_DELETED',name,sha);
+            }
+            await pin();
+            if(deleted+previous!==targets.length)throw new Error('Final count mismatch');
+            console.log('IN_MAIN_TWO_DELETE_DONE','deleted='+deleted,'previous='+previous,'archives_verified='+targets.length);
