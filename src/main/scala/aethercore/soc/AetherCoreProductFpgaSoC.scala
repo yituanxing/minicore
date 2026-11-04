@@ -47,7 +47,8 @@ class AetherCoreProductFpgaSoC(
     val icacheHitCount = Output(UInt(64.W))
     val icacheMissCount = Output(UInt(64.W))
 
-    val commit = Output(new CommitTrace(Xlen, implementedPaddrBits, DataBits))
+    val commit = Output(new CommitTrace(Xlen, implementedPaddrBits, DataBits,
+      withFloating = config.software.isa.extensions.contains('F')))
     val retire = Valid(new ProductRetirement(
       Xlen,
       log2Ceil(geometry.robEntries),

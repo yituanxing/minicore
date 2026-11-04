@@ -147,4 +147,49 @@ class FloatingCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.io.fpStateEnabled.expect(true.B)
     }
   }
+
+  it should "keep clean FP state clean for a flag-free read and retain saved FCSR across FS Off" in {
+    simulate(new MachineCsrFile(rv64gc, 32, false, false)) { d =>
+      initialize(d)
+      write(d, MachineCsrAddress.Mstatus, BigInt(2) << MachineCsrBit.MstatusFsLow)
+      retireFp(d, flags = 0, dirty = false)
+      ((read(d, MachineCsrAddress.Mstatus) >> 13) & 3) shouldBe 2
+      write(d, FloatingCsrAddress.Fcsr, BigInt("a1", 16))
+      read(d, FloatingCsrAddress.Fcsr) shouldBe BigInt("a1", 16)
+
+      // Linux may mark FP state Off between context switches. A direct CSR
+      // write while Off must never mutate the saved FCSR state, even if its
+      // caller bypasses the instruction-level illegal-access evaluator.
+      write(d, SupervisorCsrAddress.Sstatus, 0)
+      d.io.fpStateEnabled.expect(false.B)
+      write(d, FloatingCsrAddress.Fcsr, BigInt("e0", 16))
+      d.io.readAddr.poke(FloatingCsrAddress.Fcsr.U)
+      d.io.readImplemented.expect(false.B)
+      write(d, SupervisorCsrAddress.Sstatus, BigInt(2) << MachineCsrBit.MstatusFsLow)
+      d.io.fpStateEnabled.expect(true.B)
+      read(d, FloatingCsrAddress.Fcsr) shouldBe BigInt("a1", 16)
+      ((read(d, MachineCsrAddress.Mstatus) >> 63) & 1) shouldBe 0
+    }
+  }
+
+  it should "derive RV32 SD from FS Dirty in bit 31 without aliasing FCSR" in {
+    val rv32f = IsaConfig(
+      xlen = 32,
+      extensions = Set('I', 'M', 'A', 'F'),
+      privilegeModes = Set('M', 'S', 'U'),
+      zExtensions = Set("Zicsr"),
+      virtualMemoryModes = Set("Sv32"),
+      pmpEntries = 16)
+    simulate(new MachineCsrFile(rv32f, 32, false, false)) { d =>
+      initialize(d)
+      write(d, MachineCsrAddress.Mstatus, BigInt(1) << MachineCsrBit.MstatusFsLow)
+      write(d, FloatingCsrAddress.Frm, 6)
+      read(d, FloatingCsrAddress.Frm) shouldBe 6 // reserved frm is CSR-readable
+      ((read(d, MachineCsrAddress.Mstatus) >> 31) & 1) shouldBe 1
+      ((read(d, SupervisorCsrAddress.Sstatus) >> 31) & 1) shouldBe 1
+      write(d, SupervisorCsrAddress.Sstatus, BigInt(2) << MachineCsrBit.MstatusFsLow)
+      ((read(d, MachineCsrAddress.Mstatus) >> 31) & 1) shouldBe 0
+      read(d, FloatingCsrAddress.Frm) shouldBe 6
+    }
+  }
 }

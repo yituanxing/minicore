@@ -11,6 +11,8 @@ on:
       - 'src/main/scala/aethercore/sim/AetherCoreProductUnifiedMemoryCompatSimTop.scala'
       - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/test/scala/aethercore/ProductCommitTraceSpec.scala'
+      - 'src/test/scala/aethercore/ProductFloatingCommitTraceSpec.scala'
+      - 'src/main/scala/aethercore/common/Interfaces.scala'
       - 'src/test/scala/aethercore/AetherCoreProductUnifiedMemorySoCSpec.scala'
       - 'src/test/scala/aethercore/AetherCoreProductSoCElaborationSpec.scala'
       - 'src/test/scala/aethercore/ProductGeometrySoCSpec.scala'
@@ -156,6 +158,7 @@ jobs:
         run: |
           ./mill aethercore.test.testOnly \
             aethercore.ProductCommitTraceSpec \
+            aethercore.ProductFloatingCommitTraceSpec \
             aethercore.AetherCoreProductUnifiedMemorySoCSpec \
             aethercore.AetherCoreProductSoCElaborationSpec \
             aethercore.ProductGeometrySoCSpec

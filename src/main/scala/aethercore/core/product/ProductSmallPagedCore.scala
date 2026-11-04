@@ -2,7 +2,7 @@ package aethercore.core.product
 
 import aethercore.common.{CommitTrace, InstructionBusIO, MachineExceptionCode, PageTableReadBusIO, PrivilegeMode, TrapInfo}
 import aethercore.config.PageTableGeometry
-import aethercore.core.{InstructionFetchAdapter, MachineCsrBit, MachineCsrFile,
+import aethercore.core.{FloatingCsrAddress, InstructionFetchAdapter, MachineCsrBit, MachineCsrFile,
   PmpAccessChecker, PmpConstants, PmpRangeDecoder, PtwArbiter, RvcParcelController}
 import aethercore.core.semantic._
 import aethercore.memory.{AetherMemRequest, AetherMemResponse, MemoryAttributes}
@@ -69,7 +69,8 @@ class ProductSmallPagedCore(
     val retire = Valid(new ProductRetirement(Xlen, I, P, G, PA))
     // CommitTrace.valid means one instruction retired. An asynchronous
     // interrupt is a separate clean-boundary event and may have valid=false.
-    val commit = Output(new CommitTrace(Xlen, PA, Xlen))
+    val commit = Output(new CommitTrace(Xlen, PA, Xlen,
+      withFloating = isa.extensions.contains('F')))
     val currentPrivilege = Output(UInt(2.W))
     val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
     val recovering = Output(Bool())
@@ -203,6 +204,14 @@ class ProductSmallPagedCore(
   io.commit.rd := core.io.retire.bits.rd
   io.commit.rdWrite := retiring && core.io.retire.bits.wroteRegister
   io.commit.rdData := core.io.retire.bits.value
+  if (isa.extensions.contains('F')) {
+    val fpCsrWrite = pendingEffect.csrWriteValid &&
+      (pendingEffect.csrAddress === FloatingCsrAddress.Fflags.U ||
+        pendingEffect.csrAddress === FloatingCsrAddress.Frm.U ||
+        pendingEffect.csrAddress === FloatingCsrAddress.Fcsr.U)
+    ProductFloatingRetirementTrace.connect(io.commit.floating.get,
+      core.io.retire.bits, retiring, fpCsrWrite)
+  }
   io.commit.memValid := retiring && core.io.retire.bits.memoryTrace.valid && !retireFault
   io.commit.memWrite := io.commit.memValid && core.io.retire.bits.memoryTrace.write
   io.commit.memAddr := core.io.retire.bits.memoryTrace.paddr

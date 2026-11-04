@@ -23,6 +23,7 @@ on:
       - 'src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala'
       - 'src/test/scala/aethercore/ProductFpUnitSpec.scala'
       - 'src/test/scala/aethercore/ProductFpBackendSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpMemoryIntegrationSpec.scala'
       - 'src/test/scala/aethercore/FpSemanticDecodeSpec.scala'
       - 'src/test/scala/aethercore/SharedSemanticDecodeSpec.scala'
       - 'src/test/scala/aethercore/V2FoundationTypesSpec.scala'
@@ -134,6 +135,7 @@ jobs:
             aethercore.ProductMUnitSpec \
             aethercore.ProductFpUnitSpec \
             aethercore.ProductFpBackendSpec \
+            aethercore.ProductFpMemoryIntegrationSpec \
             aethercore.ProductPhysicalLsqSpec \
             aethercore.ProductSmallMemoryCoreSpec \
             aethercore.ProductDataResolverSpec \
