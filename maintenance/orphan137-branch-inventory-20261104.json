@@ -1,0 +1,1245 @@
+{
+  "repository": "yituanxing/minicore",
+  "snapshot_date": "2026-11-04",
+  "description": "Inventory only. No branch deletion implied. Excludes 80 retained legacy135, 23 archived historic PR heads, 14 active PR heads, main, Product and maintenance.",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "087a3ed9588c8fe4ff99b682957f3adbe70230aa",
+  "remote_branches_total": 256,
+  "orphan_count": 137,
+  "open_pr_count": 14,
+  "entries": [
+    {
+      "name": "agent/ci-pipeline-refactor",
+      "sha": "14aa55493df6f918b3a9454f996a90682c767f3a",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/freertos-external-interrupt",
+      "sha": "c220ccb228aa4bdaea7a741844063020c2b32abc",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/freertos-rv32-difftest",
+      "sha": "011b530354b139f733af1f364decccb566f81086",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-busybox-shell",
+      "sha": "0c306e06c8c20fbb17e2b3f9abfcb1249ba1f9b9",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-6.6.143-build",
+      "sha": "fb15c55183381010fe2dbcf3ae2ceb36c23c9fef",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-build-current",
+      "sha": "a34eef93fd4d108e52926e2ccd03894179e536d3",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-build-next",
+      "sha": "70ecd9869a8f78ee9ee09159e0c30c9346536433",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-deeper-boot",
+      "sha": "2b506e8429a8020e6856fef711ce5bab45bbeb36",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-early-boot",
+      "sha": "01efceeed2f6eeb762d5725bfc15f81d89acae8a",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-early-boot-v2",
+      "sha": "4db6728efdfa683c3255c0b59bc967dcc0e6af74",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-first-boot",
+      "sha": "7524d00c8e8a5dd5cd38b1a37f3dfd312e970592",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-handoff",
+      "sha": "c63804c30163f747e4d62aebef423fa9a9c5d108",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-kernel-init",
+      "sha": "318b193c080c41c3e49b24a1a0179412ec25836c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-linux-timer-diag",
+      "sha": "6a527c3f73202645af49bc0d8ea7fc140d263a81",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-minimal-initramfs",
+      "sha": "66ca5f0b1f2bdd0448ffb66d63d6d1fa83629210",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-opensbi-exec-next",
+      "sha": "8637c086062f7dbe68f0c68fd057aeec6689379d",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-opensbi-linux",
+      "sha": "42fb3ac2eb115d65aa152069e9adb7c0bab2dc25",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/l32-supervisor-uart-irq",
+      "sha": "86270bd3773dedc77ce3573022eb70d868160147",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/machine-timer-interrupt",
+      "sha": "20e4bfde44ee33090514adf676ed4ce83b6efed6",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/n5-plic-next",
+      "sha": "342a74ba7db101bb901fb24b810352cc07e7684b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/n5-sstc-next",
+      "sha": "ff6f106208d5c80c947f6af0160b097b684471c6",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/nuttx-sv32-batch-next",
+      "sha": "01e531155d55eff817da110964eabeaa8f18cd84",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/nuttx-sv32-pmp-prep",
+      "sha": "42bd2bd38f574f1132e03090cf2a7a461186fcb8",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/rv32-difftest",
+      "sha": "dd481a380c94cfedf8b1d727c554fe53eb36e1d3",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/rv32im-preemptive-scheduler",
+      "sha": "f9fd6c934503a923c5ce4b4e656803892de4c343",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/rv32imu-isolated-scheduler",
+      "sha": "bebab3d663c47ca4beff58b06215d2a65c98f218",
+      "protected": false,
+      "role_open_pr_base": true,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/rv32imu-syscall",
+      "sha": "e42e3d2d02b2319ee2a582a9d3dd68627d76c8f3",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/sv32-v2-minimal-translation",
+      "sha": "43817d899cd335610a8a4467bc3dff6d4e405d98",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/zephyr-host-ci-base",
+      "sha": "9e2eaa11726aea7dbb5a073088be344037d2528a",
+      "protected": false,
+      "role_open_pr_base": true,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "agent/zephyr-stage-resume-prep",
+      "sha": "49acdeef357b74aa01c4f8a0beb79cdd3b61e0bb",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "arch/aethercore-v2-dcache-stage1",
+      "sha": "2e039b71f3166b31d8727043bfe30e8033e4aae9",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "arch/aethercore-v2-p8-2-generalized-recovery",
+      "sha": "88eee934df2b6387dc8bc81b639cba68560ee0ce",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "arch/aethercore-v2-p8-2-integration",
+      "sha": "6f00207ae79254114032de7c76531ebd5aec0339",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "arch/aethercore-v2-p8-2-r4-selective-branch",
+      "sha": "c375c48f58d721c082aa5a9610b53825a897482c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "arch/aethercore-v2-p8-3-completion-overlap",
+      "sha": "02e912bac4632c32fc18082999f9af19b1ef6a16",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "arch/aethercore-v2-xlen-vm-platform-boundary",
+      "sha": "a118ffda746d6826a3d9d3d6c064b2da6d7da178",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/aethersoc-plic10-ab",
+      "sha": "d74a6e4cac8ee1a017a472f5cf7a1ebe05016a93",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/axi-sparse-read-slots-ab",
+      "sha": "a90da9fe6f47de39329e20a4ec6bdb1c79c44934",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/bootrom-local-offset-ab",
+      "sha": "e1bd2b16da67571740ab5c50ee2069a91346213a",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/bootrom-prefix-hit-ab",
+      "sha": "1a32ce78ba9ffac51a31ca06cb24d6161cec416b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/compact-txn3-ab",
+      "sha": "42b9aa5e389cc1cdc8be7b981daadba8531463f7",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/dcache-lineepoch-ram-ab",
+      "sha": "b05f3c742030bfebcb0a9797925d35402846820c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/dependency-producer-cam-ab",
+      "sha": "6f8fe04ccdb4e3e069636a015f52a3b70fe8731b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/dual-load-shared-pmp-ab",
+      "sha": "9f2349493bf1f7b2c164cc6af2000145d6356c0c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/fpga-disable-cache-counters-ab",
+      "sha": "5f818ecc3b1e369bd08e05f5d842728423ff13bf",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/fpga-disable-sim-exit-ab",
+      "sha": "01066066fee254a88a76a97e77c2eca672b06f7e",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/fpga-physical-top-ab",
+      "sha": "93ed612854ab44a5cce6a3bd98683c606c2a878d",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/icache-single-read-port-refill-ab",
+      "sha": "ae51f78162cc59993b9352a65a2b838a5f904645",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/icache-tag-mask-single-read-ab",
+      "sha": "f9bfe6b35abf2c3c676bf32437a46016a9d15e55",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/integer-word-single-datapath-ab",
+      "sha": "52129932b0feb55e8b601bef19f74c52b6571df7",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/pa32-stage1-ab",
+      "sha": "a2b1273c5f5825797f2f87fdfea059b0ee31e9b5",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/pa32-stage2-compact-tlb",
+      "sha": "4ddcc15185a99233867f53c071491eee97378236",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic10-ab",
+      "sha": "037c8787932a6c19903b76e719ecb0614fdc17c2",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic15-ab",
+      "sha": "39445e662895534d32f67216766f2d175c093b01",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic16-address22-prefix-ab",
+      "sha": "223aba1ecb0f6c2fea4eae1d13c55b8aac4e1974",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic16-address22-priority1-ab",
+      "sha": "b0f07b0f7b2e9403b56e8dc03c1d082559a766ce",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic16-address22-qualification",
+      "sha": "830b1b717a47587dfbf16ce40528006e28118b96",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic16-qualification",
+      "sha": "8a7f7106ed364a8cf7d166688a1a9fc4b05919e2",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic-address22-ab",
+      "sha": "19e151dfafc9d3c9cc872aca7622b62c44918e48",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic-prefix-only-ab",
+      "sha": "ed0fe5ca0a745897ebbcd939a5d8630afec41ca7",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic-priority1-ab",
+      "sha": "0692c2b4aff736b9cc95b9b4291536f821243d71",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic-priority-index-decode-ab",
+      "sha": "aa7e6ee8bb8213d4cfda18888d44efc4f7f4da91",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/plic-wired-source-ab",
+      "sha": "da76d29161f68e46325dc9ffa47eecb0860f0503",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/power2-platform-decode-ab",
+      "sha": "c72550a01299bfefa1a99fb430a6acbff95fe846",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/ram-prefix-only-ab",
+      "sha": "e725b3727c80247cb51bc83fbe6338dd22a3a597",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/rf-dependency-cam-integrated",
+      "sha": "c860ff62dd1b51e8df0c0caf503cb4b5e56c2b1b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/rob4-physical-scheduling-v1",
+      "sha": "345592d6164c0a66905ce6b7d413db5bf20cf9de",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/share-data-pmp-range-decode-ab",
+      "sha": "131e29c089c7fa77dd500f4e1934503dd2e80575",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/share-ptw-pmp-after-arbiter-ab",
+      "sha": "3d911d96880838724146cd86fae12fbe04372dbf",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/share-ptw-pmp-post-44k-ab",
+      "sha": "334bd0f42f07af91b60bed8584dd47ba49b12021",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/tlb4-ab",
+      "sha": "778b75e13d08554ff59c6a39662c88eedad24f1a",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/uart-countdown-phy-ab",
+      "sha": "c8d9599697e2b8e2c7849ed82a3a0c28cf9c0162",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/uart-prefix-only-ab",
+      "sha": "216372d1eb206857b38656c9ff5c4c3d0b1f6c03",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "area/unified-data-pmp-ab",
+      "sha": "fd049b058264afe59848ea853eab6cdda45a2960",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "diag/v2-f7-pid1-forkserver",
+      "sha": "ffa837c4d936b3291bbfd5d5d55e5090dac4204e",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "explore/linux-frontier-stall-v1",
+      "sha": "37705724cf27d4b4278993a9cfdb1c97dcf373f2",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "explore/rv32c-freertos",
+      "sha": "fb4363a07dc6fb126c931df806087196de4beaf4",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "explore/rv32c-spike-reference",
+      "sha": "85d9f87df9949adbbe95dae35bab80596ba89ba9",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "explore/rv64-linux-busybox-v1",
+      "sha": "015ce16715b4764e3aa0ac02228b8129e4554bd3",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "explore/rv64-linux-deeper-v1",
+      "sha": "140b226bfe09157610406c339c18fc783305f37b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": true,
+      "role_legacy86_base": true,
+      "freeze_named": false
+    },
+    {
+      "name": "explore/validation-artifacts-v1",
+      "sha": "21a27bed39d294f784009899af29b05bc3821cb6",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": true,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "feature/aethercore-v2-f1-actual",
+      "sha": "958aa89a7f78a606b4bed184382ab6ea6671b8ef",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "fix/data-address-misaligned",
+      "sha": "d28bafcf1ccc8f0bcc16d950189043f01940a9af",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "fix/l32-reproducible-frozen-linux",
+      "sha": "b3dff221e43e2b33bd048f07de3ff999013698f3",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "fix/rv32a-natural-alignment",
+      "sha": "14dcd2c4e287786261e6e6fea7a3af381d95c70a",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "freeze/nuttx-13.0.0-n1-n4",
+      "sha": "cd3ce492cc5c9d47acb673128d199cf0a3949e0b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": true
+    },
+    {
+      "name": "freeze/nuttx-13.0.0-p1-p3-protected",
+      "sha": "5f3789a28f2b751a4b51fe9031a56ea07e129baa",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": true
+    },
+    {
+      "name": "freeze/nuttx-protected-rv32ima-p1-p2",
+      "sha": "56fe8aedc5a5d71ac778b3dd2dade0907daf6b8a",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": true
+    },
+    {
+      "name": "freeze/smode-v1-minimal-trap",
+      "sha": "af71ea1903da3cd9d956a457acd097560e4b4591",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": true
+    },
+    {
+      "name": "freeze/sv32-v2-minimal-translation",
+      "sha": "9486da87b70660e1abd0fb552b8bf9b91a27bc9d",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": true
+    },
+    {
+      "name": "freeze/zephyr-v3.7.2-z1-z4",
+      "sha": "555427849f278769b1c81889b9e137710c0e195b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": true
+    },
+    {
+      "name": "measure/axi4-data-latency-overlap",
+      "sha": "5348d25e4b39e7e67ef383a7322dbee4cb222b06",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/dcache-fullbeat-oracle",
+      "sha": "a84d99d9b3b4e7492e9aa4908002923d0a2f21bb",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/dual-load-lsu-area",
+      "sha": "a9ab5fc5d93320105ed7072da60f88050cc1877b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/icache-fullbeat-oracle",
+      "sha": "5415eff22ca48ae13aec26808c4fe0995ed64d39",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/icache-safe-fullbeat-same-fw-ab",
+      "sha": "8727d246ab5a77925dc0459bdb2e4fb6c362d617",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/loadq2-saturation-after-host-concurrency",
+      "sha": "00b8ff8dc771d7bf94d013e18a987e398ed2b7cf",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/post-42k-dependency-wake-value-ceiling",
+      "sha": "614d567cb2ec79634c4fd17af7c866ef043af053",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/rf-dependency-cam-full-soc",
+      "sha": "5ab03cf22f0583b3e5fc117eed565ee07704577c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/rob4-physical-slot-area",
+      "sha": "958b628e0d76849a90d571592be3d57e2b1d0410",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/rv64-busybox-axi4-concurrency",
+      "sha": "57d886ba7204acf9220373fe5db9ff2487d451e0",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/shared-pmp-full-soc",
+      "sha": "a5c10f4ef795b24b844a05df8f3b372e78e7963c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/shared-pmp-xc7-proxy",
+      "sha": "d87acadc11649d68eedce7448f08d0158f66078c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/unified-data-pmp-full-soc",
+      "sha": "6b6fb46c5e4072afdcdc65a258e4bdbe5c6b865d",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "measure/verilator-thread-count-ab",
+      "sha": "9a4841ea5774fd77aef331d2c34e6dde52a47091",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-bht64-ras4-btb16",
+      "sha": "7a3b20667e034a1b0dacebe4bd514a7a8d7ff931",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-branchsafe-hotpath-cut",
+      "sha": "257c524eca0dab8889eb3ee8a9f9445c91597085",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-dual-compute-int-shadow",
+      "sha": "354f362a046d3744d357f2ec485fdd291d231251",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-dual-integer-launch",
+      "sha": "5cdc6ea10506b84d72607642fdbdd965a3db167e",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-dual-integer-shadow",
+      "sha": "e3ee5ae7cb79241a7780d59322849eeae2109762",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-memory-decomposition",
+      "sha": "3dcc61b2af3387aef76378230010fdc8e05a3ce6",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-p8-completed-branch-load-bypass",
+      "sha": "d9a9a4e71be2393f7962aa89638d207b2e46fec6",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-p8-general-safe-load-ooo",
+      "sha": "e8c6819db26778e942941fa61d4048e38e41b768",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-p8-loadq3-opportunity",
+      "sha": "57fccf93fb9de095a67e485b6ac859b226b8acfe",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-rob8-ab",
+      "sha": "f01bcf70a440cdbe13789f6109a91cffda41c061",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-rob8-window",
+      "sha": "67396c5b10d3113e1f465d14c505985626b53c86",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethercore-v2-rob8-window4-ab",
+      "sha": "d2572d32344772380edefe02ffa2de3f073e4639",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/aethersoc-v0-pmp-napot-compact",
+      "sha": "1fbf2cc09f98d9d1e56daeef7a941e1fb04dfac3",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": true,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/dcache-1k-formal",
+      "sha": "b4b32c9499a6fd7b0187fe9510fa9c6005c479f9",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/dcache-128-busybox-ab",
+      "sha": "8288b3269a1b86528e61578d15dcdf7c5308a737",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/dcache-256-busybox-ab",
+      "sha": "7aff17774707890240587e735d028e77d68dd41b",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/fast-host-data-multislot",
+      "sha": "f94ccf460d5619aef62f05f6cdb231311b260d42",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "perf/l32-linux-runtime-fastpath",
+      "sha": "2b5acae3af4e95711e7b8632608f9c5a4e3025b7",
+      "protected": false,
+      "role_open_pr_base": true,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "productize/pa32-fpga-v1-ready",
+      "sha": "2698b8e4403cb7d502846073c0a5a91a3b12cd39",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "refactor/instruction-physical-request-valid",
+      "sha": "b07038353537af4ecde6069ba6ee9234adb4f0e6",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "release/aethersoc-v0-freeze",
+      "sha": "102fc5ea05ac17b91d5790f6a8c66c3ca867b769",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethercore-v0-icache-authorized-linefill",
+      "sha": "53a8ede052508376942054b6e4002501f042a4fc",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-cpu-complex",
+      "sha": "45527159d6c1c305682eea612d128a02aa6bc4c2",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-physical-seams",
+      "sha": "0e08a71714cb011629b1d3d3d7b6113d750cea66",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-platform-fabric",
+      "sha": "bc6340e2542bbc5ac5a326514055d522186c49dd",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-plic-peripheral",
+      "sha": "ca25cad7bb8d837fc2e3ce704cef69f36d56bd00",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-timer-peripheral",
+      "sha": "515c37daf22ccbd1ebfb6bfc43b18a256a942f2c",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-uart-peripheral",
+      "sha": "b38761305bea395c84588e19dbc7339bbd9f752d",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-virtual-fpga-board",
+      "sha": "b624698b850b0a6974acdec8d530adccd460ae4e",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "soc/aethersoc-v0-virtual-fpga-pid1",
+      "sha": "d47c0e504789ce4abcc58877327e73e0724f2059",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "staging/aethercore-v2-foundation-restack",
+      "sha": "d7993ec0d0203ca106057a2cd78f1023ff456f7d",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    },
+    {
+      "name": "test/plic16-priority-boundary",
+      "sha": "61eb771ce4916d10481b7edacce0ec0edd4d47cd",
+      "protected": false,
+      "role_open_pr_base": false,
+      "role_historic23_base": false,
+      "role_legacy86_base": false,
+      "freeze_named": false
+    }
+  ]
+}
