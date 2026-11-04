@@ -22,6 +22,8 @@ on:
       - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala'
       - 'src/test/scala/aethercore/ProductFpUnitSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpArithmeticSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpArithmeticRecoverySpec.scala'
       - 'src/test/scala/aethercore/ProductFpBackendSpec.scala'
       - 'src/test/scala/aethercore/ProductFpMemoryIntegrationSpec.scala'
       - 'src/test/scala/aethercore/FpSemanticDecodeSpec.scala'
@@ -134,6 +136,8 @@ jobs:
             aethercore.ProductSmallIntegerCoreSpec \
             aethercore.ProductMUnitSpec \
             aethercore.ProductFpUnitSpec \
+            aethercore.ProductFpArithmeticSpec \
+            aethercore.ProductFpArithmeticRecoverySpec \
             aethercore.ProductFpBackendSpec \
             aethercore.ProductFpMemoryIntegrationSpec \
             aethercore.ProductPhysicalLsqSpec \

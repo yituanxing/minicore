@@ -48,6 +48,9 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     val systemCsrReadImplemented = Input(Bool())
     val systemCsrReadWritable = Input(Bool())
     val systemCurrentPrivilege = Input(UInt(2.W))
+    // Dynamic IEEE rounding is sourced from the sole architectural CSR
+    // owner.  Non-F targets elaborate neither this port nor the FP lane.
+    val fpDynamicRoundingMode = if (enableFloating) Some(Input(UInt(3.W))) else None
     val retire = Decoupled(new ProductRetirement(64, I, P, G, PA))
     val redirect = Valid(new ProductRedirect(64, I, G))
     val trap = Valid(new ProductRetirement(64, I, P, G, PA))
@@ -118,6 +121,10 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     Mux(issueM, m.io.request.ready, integer.io.request.ready))
   if (enableFloating) {
     val unit = fp.get
+    unit.io.dynamicRoundingMode := io.fpDynamicRoundingMode.get
+    // Recovery removes only the identified younger ROB lifetime.  A global
+    // FU reset here would incorrectly discard an older in-flight FP divide.
+    unit.io.kill := backend.io.fpKill.get
     unit.io.request <> backend.io.fpIssue.get
     backend.io.fpAvailable.get := unit.io.available
     completion.io.in(4) <> unit.io.response

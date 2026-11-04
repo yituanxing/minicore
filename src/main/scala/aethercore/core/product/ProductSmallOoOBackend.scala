@@ -269,6 +269,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
     val memoryReserve = Decoupled(new ProductMemReservation(I, F, G))
     val memoryHead = Valid(new ProductRobId(I, G))
     val memoryKill = Valid(new ProductRobId(I, G))
+    // Exact victim token, not a global redirect pulse. A mispredicted branch
+    // must not cancel an older long-latency floating-point operation.
+    val fpKill = if (enableFloating) Some(Valid(new ProductRobId(I, G))) else None
     val systemHead = Decoupled(new ProductSystemHead(Xlen, I, F, G))
     val completion = Flipped(Decoupled(new ProductCompletion(Xlen, I, F, G, paddrBits)))
     val retire = Decoupled(new ProductRetirement(Xlen, I, F, G, paddrBits))
@@ -330,6 +333,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   io.memoryHead.bits := 0.U.asTypeOf(io.memoryHead.bits)
   io.memoryKill.valid := false.B
   io.memoryKill.bits := 0.U.asTypeOf(io.memoryKill.bits)
+  if (enableFloating) {
+    io.fpKill.get.valid := false.B
+    io.fpKill.get.bits := 0.U.asTypeOf(io.fpKill.get.bits)
+  }
   io.systemHead.valid := false.B
   io.systemHead.bits := 0.U.asTypeOf(io.systemHead.bits)
 
@@ -598,6 +605,14 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
       io.memoryKill.valid := victim.memoryKind =/= MemoryOperationKind.None
       io.memoryKill.bits.index := victimIndex
       io.memoryKill.bits.generation := victim.tokenGeneration
+      if (enableFloating) {
+        // The FP lane locally compares this lifetime against its outstanding
+        // token. Sending every victim needs no extra per-ROB FP classification
+        // bit and handles FP->XPR operations just as safely as FP->FPR ones.
+        io.fpKill.get.valid := true.B
+        io.fpKill.get.bits.index := victimIndex
+        io.fpKill.get.bits.generation := victim.tokenGeneration
+      }
       when(victim.writes && victim.destinationFile === ProductRegisterFile.Integer) {
         speculativeRat(victim.rd) := victim.oldPhysical
         free(victim.newPhysical.index) := true.B

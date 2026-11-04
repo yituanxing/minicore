@@ -44,7 +44,7 @@ class ProductSmallPagedCore(
   require(isa.hasS && isa.hasU,
     "ProductSmallPagedCore requires machine, supervisor and user privilege")
   require(!isa.extensions.contains('F') && !isa.extensions.contains('D'),
-    "ProductSmallPagedCore has no F/D execution or FCSR state; use the LP64 engineering profile")
+    "ProductSmallPagedCore F/D is not yet qualified with paged privilege/FS and LP64D; use LP64")
   require(!withSupervisorExternalInterrupt || isa.hasS,
     "supervisor external interrupt requires implemented S-mode")
 
@@ -104,6 +104,9 @@ class ProductSmallPagedCore(
   core.io.systemCsrReadImplemented := csrFile.io.readImplemented
   core.io.systemCsrReadWritable := csrFile.io.readWritable
   core.io.systemCurrentPrivilege := csrFile.io.currentPrivilege
+  if (isa.extensions.contains('F')) {
+    core.io.fpDynamicRoundingMode.get := csrFile.io.fpRoundingMode
+  }
 
   core.io.context.effectivePrivilege := csrFile.io.effectiveDataPrivilege
   core.io.context.satpEnabled := csrFile.io.satpTranslationEnabled
@@ -334,6 +337,15 @@ class ProductSmallPagedCore(
       decoded.exception.valid := true.B
       decoded.exception.cause := MachineExceptionCode.IllegalInstruction.U(Xlen.W)
       decoded.exception.value := Cat(0.U(32.W), decode.io.decoded.rawInst)
+      // An exception-only ROB entry must not reserve an FPR/XPR physical
+      // destination or LSQ ownership.  Otherwise a full free list could
+      // prevent the instruction from reaching its *precise* illegal trap.
+      decoded.floating := 0.U.asTypeOf(new DecodedFloatingOperation)
+      decoded.memory := 0.U.asTypeOf(new DecodedMemoryOperation)
+      decoded.usesRs1 := false.B
+      decoded.usesRs2 := false.B
+      decoded.writesRd := false.B
+      decoded.ordering := OrderingClass.Normal
     }
   }
   private val sequentialNextPc = pc + decoded.instBytes

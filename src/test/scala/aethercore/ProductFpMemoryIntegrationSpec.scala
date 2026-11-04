@@ -66,6 +66,8 @@ private class ProductFpMemoryHarness extends Module {
   core.io.systemCsrReadImplemented := false.B
   core.io.systemCsrReadWritable := false.B
   core.io.systemCurrentPrivilege := PrivilegeMode.Machine.U
+  // The isolated harness has no CSR bank; use the RNE architectural default.
+  core.io.fpDynamicRoundingMode.get := 0.U
 }
 
 class ProductFpMemoryIntegrationSpec extends AnyFlatSpec with Matchers with ChiselSim {

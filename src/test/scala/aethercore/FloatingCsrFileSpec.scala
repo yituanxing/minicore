@@ -3,10 +3,25 @@ package aethercore
 import aethercore.config.IsaConfig
 import aethercore.core.{FloatingCsrAddress, MachineCsrAddress, MachineCsrFile,
   MachineCsrBit, SupervisorCsrAddress}
+import aethercore.core.semantic.FloatingRoundingMode
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+
+/** Only arithmetic may consume frm; FSGNJ/FCMP/FCLASS/FMVs do not. */
+private class FloatingRoundingProbe extends Module {
+  val io = IO(new Bundle {
+    val instructionRm = Input(UInt(3.W))
+    val frm = Input(UInt(3.W))
+    val effective = Output(UInt(3.W))
+    val valid = Output(Bool())
+  })
+  val (effective, valid) = FloatingRoundingMode.resolveForArithmetic(
+    io.instructionRm, io.frm)
+  io.effective := effective
+  io.valid := valid
+}
 
 /** Architectural FP status is updated by retirement, never by speculative FP completion. */
 class FloatingCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
@@ -190,6 +205,19 @@ class FloatingCsrFileSpec extends AnyFlatSpec with Matchers with ChiselSim {
       write(d, SupervisorCsrAddress.Sstatus, BigInt(2) << MachineCsrBit.MstatusFsLow)
       ((read(d, MachineCsrAddress.Mstatus) >> 31) & 1) shouldBe 0
       read(d, FloatingCsrAddress.Frm) shouldBe 6
+    }
+  }
+
+  it should "resolve all static and dynamic rounding encodings without corrupting raw frm" in {
+    simulate(new FloatingRoundingProbe) { d =>
+      for (instructionRm <- 0 to 7; frm <- 0 to 7) {
+        d.io.instructionRm.poke(instructionRm.U)
+        d.io.frm.poke(frm.U)
+        val effective = if (instructionRm == FloatingRoundingMode.Dynamic) frm
+          else instructionRm
+        d.io.effective.expect(effective.U)
+        d.io.valid.expect((effective <= FloatingRoundingMode.LargestLegal).B)
+      }
     }
   }
 }

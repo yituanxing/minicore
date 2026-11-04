@@ -5,8 +5,9 @@ processor able to run an upstream Debian riscv64 distribution on a physical
 board. The hardware implementation is **not** yet qualified for that target.
 
 This experiment compares the **same single-wide `ProductSmallMemoryCore`**
-between two architectural switches. It isolates the cost of newly added FPR
-rename/PRF, FP IQ dependencies, one FP bit-level FU and FP completion routing.
+between two architectural switches. It measures the combined cost of FPR
+rename/PRF, FP IQ dependencies, bit-level FP operations, HardFloat IEEE
+arithmetic (including iterative division/square-root) and completion routing.
 It does not compare unrelated two-wide pipelines or larger ROBs.
 
 | Setting | Geometry | ISA request | Physical address | Meaning |
@@ -33,12 +34,17 @@ the representative non-F full-board-shell comparison.
 
 Important qualification limits:
 
-- F/D-on uses the real optional FPR/ROB/LSQ path, but the FPU currently
-  implements only sign/minmax/compare/classify/move operations. General
-  IEEE-754 arithmetic remains *precisely illegal* pending qualified IP.
+- F/D-on contains HardFloat-backed arithmetic and conversions as well as the
+  real optional FPR/ROB/LSQ path. Having synthesizable IP is **not** proof of
+  ISA-complete numerical behavior: rounding, NaN, exceptions and recovery
+  still require independent directed and differential verification.
 - `ProductSmallPagedCore` still rejects F/D. This experiment cannot run
   OpenSBI or Debian, nor qualify supervisor FS context switching.
 - `synth_ecp5` and `ltp -noff` are a board-neutral **area/depth proxy**, not
   routed device Fmax, timing closure or physical FPGA DDR/PLL feasibility.
+- The floating RTL uses `io.github.ucb-substrate::hardfloat:0.1.1` with a
+  pinned Chisel 7.8.0 toolchain. Before distributing netlists/bitstreams,
+  review and preserve the per-source HardFloat copyright/license notices;
+  the published Maven POM license label alone is not a sufficient audit.
 - This opt-in test deliberately does not run on every PR push: synthesis is
   expensive, and broad architecture batches should trigger it when meaningful.

@@ -5,13 +5,13 @@ import aethercore.core.semantic.{FloatingFormat, FloatingOperationKind}
 import chisel3._
 import chisel3.util._
 
-/** FPGA-synthesizable, exact bit-level RV64 F/D slice.
+/** FPGA-synthesizable RV64 F/D execution cluster with one FP lifetime.
   *
-  * It deliberately does not pretend that integer arithmetic can implement
-  * IEEE addition, multiplication, FMA, division, square root, or rounding
-  * conversions.  Those operations complete as an IllegalInstruction until
-  * a separately qualified arithmetic IP is attached.  The rest of the OoO
-  * pipeline still preserves their precise ROB lifetime and original mtval.
+  * Real IEEE arithmetic, conversion and iterative division/square root use
+  * HardFloat. Sign/minmax/compare/classify/move use exact bit-level logic.
+  * Both share a single ROB completion interface, floating rounding state
+  * and a token-qualified recovery path. Numerical qualification still
+  * requires independently executed simulation/differential regressions.
   *
   * Sign, min/max, comparisons, class and moves are implemented with their
   * actual architectural floating-point semantics, including NaN boxing,
@@ -27,10 +27,28 @@ class ProductFpUnit(val geometry: ProductCoreGeometry, val paddrBits: Int = 56)
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(new ProductFpIssue(Xlen, I, P, G)))
     val response = Decoupled(new ProductCompletion(Xlen, I, P, G, paddrBits))
+    // Architectural FCSR.frm is sampled only when an rm=111 arithmetic uOp
+    // actually issues. The exact-head SYSTEM lane serializes earlier CSR writes.
+    val dynamicRoundingMode = Input(UInt(3.W))
+    // One recovery victim per cycle, qualified by ROB index AND generation.
+    // Never flush all FP work on redirect: older FP work must survive.
+    val kill = Flipped(Valid(new ProductRobId(I, G)))
     val available = Output(Bool())
   })
 
   val req = io.request.bits
+  // Long-latency IEEE arithmetic/conversion is owned by qualified HardFloat,
+  // while bit-level moves, classification, comparison and sign/minmax stay
+  // here. No fabricated integer approximation is permitted on the math path.
+  val arithmetic = Module(new ProductFpArithmetic(geometry, paddrBits))
+  val arithmeticKind = Seq(
+    FloatingOperationKind.Add, FloatingOperationKind.Sub,
+    FloatingOperationKind.Mul, FloatingOperationKind.Div,
+    FloatingOperationKind.Sqrt, FloatingOperationKind.Fma,
+    FloatingOperationKind.Fmsub, FloatingOperationKind.Fnmsub,
+    FloatingOperationKind.Fnmadd, FloatingOperationKind.ConvertToInt,
+    FloatingOperationKind.ConvertFromInt, FloatingOperationKind.ConvertFormat
+  ).map(req.floating.kind === _).reduce(_ || _)
   val single = req.floating.format === FloatingFormat.Single
   val canonicalSingle = "h7fc00000".U(32.W)
   val canonicalDouble = "h7ff8000000000000".U(64.W)
@@ -150,13 +168,46 @@ class ProductFpUnit(val geometry: ProductCoreGeometry, val paddrBits: Int = 56)
   }
 
   val held = RegInit(false.B)
+  val arithmeticInFlight = RegInit(false.B)
+  val arithmeticToken = Reg(new ProductRobId(I, G))
   val responseReg = Reg(new ProductCompletion(Xlen, I, P, G, paddrBits))
-  io.available := !held || io.response.ready
-  io.request.ready := io.available
-  io.response.valid := held
-  io.response.bits := responseReg
+  val bitKilled = io.kill.valid && held &&
+    io.kill.bits.index === responseReg.token.index &&
+    io.kill.bits.generation === responseReg.token.generation
+  val arithmeticKilled = io.kill.valid && arithmeticInFlight &&
+    io.kill.bits.index === arithmeticToken.index &&
+    io.kill.bits.generation === arithmeticToken.generation
 
-  when(io.request.fire) {
+  // Small, one-wide FPGA composition: at most one *FP* operation in flight.
+  // Integer and memory instructions may still execute while HardFloat is
+  // busy. The shared completion port has no hidden second retire owner.
+  io.available := !held && !arithmeticInFlight && arithmetic.io.available &&
+    !io.kill.valid
+  // Availability is deliberately request-independent for the backend IQ
+  // scheduler. Handshake readiness may additionally depend on the selected
+  // operation: an iterative div/sqrt must wait for HardFloat.inReady, even
+  // if the cluster otherwise has no outstanding FP lifetime.
+  io.request.ready := io.available &&
+    (!arithmeticKind || arithmetic.io.request.ready)
+  arithmetic.io.request.valid := io.request.valid && io.available && arithmeticKind
+  arithmetic.io.request.bits := req
+  arithmetic.io.frm := io.dynamicRoundingMode
+  arithmetic.io.flush := arithmeticKilled
+  arithmetic.io.response.ready := io.response.ready && !held
+
+  io.response.valid := Mux(held, !bitKilled, arithmetic.io.response.valid)
+  io.response.bits := Mux(held, responseReg, arithmetic.io.response.bits)
+
+  when(arithmetic.io.request.fire) {
+    arithmeticInFlight := true.B
+    arithmeticToken := req.token
+  }.elsewhen(arithmeticKilled || arithmetic.io.response.fire) {
+    arithmeticInFlight := false.B
+  }
+
+  when(bitKilled) {
+    held := false.B
+  }.elsewhen(io.request.fire && !arithmeticKind) {
     held := true.B
     responseReg := 0.U.asTypeOf(responseReg)
     responseReg.token := req.token
@@ -177,7 +228,11 @@ class ProductFpUnit(val geometry: ProductCoreGeometry, val paddrBits: Int = 56)
     responseReg.exception.cause := Mux(supported, 0.U,
       MachineExceptionCode.IllegalInstruction.U)
     responseReg.exception.value := Mux(supported, 0.U, req.rawInst)
-  }.elsewhen(io.response.fire) {
+  }.elsewhen(io.response.fire && held) {
     held := false.B
+  }
+
+  when(arithmeticInFlight) {
+    assert(!held, "a one-wide FP unit cannot have simultaneous bit and arithmetic owners")
   }
 }

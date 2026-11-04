@@ -6,9 +6,9 @@ import aethercore.core.product.{ProductCoreProfiles, ProductSmallMemoryCore}
 /** Isolated one-wide FPGA *core* cost oracle, not an FPGA SoC or Linux machine.
   *
   * Compare the same executable SmallOoO geometry with its architectural F/D
-  * resources off/on. The FP-enabled lane still intentionally traps unqualified
-  * IEEE arithmetic. This entrypoint makes FPR/IQ/LSQ cost visible without
-  * lying about ProductSmallPagedCore (which continues to reject F/D).
+  * resources off/on. The FP-enabled lane contains HardFloat F/D arithmetic
+  * as well as FPR/IQ/LSQ; the full ProductSmallPagedCore still rejects F/D
+  * until numerical, privileged and physical-platform qualification completes.
   *
   * Usage: ... ElaborateProductFloatingSlice small|expanded integer|floating
   *        --target-dir PATH

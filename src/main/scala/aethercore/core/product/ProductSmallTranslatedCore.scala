@@ -17,6 +17,7 @@ import chisel3.util._
 class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: Int = 8)
     extends Module {
   private val g = config.geometry
+  private val enableFloating = config.software.isa.extensions.contains('F')
   private val geom = PageTableGeometry.Sv39
   private val I = log2Ceil(g.robEntries)
   private val P = log2Ceil(g.integerPhysicalRegisters)
@@ -45,6 +46,7 @@ class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: 
     val systemCsrReadImplemented = Input(Bool())
     val systemCsrReadWritable = Input(Bool())
     val systemCurrentPrivilege = Input(UInt(2.W))
+    val fpDynamicRoundingMode = if (enableFloating) Some(Input(UInt(3.W))) else None
     val retire = Decoupled(new ProductRetirement(64, I, P, G, PA))
     val redirect = Valid(new ProductRedirect(64, I, G))
     val trap = Valid(new ProductRetirement(64, I, P, G, PA))
@@ -96,6 +98,7 @@ class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: 
   core.io.systemCsrReadImplemented := io.systemCsrReadImplemented
   core.io.systemCsrReadWritable := io.systemCsrReadWritable
   core.io.systemCurrentPrivilege := io.systemCurrentPrivilege
+  if (enableFloating) core.io.fpDynamicRoundingMode.get := io.fpDynamicRoundingMode.get
 
   io.retire.valid := core.io.retire.valid
   io.retire.bits := core.io.retire.bits

@@ -8,7 +8,9 @@ import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/** IEEE bit-level FP regression, independent of any unqualified arithmetic IP. */
+/** IEEE FP execution regression covering bit-level operations and the
+  * independently owned, HardFloat-backed arithmetic/rounding lane.
+  */
 class ProductFpUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
   behavior of "Small Product FP bit-level execution unit"
 
@@ -19,6 +21,9 @@ class ProductFpUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     d.io.request.valid.poke(false.B)
     d.io.request.bits.poke(0.U.asTypeOf(d.io.request.bits))
     d.io.response.ready.poke(false.B)
+    d.io.dynamicRoundingMode.poke(0.U)
+    d.io.kill.valid.poke(false.B)
+    d.io.kill.bits.poke(0.U.asTypeOf(d.io.kill.bits))
     d.clock.step()
   }
 
@@ -29,6 +34,7 @@ class ProductFpUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
       a: BigInt,
       b: BigInt = BigInt(0),
       subop: Int = 0,
+      roundingMode: Int = 0,
       intLhs: BigInt = BigInt(0),
       expected: BigInt,
       fflags: Int = 0,
@@ -45,6 +51,7 @@ class ProductFpUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     d.io.request.bits.floating.kind.poke(kind)
     d.io.request.bits.floating.format.poke(format)
     d.io.request.bits.floating.subop.poke(subop.U)
+    d.io.request.bits.floating.roundingMode.poke(roundingMode.U)
     d.io.request.bits.fpLhs.poke(a.U)
     d.io.request.bits.fpRhs.poke(b.U)
     d.io.request.bits.intLhs.poke(intLhs.U)
@@ -53,6 +60,13 @@ class ProductFpUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     d.io.request.ready.expect(true.B)
     d.clock.step()
     d.io.request.valid.poke(false.B)
+    // Iterative IEEE div/sqrt and other qualified arithmetic need not
+    // complete one cycle after issue; an ROB completion is still mandatory.
+    var cycles = 0
+    while (!d.io.response.valid.peek().litToBoolean && cycles < 400) {
+      d.clock.step()
+      cycles += 1
+    }
     d.io.response.valid.expect(true.B)
     d.io.response.bits.token.index.expect(2.U)
     d.io.response.bits.token.generation.expect(1.U)
@@ -185,15 +199,68 @@ class ProductFpUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
-  it should "trap genuinely unsupported arithmetic without manufacturing an FP result" in {
+  it should "route IEEE arithmetic to the qualified engine without manufacturing results" in {
     simulate(new ProductFpUnit(profile.geometry)) { d =>
       init(d)
-      run(d, FloatingOperationKind.Add, FloatingFormat.Double, BigInt(0),
-        expected = 0, illegal = true)
-      run(d, FloatingOperationKind.Div, FloatingFormat.Single, BigInt(0),
-        expected = 0, illegal = true)
-      run(d, FloatingOperationKind.ConvertToInt, FloatingFormat.Single, BigInt(0),
-        expected = 0, illegal = true)
+      run(d, FloatingOperationKind.Add, FloatingFormat.Double,
+        BigInt("3ff0000000000000", 16), BigInt("4000000000000000", 16),
+        expected = BigInt("4008000000000000", 16)) // 1+2=3
+      run(d, FloatingOperationKind.Mul, FloatingFormat.Single,
+        Box | BigInt("40000000", 16), Box | BigInt("40400000", 16),
+        expected = Box | BigInt("40c00000", 16)) // 2*3=6
+      run(d, FloatingOperationKind.Add, FloatingFormat.Double,
+        BigInt("3ff0000000000000", 16), BigInt("3ff0000000000000", 16),
+        roundingMode = 5, expected = 0, illegal = true)
+    }
+  }
+
+  it should "preserve an older divide across an unrelated younger recovery token" in {
+    simulate(new ProductFpUnit(profile.geometry)) { d =>
+      init(d)
+      d.io.request.bits.poke(0.U.asTypeOf(d.io.request.bits))
+      d.io.request.bits.token.index.poke(2.U)
+      d.io.request.bits.token.generation.poke(6.U)
+      d.io.request.bits.destination.index.poke(33.U)
+      d.io.request.bits.destination.generation.poke(4.U)
+      d.io.request.bits.destinationFile.poke(ProductRegisterFile.Floating)
+      d.io.request.bits.hasDestination.poke(true.B)
+      d.io.request.bits.floating.kind.poke(FloatingOperationKind.Div)
+      d.io.request.bits.floating.format.poke(FloatingFormat.Double)
+      d.io.request.bits.fpLhs.poke("h3ff0000000000000".U)
+      d.io.request.bits.fpRhs.poke("h4008000000000000".U)
+      d.io.request.valid.poke(true.B)
+      d.io.request.ready.expect(true.B)
+      d.clock.step()
+      d.io.request.valid.poke(false.B)
+
+      // Recovery of a different, younger ROB lifetime must not kill this
+      // outstanding divide or release its FP issue slot prematurely.
+      d.io.kill.valid.poke(true.B)
+      d.io.kill.bits.index.poke(3.U)
+      d.io.kill.bits.generation.poke(6.U)
+      d.clock.step()
+      d.io.kill.valid.poke(false.B)
+      var cycles = 0
+      while (!d.io.response.valid.peek().litToBoolean && cycles < 400) {
+        d.clock.step()
+        cycles += 1
+      }
+      d.io.response.valid.expect(true.B)
+      d.io.response.bits.token.index.expect(2.U)
+      d.io.response.bits.token.generation.expect(6.U)
+      d.io.response.bits.value.expect("h3fd5555555555555".U)
+      d.io.response.bits.fflags.expect(1.U) // inexact 1/3
+
+      // Same index, *different generation* is also an unrelated lifetime.
+      d.io.kill.valid.poke(true.B)
+      d.io.kill.bits.index.poke(2.U)
+      d.io.kill.bits.generation.poke(7.U)
+      d.clock.step()
+      d.io.response.valid.expect(true.B)
+      d.io.kill.valid.poke(false.B)
+      d.io.response.ready.poke(true.B)
+      d.clock.step()
+      d.io.response.valid.expect(false.B)
     }
   }
 }

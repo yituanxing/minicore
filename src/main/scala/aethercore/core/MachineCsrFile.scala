@@ -464,6 +464,8 @@ class MachineCsrFile(
       io.writeAddr === FloatingCsrAddress.Fcsr.U)
   val fpDirtyEvent = fpCsrWrite || (fpCommitValid && fpCommitChangesState)
   io.fpStateEnabled := fpStateEnabled
+  // Preserve the architectural raw frm; the actual arithmetic unit resolves
+  // static/dynamic rm and rejects reserved encodings at *execution*.
   io.fpRoundingMode := (if (hasFloat) fpFrm.get else 0.U(3.W))
   io.fpFlags := (if (hasFloat) fpFflags.get else 0.U(5.W))
   if (hasFloat) {
