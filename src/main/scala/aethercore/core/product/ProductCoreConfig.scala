@@ -19,7 +19,10 @@ final case class ProductCoreGeometry(
     storeQueueEntries: Int,
     integerPhysicalRegisters: Int,
     integerReadPorts: Int,
-    integerWritePorts: Int
+    integerWritePorts: Int,
+    floatingPhysicalRegisters: Int = 48,
+    floatingReadPorts: Int = 3,
+    floatingWritePorts: Int = 1
 ) {
   require(Set(1, 2).contains(decodeWidth), "initial product decode width must be 1 or 2")
   require(dispatchWidth > 0 && dispatchWidth <= decodeWidth, "dispatch exceeds decode width")
@@ -32,12 +35,22 @@ final case class ProductCoreGeometry(
   require(integerPhysicalRegisters > 32, "integer PRF requires the architectural mapping plus a spare destination")
   require(integerReadPorts >= issueWidth * 2, "one 2-source integer issue requires two PRF reads")
   require(integerWritePorts >= issueWidth, "integer PRF write bandwidth must cover issue width")
+  // Geometry is independent of the ISA switch: these banks are instantiated
+  // only when the selected Product software target enables F/D.  In
+  // particular, FMA has three FP operands even on a one-wide issue path.
+  require(floatingPhysicalRegisters > 32,
+    "floating PRF requires the architectural FPR mapping plus a spare destination")
+  require(floatingReadPorts >= 3,
+    "one FP fused multiply-add needs three physical source operands")
+  require(floatingWritePorts >= 1, "a floating destination requires a write port")
 
   /** Architectural correctness does not require a 32+ROB sized PRF:
     * a smaller PRF must backpressure rename when exhausted. This flag is only
     * a potential throughput warning, not a hard validation failure.
     */
   val freeRegisterPressureBeforeFullRob: Boolean = integerPhysicalRegisters < 32 + robEntries
+  val freeFloatingRegisterPressureBeforeFullRob: Boolean =
+    floatingPhysicalRegisters < 32 + robEntries
 }
 
 /** A target ISA/ABI can exist before the RTL implementing it.
@@ -79,7 +92,8 @@ object ProductCoreProfiles {
   // cost A/B. The Medium/Large two-wide profiles below are still future RTL.
   val expandedSingleLaneGeometry: ProductCoreGeometry = smallGeometry.copy(
     robEntries = 16, iqEntries = 8, integerPhysicalRegisters = 64,
-    loadQueueEntries = 4, storeQueueEntries = 4
+    loadQueueEntries = 4, storeQueueEntries = 4,
+    floatingPhysicalRegisters = 64
   )
   val mediumGeometry = ProductCoreGeometry(
     decodeWidth = 2, dispatchWidth = 2, issueWidth = 1, retireWidth = 2,

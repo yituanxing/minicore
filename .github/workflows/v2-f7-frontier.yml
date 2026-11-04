@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/main/scala/aethercore/core/v2/**'
       - 'src/main/scala/aethercore/core/semantic/**'
+      - 'src/main/scala/aethercore/core/isa/FpExtensionDecode.scala'
+      - 'src/main/scala/aethercore/core/Rv32CDecompressor.scala'
+      - 'src/main/scala/aethercore/core/Rv32CParcelController.scala'
       - 'src/main/scala/aethercore/core/product/**'
       - 'src/main/scala/aethercore/core/arith/**'
       - 'src/test/scala/aethercore/ProductMUnitSpec.scala'
@@ -18,6 +21,9 @@ on:
       - 'src/test/scala/aethercore/ProductSmallIntegerCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpUnitSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpBackendSpec.scala'
+      - 'src/test/scala/aethercore/FpSemanticDecodeSpec.scala'
       - 'src/test/scala/aethercore/SharedSemanticDecodeSpec.scala'
       - 'src/test/scala/aethercore/V2FoundationTypesSpec.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
@@ -121,10 +127,13 @@ jobs:
           ./mill aethercore.test.testOnly \
             aethercore.V2F7SemanticDecodeSpec \
             aethercore.SharedSemanticDecodeSpec \
+            aethercore.FpSemanticDecodeSpec \
             aethercore.ProductCoreConfigSpec \
             aethercore.ProductSmallOoOBackendSpec \
             aethercore.ProductSmallIntegerCoreSpec \
             aethercore.ProductMUnitSpec \
+            aethercore.ProductFpUnitSpec \
+            aethercore.ProductFpBackendSpec \
             aethercore.ProductPhysicalLsqSpec \
             aethercore.ProductSmallMemoryCoreSpec \
             aethercore.ProductDataResolverSpec \

@@ -107,3 +107,20 @@ ISA 也须独立声明：当前可实例化的工程硬件为带 **C** 的 RV64I
 | ROB64 / LQ16+SQ16 候选 | 64 | 32 | 4096 | 1024 |
 
 这些仅是**结构实例数量/比较对数**，并不是 LUT/FF/Fmax 实测值。增加 `ProductPhysicalStorageSpec` 与杀死 post 分类、六槽轮转动态验证；新增 Product Small/Expanded 同顶层 PA32 `synth_ecp5` 面积及逻辑深度 A/B 门禁。**必须看 RTL/Verilator/综合实际结果后才能评价 FPGA 收益**，不能凭表直接声称已经满足 FPGA 资源或 Debian 产品要求。
+
+## 8. Small 上的浮点架构所有权与产品资格边界（2026-11-04）
+
+本批以 **Small 单发射乱序核直接承载未来 RV64GC/LP64D** 为架构约束，而不是先堆成多发射或大 ROB。实现遵循 NaxRiscv 可参考的原则：ISA、重命名与物理寄存器容量彼此独立；整数和浮点各有寄存器状态所有权，共享指令生命周期、提交和异常恢复。**本节描述正在集成的源码切片，不代表本次 Scala/Chisel 门禁已通过。**
+
+| 层次 | 本批硬件接口/机制 | 当前资格及禁止推论 |
+| --- | --- | --- |
+| 译码、C 扩展 | `DecodedFloatingOperation` 单独保存 F/D 操作种类、格式、三个 FPR 源、整数源和目的寄存器域；`FpExtensionDecode` 负责指令合法性；C.FLD/FSD 及 SP 变体仅随 D 配置打开 | 覆盖译码语义，不意味着对应 IEEE 算术能执行 |
+| Rename / IQ / ROB | `ProductSmallOoOBackend(enableFloating)` 条件生成独立浮点 RAT、FPR 物理寄存器、FreeList、ready/generation；整数与浮点操作共享单发射仲裁、ROB、Tag Completion、按序 Commit 和年轻指令撤销；`f0` 是普通可写浮点寄存器，与固定零的 `x0` 不同 | 不新增第二条全功能流水线，不假设 ROB64 或双发射；FP 开关关闭时原整数后端实例仍是基线 |
+| 统一 LSQ | `ProductPhysicalLsq` 用 `destinationFile` 区分 FLW/FLD 的浮点写回；FLW 从外存和 Store Forwarding 两条路径统一执行 NaN-boxing，FLD 保留 64 位，FSW/FSD 经同一存储队列，异常路径禁止错误写回 | 不创建第二份浮点 Load/Store 系统；内存序、精确异常及回滚仍需新配置动态回归 |
+| FCSR / FS | `MachineCsrFile` 实现 `fflags/frm/fcsr`、`mstatus.FS` 与派生 `SD`，并由**真正 ROB 退休**端口累积浮点标志及 Dirty；FS=Off 时访问浮点 CSR 非法 | 不能用执行完成时更新 FCSR；需验证 Trap、S/U 上下文切换与 Linux 保存/恢复语义 |
+| FP 执行 | `ProductFpUnit` 提供真实的位级 FSGNJ、FMIN/MAX、比较、FCLASS、FMV 等逻辑，并处理单精度 NaN-boxing、sNaN/NV 和 ±0；与整数单发射端口互斥 | **没有经过验证的 IEEE 加减乘除、平方根、FMA 与带舍入转换**。缺失操作必须以原始指令 `mtval` 精确 IllegalInstruction 结束，不能伪装成计算结果 |
+| PagedCore 产品入口 | `ProductSmallMemoryCore` 可按 ISA F 参数生成上述条件路径；`ProductSmallPagedCore` 仍保留对 F/D 的**显式 `require` 拒绝** | **目前不可把这批切片作为 `rv64gc/lp64d` 发行版产品进行实例化或宣称通过** |
+
+产品能力要越过该阻断，必须先有 FPGA 可综合且可审计的 IEEE-754 F/D 算术 IP（例如经过许可、版本固定并实测的 HardFloat 集成），补齐动态舍入模式、转换、异常标志与 NaN 的指令级正确性；然后把 FP 指令加入 Spike 对照、旁路/回滚、FS 切换、线程/进程上下文切换和内核 `ptrace`/信号处理的验证集合，再解除 `PagedCore` F/D 拒绝。**IP 接入不是复用整数 ALU 的简单优化，也不应触发重做 ROB/LSQ 架构。**
+
+这一切仍只对应 **D2 的候选实现**。D3 必须独立提供目标 FPGA 的布局布线 Fmax/BRAM/LUT/FF、DDR 与持久存储、真实 DTB/固件、上游 Debian riscv64（LP64D）动态链接、shell/apt/dpkg、文件持久化与复位重启证据。即使 Small 上的 RV64GC 指令级差分全部通过，也不能代替板级发行版实测。

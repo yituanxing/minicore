@@ -89,7 +89,8 @@ class ProductSmallPagedCore(
     isa, PA, withMachineExternalInterrupt, withSupervisorExternalInterrupt))
   private val decode = Module(new SemanticDecode(isa))
   private val fetch = Module(new InstructionFetchAdapter(geometry, PA, tlbEntries))
-  private val parcel = if (isa.hasC) Some(Module(new RvcParcelController(Xlen))) else None
+  private val parcel = if (isa.hasC) Some(Module(new RvcParcelController(
+    Xlen, withDouble = isa.extensions.contains('D')))) else None
   private val frontendPmp = Module(new PmpRangeDecoder(Xlen, PmpConstants.MaxEntries, PA))
   private val instructionPmp = Module(new PmpAccessChecker(PmpConstants.MaxEntries, PA))
   private val ptePmp = Module(new PmpAccessChecker(PmpConstants.MaxEntries, PA))
@@ -125,6 +126,15 @@ class ProductSmallPagedCore(
   csrFile.io.writeEnable := retiring && !retireFault && pendingEffect.csrWriteValid
   csrFile.io.writeAddr := pendingEffect.csrAddress
   csrFile.io.writeData := pendingEffect.csrWriteData
+  // FP architectural state belongs to the CSR owner and changes only at
+  // precise ROB retirement. A younger FU completion can never publish
+  // fflags/FS Dirty ahead of an older fault or branch recovery.
+  if (isa.extensions.contains('F')) {
+    csrFile.io.fpCommit.get.valid := retiring && !retireFault &&
+      (core.io.retire.bits.fpDirty || core.io.retire.bits.fflags.orR)
+    csrFile.io.fpCommit.get.bits.fflags := core.io.retire.bits.fflags
+    csrFile.io.fpCommit.get.bits.dirty := core.io.retire.bits.fpDirty
+  }
   core.io.translationFence := sfenceAtRetire
 
   csrFile.io.timerInterrupt := io.timerInterrupt
@@ -305,7 +315,18 @@ class ProductSmallPagedCore(
   // Static direct-jump/BTFNT prediction keeps a useful fetch window without
   // introducing a second speculative checkpoint owner. JALR is conservatively
   // predicted sequentially and repaired by the Product ROB branch completion.
-  private val decoded = decode.io.decoded
+  // The CSR file, not the FPU or speculative RAT, owns the current FS state.
+  // SYSTEM instructions serialize dispatch, so this precise legality check
+  // covers FP arithmetic *and* FLW/FLD/FSW/FSD before entering the ROB.
+  private val decoded = WireInit(decode.io.decoded)
+  if (isa.extensions.contains('F')) {
+    when(decode.io.decoded.floating.kind =/= FloatingOperationKind.None &&
+      !csrFile.io.fpStateEnabled && !decode.io.decoded.exception.valid) {
+      decoded.exception.valid := true.B
+      decoded.exception.cause := MachineExceptionCode.IllegalInstruction.U(Xlen.W)
+      decoded.exception.value := Cat(0.U(32.W), decode.io.decoded.rawInst)
+    }
+  }
   private val sequentialNextPc = pc + decoded.instBytes
   private val predictableBranch = !decoded.exception.valid
   private val predictDirectJump = predictableBranch &&

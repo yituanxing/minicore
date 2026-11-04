@@ -5,6 +5,7 @@ import chisel3.util._
 import aethercore.common._
 import aethercore.config.IsaConfig
 import aethercore.core.{Decoder, Immediate}
+import aethercore.core.isa.FpExtensionDecode
 
 /** Canonical backend-independent architectural semantics for both v2 and ProductCore.
   * Legacy pipeline selectors terminate here; no backend types are referenced.
@@ -30,6 +31,10 @@ class SemanticDecode(val isa: IsaConfig) extends Module {
   private val ctrl = decoder.io.ctrl
   private val opcode = io.inst(6, 0)
   private val funct3 = io.inst(14, 12)
+  // The shared legacy ControlSignals shape has no FP namespace. Architectural
+  // FP semantics are decoded alongside it, never smuggled into integer regWrite
+  // or the legacy integer ALU selector.
+  private val fp = FpExtensionDecode.decode(io.inst, isa)
 
   // Decoder intentionally leaves SFENCE.VMA to the privileged/VM composition
   // because rs1/rs2 are semantic operands. Recognize only the architectural
@@ -48,6 +53,8 @@ class SemanticDecode(val isa: IsaConfig) extends Module {
     is(ImmSel.U) { decodedImm := Immediate.u(io.inst, xlen) }
     is(ImmSel.J) { decodedImm := Immediate.j(io.inst, xlen) }
   }
+  when(fp.memoryLoad) { decodedImm := Immediate.i(io.inst, xlen) }
+  when(fp.memoryStore) { decodedImm := Immediate.s(io.inst, xlen) }
 
   private val systemKind = WireDefault(SystemOperationKind.None)
   when(ctrl.csrOp =/= CsrOp.None) {
@@ -76,6 +83,8 @@ class SemanticDecode(val isa: IsaConfig) extends Module {
   }.elsewhen(ctrl.memWrite) {
     memoryKind := MemoryOperationKind.Store
   }
+  when(fp.memoryLoad) { memoryKind := MemoryOperationKind.Load }
+  when(fp.memoryStore) { memoryKind := MemoryOperationKind.Store }
 
   private val controlFlowKind = WireDefault(ControlFlowKind.None)
   when(ctrl.branch =/= BranchType.None) {
@@ -89,7 +98,7 @@ class SemanticDecode(val isa: IsaConfig) extends Module {
   private val decodedException = WireDefault(0.U.asTypeOf(new TrapInfo(xlen)))
   when(io.fetchException.valid) {
     decodedException := io.fetchException
-  }.elsewhen(ctrl.illegal && !sfenceVma) {
+  }.elsewhen(ctrl.illegal && !sfenceVma && !fp.valid) {
     decodedException.valid := true.B
     decodedException.cause := MachineExceptionCode.IllegalInstruction.U(xlen.W)
     decodedException.value :=
@@ -128,7 +137,7 @@ class SemanticDecode(val isa: IsaConfig) extends Module {
   // implementation conservatively flushes all translations, but preserving
   // these dependency facts keeps later address/ASID-selective invalidation from
   // having to re-decode the raw opcode inside the backend.
-  private val semanticUsesRs1 = ctrl.usesRs1 || sfenceVma
+  private val semanticUsesRs1 = ctrl.usesRs1 || sfenceVma || fp.integerUsesRs1
   private val semanticUsesRs2 = ctrl.usesRs2 || sfenceVma
 
   private val hasDecodeException = decodedException.valid
@@ -140,22 +149,29 @@ class SemanticDecode(val isa: IsaConfig) extends Module {
   io.decoded.aluOp := ctrl.aluOp
   io.decoded.wordOp := ctrl.wordOp
   io.decoded.lhsSource := lhsSource
-  io.decoded.rhsSource := rhsSource
+  io.decoded.rhsSource := Mux(fp.memoryLoad || fp.memoryStore,
+    OperandSourceKind.Immediate, rhsSource)
   io.decoded.rs1 := decoder.io.rs1
   io.decoded.rs2 := decoder.io.rs2
   io.decoded.rd := decoder.io.rd
   io.decoded.usesRs1 := semanticUsesRs1 && !hasDecodeException
   io.decoded.usesRs2 := semanticUsesRs2 && !hasDecodeException
-  io.decoded.writesRd := ctrl.regWrite && !hasDecodeException
+  io.decoded.writesRd :=
+    (ctrl.regWrite || fp.integerWritesRd) && !hasDecodeException
   io.decoded.immediate := decodedImm
   io.decoded.controlFlow.kind := controlFlowKind
   io.decoded.controlFlow.branchType := ctrl.branch
   io.decoded.memory.kind := memoryKind
-  io.decoded.memory.size := ctrl.memSize
+  io.decoded.memory.size := Mux(fp.memoryLoad || fp.memoryStore,
+    Mux(io.inst(14, 12) === 2.U, MemSize.Word, MemSize.DWord), ctrl.memSize)
   io.decoded.memory.unsigned := ctrl.memUnsigned
   io.decoded.memory.atomicOp := ctrl.atomicOp
   io.decoded.memory.acquire := acquire
   io.decoded.memory.release := release
+  io.decoded.floating := fp.floating
+  when(hasDecodeException) {
+    io.decoded.floating := 0.U.asTypeOf(new DecodedFloatingOperation)
+  }
   io.decoded.system.kind := systemKind
   io.decoded.system.csrOp := ctrl.csrOp
   io.decoded.system.csrAddress := io.inst(31, 20)

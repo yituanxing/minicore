@@ -38,7 +38,8 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
   private def reserve(d: ProductPhysicalLsq, idx: Int, kind: MemoryOperationKind.Type,
                       size: MemSize.Type = MemSize.DWord, gen: Int = 0,
                       dest: Int = 0, writes: Boolean = false,
-                      atomic: AtomicOp.Type = AtomicOp.None): Unit = {
+                      atomic: AtomicOp.Type = AtomicOp.None,
+                      destinationFile: ProductRegisterFile.Type = ProductRegisterFile.Integer): Unit = {
     val r = d.io.reserve.bits
     r.token.index.poke(idx.U)
     r.token.generation.poke(gen.U)
@@ -46,6 +47,7 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
     r.size.poke(size)
     r.unsigned.poke(false.B)
     r.atomicOp.poke(atomic)
+    r.destinationFile.poke(destinationFile)
     r.destination.index.poke(dest.U)
     r.destination.generation.poke(1.U)
     r.hasDestination.poke(writes.B)
@@ -477,6 +479,130 @@ class ProductPhysicalLsqSpec extends AnyFlatSpec with Matchers with ChiselSim {
       d.clock.step()
       d.io.storeCount.expect(0.U)
       d.io.outstanding.expect(0.U)
+    }
+  }
+
+  it should "preserve an FP load destination bank and writable f0 across the single LSQ" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 0)
+      reserve(d, 0, MemoryOperationKind.Load, size = MemSize.Word, dest = 0,
+        writes = true, destinationFile = ProductRegisterFile.Floating)
+      resolve(d, 0, BigInt("80009000", 16))
+      d.io.loadCount.expect(1.U)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Read)
+      d.io.memoryRequest.bits.size.expect(MemSize.Word)
+      val txn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      response(d, txn, BigInt("aabbccdd3f800000", 16))
+      d.io.completion.valid.expect(true.B)
+      d.io.completion.bits.destinationFile.expect(ProductRegisterFile.Floating)
+      d.io.completion.bits.destination.index.expect(0.U)
+      d.io.completion.bits.hasValue.expect(true.B)
+      // FLW is NaN-boxed even when bit31 of the payload is zero. Integer LW
+      // would zero/sign extend differently; the FP destination is distinct.
+      d.io.completion.bits.value.expect("hffffffff3f800000".U)
+      d.io.completion.bits.fflags.expect(0.U)
+      d.io.completion.ready.poke(true.B)
+      d.clock.step()
+      d.io.loadCount.expect(0.U)
+    }
+  }
+
+  it should "forward an FSW payload to a younger FLW through the existing memory dependency path" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 7)
+      reserve(d, 0, MemoryOperationKind.Store, size = MemSize.Word)
+      reserve(d, 1, MemoryOperationKind.Load, size = MemSize.Word, dest = 35,
+        writes = true, destinationFile = ProductRegisterFile.Floating)
+      resolve(d, 1, BigInt("8000a000", 16))
+      d.io.memoryRequest.valid.expect(false.B) // unknown older FSW blocks FLW
+      resolve(d, 0, BigInt("8000a000", 16), data = BigInt("ffffffff40490fdb", 16))
+      d.io.forwarded.expect(true.B)
+      d.clock.step()
+      d.io.completion.bits.destinationFile.expect(ProductRegisterFile.Floating)
+      d.io.completion.bits.destination.index.expect(35.U)
+      receive(d, 1, BigInt("ffffffff40490fdb", 16), writes = true)
+
+      head(d, 0)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Write)
+      d.io.memoryRequest.bits.wmask.expect("hf".U)
+      d.io.memoryRequest.bits.wdata.expect(BigInt("ffffffff40490fdb", 16).U)
+      val txn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      response(d, txn)
+      receive(d, 0)
+      d.io.loadCount.expect(0.U)
+      d.io.storeCount.expect(0.U)
+    }
+  }
+
+  it should "pass the full FLD payload to a separate FP physical tag without integer sign conversion" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 0)
+      reserve(d, 0, MemoryOperationKind.Load, size = MemSize.DWord, dest = 34,
+        writes = true, destinationFile = ProductRegisterFile.Floating)
+      resolve(d, 0, BigInt("8000b000", 16))
+      val txn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      val bits = BigInt("fff0000000000001", 16)
+      response(d, txn, bits)
+      d.io.completion.valid.expect(true.B)
+      d.io.completion.bits.destinationFile.expect(ProductRegisterFile.Floating)
+      d.io.completion.bits.value.expect(bits.U)
+      d.io.completion.bits.fflags.expect(0.U)
+      receive(d, 0, bits, writes = true)
+    }
+  }
+
+  it should "keep a faulting FLD destination in the floating bank for precise retirement" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 0)
+      reserve(d, 0, MemoryOperationKind.Load, size = MemSize.DWord, dest = 0,
+        writes = true, destinationFile = ProductRegisterFile.Floating)
+      resolve(d, 0, BigInt("8000c000", 16), vaddr = Some(BigInt("4000c000", 16)))
+      val txn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      response(d, txn, fault = true)
+      d.io.completion.valid.expect(true.B)
+      d.io.completion.bits.destinationFile.expect(ProductRegisterFile.Floating)
+      d.io.completion.bits.destination.index.expect(0.U)
+      d.io.completion.bits.hasValue.expect(true.B)
+      d.io.completion.bits.value.expect(0.U)
+      d.io.completion.bits.exception.valid.expect(true.B)
+      d.io.completion.bits.exception.cause.expect(MachineExceptionCode.LoadAccessFault.U)
+      d.io.completion.bits.exception.value.expect(BigInt("4000c000", 16).U)
+      d.io.completion.ready.poke(true.B)
+      d.clock.step()
+      d.io.outstanding.expect(0.U)
+    }
+  }
+
+  it should "externalize an FSD only at ROB head and preserve its complete 64-bit store value" in {
+    simulate(new ProductPhysicalLsq(ProductCoreProfiles.smallGeometry)) { d =>
+      init(d)
+      head(d, 7)
+      reserve(d, 0, MemoryOperationKind.Store, size = MemSize.DWord)
+      val bits = BigInt("fedcba9876543210", 16)
+      resolve(d, 0, BigInt("8000d000", 16), data = bits)
+      d.io.memoryRequest.valid.expect(false.B)
+      head(d, 0)
+      d.io.memoryRequest.valid.expect(true.B)
+      d.io.memoryRequest.bits.op.expect(AetherMemOp.Write)
+      d.io.memoryRequest.bits.wmask.expect("hff".U)
+      d.io.memoryRequest.bits.wdata.expect(bits.U)
+      val txn = d.io.memoryRequest.bits.txnId.peek().litValue
+      d.clock.step()
+      response(d, txn)
+      d.io.completion.bits.hasValue.expect(false.B)
+      d.io.completion.bits.memoryTrace.write.expect(true.B)
+      d.io.completion.bits.memoryTrace.wdata.expect(bits.U)
+      receive(d, 0)
     }
   }
 }

@@ -15,6 +15,10 @@ class ProductMemReservation(val indexBits: Int, val physicalBits: Int, val gener
   val size = MemSize()
   val unsigned = Bool()
   val atomicOp = AtomicOp()
+  // The ROB lifetime and the physical destination register bank are separate
+  // axes. A floating load writes a floating PRF tag; ordinary loads/atomics
+  // continue to write the integer PRF. A floating store has no destination.
+  val destinationFile = ProductRegisterFile()
   val destination = new ProductPhysicalTag(physicalBits, generationBits)
   val hasDestination = Bool()
 }
@@ -42,6 +46,7 @@ private class ProductMemSlot(val paddrBits: Int, val indexBits: Int,
   val size = MemSize()
   val unsigned = Bool()
   val atomicOp = AtomicOp()
+  val destinationFile = ProductRegisterFile()
   val destination = new ProductPhysicalTag(physicalBits, generationBits)
   val hasDestination = Bool()
   val resolved = Bool()
@@ -134,6 +139,14 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     }
     out
   }
+  // FLW writes the raw 32-bit memory payload into a 64-bit FP register using
+  // mandatory NaN boxing. Integer LW sign-extends and LWU zero-extends as
+  // before; FLD preserves all 64 bits. Keep both external replies and store
+  // forwarding on this one path so they cannot disagree about FP bit patterns.
+  private def loadValue(data: UInt, size: MemSize.Type, unsigned: Bool,
+                        destinationFile: ProductRegisterFile.Type): UInt =
+    Mux(destinationFile === ProductRegisterFile.Floating && size === MemSize.Word,
+      Cat("hffffffff".U(32.W), data(31, 0)), extended(data, size, unsigned))
   // The AetherMem atomic response contains the pre-RMW memory value. Rebuild
   // exactly the successful write value for architectural trace observation;
   // AMO.W arithmetic and comparisons are 32-bit, not sign-extended XLEN ops.
@@ -211,6 +224,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     slots(chosenSlot).size := io.reserve.bits.size
     slots(chosenSlot).unsigned := io.reserve.bits.unsigned
     slots(chosenSlot).atomicOp := io.reserve.bits.atomicOp
+    slots(chosenSlot).destinationFile := io.reserve.bits.destinationFile
     slots(chosenSlot).destination := io.reserve.bits.destination
     slots(chosenSlot).hasDestination := io.reserve.bits.hasDestination
   }
@@ -431,10 +445,12 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
       slots(responseSlot).valid := false.B
       completions.io.enq.valid := true.B
       completions.io.enq.bits.token := owner.token
+      completions.io.enq.bits.destinationFile := returningSlot.destinationFile
       completions.io.enq.bits.destination := returningSlot.destination
       completions.io.enq.bits.hasValue := returningSlot.hasDestination
-      completions.io.enq.bits.value := extended(io.memoryResponse.bits.rdata,
-        returningSlot.size, returningSlot.unsigned)
+      completions.io.enq.bits.value := Mux(io.memoryResponse.bits.fault,
+        0.U, loadValue(io.memoryResponse.bits.rdata, returningSlot.size,
+          returningSlot.unsigned, returningSlot.destinationFile))
       completions.io.enq.bits.exception.valid := io.memoryResponse.bits.fault
       completions.io.enq.bits.exception.cause := Mux(owner.isLoad,
         MachineExceptionCode.LoadAccessFault.U, MachineExceptionCode.StoreAccessFault.U)
@@ -470,9 +486,12 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     slots(candidateIndex).valid := false.B
     completions.io.enq.valid := true.B
     completions.io.enq.bits.token := candidate.token
+    completions.io.enq.bits.destinationFile := candidate.destinationFile
     completions.io.enq.bits.destination := candidate.destination
     completions.io.enq.bits.hasValue := candidate.hasDestination
-    completions.io.enq.bits.value := extended(candidateForwardData, candidate.size, candidate.unsigned)
+    completions.io.enq.bits.value := Mux(candidate.fault.valid,
+      0.U, loadValue(candidateForwardData, candidate.size,
+        candidate.unsigned, candidate.destinationFile))
     completions.io.enq.bits.exception := candidate.fault
     completions.io.enq.bits.memoryTrace.valid := candidateForward && !candidate.fault.valid
     completions.io.enq.bits.memoryTrace.write := false.B

@@ -6,10 +6,12 @@ on:
       - 'src/main/scala/aethercore/core/product/**'
       - 'src/main/scala/aethercore/core/semantic/**'
       - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
       - 'src/main/scala/aethercore/ElaborateProductSmallPagedCore.scala'
       - 'src/test/scala/aethercore/SystemSemanticEvaluatorSpec.scala'
       - 'src/test/scala/aethercore/ProductSystemCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallPagedCoreSpec.scala'
+      - 'src/test/scala/aethercore/FloatingCsrFileSpec.scala'
       - '.github/workflows/product-g1-privileged.yml'
 
 permissions:
@@ -104,6 +106,7 @@ jobs:
         run: |
           ./mill aethercore.test.testOnly \
             aethercore.SystemSemanticEvaluatorSpec \
+            aethercore.FloatingCsrFileSpec \
             aethercore.ProductSystemCoreSpec \
             aethercore.ProductSmallPagedCoreSpec
 

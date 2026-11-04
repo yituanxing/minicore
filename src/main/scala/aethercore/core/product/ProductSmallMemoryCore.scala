@@ -5,7 +5,7 @@ import chisel3.util._
 import aethercore.core.semantic.MemoryOperationKind
 import aethercore.memory.{AetherMemRequest, AetherMemResponse}
 
-/** One SmallOoO backend plus 4 FU completion ports, physical LSQ and a
+/** One SmallOoO backend plus execution/LSQ completion ports, physical LSQ and a
   * separately owned VA->PA/PMP/PMA resolver.
   *
   * The caller MUST resolve memoryExecute to physical paddr/attributes/fault
@@ -14,6 +14,7 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   */
 class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   private val g = config.geometry
+  private val enableFloating = config.software.isa.extensions.contains('F')
   require(g.decodeWidth == 1 && g.dispatchWidth == 1 && g.issueWidth == 1 &&
     g.retireWidth == 1, "physical SmallOoO frontend is one-wide")
   private val I = log2Ceil(g.robEntries)
@@ -59,12 +60,17 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
     val staleCompletion = Output(Bool())
   })
 
-  private val backend = Module(new ProductSmallOoOBackend(g, allowSystem = true, paddrBits = PA))
+  private val backend = Module(new ProductSmallOoOBackend(
+    g, allowSystem = true, paddrBits = PA, enableFloating = enableFloating))
   private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC, PA))
   private val m = Module(new ProductMUnit(g, PA))
+  // One floating execution lane shares the same ROB and completion arbiter;
+  // no second retire path or speculative architectural FP state is created.
+  private val fp = if (enableFloating) Some(Module(new ProductFpUnit(g, PA))) else None
   private val lsq = Module(new ProductPhysicalLsq(g, PA))
   private val system = Module(new ProductSystemUnit(config))
-  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA), 4))
+  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA),
+    if (enableFloating) 5 else 4))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits
@@ -110,6 +116,12 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   m.io.request.bits := backend.io.issue.bits
   backend.io.issue.ready := Mux(issueMemory, io.memoryExecute.ready,
     Mux(issueM, m.io.request.ready, integer.io.request.ready))
+  if (enableFloating) {
+    val unit = fp.get
+    unit.io.request <> backend.io.fpIssue.get
+    backend.io.fpAvailable.get := unit.io.available
+    completion.io.in(4) <> unit.io.response
+  }
 
   completion.io.in(0) <> integer.io.response
   completion.io.in(1) <> m.io.response

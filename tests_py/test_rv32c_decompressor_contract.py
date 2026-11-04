@@ -11,12 +11,12 @@ class Rv32CDecompressorContract(unittest.TestCase):
         core = (ROOT / "src/main/scala/aethercore/core/AetherCore.scala").read_text()
         config = (ROOT / "src/main/scala/aethercore/config/CoreConfig.scala").read_text()
 
-        self.assertIn("class RvcDecompressor(val xlen: Int) extends Module", module)
+        self.assertIn("class RvcDecompressor(val xlen: Int, val withDouble: Boolean = false) extends Module", module)
         self.assertIn("require(Set(32, 64).contains(xlen)", module)
         self.assertIn("class Rv32CDecompressor extends RvcDecompressor(32)", module)
 
-        self.assertIn("class RvcParcelController(val xlen: Int = 32) extends Module", parcel)
-        self.assertIn("val decompressor = Module(new RvcDecompressor(xlen))", parcel)
+        self.assertIn("class RvcParcelController(val xlen: Int = 32, val withDouble: Boolean = false) extends Module", parcel)
+        self.assertIn("val decompressor = Module(new RvcDecompressor(xlen, withDouble))", parcel)
         self.assertIn("class Rv32CParcelController(xlen: Int = 32) extends RvcParcelController(xlen)", parcel)
 
         self.assertIn("val compressedFetch = if (config.isa.hasC)", core)

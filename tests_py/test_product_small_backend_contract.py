@@ -38,7 +38,8 @@ class ProductSmallBackendContracts(unittest.TestCase):
     def test_killed_and_reused_responses_must_be_checked(self):
         source = CORE.read_text()
         for text in ("tokenGeneration === c.token.generation",
-                     "physicalGenerations(c.destination.index) === c.destination.generation",
+                     "completionPhysicalGeneration === c.destination.generation",
+                     "completionEntry.destinationFile === c.destinationFile",
                      "io.completion.ready := !recovering",
                      "io.staleCompletion := io.completion.fire && !sameLifetime",
                      "free(victim.newPhysical.index) := true.B",

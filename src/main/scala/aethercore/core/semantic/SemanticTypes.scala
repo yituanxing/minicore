@@ -30,6 +30,45 @@ object SystemOperationKind extends ChiselEnum {
   val None, Csr, Ecall, Ebreak, Wfi, Xret, Fence, FenceI, SfenceVma = Value
 }
 
+/** The architectural FP operation, independent of issue lanes and execution units.
+  * Integer and floating register namespaces must remain separate through rename.
+  */
+object FloatingOperationKind extends ChiselEnum {
+  val None, Load, Store, Add, Sub, Mul, Div, Sqrt,
+      Fma, Fmsub, Fnmsub, Fnmadd, Sign, MinMax, Compare, Classify,
+      ConvertToInt, ConvertFromInt, ConvertFormat, MoveToInt, MoveFromInt = Value
+}
+
+object FloatingFormat extends ChiselEnum {
+  val Single, Double = Value
+}
+
+/** F/D architectural semantics, not an implementation-specific FPU uOp.
+  * The FPR namespace includes f0 (unlike the fixed-zero integer x0).
+  * Conversions/moves expose XPR dependencies through the enclosing integer
+  * usesRs1/writesRd fields; only actual FPR dependencies appear here.
+  */
+class DecodedFloatingOperation extends Bundle {
+  val kind = FloatingOperationKind()
+  val format = FloatingFormat()
+  val sourceFormat = FloatingFormat()
+  val rs1 = UInt(5.W)
+  val rs2 = UInt(5.W)
+  val rs3 = UInt(5.W)
+  val rd = UInt(5.W)
+  val usesRs1 = Bool()
+  val usesRs2 = Bool()
+  val usesRs3 = Bool()
+  val writesRd = Bool()
+  // 000–100 are static IEEE rounding modes; 111 uses dynamic FCSR.frm.
+  val roundingMode = UInt(3.W)
+  // FSGNJ/FMIN/FCMP sub-operation without leaking a FU selector.
+  val subop = UInt(3.W)
+  // FCVT to/from integer: false => 32-bit W/WU; true => 64-bit L/LU.
+  val integerWidth = Bool()
+  val integerUnsigned = Bool()
+}
+
 /** Decode-visible scheduling/serialization semantics for system and memory
   * operations. Address-dependent PMA/device ordering belongs to the resolved
   * memory transaction attributes, not to instruction decode.
@@ -101,6 +140,7 @@ class DecodedInstruction(val xlen: Int) extends Bundle {
 
   val controlFlow = new DecodedControlFlow
   val memory = new DecodedMemoryOperation
+  val floating = new DecodedFloatingOperation
   val system = new DecodedSystemOperation
   val ordering = OrderingClass()
   val exception = new TrapInfo(xlen)
