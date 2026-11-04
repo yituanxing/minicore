@@ -1,0 +1,163 @@
+name: Verified SHA-CAS delete 21 archived performance experiment refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-measure-perf21-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-delete-measure-perf21-20261104
+  cancel-in-progress: false
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout SHA-pinned manifest with GitHub authenticated CAS push
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Verify all 22 archived tips and delete only 21 obsolete live refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Wrong repository/ref');
+            const fs=require('fs'),cp=require('child_process');
+            const manifest=JSON.parse(fs.readFileSync('maintenance/measure-perf22-head-manifest-20261104.json','utf8'));
+            const evidence=JSON.parse(fs.readFileSync('maintenance/measure-perf22-ci-evidence-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/measure-perf-22/';
+            const liveAnchor='perf/fast-host-data-multislot';
+            if(manifest.repository!==owner+'/'+repo||manifest.total!==22||
+               manifest.targets?.length!==22||manifest.main_pin!==main||
+               manifest.product_pin!==product||manifest.open_pr_count!==14||
+               manifest.delete_count!==21||manifest.delete_branches?.length!==21||
+               manifest.preserve_live_ref!==liveAnchor||manifest.tag_prefix!==prefix||
+               evidence.heads!==22||evidence.runs!==263)
+              throw new Error('Source archival policy/evidence changed');
+            const targets=manifest.targets.filter(t=>!t.preserve_live_name);
+            const preserved=manifest.targets.find(t=>t.preserve_live_name);
+            if(targets.length!==21||!preserved||preserved.head!==liveAnchor||
+               new Set(targets.map(t=>t.head)).size!==21||
+               targets.some(t=>!manifest.delete_branches.includes(t.head))||
+               manifest.delete_branches.some(n=>!targets.some(t=>t.head===n))||
+               targets.some(t=>!/^[a-f0-9]{40}$/.test(t.sha)))
+              throw new Error('22/21 candidate allowlist mismatch');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async n=>(await retry('ref '+n,()=>github.rest.git.getRef({owner,repo,ref:n}))).data;
+            const pins=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('Main/Product moved');
+            };
+            const archive=async t=>{
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                throw new Error('Exact archive tag changed '+t.head);
+            };
+            const checkAnchor=async()=>{
+              if((await ref('heads/'+preserved.head)).object.sha!==preserved.sha)
+                throw new Error('Unified Linux Path validation branch moved');
+            };
+            const noOpen=async name=>{
+              const ps=await retry('open PRs',()=>github.paginate(
+                github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+              if(ps.length!==14||ps.some(p=>p.head.ref===name||p.base.ref===name))
+                throw new Error('Active open PR depends on '+name);
+            };
+            const noActive=async name=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry('CI '+name+' '+status,()=>github.paginate(
+                  github.rest.actions.listWorkflowRunsForRepo,{owner,repo,branch:name,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name))
+                  throw new Error('Active CI '+name+' '+status);
+              }
+            };
+            const noHardref=t=>{
+              const args=['grep','-n','-F','--',t.head,'--','.',':(exclude)maintenance/**'];
+              const r=cp.spawnSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              if(r.error)throw r.error;
+              if(r.status===0)
+                throw new Error('Tracked source/docs/workflow still refer '+t.head+' '+String(r.stdout).slice(0,400));
+              if(r.status!==1)
+                throw new Error('Failed hard-ref scan '+t.head+' '+String(r.stderr).slice(0,400));
+            };
+            const isLive=async t=>{
+              try{
+                const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+                if(b.protected||b.commit.sha!==t.sha)
+                  throw new Error('Protected or moved branch '+t.head);
+                return true;
+              }catch(e){if(e.status===404)return false;throw e;}
+            };
+            const checked=async t=>{
+              await pins();
+              await checkAnchor();
+              await archive(t);
+              noHardref(t);
+              await noOpen(t.head);
+              await noActive(t.head);
+              if(t.pr!==null){
+                const p=(await retry('PR '+t.pr,()=>github.rest.pulls.get({owner,repo,pull_number:t.pr}))).data;
+                if(p.state!=='closed'||p.merged_at)
+                  throw new Error('Historical PR changed '+t.pr);
+              }
+              return await isLive(t);
+            };
+            await pins();
+            await checkAnchor();
+            for(const t of manifest.targets)await archive(t);
+            let live=0;
+            for(const t of targets){
+              if(await checked(t))live++;
+              console.log('MEASURE21_DELETE_PREFLIGHT',t.pr,t.head,t.sha);
+            }
+            console.log('MEASURE21_PREFLIGHT_ALL_PASS','total=21','live='+live,
+                        'archives=22','retained_unified_linux_anchor='+preserved.head);
+            let deleted=0,already=0;
+            for(let i=0;i<targets.length;i++){
+              const t=targets[i];
+              const exists=await checked(t);
+              if(!exists){already++;continue;}
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Branch changed immediately before deletion '+t.head);
+              try{
+                cp.execFileSync('git',['push','--force-with-lease=refs/heads/'+t.head+':'+t.sha,
+                  'origin',':refs/heads/'+t.head],{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              }catch(e){
+                throw new Error('CAS refused '+t.head+' '+String(e.stderr||e.message).slice(0,500));
+              }
+              let gone=false;
+              for(let k=0;k<8;k++){
+                try{await ref('heads/'+t.head);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(k<7)await new Promise(ok=>setTimeout(ok,1200));
+              }
+              if(!gone)throw new Error('Ref still present '+t.head);
+              await archive(t);
+              deleted++;
+              console.log('MEASURE21_CAS_DELETED',i+1,t.pr,t.head,t.sha);
+            }
+            await pins();
+            await checkAnchor();
+            for(const t of manifest.targets)await archive(t);
+            if(deleted+already!==21)throw new Error('Unexpected final deletion count');
+            console.log('MEASURE21_DELETE_DONE','deleted='+deleted,'already='+already,
+                        'archive_tags=22','retained_unified_linux_anchor=true','open_prs_untouched=14');
