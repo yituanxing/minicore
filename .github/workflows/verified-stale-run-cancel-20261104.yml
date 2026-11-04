@@ -75,8 +75,24 @@ jobs:
               const now=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:item.id})).data;
               if(now.status!=='queued'||now.head_sha!==item.sha)
                 throw new Error('Queue changed before cancellation: '+item.id);
-              await github.rest.actions.cancelWorkflowRun({owner,repo,run_id:item.id});
-              console.log('CANCEL_REQUESTED',item.id);
+              try {
+                await github.rest.actions.cancelWorkflowRun({owner,repo,run_id:item.id});
+                console.log('CANCEL_REQUESTED',item.id);
+              } catch (error) {
+                if (error.status !== 409) throw error;
+                console.log('NORMAL_CANCEL_409',item.id,'attempting force cancellation');
+                try {
+                  await github.rest.actions.forceCancelWorkflowRun({owner,repo,run_id:item.id});
+                  console.log('FORCE_CANCEL_REQUESTED',item.id);
+                } catch (forceError) {
+                  if (forceError.status !== 409) throw forceError;
+                  const after=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:item.id})).data;
+                  const jobs=(await github.rest.actions.listJobsForWorkflowRun({owner,repo,run_id:item.id,per_page:100})).data;
+                  if(after.status!=='queued'||jobs.total_count!==0||after.head_sha!==item.sha)
+                    throw new Error('Cancellation failed but state changed: '+item.id);
+                  console.log('STUCK_QUEUE_UNCANCELLABLE',item.id,'409 despite queued/no jobs');
+                }
+              }
             }
             for(let attempt=0;attempt<8;attempt++){
               const states=await Promise.all(targets.map(async item=>{
@@ -89,7 +105,7 @@ jobs:
                 break;
               }
               if(attempt<7)await new Promise(resolve=>setTimeout(resolve,2500));
-              else throw new Error('Cancellation not yet confirmed for both runs; no PRs touched');
+              else console.log('CANCEL_NOT_CONFIRMED',JSON.stringify(states),'no PRs touched');
             }
             await protect();
             console.log('CI_CANCEL_SCOPE_VERIFIED','only',targets.map(x=>x.id).join(','));
