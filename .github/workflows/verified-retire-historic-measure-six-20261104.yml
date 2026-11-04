@@ -1,0 +1,133 @@
+name: Verified retire six archived historic measurement PR leaves (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-retire-historic-measure-six-20261104.yml
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+concurrency:
+  group: verified-measure-six-retire-20261104
+  cancel-in-progress: false
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout maintenance ref only for SHA-lease branch deletion
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Revalidate exact six, close old unmerged PRs, then CAS-delete heads
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa",basePins={"soc/aethercore-v0-icache":"a502a71df7aac98d3997615e71b29661939ebb5e","area/register-file-mem-ab":"ee8e485a12d9bcc27558442e29a2aa00e5796974"};
+            const targets=[[255,"measure/aethersoc-v0-core-area","49fd50402d921264a47e5e3b43c407623f809e2f","soc/aethercore-v0-icache",1],[266,"measure/rf-mem-full-soc","417537f0bd9c2f58714b58920098296349c42c43","area/register-file-mem-ab",1],[294,"measure/current-main-area-ranking","d2d0def3294c281b70f94da825c6f68d856482a2","main",3],[310,"measure/post-pa32-main-area-ranking","584ca3a31b1e50051b15800f72c636965f2636af","main",2],[351,"measure/post-44k-area-ranking","4812021793c5b5614243a1447af812063dcdf884","main",2],[360,"measure/icache-capacity-ppa-matrix","ca4aa95290c6ebbcd60caed3410dfb7599362f08","main",1]];
+            const prefix='branch-archive/2026-11-04/historic-measure-six/';
+            const cp=require('child_process');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('READ_RETRY',label,i+1);
+                  await new Promise(resolve=>setTimeout(resolve,500*(2**i)));
+                }
+              }
+            };
+            const ref=async s=>(await retry('ref '+s,()=>github.rest.git.getRef({owner,repo,ref:s}))).data;
+            const getPR=async n=>(await retry('PR '+n,()=>github.rest.pulls.get({owner,repo,pull_number:n}))).data;
+            const openPRs=async()=>retry('openPRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('Main/Product moved '+m+'/'+p);
+              for(const [name,sha] of Object.entries(basePins)){
+                if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Non-main PR base moved '+name);
+              }
+            };
+            const external=async(name,n)=>(await openPRs()).some(p=>p.number!==n&&(p.head.ref===name||p.base.ref===name));
+            const active=async(name,n)=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name||(r.pull_requests||[]).some(p=>p.number===n)))
+                  throw new Error('Active CI #'+n+' status='+status);
+              }
+            };
+            const archiveSHA=async name=>(await ref('tags/'+prefix+name)).object.sha;
+            const validate=async(n,name,sha,base,unique)=>{
+              const p=await getPR(n);
+              if(!['open','closed'].includes(p.state)||p.merged_at||p.base.ref!==base||p.head.ref!==name||p.head.sha!==sha||
+                 p.head.repo?.full_name!==owner+'/'+repo)
+                throw new Error('Changed PR metadata #'+n);
+              if(await external(name,n))throw new Error('Dependent open PR #'+n);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive missing #'+n);
+              const cmp=(await retry('compare '+n,()=>github.rest.repos.compareCommits({owner,repo,base,head:sha}))).data;
+              if(cmp.ahead_by!==unique||!['ahead','diverged'].includes(cmp.status))
+                throw new Error('Unique commits changed #'+n);
+              const files=await retry('files '+n,()=>github.paginate(github.rest.pulls.listFiles,{owner,repo,pull_number:n,per_page:100}));
+              if(!files.length||files.length>3||files.some(f=>!f.filename.startsWith('.github/workflows/')))
+                throw new Error('Non-workflow diff #'+n);
+              await active(name,n);
+              try{
+                const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Head protected/moved #'+n);
+                return{p,alive:true};
+              }catch(e){if(e.status!==404||p.state!=='closed')throw e;return{p,alive:false};}
+            };
+            await pin();
+            let prevClosed=0,prevDeleted=0;
+            for(const [n,name,sha,base,unique] of targets){
+              const x=await validate(n,name,sha,base,unique);
+              if(x.p.state==='closed')prevClosed++;
+              if(!x.alive)prevDeleted++;
+              console.log('MEASURE_SIX_RETIRE_PREFLIGHT',n,name,sha,x.p.state,x.alive?'live':'gone');
+            }
+            console.log('MEASURE_SIX_RETIRE_PREFLIGHT_ALL_PASS',targets.length,'prev_closed',prevClosed,'prev_deleted',prevDeleted);
+            await pin();
+            let closed=0;
+            for(const [n,name,sha,base,unique] of targets){
+              const x=await validate(n,name,sha,base,unique);
+              if(x.p.state==='closed'){console.log('ALREADY_CLOSED',n);continue;}
+              if(!x.alive)throw new Error('Missing open PR branch #'+n);
+              await pin();
+              await github.rest.pulls.update({owner,repo,pull_number:n,state:'closed'});
+              const p=await getPR(n);
+              if(p.state!=='closed'||p.merged_at)throw new Error('Closure failed #'+n);
+              closed++;console.log('MEASURE_SIX_CLOSED_UNMERGED',n,name,sha);
+            }
+            console.log('MEASURE_SIX_CLOSE_ALL_PASS',closed,'previous',prevClosed);
+            await pin();
+            let deleted=0,previous=0;
+            for(const [n,name,sha,base,unique] of targets){
+              const x=await validate(n,name,sha,base,unique);
+              if(x.p.state!=='closed')throw new Error('PR reopened #'+n);
+              await pin();
+              if(!x.alive){previous++;console.log('ALREADY_DELETED',n);continue;}
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Ref moved '+name);
+              const args=['push','--force-with-lease=refs/heads/'+name+':'+sha,'origin',':refs/heads/'+name];
+              try{cp.execFileSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});}
+              catch(e){throw new Error('CAS refused '+name+' '+String(e.stderr||e.message).slice(0,500));}
+              let gone=false;
+              for(let i=0;i<8;i++){
+                try{await ref('heads/'+name);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(i<7)await new Promise(resolve=>setTimeout(resolve,1500));
+              }
+              if(!gone)throw new Error('Not deleted '+name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive changed after deletion '+name);
+              deleted++;console.log('MEASURE_SIX_CAS_DELETED',n,name,sha);
+            }
+            await pin();
+            if(closed+prevClosed!==targets.length||deleted+previous!==targets.length)
+              throw new Error('Final mismatch');
+            console.log('MEASURE_SIX_RETIRE_DONE','closed='+closed,'deleted='+deleted,'prev_closed='+prevClosed,'prev_deleted='+previous,'archive_verified='+targets.length);
