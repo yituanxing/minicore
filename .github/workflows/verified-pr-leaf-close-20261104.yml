@@ -68,9 +68,11 @@ jobs:
                   (p.head.repo && p.head.repo.full_name === owner + '/' + repo && p.head.ref === name)));
             const getArchive = async name => getRef('tags/' + archivePrefix + name);
             const archiveMatches = async (name,sha) => (await getArchive(name)).object.sha === sha;
-            if ((await getRef('heads/main')).object.sha !== mainExpected ||
-                (await getRef('heads/' + productBranch)).object.sha !== productExpected) {
-              throw new Error('Main or Product SHA changed; refuse closure');
+            const mainActual = (await getRef('heads/main')).object.sha;
+            const productActual = (await getRef('heads/' + productBranch)).object.sha;
+            console.log('PIN_CHECK','main',mainActual,'product',productActual);
+            if (mainActual !== mainExpected || productActual !== productExpected) {
+              throw new Error('Main or Product SHA changed; refuse closure: ' + mainActual + ' / ' + productActual);
             }
 
             const prs = await openPRs();
