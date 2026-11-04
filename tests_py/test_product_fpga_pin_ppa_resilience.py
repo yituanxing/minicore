@@ -27,6 +27,11 @@ class ProductPhysicalPpaResilience(unittest.TestCase):
         self.assertIn("${{ github.run_attempt }}", workflow)
         self.assertIn('test "$(cat "$dir/commit.sha")" = "$expected"', workflow)
         self.assertIn("tools/report_product_fpga_pin_cost.py", workflow)
+        self.assertEqual(workflow.count("uses: actions/cache/restore@v4"), 2)
+        self.assertEqual(workflow.count("uses: actions/cache/save@v4"), 1)
+        self.assertIn("~/.cache/aethercore/mill-${{ env.MILL_VERSION }}", workflow)
+        self.assertIn("Require validated Mill distribution before synthesis", workflow)
+        self.assertIn("steps.mill-dist-cache.outputs.cache-hit", workflow)
 
     def test_one_source_recipe_supports_local_full_and_ci_single_variant(self):
         script = SCRIPT.read_text()

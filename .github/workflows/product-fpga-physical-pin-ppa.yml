@@ -24,6 +24,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Keep the launcher version pinned across the validation and four synth hosts.
+  MILL_VERSION: '1.1.2'
+
 concurrency:
   group: aethercore-product-physical-ppa-${{ github.ref }}-${{ inputs.capacity || 'small' }}
   # Finish expensive four-way synthesis; only stale pending snapshots are replaced.
@@ -51,6 +55,13 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
+      - name: Restore pinned Mill distribution
+        id: mill-dist-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/mill-${{ env.MILL_VERSION }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-mill-dist-${{ env.MILL_VERSION }}-v1
+
       - name: Validate exact product and physical pin RTL
         shell: bash
         run: |
@@ -58,6 +69,19 @@ jobs:
           ./mill aethercore.test.testOnly \
             aethercore.AetherCoreProductSoCElaborationSpec \
             aethercore.ProductCoreConfigSpec
+
+      - name: Confirm pinned Mill distribution was actually used
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$HOME/.cache/aethercore/mill-${MILL_VERSION}"
+
+      - name: Save validated Mill distribution for all four synthesis jobs
+        if: success() && steps.mill-dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/mill-${{ env.MILL_VERSION }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-mill-dist-${{ env.MILL_VERSION }}-v1
 
   fpga-physical-synthesis:
     name: ${{ matrix.isa }} / ${{ matrix.boundary }} full-SoC ECP5 proxy
@@ -87,6 +111,23 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Mill distribution from validated job
+        id: mill-dist-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/mill-${{ env.MILL_VERSION }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-mill-dist-${{ env.MILL_VERSION }}-v1
+
+      - name: Require validated Mill distribution before synthesis
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ steps.mill-dist-cache.outputs.cache-hit }}' != true ]] ||
+             [[ ! -x "$HOME/.cache/aethercore/mill-${MILL_VERSION}" ]]; then
+            echo 'ERROR: pinned Mill binary missing from shared synthesis cache' >&2
+            exit 1
+          fi
 
       - name: Install synthesis proxy
         shell: bash
