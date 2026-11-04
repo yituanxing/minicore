@@ -1,0 +1,143 @@
+name: Verified one-shot branch pruning (2026-11-04)
+
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-branch-prune-20261104.yml
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: one-shot-branch-prune-20261104
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Archive and delete ten verified redundant refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verify every target, archive exact SHAs, then prune
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // One-shot housekeeping. Never change main, Product, or a PR dependency.
+            const { owner, repo } = context.repo;
+            if (owner !== 'yituanxing' || repo !== 'minicore') {
+              throw new Error('Unexpected repository');
+            }
+            if (context.ref !== 'refs/heads/maintenance/verified-branch-prune-20261104') {
+              throw new Error('Unexpected workflow branch');
+            }
+            const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product = 'design/rv64gc-product-architecture-20261103';
+            const archivePrefix = 'branch-archive/2026-11-04/';
+            const targets = [
+              ['agent/umode-pmp-production-pa-geometry', '6582777bb8734ad46411b28881cbeacf86874d9a', 'refactor/pmp-production-pa-geometry'],
+              ['feature/aethercore-v2-f5-privileged-traps', '554430bc71b5dee18a7333cd1d5c4447a1c2314e', 'feature/aethercore-v2-f4-recovery'],
+              ['fix/data-address-misaligned-mprv', 'aee6cb44e62f288b2273e394bf6202e70cf773f5', 'feat/mprv-effective-data-privilege'],
+              ['measure/aethercore-v2-branch-exposure', 'bb8192f03f683d78ca3e005b67678fb16f9a0667', 'arch/aethercore-v2-a8-common-rvc'],
+              ['perf/aethercore-v2-p8-loadq3-outstanding', 'd7127542d94e6677834c092fb047b45e0452ec8f', 'perf/aethercore-v2-p8-loadq2-outstanding'],
+              ['perf/aethercore-v2-p8-two-entry-load-queue', '021d95650d6d808c47c2d0108bd9fedff57019a3', 'perf/aethercore-v2-p8-prehead-load-v2'],
+              ['perf/aethercore-v2-p8-two-load-outstanding', '021d95650d6d808c47c2d0108bd9fedff57019a3', 'perf/aethercore-v2-p8-prehead-load-v2'],
+              ['perf/aethercore-v2-p8-two-outstanding-loads', '021d95650d6d808c47c2d0108bd9fedff57019a3', 'perf/aethercore-v2-p8-prehead-load-v2'],
+              ['refactor/rvc-instruction-length-plumbing', 'fac1d322a9d4c40a9bfef8c22baa0e6b6c54f19b', 'ci/l32-transactional-linux-cache'],
+              ['test/aethercore-v2-branch-flowthrough-timing', 'ed3580ba59b8c8238f4123bd8f139054b53dde9c', 'perf/aethercore-v2-branch-response-flowthrough'],
+            ];
+            const getRef = async ref => (await github.rest.git.getRef({owner, repo, ref})).data;
+            const getOpenPRs = async () => github.paginate(github.rest.pulls.list, {owner, repo, state:'open', per_page:100});
+            const prRefs = prs => {
+              const reserved = new Set(['main', product, 'maintenance/verified-branch-prune-20261104']);
+              const openHeads = new Set();
+              for (const pr of prs) {
+                reserved.add(pr.base.ref);
+                if (pr.head.repo && pr.head.repo.full_name === owner + '/' + repo) {
+                  reserved.add(pr.head.ref);
+                  openHeads.add(pr.head.ref);
+                }
+              }
+              return {reserved, openHeads};
+            };
+            const activeRuns = async () => {
+              const branches = new Set();
+              for (const status of ['queued', 'in_progress']) {
+                const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+                  {owner, repo, status, per_page:100});
+                for (const run of runs) if (run.head_branch) branches.add(run.head_branch);
+              }
+              return branches;
+            };
+            const main = (await getRef('heads/main')).object.sha;
+            if (main !== mainExpected) {
+              throw new Error('main changed; refuse to prune: ' + main);
+            }
+            const prs = await getOpenPRs();
+            const {reserved, openHeads} = prRefs(prs);
+            const running = await activeRuns();
+            for (const [name, sha, keeper] of targets) {
+              if (reserved.has(name) || running.has(name) || name === keeper) {
+                throw new Error('Target now in use: ' + name);
+              }
+              if (!openHeads.has(keeper)) throw new Error('Keeper is no longer an open PR head: ' + keeper);
+              const branch = (await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+              if (branch.protected || branch.commit.sha !== sha) {
+                throw new Error('Protected/changed target ' + name + ' got ' + branch.commit.sha);
+              }
+              const partner = (await github.rest.repos.getBranch({owner,repo,branch:keeper})).data;
+              if (partner.commit.sha !== sha) throw new Error('Keeper SHA changed: ' + keeper);
+              const compare = (await github.rest.repos.compareCommits({owner,repo,base:sha,head:main})).data;
+              if (!['ahead','identical'].includes(compare.status)) {
+                throw new Error('Target is not fully reachable from main: ' + name);
+              }
+              console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper);
+            }
+            console.log('PREFLIGHT_ALL_PASS', targets.length, 'open_prs', prs.length);
+
+            // Create immutable recovery names before any target branch deletion.
+            for (const [name, sha] of targets) {
+              const tagName = archivePrefix + name;
+              const ref = 'tags/' + tagName;
+              try {
+                const existing = await getRef(ref);
+                if (existing.object.sha !== sha) {
+                  throw new Error('Archive tag collision: ' + tagName);
+                }
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.git.createRef({owner,repo,ref:'refs/' + ref,sha});
+              }
+              const recorded = await getRef(ref);
+              if (recorded.object.sha !== sha) throw new Error('Archive verification failed: ' + name);
+              console.log('ARCHIVE_VERIFIED', tagName, sha);
+            }
+            console.log('ARCHIVE_ALL_PASS', targets.length);
+
+            let deleted = 0;
+            for (const [name, sha, keeper] of targets) {
+              const latest = await getRef('heads/' + name);
+              if (latest.object.sha !== sha) throw new Error('STOP changed ref: ' + name);
+              const nowPRs = prRefs(await getOpenPRs());
+              if (nowPRs.reserved.has(name) || !nowPRs.openHeads.has(keeper)) {
+                throw new Error('STOP PR relationship changed: ' + name);
+              }
+              const retained = await getRef('heads/' + keeper);
+              if (retained.object.sha !== sha) throw new Error('STOP keeper changed: ' + keeper);
+              const nowRunning = await activeRuns();
+              if (nowRunning.has(name)) throw new Error('STOP active CI: ' + name);
+              await github.rest.git.deleteRef({owner,repo,ref:'heads/' + name});
+              try {
+                await getRef('heads/' + name);
+                throw new Error('Deleted branch is still present: ' + name);
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+              deleted++;
+              console.log('DELETED', name, sha, 'archive', archivePrefix + name);
+            }
+            console.log('BRANCH_PRUNE_DONE', 'deleted=' + deleted, 'archived=' + targets.length);
+            if (deleted !== targets.length) throw new Error('Unexpected deletion count');
