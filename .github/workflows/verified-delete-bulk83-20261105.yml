@@ -1,0 +1,160 @@
+name: Verified SHA-CAS prune archived legacy branches bulk83 (2026-11-05)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-bulk83-20261105.yml
+      - maintenance/bulk83-delete-manifest-20261105.json
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-delete-bulk83-20261105
+  cancel-in-progress: false
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact manifest commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: true
+          fetch-depth: 1
+      - name: Verify all candidates and delete only eligible exact refs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            const fs=require('fs'),cp=require('child_process');
+            const branch='maintenance/verified-branch-prune-20261104';
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+branch)
+              throw new Error('Wrong repository/ref');
+            const m=JSON.parse(fs.readFileSync('maintenance/bulk83-delete-manifest-20261105.json','utf8'));
+            const exclusions=['area/pa32-stage1-ab','perf/fast-host-data-multislot','soc/aethercore-v0-icache'];
+            if(m.repository!==owner+'/'+repo||m.total!==83||m.targets?.length!==83||
+               m.open_pr_count!==14||JSON.stringify(m.excluded)!==JSON.stringify(exclusions)||
+               m.main_pin!=='7ff35c6acdc3068754292bba814e4ec52ba4ec50'||
+               m.product_pin!=='b481160151ab4e3e5e5c5e1f7317a74fdddc36f3')
+              throw new Error('Pinned cleanup policy changed');
+            const names=new Set();
+            for(const t of m.targets){
+              if(names.has(t.head)||exclusions.includes(t.head)||
+                 !/^[a-z0-9][a-z0-9._/-]+$/.test(t.head)||
+                 !/^[a-f0-9]{40}$/.test(t.sha)||
+                 !/^branch-archive\/2026-11-04\/(legacy-pr135-86|remaining23)\//.test(t.tag)||
+                 !t.tag.endsWith('/'+t.head))
+                throw new Error('Unexpected or duplicate allowlist entry '+t.head);
+              names.add(t.head);
+            }
+            const retry=async fn=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  if(i===4||!(e.status===429||e.status>=500||
+                    /fetch failed|ECONNRESET|ETIMEDOUT/i.test(String(e.message||''))))throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async r=>(await retry(()=>github.rest.git.getRef({owner,repo,ref:r}))).data.object.sha;
+            const pins=async()=>{
+              if(await ref('heads/main')!==m.main_pin||
+                 await ref('heads/design/rv64gc-product-architecture-20261103')!==m.product_pin)
+                throw new Error('Main/Product moved; stop');
+            };
+            const archive=async t=>{
+              if(await ref('tags/'+t.tag)!==t.sha)throw new Error('Archive tag drift '+t.head);
+            };
+            const openPrs=async()=>{
+              const list=await retry(()=>github.paginate(github.rest.pulls.list,
+                {owner,repo,state:'open',per_page:100}));
+              if(list.length!==14)throw new Error('Open PR inventory changed');
+              return list;
+            };
+            const activeBranches=async()=>{
+              const active=new Set();
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry(()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+                  {owner,repo,status,per_page:100}));
+                for(const run of runs)if(run.head_branch)active.add(run.head_branch);
+              }
+              return active;
+            };
+            const hardrefFile='/tmp/archived-branch-candidates.txt';
+            fs.writeFileSync(hardrefFile,m.targets.map(t=>t.head).join('\n')+'\n');
+            const scan=cp.spawnSync('git',
+              ['grep','-n','-F','-f',hardrefFile,'--','.',':(exclude)maintenance/**'],
+              {cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:180000,maxBuffer:16*1024*1024});
+            if(scan.error)throw scan.error;
+            if(scan.status!==0&&scan.status!==1)
+              throw new Error('Hard reference scan failed: '+String(scan.stderr).slice(0,300));
+            const hardrefs=new Set(m.targets.filter(t=>String(scan.stdout).includes(t.head)).map(t=>t.head));
+            const currentBranch=async t=>{
+              try{
+                const b=(await retry(()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+                if(b.protected)return 'protected';
+                if(b.commit.sha!==t.sha)return 'moved';
+                return 'live';
+              }catch(e){if(e.status===404)return 'absent';throw e;}
+            };
+            await pins();
+            const prs=await openPrs(),active=await activeBranches();
+            for(const t of m.targets)await archive(t);
+            const qualified=[],skipped=[];
+            for(const t of m.targets){
+              let why='';
+              if(prs.some(p=>p.head.ref===t.head||p.base.ref===t.head))why='open-pr';
+              else if(active.has(t.head))why='active-ci';
+              else if(hardrefs.has(t.head))why='hard-reference';
+              else{
+                const state=await currentBranch(t);
+                if(state!=='live')why=state;
+              }
+              if(why){skipped.push({head:t.head,why});console.log('BULK83_SKIP',t.head,why);}
+              else qualified.push(t);
+            }
+            console.log('BULK83_PREFLIGHT_ALL_PASS',
+              'total='+m.total,'qualified='+qualified.length,'skipped='+skipped.length);
+            let deleted=0,lateSkipped=0;
+            for(const t of qualified){
+              await pins();
+              await archive(t);
+              const latestPrs=await openPrs();
+              if(latestPrs.some(p=>p.head.ref===t.head||p.base.ref===t.head)){
+                console.log('BULK83_LATE_SKIP',t.head,'new-pr');lateSkipped++;continue;
+              }
+              const latestActive=await activeBranches();
+              if(latestActive.has(t.head)){
+                console.log('BULK83_LATE_SKIP',t.head,'new-ci');lateSkipped++;continue;
+              }
+              if(await currentBranch(t)!=='live'){
+                console.log('BULK83_LATE_SKIP',t.head,'moved-or-absent');lateSkipped++;continue;
+              }
+              if(await ref('heads/'+t.head)!==t.sha)
+                throw new Error('CAS drift '+t.head);
+              cp.execFileSync('git',
+                ['push','--force-with-lease=refs/heads/'+t.head+':'+t.sha,
+                 'origin',':refs/heads/'+t.head],
+                {cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              let gone=false;
+              for(let i=0;i<8;i++){
+                try{await ref('heads/'+t.head);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(i<7)await new Promise(ok=>setTimeout(ok,1200));
+              }
+              if(!gone)throw new Error('Branch still present '+t.head);
+              await archive(t);
+              deleted++;
+              console.log('BULK83_CAS_DELETED',deleted,t.head,t.sha);
+            }
+            await pins();
+            for(const t of m.targets)await archive(t);
+            if(deleted+lateSkipped+skipped.length!==83)throw new Error('Final count mismatch');
+            console.log('BULK83_DELETE_DONE',
+              'deleted='+deleted,'skipped='+skipped.length,
+              'late-skipped='+lateSkipped,'archives=83',
+              'preserved-exclusions='+exclusions.join(','));

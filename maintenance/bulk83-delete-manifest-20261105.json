@@ -1,0 +1,429 @@
+{
+  "repository": "yituanxing/minicore",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "b481160151ab4e3e5e5c5e1f7317a74fdddc36f3",
+  "open_pr_count": 14,
+  "total": 83,
+  "excluded": [
+    "area/pa32-stage1-ab",
+    "perf/fast-host-data-multislot",
+    "soc/aethercore-v0-icache"
+  ],
+  "targets": [
+    {
+      "head": "agent/os-validation-ladder",
+      "sha": "1cf91b047abb8a148c3da5bf079b605a75b54f74",
+      "tag": "branch-archive/2026-11-04/remaining23/agent/os-validation-ladder"
+    },
+    {
+      "head": "agent/runner-resilience-cache",
+      "sha": "1662e93ebbe8737cec5ec5132bce8d7ff0392c13",
+      "tag": "branch-archive/2026-11-04/remaining23/agent/runner-resilience-cache"
+    },
+    {
+      "head": "area/compact-rob-lifetime-v1",
+      "sha": "466101700d2e969e119013030db91da2e48371f5",
+      "tag": "branch-archive/2026-11-04/remaining23/area/compact-rob-lifetime-v1"
+    },
+    {
+      "head": "area/dependency-central-wake-value-ab",
+      "sha": "4299b0bc75865885dd7ddb4d0289fb9e2724560a",
+      "tag": "branch-archive/2026-11-04/remaining23/area/dependency-central-wake-value-ab"
+    },
+    {
+      "head": "area/register-file-mem-ab",
+      "sha": "ee8e485a12d9bcc27558442e29a2aa00e5796974",
+      "tag": "branch-archive/2026-11-04/remaining23/area/register-file-mem-ab"
+    },
+    {
+      "head": "area/shared-load-translation-v1",
+      "sha": "85060817a36db22067cf468380f6f6d008845f5a",
+      "tag": "branch-archive/2026-11-04/remaining23/area/shared-load-translation-v1"
+    },
+    {
+      "head": "area/unified-ptw-pmp-ab",
+      "sha": "8ebb657a8f3985706ce600925e4a2f97f4e7e366",
+      "tag": "branch-archive/2026-11-04/remaining23/area/unified-ptw-pmp-ab"
+    },
+    {
+      "head": "ci/aethercore-v2-p8-pr-base-ab",
+      "sha": "51e8669816092e79c32a1f9e911afbc8ab47fc35",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/ci/aethercore-v2-p8-pr-base-ab"
+    },
+    {
+      "head": "ci/github-hosted-cache-v1",
+      "sha": "76d37c1947b7c6f1870ea91c01099a9c0ac9ed03",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/ci/github-hosted-cache-v1"
+    },
+    {
+      "head": "ci/nemu-shared-config-bootstrap",
+      "sha": "cac46967408e57eab6f46aa8b3e24f92ee340b29",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/ci/nemu-shared-config-bootstrap"
+    },
+    {
+      "head": "ci/p8-deterministic-pid1-staging",
+      "sha": "2e7125099d7b5f8d11ac6064c3319088efaa96ad",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/ci/p8-deterministic-pid1-staging"
+    },
+    {
+      "head": "ci/rv64-linux-cache-save",
+      "sha": "dd9779e6ba30b6bbddd7d3f69ba025156febcf38",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/ci/rv64-linux-cache-save"
+    },
+    {
+      "head": "diag/v2-f7-pid1-checkpoint",
+      "sha": "085a08734dac6aac45d30acb73cfc26a51fe5bf0",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/diag/v2-f7-pid1-checkpoint"
+    },
+    {
+      "head": "docs/aethercore-v2-design-notes",
+      "sha": "c525a3d156c8bb0e6fd276e9f45a11f1d4e9c0b3",
+      "tag": "branch-archive/2026-11-04/remaining23/docs/aethercore-v2-design-notes"
+    },
+    {
+      "head": "explore/linux-frontier-first-v1",
+      "sha": "ca4d94febc199a1a8580ddeb6ac8a64dd7b8b499",
+      "tag": "branch-archive/2026-11-04/remaining23/explore/linux-frontier-first-v1"
+    },
+    {
+      "head": "explore/linux-frontier-policy-v1",
+      "sha": "af2657a66290e256e71791814e4eb0b74e7a12a2",
+      "tag": "branch-archive/2026-11-04/remaining23/explore/linux-frontier-policy-v1"
+    },
+    {
+      "head": "explore/rv64-linux-initramfs-v1",
+      "sha": "34f460d6639361df9cdb23c8f2070084a888159b",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/explore/rv64-linux-initramfs-v1"
+    },
+    {
+      "head": "feature/aethercore-v2-f1-rob-commit",
+      "sha": "17de06255163f2204c8b47f3be11aae6ca940a29",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f1-rob-commit"
+    },
+    {
+      "head": "feature/aethercore-v2-f2-dependencies",
+      "sha": "e5f30c0ee320b223da7a552584737fb11ad4b6e2",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f2-dependencies"
+    },
+    {
+      "head": "feature/aethercore-v2-f3-execution",
+      "sha": "650df2a7e7fb8353915efafdafebecd82ecebb65",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f3-execution"
+    },
+    {
+      "head": "feature/aethercore-v2-f4-recovery",
+      "sha": "554430bc71b5dee18a7333cd1d5c4447a1c2314e",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f4-recovery"
+    },
+    {
+      "head": "feature/aethercore-v2-f5-privileged",
+      "sha": "6a04335be31114f86e5d20b7670deb6c714bf885",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f5-privileged"
+    },
+    {
+      "head": "feature/aethercore-v2-f6-memory",
+      "sha": "184d2db9629d342cd69fd2f1daeb82051f9b6b6a",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f6-memory"
+    },
+    {
+      "head": "feature/aethercore-v2-f7-software-parity",
+      "sha": "418a4b798410df45c0218f1a0122cdf0199211f6",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-f7-software-parity"
+    },
+    {
+      "head": "feature/aethercore-v2-foundation",
+      "sha": "1960f1dcfb35ee2c65220e41326156aef239711c",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/feature/aethercore-v2-foundation"
+    },
+    {
+      "head": "fix/aethercore-v2-data-wait-runtime-contract",
+      "sha": "4990fc35fb093700d4166e41d6a4bdd9b6e312aa",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/fix/aethercore-v2-data-wait-runtime-contract"
+    },
+    {
+      "head": "fix/aethercore-v2-prehead-load-exception-deferral",
+      "sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/fix/aethercore-v2-prehead-load-exception-deferral"
+    },
+    {
+      "head": "measure/aethercore-register-file-area",
+      "sha": "613460b256eab1e2c9a148510920df08ae9d7276",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/aethercore-register-file-area"
+    },
+    {
+      "head": "measure/aethercore-v0-icache-runtime",
+      "sha": "ac9ffb9ed6483e1d020dc7c3f811761db7ca4cfa",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v0-icache-runtime"
+    },
+    {
+      "head": "measure/aethercore-v2-194-exact-ab",
+      "sha": "a04859b76dd223f7f31dc1d234ab5a75e92b637f",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-194-exact-ab"
+    },
+    {
+      "head": "measure/aethercore-v2-198-exact-ab",
+      "sha": "98f7e623ffef65f4f30350586a20b673cad25276",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-198-exact-ab"
+    },
+    {
+      "head": "measure/aethercore-v2-198-full-linux",
+      "sha": "36e62dac5039628d15037a2d8a946f54367fe4ab",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-198-full-linux"
+    },
+    {
+      "head": "measure/aethercore-v2-198-ppa-long",
+      "sha": "22a831dc1f43d90e6bd4cbdf624dde1592b6aee9",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-198-ppa-long"
+    },
+    {
+      "head": "measure/aethercore-v2-198-qualified-full",
+      "sha": "b4fa05458ea36ab79e4332bf84e0ac4d9a76064f",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-198-qualified-full"
+    },
+    {
+      "head": "measure/aethercore-v2-dcache-ppa",
+      "sha": "b083098c11b15d0cc8f208197467a513fb07b346",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-dcache-ppa"
+    },
+    {
+      "head": "measure/aethercore-v2-dcache-ppa-60m",
+      "sha": "2aa59822892872af0cbf919ab42a90d769597be5",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-dcache-ppa-60m"
+    },
+    {
+      "head": "measure/aethercore-v2-dcache-ram-storage-cost",
+      "sha": "f94b3f6650452364bf6cb9e30a57c98726b589dd",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/measure/aethercore-v2-dcache-ram-storage-cost"
+    },
+    {
+      "head": "measure/aethersoc-pmp-checker-area-ab",
+      "sha": "adc8678708656ccc2324018c98272bbf0a5de7c2",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/aethersoc-pmp-checker-area-ab"
+    },
+    {
+      "head": "measure/fpga-arch-opportunity-gate",
+      "sha": "b34b3b54442f1b98e82a2e9debf17d0a42e1f063",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/fpga-arch-opportunity-gate"
+    },
+    {
+      "head": "measure/parent-pmp-area-ceiling",
+      "sha": "99ce6e8fd3fecf91a0e37f2145baaad5a40444ee",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/parent-pmp-area-ceiling"
+    },
+    {
+      "head": "measure/post-42k-area-ranking",
+      "sha": "5dc13f99277adddaf382c45f0a35410503e69cc9",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/post-42k-area-ranking"
+    },
+    {
+      "head": "measure/rv64-v2-busybox-shell-baseline",
+      "sha": "98eef6df7a2ba237499b171b4e6e071121a2f9d5",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/rv64-v2-busybox-shell-baseline"
+    },
+    {
+      "head": "measure/verilator-host-compiler-matrix",
+      "sha": "41ed7eaa8cb14074e91adb1e808da9efbbb20040",
+      "tag": "branch-archive/2026-11-04/remaining23/measure/verilator-host-compiler-matrix"
+    },
+    {
+      "head": "opt/aethercore-v2-dcache-ram-storage",
+      "sha": "7ff1a795b41e80e7eef3c81aa186e69d11d6913a",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/opt/aethercore-v2-dcache-ram-storage"
+    },
+    {
+      "head": "perf/aethercore-v2-a8-selective-issue",
+      "sha": "c8d32cd9fef4e325d7524f123b7f2c8d567db7e6",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-a8-selective-issue"
+    },
+    {
+      "head": "perf/aethercore-v2-branch-response-flowthrough",
+      "sha": "ed3580ba59b8c8238f4123bd8f139054b53dde9c",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-branch-response-flowthrough"
+    },
+    {
+      "head": "perf/aethercore-v2-completed-branch-load-overlap",
+      "sha": "f3b630355ed6b432086107a19de6baac0c101e2b",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-completed-branch-load-overlap"
+    },
+    {
+      "head": "perf/aethercore-v2-f8-baseline",
+      "sha": "cb615b852cc158ea6ccebb1adc7dde6fbe55aa20",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-f8-baseline"
+    },
+    {
+      "head": "perf/aethercore-v2-lsu-intake-flowthrough",
+      "sha": "040cb17de319a0c5ab8d4b34ed5e957b158d9673",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-lsu-intake-flowthrough"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-branch-exposure",
+      "sha": "8859dd038c9a6c56ed4fa048d65438500d6638e5",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-branch-exposure"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-completed-branch-load-bypass-v2",
+      "sha": "9d3f76e9de7177ca8c537ac592dc1aa39d01aa48",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-completed-branch-load-bypass-v2"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-completion-bandwidth-decision",
+      "sha": "7428de98cce038b2ebe838fc7c96aed9f64686ed",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-completion-bandwidth-decision"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-loadq2-outstanding",
+      "sha": "d7127542d94e6677834c092fb047b45e0452ec8f",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-loadq2-outstanding"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-measurement",
+      "sha": "0ceccdfdc84682990f01b72d70f90bb9423bfb95",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-measurement"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-memory-lifetime-status",
+      "sha": "2437d8b86900c6aaf6efdeccbfd838df1293523d",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-memory-lifetime-status"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-next-bottleneck-attribution",
+      "sha": "5a9a500ef67c08a05aae6dd2c5932410a9ef2b5f",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-next-bottleneck-attribution"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-next-bottleneck-attribution-v2",
+      "sha": "8a720fcc6597cf9d9308a128743fb392314728f2",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-next-bottleneck-attribution-v2"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-opportunity-attribution",
+      "sha": "faf9197aaef1fdb3dd7ff6e4133a9adcb5cb3a20",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-opportunity-attribution"
+    },
+    {
+      "head": "perf/aethercore-v2-p8-prehead-load-v2",
+      "sha": "021d95650d6d808c47c2d0108bd9fedff57019a3",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-p8-prehead-load-v2"
+    },
+    {
+      "head": "perf/aethercore-v2-prehead-load",
+      "sha": "ab0df9c9c49322cdf045b2169bca99543cff1e55",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-prehead-load"
+    },
+    {
+      "head": "perf/aethercore-v2-sim-speed",
+      "sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-sim-speed"
+    },
+    {
+      "head": "perf/aethercore-v2-sim-speed-fixed-read",
+      "sha": "7ae7acd73e3d6c53a8735f222f2c170006f38986",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-sim-speed-fixed-read"
+    },
+    {
+      "head": "perf/aethercore-v2-sim-speed-micro",
+      "sha": "4d11c5ebd90ee529a1963d3b37bdaf3f4389e918",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-sim-speed-micro"
+    },
+    {
+      "head": "perf/aethercore-v2-sim-speed-ram",
+      "sha": "6415f415a7ca972573360c07a2571755909ead8d",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-sim-speed-ram"
+    },
+    {
+      "head": "perf/aethercore-v2-sim-speed-request-guard",
+      "sha": "ce8d460bbd51125dbb25267bf759845a2d6e7ffe",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-sim-speed-request-guard"
+    },
+    {
+      "head": "perf/aethercore-v2-tlb-hit-flowthrough",
+      "sha": "822e67a984398413ce6d342f0758a976b9695fb0",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-tlb-hit-flowthrough"
+    },
+    {
+      "head": "perf/aethercore-v2-topdown-attribution",
+      "sha": "8de88a5ead0ec428885cf895efbc252a55f7b9ca",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/perf/aethercore-v2-topdown-attribution"
+    },
+    {
+      "head": "perf/dependency-central-values-v2",
+      "sha": "b95fb5ab82fc8f5e4ae8212d364e464973278101",
+      "tag": "branch-archive/2026-11-04/remaining23/perf/dependency-central-values-v2"
+    },
+    {
+      "head": "perf/icache-safe-fullbeat-clean",
+      "sha": "a190b6070793c972e5b78e265002218bcdec5309",
+      "tag": "branch-archive/2026-11-04/remaining23/perf/icache-safe-fullbeat-clean"
+    },
+    {
+      "head": "perf/icache-safe-fullbeat-inline-pmp",
+      "sha": "b51af003ae4cdbf3cd071578c0528d76f690ef85",
+      "tag": "branch-archive/2026-11-04/remaining23/perf/icache-safe-fullbeat-inline-pmp"
+    },
+    {
+      "head": "perf/icache-safe-fullbeat-lower-half",
+      "sha": "8c781d7a7b4ebc870a28296d4212ebdfa034bb43",
+      "tag": "branch-archive/2026-11-04/remaining23/perf/icache-safe-fullbeat-lower-half"
+    },
+    {
+      "head": "perf/inactive-mul-host-gate",
+      "sha": "299a1a641a076e73112293564c9873c262703a34",
+      "tag": "branch-archive/2026-11-04/remaining23/perf/inactive-mul-host-gate"
+    },
+    {
+      "head": "soc/aethercore-v0-axi4-bridge",
+      "sha": "8bd36a657511395edd26b39311d0945204495f6a",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-axi4-bridge"
+    },
+    {
+      "head": "soc/aethercore-v0-axi4-icache-linux",
+      "sha": "a6e0ac65413016a8f39c77216b43ad9415bf9946",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-axi4-icache-linux"
+    },
+    {
+      "head": "soc/aethercore-v0-axi4-linux-path",
+      "sha": "b45f282054a94c6b2171c85e9e660f1f68bffda3",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-axi4-linux-path"
+    },
+    {
+      "head": "soc/aethercore-v0-axi4-soc",
+      "sha": "75a85bac964b31c5d15911deffe41dceab7bfe34",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-axi4-soc"
+    },
+    {
+      "head": "soc/aethercore-v0-ifetch-flowthrough",
+      "sha": "1f893d785b871c3126bcca07d4425c72c8c3b171",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-ifetch-flowthrough"
+    },
+    {
+      "head": "soc/aethercore-v0-memory-hub",
+      "sha": "4b262a115eb39282c3e9cf3df54f0c1a24cbcff8",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-memory-hub"
+    },
+    {
+      "head": "soc/aethercore-v0-product-shell",
+      "sha": "e82a7f894840b4415aa84e4f9e4796148affb5ef",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-product-shell"
+    },
+    {
+      "head": "soc/aethercore-v0-unified-linux-path",
+      "sha": "f65cbd3e1b8fa1415c1c8c019e3471c5294727be",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-unified-linux-path"
+    },
+    {
+      "head": "soc/aethercore-v0-unified-memory-adapters",
+      "sha": "532daa8713276148f90aad87af6b90cb0e09d6d7",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-unified-memory-adapters"
+    },
+    {
+      "head": "soc/aethercore-v0-unified-memory-soc",
+      "sha": "ec02ba5f4b263a6936d3b557f56e945075b2ff86",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/soc/aethercore-v0-unified-memory-soc"
+    },
+    {
+      "head": "trigger/rv64-linux-deeper-hosted-v1",
+      "sha": "cddec5f06480c71fe47e5893702b85f51ca12df5",
+      "tag": "branch-archive/2026-11-04/remaining23/trigger/rv64-linux-deeper-hosted-v1"
+    }
+  ]
+}
