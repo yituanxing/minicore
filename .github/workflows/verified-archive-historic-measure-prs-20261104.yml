@@ -88,7 +88,18 @@ jobs:
               catch(e){if(e.status!==404)throw e;}
               if(!exists){await github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha});created++;}
               else previous++;
-              if((await ref(tag)).object.sha!==sha)throw new Error('Tag verify failed '+name);
+              let verified=false;
+              for(let attempt=0;attempt<8;attempt++){
+                try{
+                  const archived=await ref(tag);
+                  if(archived.object.sha!==sha)throw new Error('Tag verify mismatch '+name);
+                  verified=true;break;
+                }catch(e){
+                  if(e.status!==404||attempt===7)throw e;
+                  await new Promise(resolve=>setTimeout(resolve,1300));
+                }
+              }
+              if(!verified)throw new Error('Tag not eventually visible '+name);
               console.log('MEASURE_ARCHIVE_VERIFIED',number,name,sha);
             }
             console.log('MEASURE_ARCHIVE_DONE','verified='+targets.length,'created='+created,'previous='+previous,'PRs_closed=0','branches_deleted=0');
