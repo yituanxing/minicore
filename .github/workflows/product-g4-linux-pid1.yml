@@ -14,7 +14,8 @@ permissions:
 
 concurrency:
   group: aethercore-product-g4-pid1-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Retain hours-long Linux RTL evidence; newer PR heads replace only pending runs.
+  cancel-in-progress: false
 
 jobs:
   product-linux-pid1:

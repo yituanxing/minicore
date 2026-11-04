@@ -14,7 +14,8 @@ permissions:
 
 concurrency:
   group: aethercore-product-g5-debian-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Preserve the active billion-cycle Debian run while the latest PR head queues.
+  cancel-in-progress: false
 
 jobs:
   product-debian-rv64gc:

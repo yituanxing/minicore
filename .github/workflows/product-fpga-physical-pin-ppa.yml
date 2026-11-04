@@ -24,7 +24,8 @@ permissions:
 
 concurrency:
   group: aethercore-product-physical-ppa-${{ github.ref }}-${{ inputs.capacity || 'small' }}
-  cancel-in-progress: true
+  # Finish expensive four-way synthesis; only stale pending snapshots are replaced.
+  cancel-in-progress: false
 
 jobs:
   fpga-physical-ppa:
