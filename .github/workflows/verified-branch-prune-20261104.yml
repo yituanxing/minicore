@@ -1,4 +1,4 @@
-name: Verified one-shot branch pruning (2026-11-04 batch 5)
+name: Verified one-shot branch pruning (2026-11-04 batch 8)
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   prune:
-    name: Archive and prune seven exact-tip milestone aliases
+    name: Archive and prune three exact-tip redundant aliases
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -26,7 +26,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // One-shot housekeeping. Never change main, Product, or a PR dependency.
+            // One-shot housekeeping. Archive exact SHAs, retain live identical keepers; never change main, Product, or a PR dependency.
             const { owner, repo } = context.repo;
             if (owner !== 'yituanxing' || repo !== 'minicore') {
               throw new Error('Unexpected repository');
@@ -36,15 +36,12 @@ jobs:
             }
             const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
             const product = 'design/rv64gc-product-architecture-20261103';
-            const archivePrefix = 'branch-archive/2026-11-04/batch5/';
+            const productExpected = '087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const archivePrefix = 'branch-archive/2026-11-04/batch8/';
             const targets = [
-              ['agent/l32-machine-id', '42fb3ac2eb115d65aa152069e9adb7c0bab2dc25', 'agent/l32-opensbi-linux'],
-              ['agent/nuttx-sv32-knsh-paging', '06cad804a916fee5c916cc575d3e91726c01a35e', 'agent/n5-sstc-integration'],
-              ['agent/work-nuttx-n4', 'cd3ce492cc5c9d47acb673128d199cf0a3949e0b', 'freeze/nuttx-13.0.0-n1-n4'],
-              ['explore/rv64-sv39-translation-v1', '641e71020d46035742bd1461056e9ef3a0242d04', 'explore/rv64-vm-shared-contract-v1'],
-              ['agent/umode-physical-fetch-request-valid', '2c1fc6deff8f5212911b49beaa740391b70dcfe9', 'refactor/physical-fetch-request-valid'],
-              ['productize/pa32-fpga-v1', '2698b8e4403cb7d502846073c0a5a91a3b12cd39', 'productize/pa32-fpga-v1-ready'],
-              ['productize/plic16-address22-ready', '830b1b717a47587dfbf16ce40528006e28118b96', 'area/plic16-address22-qualification'],
+              ['agent/nuttx-bringup', 'cd3ce492cc5c9d47acb673128d199cf0a3949e0b', 'freeze/nuttx-13.0.0-n1-n4'],
+              ['arch/aethercore-v2-xlen-boundary-restack', '96f129557a609cac2d869f0d0582fd18b8c47749', 'arch/aethercore-v2-decode-uop-boundary'],
+              ['perf/aethercore-v2-prehead-load-fold', 'ab0df9c9c49322cdf045b2169bca99543cff1e55', 'perf/aethercore-v2-prehead-load'],
             ];
             const getRef = async ref => (await github.rest.git.getRef({owner, repo, ref})).data;
             const getOpenPRs = async () => github.paginate(github.rest.pulls.list, {owner, repo, state:'open', per_page:100});
@@ -71,6 +68,10 @@ jobs:
             if (main !== mainExpected) {
               throw new Error('main changed; refuse to prune: ' + main);
             }
+            const productActual = (await getRef('heads/' + product)).object.sha;
+            if (productActual !== productExpected) {
+              throw new Error('Product changed; refuse to prune: ' + productActual);
+            }
             const prs = await getOpenPRs();
             const reserved = prRefs(prs);
             const running = await activeRuns();
@@ -96,11 +97,8 @@ jobs:
               if (retained.commit.sha !== sha) {
                 throw new Error('Keeper is not an exact SHA twin: ' + keeper);
               }
-              const compare = (await github.rest.repos.compareCommits({owner,repo,
-                base:sha,head:main})).data;
-              if (!['ahead','identical'].includes(compare.status)) {
-                throw new Error('Target no longer in main ancestry: ' + name);
-              }
+              // Alias cleanup may contain work not in main. Exact-SHA live keeper,
+              // original branch tip and recovery tag are the safety invariants.
               console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper,
                 alreadyDeleted.has(name) ? 'archived-already-deleted' : 'live');
             }
