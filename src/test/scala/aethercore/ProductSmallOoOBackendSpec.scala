@@ -11,7 +11,7 @@ import aethercore.core.semantic.SemanticDecode
 /** Real Chisel scheduling/rename/ROB/rollback, using an external completion FU
   * to inject independent execution latencies and precise failure races.
   */
-private class SmallOoOTestHarness extends Module {
+private class SmallOoOTestHarness(val allowSystem: Boolean = false) extends Module {
   private val g = ProductCoreProfiles.smallGeometry
   private val I = log2Ceil(g.robEntries)
   private val P = log2Ceil(g.integerPhysicalRegisters)
@@ -19,10 +19,13 @@ private class SmallOoOTestHarness extends Module {
   val io = IO(new Bundle {
     val pc = Input(UInt(64.W))
     val inst = Input(UInt(32.W))
+    val rawInst = Input(UInt(32.W))
+    val instBytes = Input(UInt(3.W))
     val predictedNextPc = Input(UInt(64.W))
     val dispatchValid = Input(Bool())
     val dispatchReady = Output(Bool())
     val issue = Decoupled(new ProductIssue(64, I, P, G))
+    val systemHead = Decoupled(new ProductSystemHead(64, I, P, G))
     val completion = Flipped(Decoupled(new ProductCompletion(64, I, P, G)))
     val retire = Decoupled(new ProductRetirement(64, I, P, G))
     val redirect = Valid(new ProductRedirect(64, I, G))
@@ -37,17 +40,19 @@ private class SmallOoOTestHarness extends Module {
   val d = Module(new SemanticDecode(ProductCoreProfiles.smallEngineering.software.isa))
   d.io.pc := io.pc
   d.io.inst := io.inst
-  d.io.rawInst := io.inst
-  d.io.instBytes := 4.U
+  d.io.rawInst := io.rawInst
+  d.io.instBytes := io.instBytes
   d.io.fetchException := 0.U.asTypeOf(d.io.fetchException)
-  val core = Module(new ProductSmallOoOBackend(g))
+  val core = Module(new ProductSmallOoOBackend(g, allowSystem = allowSystem))
   // Standalone backend injection test models both execution resources as ready.
   core.io.integerAvailable := true.B
   core.io.mAvailable := true.B
   // The external completion harness has no memory resolver or LSQ.
   core.io.memoryAvailable := false.B
   core.io.memoryReserve.ready := false.B
-  core.io.systemHead.ready := false.B
+  io.systemHead.valid := core.io.systemHead.valid
+  io.systemHead.bits := core.io.systemHead.bits
+  core.io.systemHead.ready := io.systemHead.ready
   core.io.dispatch.valid := io.dispatchValid
   core.io.dispatch.bits.decoded := d.io.decoded
   core.io.dispatch.bits.predictedNextPc := io.predictedNextPc
@@ -81,9 +86,12 @@ class ProductSmallOoOBackendSpec extends AnyFlatSpec with Matchers with ChiselSi
   private def init(d: SmallOoOTestHarness): Unit = {
     d.io.pc.poke("h80000000".U)
     d.io.inst.poke("h00000013".U)
+    d.io.rawInst.poke("h00000013".U)
+    d.io.instBytes.poke(4.U)
     d.io.predictedNextPc.poke("h80000004".U)
     d.io.dispatchValid.poke(false.B)
     d.io.issue.ready.poke(true.B)
+    d.io.systemHead.ready.poke(false.B)
     d.io.retire.ready.poke(false.B)
     d.io.completion.valid.poke(false.B)
     d.io.completion.bits.poke(0.U.asTypeOf(d.io.completion.bits))
@@ -92,6 +100,7 @@ class ProductSmallOoOBackendSpec extends AnyFlatSpec with Matchers with ChiselSi
 
   private def dispatch(d: SmallOoOTestHarness, instruction: Long, pc: Long): Unit = {
     d.io.inst.poke(instruction.U)
+    d.io.rawInst.poke(instruction.U)
     d.io.pc.poke(pc.U)
     d.io.predictedNextPc.poke((pc + 4).U)
     d.io.dispatchValid.poke(true.B)
@@ -243,6 +252,66 @@ class ProductSmallOoOBackendSpec extends AnyFlatSpec with Matchers with ChiselSi
       untilRecovered(d)
       d.io.occupancy.expect(0.U)
       d.io.retire.valid.expect(false.B)
+    }
+  }
+
+  it should "retain compact ROB compressed instruction trace independently of decoded instruction" in {
+    simulate(new SmallOoOTestHarness) { d =>
+      init(d)
+      dispatch(d, 0x00108093L, 0x80000000L) // expanded addi x1,x1,1
+      // Re-dispatch with different raw compressed bits using the same decode.
+      // Test the actual ROB storage on a second instruction below.
+      val first = issue(d)
+      complete(d, first, 1)
+      d.io.retire.ready.poke(true.B)
+      d.clock.step()
+      d.io.retire.ready.poke(false.B)
+
+      d.io.inst.poke("h00108093".U)
+      d.io.rawInst.poke("h00000085".U) // architectural C.ADDI encoding
+      d.io.instBytes.poke(2.U)
+      d.io.pc.poke("h80000004".U)
+      d.io.predictedNextPc.poke("h80000006".U)
+      d.io.dispatchValid.poke(true.B)
+      d.io.dispatchReady.expect(true.B)
+      d.clock.step()
+      d.io.dispatchValid.poke(false.B)
+      val second = issue(d)
+      complete(d, second, 2)
+      d.io.retire.bits.inst.expect("h00108093".U)
+      d.io.retire.bits.rawInst.expect("h00000085".U)
+      d.io.retire.bits.instBytes.expect(2.U)
+      d.io.retire.ready.poke(true.B)
+      d.clock.step()
+      d.io.occupancy.expect(0.U)
+    }
+  }
+
+  it should "discard a younger SYSTEM sidecar on branch squash and accept a fresh lifetime" in {
+    simulate(new SmallOoOTestHarness(allowSystem = true)) { d =>
+      init(d)
+      dispatch(d, 0x00000463L, 0x80000000L) // beq x0,x0,+8
+      val branch = issue(d)
+      dispatch(d, 0x300010f3L, 0x80000004L) // younger csrrw x1,mstatus,x0
+      d.io.systemHead.valid.expect(false.B) // the older branch owns ROB head
+      complete(d, branch, 0, Some(BigInt("80000008", 16)))
+      untilRecovered(d)
+      d.io.occupancy.expect(1.U) // younger SYSTEM was killed
+      d.io.retire.ready.poke(true.B)
+      d.io.retire.bits.wroteRegister.expect(false.B)
+      d.clock.step()
+      d.io.occupancy.expect(0.U)
+      d.io.retire.ready.poke(false.B)
+
+      dispatch(d, 0x300010f3L, 0x80000008L)
+      d.io.systemHead.valid.expect(true.B)
+      d.io.systemHead.bits.decoded.system.kind.expect(
+        aethercore.core.semantic.SystemOperationKind.Csr)
+      d.io.systemHead.bits.decoded.rs1.expect(0.U)
+      d.io.systemHead.bits.rs1Value.expect(0.U)
+      d.io.systemHead.ready.poke(true.B)
+      d.clock.step()
+      d.io.systemHead.valid.expect(false.B)
     }
   }
 

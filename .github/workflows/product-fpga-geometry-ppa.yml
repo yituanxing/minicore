@@ -93,12 +93,32 @@ jobs:
               '{capacity: $capacity, cells: $cells, lut4: $lut4, ff: $ff, bram: $bram, dpr: $dpr, dsp: $dsp, depth: $depth}' \
               > "$out/$size/metrics.json"
           done
-          small_rtl=$(find "$out/small/rtl" -maxdepth 1 -name '*.sv' -print -quit)
-          expanded_rtl=$(find "$out/expanded/rtl" -maxdepth 1 -name '*.sv' -print -quit)
-          if cmp -s "$small_rtl" "$expanded_rtl"; then
-            echo 'ERROR: Small and Expanded RTL emitted identical hardware' >&2
-            exit 1
-          fi
+          # Chisel emits multiple SV files; the first may be an unchanged
+          # shared peripheral even when the Product core geometry differs.
+          # Compare all emitted module names and bytes, in sorted order.
+          python3 - "$out" <<'PY'
+          import hashlib
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          def rtl_digest(size):
+              paths = sorted((root / size / 'rtl').glob('*.sv'))
+              if not paths:
+                  raise RuntimeError(f'{size}: no SystemVerilog files emitted')
+              digest = hashlib.sha256()
+              for path in paths:
+                  digest.update(path.name.encode('utf-8') + b'\0')
+                  digest.update(path.read_bytes())
+              return digest.hexdigest(), len(paths)
+
+          small, small_files = rtl_digest('small')
+          expanded, expanded_files = rtl_digest('expanded')
+          print(f'Product Small RTL: {small_files} files, SHA256={small}')
+          print(f'Product Expanded RTL: {expanded_files} files, SHA256={expanded}')
+          if small == expanded:
+              raise SystemExit('ERROR: Small and Expanded complete RTL sets are identical')
+          PY
 
       - name: Compare and report Product geometry cost
         shell: bash
