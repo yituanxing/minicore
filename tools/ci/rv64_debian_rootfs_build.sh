@@ -44,10 +44,17 @@ trap - EXIT
 # Debian slim images omit host-managed /dev nodes. The kernel's built-in cpio
 # generator preserves device special files; PID1 must open its real console.
 mkdir -p "${ROOTFS_DIR}/dev" "${ROOTFS_DIR}/proc" "${ROOTFS_DIR}/sys"
-[[ -e "${ROOTFS_DIR}/dev/console" ]] || \
+# Docker export materializes its runtime /dev entries as ordinary placeholder
+# files on some hosts. An initramfs needs actual character-device metadata:
+# replace only these two disposable, freshly exported entries when required.
+if [[ ! -c "${ROOTFS_DIR}/dev/console" ]]; then
+  sudo rm -f -- "${ROOTFS_DIR}/dev/console"
   sudo mknod -m 600 "${ROOTFS_DIR}/dev/console" c 5 1
-[[ -e "${ROOTFS_DIR}/dev/null" ]] || \
+fi
+if [[ ! -c "${ROOTFS_DIR}/dev/null" ]]; then
+  sudo rm -f -- "${ROOTFS_DIR}/dev/null"
   sudo mknod -m 666 "${ROOTFS_DIR}/dev/null" c 1 3
+fi
 [[ -c "${ROOTFS_DIR}/dev/console" && -c "${ROOTFS_DIR}/dev/null" ]] || \
   fail 'Debian initramfs must contain real console/null device nodes'
 install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_dynamic_init.sh" "${ROOTFS_DIR}/init"

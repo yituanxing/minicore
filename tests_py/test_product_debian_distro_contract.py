@@ -44,6 +44,8 @@ class ProductDebianDistroContracts(unittest.TestCase):
             "actual_arch", "riscv64", "double-float ABI",
             "/lib/ld-linux-riscv64-lp64d.so.1", "debian-sh-readelf.txt",
             "RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS",
+            '[[ ! -c "${ROOTFS_DIR}/dev/console" ]]',
+            '[[ ! -c "${ROOTFS_DIR}/dev/null" ]]',
         ):
             self.assertIn(fragment, rootfs)
         init = INIT.read_text()
