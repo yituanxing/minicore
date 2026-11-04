@@ -2,7 +2,7 @@ package aethercore.sim
 
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
-import aethercore.soc.AetherCoreProductUnifiedMemorySoC
+import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC}
 import _root_.circt.stage.ChiselStage
 import chisel3._
 
@@ -14,10 +14,11 @@ import chisel3._
   * Verilator C++ test harness attempt a Product boot without replacing or
   * weakening the independently qualified V2 Linux path.
   *
-  * The Product ISA still lacks F/D: this is a bring-up seam, NOT evidence that
-  * OpenSBI or a full Debian userspace has booted.
+  * The default Product top is the narrow IMAC bring-up baseline. Selecting
+  * debianTarget elaborates the existing RV64GC hardware; neither configuration
+  * alone is evidence that a complete Debian userspace has booted.
   */
-class AetherCoreProductUnifiedMemoryCompatSimTop extends Module {
+class AetherCoreProductUnifiedMemoryCompatSimTop(val debianTarget: Boolean = false) extends Module {
   private val Xlen = 64
   private val PA = 56
   private val DataBits = 64
@@ -69,7 +70,13 @@ class AetherCoreProductUnifiedMemoryCompatSimTop extends Module {
     val halted = Output(Bool())
   })
 
-  val soc = Module(new AetherCoreProductUnifiedMemorySoC)
+  // Keep the independently qualified RV64IMAC G4 top unchanged. The Debian
+  // runner explicitly opts into the very same Product CPU/SoC implementation
+  // with the hardware RV64GC/LP64D target selected at its sole board owner.
+  private val requestedTarget = if (debianTarget)
+    Some(AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(PA)) else None
+  val soc = Module(new AetherCoreProductUnifiedMemorySoC(
+    productConfigOverride = requestedTarget))
   val core = soc.core
   val hostMemory = Module(new AetherSoCUnifiedHostMemoryAdapter(
     addrBits = PA,
@@ -129,11 +136,23 @@ class AetherCoreProductUnifiedMemoryCompatSimTop extends Module {
 
 /** Distinct module identity for the existing OpenSBI host program. */
 class AetherCoreProductOpenSbiRV64SimTop
-    extends AetherCoreProductUnifiedMemoryCompatSimTop
+    extends AetherCoreProductUnifiedMemoryCompatSimTop(debianTarget = false)
+
+/** True Debian RV64GC/LP64D hardware target, not the IMAC G4 bring-up top. */
+class AetherCoreProductDebianRV64SimTop
+    extends AetherCoreProductUnifiedMemoryCompatSimTop(debianTarget = true)
 
 object ElaborateProductOpenSbiRV64SimTop extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductOpenSbiRV64SimTop,
+    args,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+object ElaborateProductDebianRV64SimTop extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductDebianRV64SimTop,
     args,
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )

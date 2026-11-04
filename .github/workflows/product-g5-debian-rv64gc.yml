@@ -1,0 +1,180 @@
+name: AetherCore Product G5 Real Debian RV64GC Dynamic PID1
+
+# This gate is deliberately separate from the frozen RV64IMA/LP64 G4 workload.
+# A real Debian userspace can require billions of slow RTL cycles. Qualify on
+# introduction, then use workflow_dispatch for explicit full distro reruns.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/product-g5-debian-rv64gc.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g5-debian-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product-debian-rv64gc:
+    name: Product SmallOoO RV64GC runs genuine Debian glibc/dash PID1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Install fixed RTL and upstream Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves qemu-user
+          docker version
+
+      - name: Restore fixed Verilator cache from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Restore fixed RV64 GCC cache from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore fixed Scala dependencies from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified upstream Linux and OpenSBI from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Provision verified frozen Verilator and GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          chmod +x ./mill tools/ensure_verilator_5_024.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build qualified unchanged upstream Linux baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -qx 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' \
+            build/rv64-linux-early/result.txt
+
+      - name: Extract official Debian riscv64 rootfs and verify LP64D dynamic ELF
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -qx 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-rootfs/result.txt
+
+      - name: Differential oracle for the same Debian glibc and dpkg under QEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          rootfs="$(sed -n 's/^rootfs=//p' build/rv64-debian-rootfs/result.txt | head -n 1)"
+          qemu-riscv64 -L "$rootfs" "$rootfs/bin/dash" -c \
+            'printf "DEBIAN_QEMU_DYNAMIC_SHELL_OK\n"'
+          arch="$(qemu-riscv64 -L "$rootfs" "$rootfs/usr/bin/dpkg" --print-architecture)"
+          test "$arch" = riscv64
+          echo 'DEBIAN_QEMU_LP64D_ORACLE_PASS: unmodified Debian ELF and loader ran under QEMU'
+
+      - name: Build real RV64GC FPU/C Linux, DTB and OpenSBI payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_debian_linux_build.sh
+          bash tools/ci/rv64_debian_payload_build.sh
+          grep -qx 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-boot/result.txt
+
+      - name: Run Debian glibc and dash as real Product RV64GC PID1
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/$TARGET_SHA"
+          mkdir -p "$build"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            TOP=AetherCoreProductDebianRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+            FW_BIN=build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS=4 \
+            MAX_CYCLES=1800000000 \
+            MILESTONE='DEBIAN_RISCV64_GLIBC_PID1_OK' \
+            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            REQUIRE_LAYERED_COMPRESSED=1 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' \
+            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
+            run-local
+          log="$build/logs/boot-probe.log"
+          grep -Fq 'Linux version 6.6.143' "$log"
+          grep -Fq 'AETHERCORE_DEBIAN_DYNAMIC_INIT_START' "$log"
+          grep -Fq 'DEBIAN_RISCV64_GLIBC_PID1_OK' "$log"
+          grep -q '^L32_LAYERED_COMPRESSED_PASS ' "$log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$log"
+          echo 'PRODUCT_G5_DEBIAN_DYNAMIC_PID1_PASS: official Debian riscv64 LP64D ELF and glibc executed on Product SmallOoO RV64GC'
+
+      - name: Preserve artifact identity, resolved kernel config and boot trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-product-g5-debian-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-rootfs/evidence/*
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/evidence/*
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/evidence/*
+            ${{ runner.temp }}/aethercore-product-g5-debian/${{ env.TARGET_SHA }}/logs/*.log

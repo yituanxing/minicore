@@ -123,7 +123,7 @@ object ProductCoreProfiles {
       AbiProfiles.lp64
     )
 
-  /** Upstream Debian riscv64 target, not yet implemented by either ProductCore or v2. */
+  /** Upstream Debian riscv64 target: Product RTL exists but distro boot is not yet qualified. */
   val distroSoftware: SoftwareTarget =
     SoftwareTarget(
       reference.isa.copy(

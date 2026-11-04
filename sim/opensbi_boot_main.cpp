@@ -20,7 +20,14 @@ constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
 constexpr std::uint64_t kSupervisorTimerInterruptCode = 5;
 constexpr std::uint64_t kSupervisorExternalInterruptCode = 9;
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+// RV64 OpenSBI fw_payload hands its Image off at 0x80200000; the older
+// RV32 qualification has a distinct 0x80400000 image base. Keep their
+// compressed-retirement accounting independent without changing execution.
+constexpr std::uint64_t kLinuxPayloadBase = 0x80200000ULL;
+#else
 constexpr std::uint64_t kLinuxPayloadBase = 0x80400000ULL;
+#endif
 
 using aethercore::l32sim::Memory;
 using aethercore::l32sim::initialize;
