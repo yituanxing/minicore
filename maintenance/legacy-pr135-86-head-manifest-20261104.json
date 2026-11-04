@@ -1,0 +1,871 @@
+{
+  "description": "Immutable snapshot of PR #135 legacy stacked subtree; archival only; no deletion implied",
+  "snapshot_date": "2026-11-04",
+  "repository": "yituanxing/minicore",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "087a3ed9588c8fe4ff99b682957f3adbe70230aa",
+  "root_pr": 135,
+  "total": 86,
+  "targets": [
+    {
+      "pr": 135,
+      "head": "explore/rv64-linux-initramfs-v1",
+      "sha": "34f460d6639361df9cdb23c8f2070084a888159b",
+      "base": "explore/rv64-linux-deeper-v1",
+      "base_current_sha": "140b226bfe09157610406c339c18fc783305f37b",
+      "created_at": "2026-08-20T06:49:31Z",
+      "updated_at": "2026-08-20T13:17:01Z",
+      "draft": true
+    },
+    {
+      "pr": 137,
+      "head": "ci/github-hosted-cache-v1",
+      "sha": "76d37c1947b7c6f1870ea91c01099a9c0ac9ed03",
+      "base": "explore/rv64-linux-initramfs-v1",
+      "base_current_sha": "34f460d6639361df9cdb23c8f2070084a888159b",
+      "created_at": "2026-08-20T16:52:39Z",
+      "updated_at": "2026-08-21T11:15:01Z",
+      "draft": true
+    },
+    {
+      "pr": 138,
+      "head": "feature/aethercore-v2-foundation",
+      "sha": "1960f1dcfb35ee2c65220e41326156aef239711c",
+      "base": "ci/nemu-shared-config-bootstrap",
+      "base_current_sha": "cac46967408e57eab6f46aa8b3e24f92ee340b29",
+      "created_at": "2026-08-21T11:09:54Z",
+      "updated_at": "2026-08-21T13:24:47Z",
+      "draft": true
+    },
+    {
+      "pr": 139,
+      "head": "ci/nemu-shared-config-bootstrap",
+      "sha": "cac46967408e57eab6f46aa8b3e24f92ee340b29",
+      "base": "ci/github-hosted-cache-v1",
+      "base_current_sha": "76d37c1947b7c6f1870ea91c01099a9c0ac9ed03",
+      "created_at": "2026-08-21T12:34:23Z",
+      "updated_at": "2026-08-21T13:25:40Z",
+      "draft": true
+    },
+    {
+      "pr": 140,
+      "head": "feature/aethercore-v2-f1-rob-commit",
+      "sha": "17de06255163f2204c8b47f3be11aae6ca940a29",
+      "base": "feature/aethercore-v2-foundation",
+      "base_current_sha": "1960f1dcfb35ee2c65220e41326156aef239711c",
+      "created_at": "2026-08-21T13:07:23Z",
+      "updated_at": "2026-08-21T13:35:31Z",
+      "draft": true
+    },
+    {
+      "pr": 141,
+      "head": "feature/aethercore-v2-f2-dependencies",
+      "sha": "e5f30c0ee320b223da7a552584737fb11ad4b6e2",
+      "base": "feature/aethercore-v2-f1-rob-commit",
+      "base_current_sha": "17de06255163f2204c8b47f3be11aae6ca940a29",
+      "created_at": "2026-08-21T13:48:52Z",
+      "updated_at": "2026-08-21T15:08:52Z",
+      "draft": true
+    },
+    {
+      "pr": 142,
+      "head": "feature/aethercore-v2-f3-execution",
+      "sha": "650df2a7e7fb8353915efafdafebecd82ecebb65",
+      "base": "feature/aethercore-v2-f2-dependencies",
+      "base_current_sha": "e5f30c0ee320b223da7a552584737fb11ad4b6e2",
+      "created_at": "2026-08-21T15:16:58Z",
+      "updated_at": "2026-08-21T16:24:57Z",
+      "draft": true
+    },
+    {
+      "pr": 143,
+      "head": "feature/aethercore-v2-f4-recovery",
+      "sha": "554430bc71b5dee18a7333cd1d5c4447a1c2314e",
+      "base": "feature/aethercore-v2-f3-execution",
+      "base_current_sha": "650df2a7e7fb8353915efafdafebecd82ecebb65",
+      "created_at": "2026-08-21T16:32:37Z",
+      "updated_at": "2026-08-22T02:27:27Z",
+      "draft": true
+    },
+    {
+      "pr": 144,
+      "head": "feature/aethercore-v2-f5-privileged",
+      "sha": "6a04335be31114f86e5d20b7670deb6c714bf885",
+      "base": "feature/aethercore-v2-f4-recovery",
+      "base_current_sha": "554430bc71b5dee18a7333cd1d5c4447a1c2314e",
+      "created_at": "2026-08-22T02:37:03Z",
+      "updated_at": "2026-08-22T04:03:44Z",
+      "draft": true
+    },
+    {
+      "pr": 145,
+      "head": "feature/aethercore-v2-f6-memory",
+      "sha": "184d2db9629d342cd69fd2f1daeb82051f9b6b6a",
+      "base": "feature/aethercore-v2-f5-privileged",
+      "base_current_sha": "6a04335be31114f86e5d20b7670deb6c714bf885",
+      "created_at": "2026-08-22T04:09:08Z",
+      "updated_at": "2026-08-22T05:52:33Z",
+      "draft": true
+    },
+    {
+      "pr": 146,
+      "head": "feature/aethercore-v2-f7-software-parity",
+      "sha": "418a4b798410df45c0218f1a0122cdf0199211f6",
+      "base": "feature/aethercore-v2-f6-memory",
+      "base_current_sha": "184d2db9629d342cd69fd2f1daeb82051f9b6b6a",
+      "created_at": "2026-08-22T05:49:56Z",
+      "updated_at": "2026-08-22T16:08:46Z",
+      "draft": true
+    },
+    {
+      "pr": 147,
+      "head": "diag/v2-f7-pid1-checkpoint",
+      "sha": "085a08734dac6aac45d30acb73cfc26a51fe5bf0",
+      "base": "feature/aethercore-v2-f7-software-parity",
+      "base_current_sha": "418a4b798410df45c0218f1a0122cdf0199211f6",
+      "created_at": "2026-08-22T15:44:12Z",
+      "updated_at": "2026-08-22T15:51:45Z",
+      "draft": true
+    },
+    {
+      "pr": 148,
+      "head": "perf/aethercore-v2-f8-baseline",
+      "sha": "cb615b852cc158ea6ccebb1adc7dde6fbe55aa20",
+      "base": "feature/aethercore-v2-f7-software-parity",
+      "base_current_sha": "418a4b798410df45c0218f1a0122cdf0199211f6",
+      "created_at": "2026-08-22T16:10:15Z",
+      "updated_at": "2026-08-23T01:55:53Z",
+      "draft": true
+    },
+    {
+      "pr": 149,
+      "head": "perf/aethercore-v2-a8-selective-issue",
+      "sha": "c8d32cd9fef4e325d7524f123b7f2c8d567db7e6",
+      "base": "perf/aethercore-v2-f8-baseline",
+      "base_current_sha": "cb615b852cc158ea6ccebb1adc7dde6fbe55aa20",
+      "created_at": "2026-08-23T02:02:19Z",
+      "updated_at": "2026-08-23T02:10:38Z",
+      "draft": true
+    },
+    {
+      "pr": 150,
+      "head": "perf/aethercore-v2-a8-production-selective-issue",
+      "sha": "e13b3ba80ee4cd5d0c5cbb6567d100668be17176",
+      "base": "perf/aethercore-v2-a8-selective-issue",
+      "base_current_sha": "c8d32cd9fef4e325d7524f123b7f2c8d567db7e6",
+      "created_at": "2026-08-23T02:07:09Z",
+      "updated_at": "2026-08-23T02:10:51Z",
+      "draft": true
+    },
+    {
+      "pr": 151,
+      "head": "perf/aethercore-v2-a8-enable-selective-issue",
+      "sha": "841c539fff9e0338ecf9480db7ddb688870415d6",
+      "base": "perf/aethercore-v2-a8-production-selective-issue",
+      "base_current_sha": "e13b3ba80ee4cd5d0c5cbb6567d100668be17176",
+      "created_at": "2026-08-23T02:17:28Z",
+      "updated_at": "2026-08-23T04:35:52Z",
+      "draft": false
+    },
+    {
+      "pr": 152,
+      "head": "perf/aethercore-v2-p8-measurement",
+      "sha": "0ceccdfdc84682990f01b72d70f90bb9423bfb95",
+      "base": "perf/aethercore-v2-a8-enable-selective-issue",
+      "base_current_sha": "841c539fff9e0338ecf9480db7ddb688870415d6",
+      "created_at": "2026-08-23T04:55:19Z",
+      "updated_at": "2026-08-23T08:54:58Z",
+      "draft": true
+    },
+    {
+      "pr": 153,
+      "head": "perf/aethercore-v2-sim-speed",
+      "sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "base": "perf/aethercore-v2-p8-measurement",
+      "base_current_sha": "0ceccdfdc84682990f01b72d70f90bb9423bfb95",
+      "created_at": "2026-08-23T09:39:12Z",
+      "updated_at": "2026-08-23T10:16:18Z",
+      "draft": true
+    },
+    {
+      "pr": 154,
+      "head": "perf/aethercore-v2-sim-speed-micro",
+      "sha": "4d11c5ebd90ee529a1963d3b37bdaf3f4389e918",
+      "base": "perf/aethercore-v2-sim-speed",
+      "base_current_sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "created_at": "2026-08-23T09:54:31Z",
+      "updated_at": "2026-08-23T09:54:31Z",
+      "draft": true
+    },
+    {
+      "pr": 155,
+      "head": "perf/aethercore-v2-sim-speed-ram",
+      "sha": "6415f415a7ca972573360c07a2571755909ead8d",
+      "base": "perf/aethercore-v2-sim-speed",
+      "base_current_sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "created_at": "2026-08-23T10:04:11Z",
+      "updated_at": "2026-08-23T10:04:11Z",
+      "draft": true
+    },
+    {
+      "pr": 156,
+      "head": "perf/aethercore-v2-sim-speed-fixed-read",
+      "sha": "7ae7acd73e3d6c53a8735f222f2c170006f38986",
+      "base": "perf/aethercore-v2-sim-speed",
+      "base_current_sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "created_at": "2026-08-23T10:14:54Z",
+      "updated_at": "2026-08-23T10:14:54Z",
+      "draft": true
+    },
+    {
+      "pr": 157,
+      "head": "perf/aethercore-v2-sim-speed-request-guard",
+      "sha": "ce8d460bbd51125dbb25267bf759845a2d6e7ffe",
+      "base": "perf/aethercore-v2-sim-speed",
+      "base_current_sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "created_at": "2026-08-23T10:22:32Z",
+      "updated_at": "2026-08-23T10:22:32Z",
+      "draft": true
+    },
+    {
+      "pr": 158,
+      "head": "perf/aethercore-v2-tlb-hit-flowthrough",
+      "sha": "822e67a984398413ce6d342f0758a976b9695fb0",
+      "base": "perf/aethercore-v2-sim-speed",
+      "base_current_sha": "25e2899de149ac38cac57cf6718e1f781d32a022",
+      "created_at": "2026-08-23T11:04:28Z",
+      "updated_at": "2026-08-24T01:35:32Z",
+      "draft": true
+    },
+    {
+      "pr": 160,
+      "head": "perf/aethercore-v2-lsu-intake-flowthrough",
+      "sha": "040cb17de319a0c5ab8d4b34ed5e957b158d9673",
+      "base": "perf/aethercore-v2-tlb-hit-flowthrough",
+      "base_current_sha": "822e67a984398413ce6d342f0758a976b9695fb0",
+      "created_at": "2026-08-24T02:42:30Z",
+      "updated_at": "2026-08-24T03:31:22Z",
+      "draft": true
+    },
+    {
+      "pr": 161,
+      "head": "perf/aethercore-v2-branch-response-flowthrough",
+      "sha": "ed3580ba59b8c8238f4123bd8f139054b53dde9c",
+      "base": "perf/aethercore-v2-lsu-intake-flowthrough",
+      "base_current_sha": "040cb17de319a0c5ab8d4b34ed5e957b158d9673",
+      "created_at": "2026-08-24T03:25:55Z",
+      "updated_at": "2026-08-24T04:32:54Z",
+      "draft": true
+    },
+    {
+      "pr": 163,
+      "head": "perf/aethercore-v2-prehead-load",
+      "sha": "ab0df9c9c49322cdf045b2169bca99543cff1e55",
+      "base": "perf/aethercore-v2-branch-response-flowthrough",
+      "base_current_sha": "ed3580ba59b8c8238f4123bd8f139054b53dde9c",
+      "created_at": "2026-08-24T05:31:14Z",
+      "updated_at": "2026-08-24T09:41:47Z",
+      "draft": true
+    },
+    {
+      "pr": 164,
+      "head": "arch/aethercore-v2-a8-profile-matrix",
+      "sha": "caee74a97da8d2cbd787c9b9b6a5f77b06be9696",
+      "base": "perf/aethercore-v2-branch-response-flowthrough",
+      "base_current_sha": "ed3580ba59b8c8238f4123bd8f139054b53dde9c",
+      "created_at": "2026-08-24T11:28:20Z",
+      "updated_at": "2026-08-24T11:36:24Z",
+      "draft": true
+    },
+    {
+      "pr": 165,
+      "head": "arch/aethercore-v2-a8-common-rvc",
+      "sha": "bb8192f03f683d78ca3e005b67678fb16f9a0667",
+      "base": "arch/aethercore-v2-a8-profile-matrix",
+      "base_current_sha": "caee74a97da8d2cbd787c9b9b6a5f77b06be9696",
+      "created_at": "2026-08-24T12:38:52Z",
+      "updated_at": "2026-08-24T14:04:55Z",
+      "draft": true
+    },
+    {
+      "pr": 166,
+      "head": "arch/aethercore-v2-a8-rv64imc-profile",
+      "sha": "e6f907be8f2660197f8562d83c19c9da956c905d",
+      "base": "arch/aethercore-v2-a8-common-rvc",
+      "base_current_sha": "bb8192f03f683d78ca3e005b67678fb16f9a0667",
+      "created_at": "2026-08-24T14:10:47Z",
+      "updated_at": "2026-08-24T14:38:13Z",
+      "draft": true
+    },
+    {
+      "pr": 167,
+      "head": "perf/aethercore-v2-p8-branch-exposure",
+      "sha": "8859dd038c9a6c56ed4fa048d65438500d6638e5",
+      "base": "arch/aethercore-v2-a8-rv64imc-profile",
+      "base_current_sha": "e6f907be8f2660197f8562d83c19c9da956c905d",
+      "created_at": "2026-08-24T14:29:01Z",
+      "updated_at": "2026-08-25T01:13:31Z",
+      "draft": true
+    },
+    {
+      "pr": 168,
+      "head": "arch/aethercore-v2-isa-semantic-closure",
+      "sha": "6cde3d9d89723cce81ef31573f50ae664c39e1bc",
+      "base": "arch/aethercore-v2-a8-rv64imc-profile",
+      "base_current_sha": "e6f907be8f2660197f8562d83c19c9da956c905d",
+      "created_at": "2026-08-25T01:44:37Z",
+      "updated_at": "2026-08-25T07:10:27Z",
+      "draft": true
+    },
+    {
+      "pr": 169,
+      "head": "arch/aethercore-v2-decode-contract-closure",
+      "sha": "364a82117ef10b5a89975452bfc60ffdf33c9532",
+      "base": "arch/aethercore-v2-isa-semantic-closure",
+      "base_current_sha": "6cde3d9d89723cce81ef31573f50ae664c39e1bc",
+      "created_at": "2026-08-25T01:53:16Z",
+      "updated_at": "2026-08-25T01:53:16Z",
+      "draft": true
+    },
+    {
+      "pr": 170,
+      "head": "arch/aethercore-v2-vm-permission-closure",
+      "sha": "cde0621ccf3e3a8317f6c0cf93803ecdff43d069",
+      "base": "arch/aethercore-v2-decode-contract-closure",
+      "base_current_sha": "364a82117ef10b5a89975452bfc60ffdf33c9532",
+      "created_at": "2026-08-25T02:00:13Z",
+      "updated_at": "2026-08-25T02:00:13Z",
+      "draft": true
+    },
+    {
+      "pr": 171,
+      "head": "arch/aethercore-v2-decode-uop-boundary",
+      "sha": "96f129557a609cac2d869f0d0582fd18b8c47749",
+      "base": "arch/aethercore-v2-isa-semantic-closure",
+      "base_current_sha": "6cde3d9d89723cce81ef31573f50ae664c39e1bc",
+      "created_at": "2026-08-25T02:11:11Z",
+      "updated_at": "2026-08-25T03:13:28Z",
+      "draft": true
+    },
+    {
+      "pr": 173,
+      "head": "arch/aethercore-v2-vm-permission-restack",
+      "sha": "6dcc0dd395c91461de65bf4efd7f3e0997554e92",
+      "base": "arch/aethercore-v2-decode-uop-boundary",
+      "base_current_sha": "96f129557a609cac2d869f0d0582fd18b8c47749",
+      "created_at": "2026-08-25T02:46:35Z",
+      "updated_at": "2026-08-25T03:48:25Z",
+      "draft": true
+    },
+    {
+      "pr": 174,
+      "head": "arch/aethercore-v2-decoded-uop-boundary",
+      "sha": "e9a0563100aa2d23d101ab544e00940bbd153a62",
+      "base": "arch/aethercore-v2-isa-semantic-closure",
+      "base_current_sha": "6cde3d9d89723cce81ef31573f50ae664c39e1bc",
+      "created_at": "2026-08-25T04:05:22Z",
+      "updated_at": "2026-08-25T08:12:03Z",
+      "draft": true
+    },
+    {
+      "pr": 175,
+      "head": "arch/aethercore-v2-cross-xlen-ownership",
+      "sha": "a978c67282d7b50ba4bd49444de93b7625331096",
+      "base": "arch/aethercore-v2-vm-permission-restack",
+      "base_current_sha": "6dcc0dd395c91461de65bf4efd7f3e0997554e92",
+      "created_at": "2026-08-25T04:26:47Z",
+      "updated_at": "2026-08-25T04:27:46Z",
+      "draft": true
+    },
+    {
+      "pr": 176,
+      "head": "arch/aethercore-v2-ptw-ownership",
+      "sha": "8d212f214fd8dcb9f44fd886a41f4c990f60b11a",
+      "base": "arch/aethercore-v2-cross-xlen-ownership",
+      "base_current_sha": "a978c67282d7b50ba4bd49444de93b7625331096",
+      "created_at": "2026-08-25T04:31:58Z",
+      "updated_at": "2026-08-25T04:31:58Z",
+      "draft": true
+    },
+    {
+      "pr": 177,
+      "head": "arch/aethercore-v2-decode-boundary-closure",
+      "sha": "d8f0ecb61969e7634676157485dc72376702887c",
+      "base": "arch/aethercore-v2-isa-semantic-closure",
+      "base_current_sha": "6cde3d9d89723cce81ef31573f50ae664c39e1bc",
+      "created_at": "2026-08-25T07:14:22Z",
+      "updated_at": "2026-08-25T07:15:11Z",
+      "draft": true
+    },
+    {
+      "pr": 178,
+      "head": "arch/aethercore-v2-xlen-boundary-closure",
+      "sha": "029b330b1c50e7eabf2385e33da28300f45ef081",
+      "base": "arch/aethercore-v2-decode-boundary-closure",
+      "base_current_sha": "d8f0ecb61969e7634676157485dc72376702887c",
+      "created_at": "2026-08-25T07:17:03Z",
+      "updated_at": "2026-08-25T07:18:14Z",
+      "draft": true
+    },
+    {
+      "pr": 179,
+      "head": "arch/aethercore-v2-vm-entry-policy-closure",
+      "sha": "6b1e573b66303134e31068009866626455975116",
+      "base": "arch/aethercore-v2-xlen-boundary-closure",
+      "base_current_sha": "029b330b1c50e7eabf2385e33da28300f45ef081",
+      "created_at": "2026-08-25T07:21:48Z",
+      "updated_at": "2026-08-25T08:13:03Z",
+      "draft": true
+    },
+    {
+      "pr": 180,
+      "head": "arch/aethercore-v2-ptw-sfence-ownership-closure",
+      "sha": "aecb4705f7621f919b1ee847e49f8c73941b5afc",
+      "base": "arch/aethercore-v2-vm-entry-policy-closure",
+      "base_current_sha": "6b1e573b66303134e31068009866626455975116",
+      "created_at": "2026-08-25T08:17:55Z",
+      "updated_at": "2026-08-25T09:10:24Z",
+      "draft": true
+    },
+    {
+      "pr": 181,
+      "head": "arch/aethercore-v2-platform-ownership-closure",
+      "sha": "d2960fba6102370d614d183e08f18f5433407ee1",
+      "base": "arch/aethercore-v2-ptw-sfence-ownership-closure",
+      "base_current_sha": "aecb4705f7621f919b1ee847e49f8c73941b5afc",
+      "created_at": "2026-08-25T09:01:32Z",
+      "updated_at": "2026-08-25T09:12:26Z",
+      "draft": true
+    },
+    {
+      "pr": 182,
+      "head": "perf/aethercore-v2-p8-completion-bandwidth-decision",
+      "sha": "7428de98cce038b2ebe838fc7c96aed9f64686ed",
+      "base": "arch/aethercore-v2-platform-ownership-closure",
+      "base_current_sha": "d2960fba6102370d614d183e08f18f5433407ee1",
+      "created_at": "2026-08-25T09:14:13Z",
+      "updated_at": "2026-08-25T09:25:02Z",
+      "draft": true
+    },
+    {
+      "pr": 183,
+      "head": "arch/aethercore-v2-abi-profile-ownership",
+      "sha": "f38639b321f8178299a3d30075945d44a428ed22",
+      "base": "perf/aethercore-v2-p8-completion-bandwidth-decision",
+      "base_current_sha": "7428de98cce038b2ebe838fc7c96aed9f64686ed",
+      "created_at": "2026-08-25T09:30:51Z",
+      "updated_at": "2026-08-25T09:59:20Z",
+      "draft": true
+    },
+    {
+      "pr": 184,
+      "head": "perf/aethercore-v2-p8-memory-lifetime-status",
+      "sha": "2437d8b86900c6aaf6efdeccbfd838df1293523d",
+      "base": "arch/aethercore-v2-abi-profile-ownership",
+      "base_current_sha": "f38639b321f8178299a3d30075945d44a428ed22",
+      "created_at": "2026-08-25T10:04:02Z",
+      "updated_at": "2026-08-25T11:34:11Z",
+      "draft": true
+    },
+    {
+      "pr": 185,
+      "head": "perf/aethercore-v2-topdown-attribution",
+      "sha": "8de88a5ead0ec428885cf895efbc252a55f7b9ca",
+      "base": "perf/aethercore-v2-p8-memory-lifetime-status",
+      "base_current_sha": "2437d8b86900c6aaf6efdeccbfd838df1293523d",
+      "created_at": "2026-08-25T11:47:17Z",
+      "updated_at": "2026-08-25T13:30:30Z",
+      "draft": true
+    },
+    {
+      "pr": 186,
+      "head": "ci/p8-deterministic-pid1-staging",
+      "sha": "2e7125099d7b5f8d11ac6064c3319088efaa96ad",
+      "base": "perf/aethercore-v2-topdown-attribution",
+      "base_current_sha": "8de88a5ead0ec428885cf895efbc252a55f7b9ca",
+      "created_at": "2026-08-25T13:36:24Z",
+      "updated_at": "2026-08-25T13:36:24Z",
+      "draft": true
+    },
+    {
+      "pr": 187,
+      "head": "perf/aethercore-v2-p8-prehead-load-v2",
+      "sha": "021d95650d6d808c47c2d0108bd9fedff57019a3",
+      "base": "ci/p8-deterministic-pid1-staging",
+      "base_current_sha": "2e7125099d7b5f8d11ac6064c3319088efaa96ad",
+      "created_at": "2026-08-25T13:47:21Z",
+      "updated_at": "2026-08-25T14:20:43Z",
+      "draft": true
+    },
+    {
+      "pr": 189,
+      "head": "perf/aethercore-v2-p8-loadq2-outstanding",
+      "sha": "d7127542d94e6677834c092fb047b45e0452ec8f",
+      "base": "perf/aethercore-v2-p8-prehead-load-v2",
+      "base_current_sha": "021d95650d6d808c47c2d0108bd9fedff57019a3",
+      "created_at": "2026-08-26T02:19:50Z",
+      "updated_at": "2026-08-26T05:53:33Z",
+      "draft": true
+    },
+    {
+      "pr": 191,
+      "head": "perf/aethercore-v2-p8-btfnt-static-conditional",
+      "sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
+      "base": "perf/aethercore-v2-p8-loadq2-outstanding",
+      "base_current_sha": "d7127542d94e6677834c092fb047b45e0452ec8f",
+      "created_at": "2026-08-26T08:16:42Z",
+      "updated_at": "2026-08-26T11:04:49Z",
+      "draft": true
+    },
+    {
+      "pr": 192,
+      "head": "perf/aethercore-v2-p8-opportunity-attribution",
+      "sha": "faf9197aaef1fdb3dd7ff6e4133a9adcb5cb3a20",
+      "base": "perf/aethercore-v2-p8-loadq2-outstanding",
+      "base_current_sha": "d7127542d94e6677834c092fb047b45e0452ec8f",
+      "created_at": "2026-08-27T01:02:03Z",
+      "updated_at": "2026-08-27T01:13:44Z",
+      "draft": true
+    },
+    {
+      "pr": 193,
+      "head": "perf/aethercore-v2-p8-completed-branch-load-bypass-v2",
+      "sha": "9d3f76e9de7177ca8c537ac592dc1aa39d01aa48",
+      "base": "perf/aethercore-v2-p8-btfnt-static-conditional",
+      "base_current_sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
+      "created_at": "2026-08-27T01:33:55Z",
+      "updated_at": "2026-08-27T01:34:28Z",
+      "draft": true
+    },
+    {
+      "pr": 194,
+      "head": "perf/aethercore-v2-completed-branch-load-overlap",
+      "sha": "f3b630355ed6b432086107a19de6baac0c101e2b",
+      "base": "perf/aethercore-v2-p8-btfnt-static-conditional",
+      "base_current_sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
+      "created_at": "2026-08-27T01:45:47Z",
+      "updated_at": "2026-08-27T01:45:47Z",
+      "draft": true
+    },
+    {
+      "pr": 195,
+      "head": "ci/aethercore-v2-p8-pr-base-ab",
+      "sha": "51e8669816092e79c32a1f9e911afbc8ab47fc35",
+      "base": "perf/aethercore-v2-completed-branch-load-overlap",
+      "base_current_sha": "f3b630355ed6b432086107a19de6baac0c101e2b",
+      "created_at": "2026-08-27T02:15:38Z",
+      "updated_at": "2026-08-27T02:33:26Z",
+      "draft": true
+    },
+    {
+      "pr": 196,
+      "head": "perf/aethercore-v2-p8-next-bottleneck-attribution",
+      "sha": "5a9a500ef67c08a05aae6dd2c5932410a9ef2b5f",
+      "base": "perf/aethercore-v2-completed-branch-load-overlap",
+      "base_current_sha": "f3b630355ed6b432086107a19de6baac0c101e2b",
+      "created_at": "2026-08-27T02:23:10Z",
+      "updated_at": "2026-08-27T02:34:39Z",
+      "draft": true
+    },
+    {
+      "pr": 197,
+      "head": "measure/aethercore-v2-194-exact-ab",
+      "sha": "a04859b76dd223f7f31dc1d234ab5a75e92b637f",
+      "base": "perf/aethercore-v2-p8-btfnt-static-conditional",
+      "base_current_sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
+      "created_at": "2026-08-27T02:37:37Z",
+      "updated_at": "2026-08-27T02:38:19Z",
+      "draft": true
+    },
+    {
+      "pr": 198,
+      "head": "fix/aethercore-v2-prehead-load-exception-deferral",
+      "sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
+      "base": "perf/aethercore-v2-completed-branch-load-overlap",
+      "base_current_sha": "f3b630355ed6b432086107a19de6baac0c101e2b",
+      "created_at": "2026-08-27T03:36:20Z",
+      "updated_at": "2026-08-27T03:39:51Z",
+      "draft": true
+    },
+    {
+      "pr": 199,
+      "head": "measure/aethercore-v2-198-full-linux",
+      "sha": "36e62dac5039628d15037a2d8a946f54367fe4ab",
+      "base": "fix/aethercore-v2-prehead-load-exception-deferral",
+      "base_current_sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
+      "created_at": "2026-08-27T03:37:25Z",
+      "updated_at": "2026-08-27T03:37:25Z",
+      "draft": true
+    },
+    {
+      "pr": 200,
+      "head": "measure/aethercore-v2-198-qualified-full",
+      "sha": "b4fa05458ea36ab79e4332bf84e0ac4d9a76064f",
+      "base": "fix/aethercore-v2-prehead-load-exception-deferral",
+      "base_current_sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
+      "created_at": "2026-08-27T03:41:25Z",
+      "updated_at": "2026-08-27T03:41:25Z",
+      "draft": true
+    },
+    {
+      "pr": 201,
+      "head": "measure/aethercore-v2-198-exact-ab",
+      "sha": "98f7e623ffef65f4f30350586a20b673cad25276",
+      "base": "perf/aethercore-v2-p8-btfnt-static-conditional",
+      "base_current_sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
+      "created_at": "2026-08-27T03:44:23Z",
+      "updated_at": "2026-08-27T03:44:23Z",
+      "draft": true
+    },
+    {
+      "pr": 202,
+      "head": "perf/aethercore-v2-p8-next-bottleneck-attribution-v2",
+      "sha": "8a720fcc6597cf9d9308a128743fb392314728f2",
+      "base": "fix/aethercore-v2-prehead-load-exception-deferral",
+      "base_current_sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
+      "created_at": "2026-08-27T08:15:46Z",
+      "updated_at": "2026-08-27T08:15:46Z",
+      "draft": true
+    },
+    {
+      "pr": 203,
+      "head": "measure/aethercore-v2-198-ppa-long",
+      "sha": "22a831dc1f43d90e6bd4cbdf624dde1592b6aee9",
+      "base": "perf/aethercore-v2-p8-btfnt-static-conditional",
+      "base_current_sha": "f3e5b29a45c1fdbd47a6ed8984b43bad90d3edb3",
+      "created_at": "2026-08-27T08:26:19Z",
+      "updated_at": "2026-08-27T08:26:19Z",
+      "draft": true
+    },
+    {
+      "pr": 204,
+      "head": "perf/aethercore-v2-bht64",
+      "sha": "3aa31483849eca703f194a1d1f0de5a0705fa6c9",
+      "base": "fix/aethercore-v2-prehead-load-exception-deferral",
+      "base_current_sha": "5216c1450aaf7991cd90376f859c08a0c5acc683",
+      "created_at": "2026-08-27T08:35:14Z",
+      "updated_at": "2026-08-27T08:35:32Z",
+      "draft": true
+    },
+    {
+      "pr": 205,
+      "head": "perf/aethercore-v2-bht64-ras4",
+      "sha": "616ab6cafedfebb01ab1b001679f7852096e4a02",
+      "base": "perf/aethercore-v2-bht64",
+      "base_current_sha": "3aa31483849eca703f194a1d1f0de5a0705fa6c9",
+      "created_at": "2026-08-27T09:37:22Z",
+      "updated_at": "2026-08-27T09:37:22Z",
+      "draft": true
+    },
+    {
+      "pr": 210,
+      "head": "arch/aethercore-v2-cache-boundary",
+      "sha": "ec73c0ceeccbf25e9e1618a703964b6d10ececdf",
+      "base": "perf/aethercore-v2-bht64-ras4",
+      "base_current_sha": "616ab6cafedfebb01ab1b001679f7852096e4a02",
+      "created_at": "2026-08-27T13:39:20Z",
+      "updated_at": "2026-08-27T13:39:20Z",
+      "draft": true
+    },
+    {
+      "pr": 212,
+      "head": "arch/aethercore-v2-cache-stage1",
+      "sha": "b6a2572457852da6a20d3f760e5daaa0c8f1e5c5",
+      "base": "arch/aethercore-v2-cache-boundary",
+      "base_current_sha": "ec73c0ceeccbf25e9e1618a703964b6d10ececdf",
+      "created_at": "2026-08-27T14:14:35Z",
+      "updated_at": "2026-08-27T14:55:04Z",
+      "draft": true
+    },
+    {
+      "pr": 213,
+      "head": "measure/aethercore-v2-dcache-10cycle-ram",
+      "sha": "396061547800a2673424be8b09937edd8e457dd6",
+      "base": "arch/aethercore-v2-cache-stage1",
+      "base_current_sha": "b6a2572457852da6a20d3f760e5daaa0c8f1e5c5",
+      "created_at": "2026-08-27T15:10:07Z",
+      "updated_at": "2026-08-27T15:10:07Z",
+      "draft": true
+    },
+    {
+      "pr": 214,
+      "head": "fix/aethercore-v2-data-wait-runtime-contract",
+      "sha": "4990fc35fb093700d4166e41d6a4bdd9b6e312aa",
+      "base": "measure/aethercore-v2-dcache-10cycle-ram",
+      "base_current_sha": "396061547800a2673424be8b09937edd8e457dd6",
+      "created_at": "2026-08-27T15:17:35Z",
+      "updated_at": "2026-08-28T01:59:08Z",
+      "draft": true
+    },
+    {
+      "pr": 215,
+      "head": "ci/rv64-linux-cache-save",
+      "sha": "dd9779e6ba30b6bbddd7d3f69ba025156febcf38",
+      "base": "fix/aethercore-v2-data-wait-runtime-contract",
+      "base_current_sha": "4990fc35fb093700d4166e41d6a4bdd9b6e312aa",
+      "created_at": "2026-08-28T02:03:31Z",
+      "updated_at": "2026-08-28T08:19:04Z",
+      "draft": false
+    },
+    {
+      "pr": 216,
+      "head": "measure/aethercore-v2-dcache-ppa",
+      "sha": "b083098c11b15d0cc8f208197467a513fb07b346",
+      "base": "ci/rv64-linux-cache-save",
+      "base_current_sha": "dd9779e6ba30b6bbddd7d3f69ba025156febcf38",
+      "created_at": "2026-08-28T08:41:00Z",
+      "updated_at": "2026-08-28T08:41:00Z",
+      "draft": false
+    },
+    {
+      "pr": 217,
+      "head": "measure/aethercore-v2-dcache-ppa-60m",
+      "sha": "2aa59822892872af0cbf919ab42a90d769597be5",
+      "base": "measure/aethercore-v2-dcache-ppa",
+      "base_current_sha": "b083098c11b15d0cc8f208197467a513fb07b346",
+      "created_at": "2026-08-28T09:10:23Z",
+      "updated_at": "2026-08-28T09:21:55Z",
+      "draft": false
+    },
+    {
+      "pr": 218,
+      "head": "opt/aethercore-v2-dcache-ram-storage",
+      "sha": "7ff1a795b41e80e7eef3c81aa186e69d11d6913a",
+      "base": "ci/rv64-linux-cache-save",
+      "base_current_sha": "dd9779e6ba30b6bbddd7d3f69ba025156febcf38",
+      "created_at": "2026-08-28T10:35:58Z",
+      "updated_at": "2026-08-28T10:43:52Z",
+      "draft": false
+    },
+    {
+      "pr": 219,
+      "head": "measure/aethercore-v2-dcache-ram-storage-cost",
+      "sha": "f94b3f6650452364bf6cb9e30a57c98726b589dd",
+      "base": "opt/aethercore-v2-dcache-ram-storage",
+      "base_current_sha": "7ff1a795b41e80e7eef3c81aa186e69d11d6913a",
+      "created_at": "2026-08-28T10:36:44Z",
+      "updated_at": "2026-08-28T10:41:38Z",
+      "draft": false
+    },
+    {
+      "pr": 220,
+      "head": "soc/aethercore-v0-product-shell",
+      "sha": "e82a7f894840b4415aa84e4f9e4796148affb5ef",
+      "base": "opt/aethercore-v2-dcache-ram-storage",
+      "base_current_sha": "7ff1a795b41e80e7eef3c81aa186e69d11d6913a",
+      "created_at": "2026-08-28T11:19:41Z",
+      "updated_at": "2026-08-28T11:22:41Z",
+      "draft": false
+    },
+    {
+      "pr": 221,
+      "head": "soc/aethercore-v0-memory-hub",
+      "sha": "4b262a115eb39282c3e9cf3df54f0c1a24cbcff8",
+      "base": "soc/aethercore-v0-product-shell",
+      "base_current_sha": "e82a7f894840b4415aa84e4f9e4796148affb5ef",
+      "created_at": "2026-08-28T11:25:53Z",
+      "updated_at": "2026-08-28T11:28:53Z",
+      "draft": false
+    },
+    {
+      "pr": 222,
+      "head": "soc/aethercore-v0-unified-memory-adapters",
+      "sha": "532daa8713276148f90aad87af6b90cb0e09d6d7",
+      "base": "soc/aethercore-v0-memory-hub",
+      "base_current_sha": "4b262a115eb39282c3e9cf3df54f0c1a24cbcff8",
+      "created_at": "2026-08-28T11:33:54Z",
+      "updated_at": "2026-08-28T11:33:54Z",
+      "draft": false
+    },
+    {
+      "pr": 223,
+      "head": "soc/aethercore-v0-unified-memory-soc",
+      "sha": "ec02ba5f4b263a6936d3b557f56e945075b2ff86",
+      "base": "soc/aethercore-v0-unified-memory-adapters",
+      "base_current_sha": "532daa8713276148f90aad87af6b90cb0e09d6d7",
+      "created_at": "2026-08-28T11:38:06Z",
+      "updated_at": "2026-08-28T11:38:06Z",
+      "draft": false
+    },
+    {
+      "pr": 224,
+      "head": "soc/aethercore-v0-unified-linux-path",
+      "sha": "f65cbd3e1b8fa1415c1c8c019e3471c5294727be",
+      "base": "soc/aethercore-v0-unified-memory-soc",
+      "base_current_sha": "ec02ba5f4b263a6936d3b557f56e945075b2ff86",
+      "created_at": "2026-08-28T11:41:51Z",
+      "updated_at": "2026-08-28T12:44:30Z",
+      "draft": false
+    },
+    {
+      "pr": 225,
+      "head": "soc/aethercore-v0-axi4-bridge",
+      "sha": "8bd36a657511395edd26b39311d0945204495f6a",
+      "base": "soc/aethercore-v0-unified-memory-soc",
+      "base_current_sha": "ec02ba5f4b263a6936d3b557f56e945075b2ff86",
+      "created_at": "2026-08-28T11:57:32Z",
+      "updated_at": "2026-08-28T12:00:18Z",
+      "draft": false
+    },
+    {
+      "pr": 226,
+      "head": "soc/aethercore-v0-axi4-soc",
+      "sha": "75a85bac964b31c5d15911deffe41dceab7bfe34",
+      "base": "soc/aethercore-v0-axi4-bridge",
+      "base_current_sha": "8bd36a657511395edd26b39311d0945204495f6a",
+      "created_at": "2026-08-28T12:01:40Z",
+      "updated_at": "2026-08-28T12:01:40Z",
+      "draft": false
+    },
+    {
+      "pr": 227,
+      "head": "soc/aethercore-v0-axi4-linux-path",
+      "sha": "b45f282054a94c6b2171c85e9e660f1f68bffda3",
+      "base": "soc/aethercore-v0-axi4-soc",
+      "base_current_sha": "75a85bac964b31c5d15911deffe41dceab7bfe34",
+      "created_at": "2026-08-28T12:10:00Z",
+      "updated_at": "2026-08-28T15:45:30Z",
+      "draft": false
+    },
+    {
+      "pr": 228,
+      "head": "soc/aethercore-v0-ifetch-flowthrough",
+      "sha": "1f893d785b871c3126bcca07d4425c72c8c3b171",
+      "base": "soc/aethercore-v0-unified-linux-path",
+      "base_current_sha": "f65cbd3e1b8fa1415c1c8c019e3471c5294727be",
+      "created_at": "2026-08-28T12:29:26Z",
+      "updated_at": "2026-08-28T12:45:45Z",
+      "draft": false
+    },
+    {
+      "pr": 229,
+      "head": "soc/aethercore-v0-icache",
+      "sha": "a502a71df7aac98d3997615e71b29661939ebb5e",
+      "base": "soc/aethercore-v0-unified-linux-path",
+      "base_current_sha": "f65cbd3e1b8fa1415c1c8c019e3471c5294727be",
+      "created_at": "2026-08-28T12:51:34Z",
+      "updated_at": "2026-08-29T14:19:31Z",
+      "draft": false
+    },
+    {
+      "pr": 231,
+      "head": "soc/aethercore-v0-axi4-icache-linux",
+      "sha": "a6e0ac65413016a8f39c77216b43ad9415bf9946",
+      "base": "soc/aethercore-v0-axi4-linux-path",
+      "base_current_sha": "b45f282054a94c6b2171c85e9e660f1f68bffda3",
+      "created_at": "2026-08-28T13:26:10Z",
+      "updated_at": "2026-08-28T13:37:30Z",
+      "draft": false
+    },
+    {
+      "pr": 232,
+      "head": "measure/aethercore-v0-icache-runtime",
+      "sha": "ac9ffb9ed6483e1d020dc7c3f811761db7ca4cfa",
+      "base": "soc/aethercore-v0-icache",
+      "base_current_sha": "a502a71df7aac98d3997615e71b29661939ebb5e",
+      "created_at": "2026-08-28T13:34:52Z",
+      "updated_at": "2026-08-28T13:34:52Z",
+      "draft": false
+    }
+  ]
+}
