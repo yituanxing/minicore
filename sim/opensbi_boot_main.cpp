@@ -131,6 +131,9 @@ int main(int argc, char** argv) {
     std::uint64_t inputCompleteCycle = 0;
     std::uint64_t postInputDeadline = 0;
     std::uint64_t nextProgressCycle = progressIntervalCycles;
+    std::uint64_t previousProgressCycle = 0;
+    std::uint64_t previousProgressCommits = 0;
+    std::uint64_t lastUartCycle = 0;
     const auto hostStart = std::chrono::steady_clock::now();
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
@@ -159,12 +162,26 @@ int main(int argc, char** argv) {
         const auto elapsed = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - hostStart).count();
         const auto cyclesPerSecond = elapsed > 0.0 ? cycles / elapsed : 0.0;
+        const auto intervalCycles = cycles - previousProgressCycle;
+        const auto intervalCommits = commits - previousProgressCommits;
+        const auto intervalIpc = intervalCycles != 0
+            ? static_cast<double>(intervalCommits) / intervalCycles : 0.0;
         std::cerr << "\nL32_SIM_PROGRESS cycles=" << cycles
                   << " commits=" << commits
                   << " host-seconds=" << elapsed
                   << " cycles-per-second=" << cyclesPerSecond
                   << " input=" << inputIndex << '/' << uartInput.size()
-                  << " milestone=" << (sawMilestone ? 1 : 0) << "\n";
+                  << " milestone=" << (sawMilestone ? 1 : 0)
+                  << " interval-commits=" << intervalCommits
+                  << " interval-ipc=" << intervalIpc
+                  << " uart-bytes=" << uart.size()
+                  << " uart-silent-cycles=" << (cycles - lastUartCycle)
+                  << " exceptions=" << exceptions
+                  << " interrupts=" << interrupts
+                  << " stip=" << supervisorTimerInterrupts
+                  << " seip=" << supervisorExternalInterrupts << "\n";
+        previousProgressCycle = cycles;
+        previousProgressCommits = commits;
         nextProgressCycle += progressIntervalCycles;
       }
 
@@ -191,6 +208,7 @@ int main(int argc, char** argv) {
       }
 
       if (top.io_uartValid) {
+        lastUartCycle = cycles;
         const char byte = static_cast<char>(top.io_uartByte);
         uart.push_back(byte);
         std::cout.put(byte);

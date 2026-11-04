@@ -31,7 +31,10 @@ class ProductG4InitcallDiagnostic(unittest.TestCase):
 
     def test_timeout_always_symbols_pcs_without_relaxing_pid1_gate(self):
         workflow = WORKFLOW.read_text()
-        self.assertIn("MAX_CYCLES=850000000", workflow)
+        self.assertIn("max_cycles=850000000", workflow)
+        self.assertIn("max_cycles=1800000000", workflow)
+        self.assertIn('MAX_CYCLES="$max_cycles"', workflow)
+        self.assertIn("PRODUCT_G4_CYCLE_BUDGET:", workflow)
         self.assertIn("MILESTONE='RV64 USER UART IRQ OK'", workflow)
         self.assertIn("MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1", workflow)
         self.assertIn("PRODUCT_G4_LINUX_PID1_DIAGNOSTIC_PASS:", workflow)
@@ -42,6 +45,8 @@ class ProductG4InitcallDiagnostic(unittest.TestCase):
         self.assertIn("${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}addr2line", workflow)
         self.assertIn("owner=linux", workflow)
         self.assertIn("owner=opensbi", workflow)
+        self.assertIn("grep '^L32_SIM_PROGRESS '", workflow)
+        self.assertIn("L32_(OPENSBI_TIMEOUT|RUNTIME_MILESTONE_PASS", workflow)
         self.assertIn("- name: Preserve Product Linux PID1 and interrupt evidence", workflow)
 
 

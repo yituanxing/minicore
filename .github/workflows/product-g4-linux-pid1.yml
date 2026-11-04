@@ -27,7 +27,9 @@ jobs:
   product-linux-pid1:
     name: Product SmallOoO real Linux 6.6.143 PID1, STIP and SEIP
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Draft diagnosis can run beyond the frozen 850M-cycle signoff budget.
+    # Keep the wall-clock ceiling bounded even if host throughput regresses.
+    timeout-minutes: 150
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       AETHERCORE_MILL_NO_DAEMON: '1'
@@ -140,13 +142,20 @@ jobs:
           set -euo pipefail
           build="$RUNNER_TEMP/aethercore-product-g4-pid1/$TARGET_SHA"
           mkdir -p "$build"
+          # Only diagnostic runs may use a longer budget. Ready PR / manual
+          # normal signoff retains the original 850M-cycle workload contract.
+          max_cycles=850000000
+          if [[ '${{ github.event.pull_request.draft || inputs.diagnostic_initcalls }}' == 'true' ]]; then
+            max_cycles=1800000000
+          fi
+          echo "PRODUCT_G4_CYCLE_BUDGET: max_cycles=$max_cycles diagnostic=${{ github.event.pull_request.draft || inputs.diagnostic_initcalls }}"
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$build" \
             TOP=AetherCoreProductOpenSbiRV64SimTop \
             ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
             FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
             JOBS=4 \
-            MAX_CYCLES=850000000 \
+            MAX_CYCLES="$max_cycles" \
             MILESTONE='RV64 USER UART IRQ OK' \
             MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
             PROGRESS_INTERVAL_CYCLES=10000000 \
@@ -213,10 +222,20 @@ jobs:
         if: always()
         shell: bash
         run: |
+          echo "Source: $TARGET_SHA" >> "$GITHUB_STEP_SUMMARY"
           if [[ '${{ github.event.pull_request.draft || inputs.diagnostic_initcalls }}' == 'true' ]]; then
-            echo 'G4 diagnostic only: DTB bootargs include initcall_debug loglevel=8; not final frozen-payload signoff.' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo 'G4 diagnostic only: DTB bootargs include initcall_debug loglevel=8; 1.8B-cycle cap; not final frozen-payload signoff.' | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo 'G4 frozen normal payload: pass only with real PID1/SEIP marker.' | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          log="$RUNNER_TEMP/aethercore-product-g4-pid1/$TARGET_SHA/logs/boot-probe.log"
+          if [[ -s "$log" ]]; then
+            {
+              echo '```text'
+              grep '^L32_SIM_PROGRESS ' "$log" | tail -1 || true
+              grep -E '^L32_(OPENSBI_TIMEOUT|RUNTIME_MILESTONE_PASS|UART_MILESTONE|FIRST_SUPERVISOR_EXTERNAL_INTERRUPT) ' "$log" | tail -4 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Preserve Product Linux PID1 and interrupt evidence
