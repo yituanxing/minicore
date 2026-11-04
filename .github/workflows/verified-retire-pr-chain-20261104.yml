@@ -1,4 +1,4 @@
-name: Verified retire PR chain batch 11 (2026-11-04)
+name: Verified retire PR chain batch 11 retry (2026-11-04)
 on:
   push:
     branches:
@@ -101,9 +101,23 @@ jobs:
              [32216610620,['c9478de262e56dea2f8c9e75590e5f61c3f4ae56','2026-08-19T04:40:26Z',32224026615]]
             ]);
             const git=require('child_process');
-            const getRef=async ref=>(await github.rest.git.getRef({owner,repo,ref})).data;
-            const getPR=async num=>(await github.rest.pulls.get({owner,repo,pull_number:num})).data;
-            const openPRs=async()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100});
+            // Retry only transient read failures. Never silently retry destructive writes.
+            const retry=async(label,fn)=>{
+              for(let n=0;n<5;n++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||
+                    /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||n===4)throw e;
+                  const ms=500*Math.pow(2,n);
+                  console.log('TRANSIENT_READ_RETRY',label,n+1,ms,String(e.message).slice(0,140));
+                  await new Promise(resolve=>setTimeout(resolve,ms));
+                }
+              }
+            };
+            const getRef=async ref=>(await retry('getRef '+ref,()=>github.rest.git.getRef({owner,repo,ref}))).data;
+            const getPR=async num=>(await retry('getPR '+num,()=>github.rest.pulls.get({owner,repo,pull_number:num}))).data;
+            const openPRs=async()=>retry('openPRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
             const pin=async()=>{
               const main=(await getRef('heads/main')).object.sha;
               const productSHA=(await getRef('heads/'+product)).object.sha;
@@ -118,13 +132,13 @@ jobs:
             const checkZombie=async run=>{
               if(!staleRunIds.has(run.id)||run.status!=='queued')return false;
               const [sha,created,successor]=staleEvidence.get(run.id);
-              const now=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:run.id})).data;
+              const now=(await retry('getRun '+run.id,()=>github.rest.actions.getWorkflowRun({owner,repo,run_id:run.id}))).data;
               if(now.status!=='queued'||now.head_branch!=='explore/rv64a-v1'||
                  now.head_sha!==sha||now.created_at!==created||now.updated_at!==created||
                  Date.now()-Date.parse(created)<35*86400000)return false;
-              const jobs=(await github.rest.actions.listJobsForWorkflowRun({owner,repo,run_id:run.id,per_page:100})).data;
+              const jobs=(await retry('listJobs '+run.id,()=>github.rest.actions.listJobsForWorkflowRun({owner,repo,run_id:run.id,per_page:100}))).data;
               if(jobs.total_count!==0)return false;
-              const later=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:successor})).data;
+              const later=(await retry('getRun '+successor,()=>github.rest.actions.getWorkflowRun({owner,repo,run_id:successor}))).data;
               if(later.status!=='completed'||later.conclusion!=='success'||
                  later.workflow_id!==now.workflow_id||
                  later.head_sha!=='2c708adc07d770e583cc9667a6f6a586416147f7')return false;
@@ -132,8 +146,8 @@ jobs:
             };
             const activeFor=async(name,number)=>{
               for(const status of ['queued','in_progress','waiting','pending','requested']){
-                const runs=await github.paginate(github.rest.actions.listWorkflowRunsForRepo,
-                  {owner,repo,status,per_page:100});
+                const runs=await retry('activeRuns '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+                  {owner,repo,status,per_page:100}));
                 for(const run of runs){
                   const applies=run.head_branch===name||
                     (run.pull_requests||[]).some(p=>p.number===number);
@@ -168,12 +182,12 @@ jobs:
               if(badInternal)throw new Error('Child-first order violated at #'+number);
               if(await archiveSHA(name)!==sha)throw new Error('Exact archive SHA mismatch: '+name);
               try{
-                const b=(await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+                const b=(await retry('getBranch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
                 if(b.protected||b.commit.sha!==sha)throw new Error('Protected/changed branch: '+name);
               }catch(e){
                 if(e.status!==404||p.state!=='closed')throw e;
               }
-              const cmp=(await github.rest.repos.compareCommits({owner,repo,base:sha,head:mainExpected})).data;
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:sha,head:mainExpected}))).data;
               if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
                 throw new Error('Not included in main: '+name);
               await activeFor(name,number);
@@ -216,7 +230,7 @@ jobs:
               await activeFor(name,number);
               await pin();
               try{
-                const b=(await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+                const b=(await retry('getBranch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
                 if(b.protected||b.commit.sha!==sha)throw new Error('Branch protected/moved: '+name);
               }catch(e){
                 if(e.status!==404)throw e;
