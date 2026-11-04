@@ -77,7 +77,9 @@ class ProductFpBackendSpec extends AnyFlatSpec with Matchers with ChiselSim {
       bits.token.generation.peek().litValue,
       bits.destination.index.peek().litValue,
       bits.destination.generation.peek().litValue,
-      bits.destinationFile.asUInt.peek().litValue,
+      // A simulator peek already returns a literal enum value. Calling
+      // .asUInt here constructs hardware outside a Chisel Module.
+      bits.destinationFile.peek().litValue,
       bits.hasDestination.peek().litToBoolean)
     d.clock.step()
     t

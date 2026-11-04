@@ -150,9 +150,12 @@ class FpSemanticDecodeSpec extends AnyFlatSpec with Matchers with ChiselSim {
         d.io.raw.poke(raw.U)
         d.clock.step()
         d.io.legal.expect(true.B)
-        d.io.expanded(6, 0).expect(expectedOpcode.U)
-        d.io.expanded(14, 12).expect(expectedWidth.U)
-        if (isStore) d.io.expanded(24, 20).expect(source.U)
+        // Peek the whole output and slice the host BigInt. d.io.expanded(hi,lo)
+        // would construct Chisel hardware outside a UserModule at test time.
+        val expanded = d.io.expanded.peek().litValue
+        (expanded & 0x7f) shouldBe BigInt(expectedOpcode)
+        ((expanded >> 12) & 0x7) shouldBe BigInt(expectedWidth)
+        if (isStore) ((expanded >> 20) & 0x1f) shouldBe BigInt(source)
       }
     }
     simulate(new RvcDecompressor(64)) { d =>
