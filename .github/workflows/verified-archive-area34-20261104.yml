@@ -1,0 +1,127 @@
+name: Verified archive 34 historical area A-B experiment tips (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-area34-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-area34-archive-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout 34 exact SHA source manifest
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Guard 34 historical closed PR heads and create verified SHA tags only
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected context');
+            const fs=require('fs');
+            const manifest=JSON.parse(fs.readFileSync('maintenance/area34-ab-head-manifest-20261104.json','utf8'));
+            const evidence=JSON.parse(fs.readFileSync('maintenance/area34-ab-ci-evidence-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/area-ab-34/';
+            if(manifest.repository!==owner+'/'+repo||manifest.total!==34||
+               manifest.targets?.length!==34||manifest.main_pin!==main||
+               manifest.product_pin!==product||manifest.live_anchor_pr!==305||
+               manifest.cas_delete_allowed_prs?.length!==33||
+               manifest.archive_prefix!==prefix||manifest.initial_open_prs!==14||
+               evidence.heads!==34||evidence.total_runs!==867||
+               evidence.entries?.length!==34)
+              throw new Error('Manifest/CI evidence mismatch');
+            const targets=manifest.targets;
+            if(new Set(targets.map(t=>t.pr)).size!==34||
+               new Set(targets.map(t=>t.head)).size!==34||
+               targets.filter(t=>t.preserve_live_name).length!==1||
+               !targets.some(t=>t.pr===305&&t.preserve_live_name&&t.ci_runs===300))
+              throw new Error('Protective archive manifest changed');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async n=>(await retry('ref '+n,()=>github.rest.git.getRef({owner,repo,ref:n}))).data;
+            const pin=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('main/Product moved');
+            };
+            await pin();
+            const open=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            if(open.length!==14)throw new Error('Open PR count changed');
+            for(const t of targets){
+              if(!t.head.startsWith('area/')||!/^[0-9a-f]{40}$/.test(t.sha))
+                throw new Error('Unexpected branch '+t.head);
+              if(open.some(p=>p.base.ref===t.head||p.head.ref===t.head))
+                throw new Error('Active PR uses '+t.head);
+              const p=(await retry('PR '+t.pr,()=>github.rest.pulls.get({owner,repo,pull_number:t.pr}))).data;
+              if(p.state!=='closed'||p.merged_at||p.head.ref!==t.head||p.head.sha!==t.sha)
+                throw new Error('Closed PR altered #'+t.pr);
+              const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+              if(b.protected||b.commit.sha!==t.sha)throw new Error('Protected/moved branch '+t.head);
+              try{
+                if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                  throw new Error('Conflicting tag '+t.head);
+              }catch(e){if(e.status!==404)throw e;}
+            }
+            const heads=new Set(targets.map(t=>t.head));
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              const runs=await retry('CI '+status,()=>github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+              if(runs.some(r=>heads.has(r.head_branch)))
+                throw new Error('Active CI on area34 '+status);
+            }
+            console.log('AREA34_ARCHIVE_PREFLIGHT_ALL_PASS','heads=34','pr_closed=34','active_ci=0','open_dependencies=0');
+            let created=0,existing=0;
+            for(let i=0;i<targets.length;i++){
+              const t=targets[i];
+              if(i%6===0)await pin();
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Source head moved '+t.head);
+              const tag='tags/'+prefix+t.head;
+              let present=false;
+              try{
+                if((await ref(tag)).object.sha!==t.sha)throw new Error('Tag conflict '+t.head);
+                present=true;
+              }catch(e){if(e.status!==404)throw e;}
+              if(present)existing++;
+              else{
+                await retry('create tag '+t.head,()=>github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha:t.sha}));
+                created++;
+              }
+              let valid=false;
+              for(let k=0;k<8;k++){
+                try{if((await ref(tag)).object.sha!==t.sha)throw new Error('Tag SHA conflict '+t.head);valid=true;break;}
+                catch(e){if(e.status!==404||k===7)throw e;await new Promise(ok=>setTimeout(ok,1200));}
+              }
+              if(!valid)throw new Error('Missing tag '+t.head);
+              console.log('AREA34_SHA_ARCHIVED',i+1,t.pr,t.head,t.sha);
+            }
+            await pin();
+            for(const t of targets){
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha||
+                 (await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Final archive/source mismatch '+t.head);
+            }
+            console.log('AREA34_ARCHIVE_DONE','verified=34','created='+created,
+                        'existing='+existing,'branches_deleted=0','prs_closed=0');
