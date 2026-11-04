@@ -1,0 +1,135 @@
+name: Verified SHA-CAS delete 19 archived legacy architecture refs (2026-11-05)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-arch19-20261105.yml
+      - maintenance/arch19-delete-manifest-20261105.json
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-delete-arch19-20261105
+  cancel-in-progress: false
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact archival manifest with authenticated Git
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Full preflight then exact SHA-CAS delete
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            const cp=require('child_process'), fs=require('fs');
+            const branch='maintenance/verified-branch-prune-20261104';
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+branch)
+              throw new Error('Unexpected repository or deletion branch');
+            const m=JSON.parse(fs.readFileSync('maintenance/arch19-delete-manifest-20261105.json','utf8'));
+            if(m.repository!==owner+'/'+repo||m.total!==19||m.targets?.length!==19||
+               m.open_pr_count!==14||
+               m.main_pin!=='7ff35c6acdc3068754292bba814e4ec52ba4ec50'||
+               m.product_pin!=='b481160151ab4e3e5e5c5e1f7317a74fdddc36f3')
+              throw new Error('Pinned manifest policy changed');
+            const names=m.targets.map(t=>t.head);
+            if(new Set(names).size!==19||m.targets.some(t=>
+               !/^arch\/aethercore-v2-[a-z0-9-]+$/.test(t.head)||
+               !/^[a-f0-9]{40}$/.test(t.sha)||
+               t.tag!=='branch-archive/2026-11-04/legacy-pr135-86/'+t.head))
+              throw new Error('Unexpected candidate or duplicate');
+            const retry=async(fn)=>{
+              for(let n=0;n<5;n++){
+                try{return await fn();}
+                catch(e){
+                  if(n===4||!(e.status===429||e.status>=500||
+                     /fetch failed|ECONNRESET|ETIMEDOUT/i.test(String(e.message||''))))throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**n)));
+                }
+              }
+            };
+            const ref=async r=>(await retry(()=>github.rest.git.getRef({owner,repo,ref:r}))).data.object.sha;
+            const pins=async()=>{
+              if(await ref('heads/main')!==m.main_pin||
+                 await ref('heads/design/rv64gc-product-architecture-20261103')!==m.product_pin)
+                throw new Error('Main or Product moved; refuse deletion');
+            };
+            const archive=async t=>{
+              if(await ref('tags/'+t.tag)!==t.sha)
+                throw new Error('Archive tag differs from branch tip '+t.head);
+            };
+            const open=await retry(()=>github.paginate(
+              github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            if(open.length!==14)throw new Error('Open PR inventory changed');
+            const noHardref=t=>{
+              const args=['grep','-n','-F','--',t.head,'--','.',':(exclude)maintenance/**'];
+              const r=cp.spawnSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:90000});
+              if(r.error)throw r.error;
+              if(r.status===0)throw new Error('Tracked hard reference '+t.head+' '+String(r.stdout).slice(0,300));
+              if(r.status!==1)throw new Error('Hardref scanner failed '+t.head);
+            };
+            const live=async t=>{
+              try{
+                const b=(await retry(()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+                if(b.protected||b.commit.sha!==t.sha)
+                  throw new Error('Protected or moved branch '+t.head);
+                return true;
+              }catch(e){if(e.status===404)return false;throw e;}
+            };
+            const noActive=async t=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry(()=>github.paginate(
+                  github.rest.actions.listWorkflowRunsForRepo,
+                  {owner,repo,branch:t.head,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===t.head))
+                  throw new Error('Active CI on '+t.head+' '+status);
+              }
+            };
+            const checked=async t=>{
+              await pins();
+              await archive(t);
+              if(open.some(p=>p.head.ref===t.head||p.base.ref===t.head))
+                throw new Error('Open PR depends on '+t.head);
+              noHardref(t);
+              await noActive(t);
+              return await live(t);
+            };
+            // Preflight the ENTIRE allowlist before making any mutation.
+            await pins();
+            for(const t of m.targets)await archive(t);
+            for(const t of m.targets){
+              const exists=await checked(t);
+              console.log('ARCH19_PREFLIGHT',t.head,t.sha,'live='+exists);
+            }
+            console.log('ARCH19_PREFLIGHT_ALL_PASS',m.targets.length);
+            let deleted=0,already=0;
+            for(const t of m.targets){
+              if(!await checked(t)){already++;continue;}
+              if(await ref('heads/'+t.head)!==t.sha)
+                throw new Error('Branch drift before CAS '+t.head);
+              cp.execFileSync('git',['push',
+                '--force-with-lease=refs/heads/'+t.head+':'+t.sha,
+                'origin',':refs/heads/'+t.head],
+                {cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              let absent=false;
+              for(let n=0;n<8;n++){
+                try{await ref('heads/'+t.head);}
+                catch(e){if(e.status!==404)throw e;absent=true;break;}
+                if(n<7)await new Promise(ok=>setTimeout(ok,1200));
+              }
+              if(!absent)throw new Error('Deleted branch still visible '+t.head);
+              await archive(t);
+              deleted++;
+              console.log('ARCH19_CAS_DELETED',t.head,t.sha);
+            }
+            await pins();
+            for(const t of m.targets)await archive(t);
+            if(deleted+already!==19)throw new Error('Deletion count mismatch');
+            console.log('ARCH19_DELETE_DONE','deleted='+deleted,'already='+already,'archives=19');

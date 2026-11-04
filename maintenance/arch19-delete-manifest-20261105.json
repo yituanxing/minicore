@@ -1,0 +1,104 @@
+{
+  "repository": "yituanxing/minicore",
+  "main_pin": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+  "product_pin": "b481160151ab4e3e5e5c5e1f7317a74fdddc36f3",
+  "open_pr_count": 14,
+  "total": 19,
+  "targets": [
+    {
+      "head": "arch/aethercore-v2-a8-common-rvc",
+      "sha": "bb8192f03f683d78ca3e005b67678fb16f9a0667",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-a8-common-rvc"
+    },
+    {
+      "head": "arch/aethercore-v2-a8-profile-matrix",
+      "sha": "caee74a97da8d2cbd787c9b9b6a5f77b06be9696",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-a8-profile-matrix"
+    },
+    {
+      "head": "arch/aethercore-v2-a8-rv64imc-profile",
+      "sha": "e6f907be8f2660197f8562d83c19c9da956c905d",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-a8-rv64imc-profile"
+    },
+    {
+      "head": "arch/aethercore-v2-abi-profile-ownership",
+      "sha": "f38639b321f8178299a3d30075945d44a428ed22",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-abi-profile-ownership"
+    },
+    {
+      "head": "arch/aethercore-v2-cache-boundary",
+      "sha": "ec73c0ceeccbf25e9e1618a703964b6d10ececdf",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-cache-boundary"
+    },
+    {
+      "head": "arch/aethercore-v2-cache-stage1",
+      "sha": "b6a2572457852da6a20d3f760e5daaa0c8f1e5c5",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-cache-stage1"
+    },
+    {
+      "head": "arch/aethercore-v2-cross-xlen-ownership",
+      "sha": "a978c67282d7b50ba4bd49444de93b7625331096",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-cross-xlen-ownership"
+    },
+    {
+      "head": "arch/aethercore-v2-decode-boundary-closure",
+      "sha": "d8f0ecb61969e7634676157485dc72376702887c",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-decode-boundary-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-decode-contract-closure",
+      "sha": "364a82117ef10b5a89975452bfc60ffdf33c9532",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-decode-contract-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-decode-uop-boundary",
+      "sha": "96f129557a609cac2d869f0d0582fd18b8c47749",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-decode-uop-boundary"
+    },
+    {
+      "head": "arch/aethercore-v2-decoded-uop-boundary",
+      "sha": "e9a0563100aa2d23d101ab544e00940bbd153a62",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-decoded-uop-boundary"
+    },
+    {
+      "head": "arch/aethercore-v2-isa-semantic-closure",
+      "sha": "6cde3d9d89723cce81ef31573f50ae664c39e1bc",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-isa-semantic-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-platform-ownership-closure",
+      "sha": "d2960fba6102370d614d183e08f18f5433407ee1",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-platform-ownership-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-ptw-ownership",
+      "sha": "8d212f214fd8dcb9f44fd886a41f4c990f60b11a",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-ptw-ownership"
+    },
+    {
+      "head": "arch/aethercore-v2-ptw-sfence-ownership-closure",
+      "sha": "aecb4705f7621f919b1ee847e49f8c73941b5afc",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-ptw-sfence-ownership-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-vm-entry-policy-closure",
+      "sha": "6b1e573b66303134e31068009866626455975116",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-vm-entry-policy-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-vm-permission-closure",
+      "sha": "cde0621ccf3e3a8317f6c0cf93803ecdff43d069",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-vm-permission-closure"
+    },
+    {
+      "head": "arch/aethercore-v2-vm-permission-restack",
+      "sha": "6dcc0dd395c91461de65bf4efd7f3e0997554e92",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-vm-permission-restack"
+    },
+    {
+      "head": "arch/aethercore-v2-xlen-boundary-closure",
+      "sha": "029b330b1c50e7eabf2385e33da28300f45ef081",
+      "tag": "branch-archive/2026-11-04/legacy-pr135-86/arch/aethercore-v2-xlen-boundary-closure"
+    }
+  ]
+}
