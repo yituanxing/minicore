@@ -1,0 +1,117 @@
+name: Verified CAS delete five archived integrated agent refs (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-delete-integrated-agent-sweep-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-agent-sweep-delete-20261104
+  cancel-in-progress: false
+jobs:
+  delete-exact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout maintenance ref with GitHub credentials for exact lease deletion
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Recheck archive, live PRs and CI then SHA-lease delete five tips
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected GitHub context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const prefix='branch-archive/2026-11-04/integrated-agent-sweep-01/';
+            const targets=[["agent/l32-clean-rebuild","b0ae419f97abfc6654b2963c669a97b36973f16d"],["agent/l32-csr-fast-tests","810474bc841d0889eefc67e4fa02ccb0aeb25a4d"],["agent/l32-mstatush","f451bc4ff5c5ad26faa2d061f314abe0b1dfe4d5"],["agent/l32-scounteren","7c5f9da539e7f4d0bf1d153f045a071a3ffd6a34"],["agent/n5-sstc-integration","06cad804a916fee5c916cc575d3e91726c01a35e"]];
+            const child=require('child_process');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('TRANSIENT_READ_RETRY',label,i+1,String(e.message).slice(0,100));
+                  await new Promise(resolve=>setTimeout(resolve,450*(2**i)));
+                }
+              }
+            };
+            const getRef=async name=>(await retry('ref '+name,()=>github.rest.git.getRef({owner,repo,ref:name}))).data;
+            const pin=async()=>{
+              const m=(await getRef('heads/main')).object.sha;
+              const p=(await getRef('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('Main/Product pin moved '+m+' '+p);
+            };
+            const ensureNoOpenRef=async name=>{
+              const prs=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+              if(prs.some(p=>p.head.ref===name||p.base.ref===name))
+                throw new Error('Open PR references '+name);
+            };
+            const ensureNoActiveCI=async name=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+                if(runs.some(r=>r.head_branch===name))
+                  throw new Error('Active CI '+name+' '+status);
+              }
+            };
+            const archiveSHA=async name=>(await getRef('tags/'+prefix+name)).object.sha;
+            await pin();
+            let preflight=0,previous=0;
+            for(const [name,sha] of targets){
+              await ensureNoOpenRef(name);
+              await ensureNoActiveCI(name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive missing or mutated '+name);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:sha,head:main}))).data;
+              if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
+                throw new Error('Unmerged code on branch '+name);
+              try{
+                const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Head changed/protected '+name);
+              }catch(e){
+                if(e.status!==404)throw e;
+                previous++;
+              }
+              preflight++;
+              console.log('SAFE_PREFLIGHT',name,sha);
+            }
+            console.log('DELETE_PREFLIGHT_ALL_PASS',preflight,'already_deleted',previous);
+            await pin();
+            let deleted=0,already=0;
+            for(const [name,sha] of targets){
+              await pin();
+              await ensureNoOpenRef(name);
+              await ensureNoActiveCI(name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive lost '+name);
+              try{
+                const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Tip moved/protected '+name);
+              }catch(e){
+                if(e.status!==404)throw e;
+                already++; console.log('ALREADY_DELETED',name);continue;
+              }
+              if((await getRef('heads/'+name)).object.sha!==sha)throw new Error('Ref moved '+name);
+              const args=['push','--force-with-lease=refs/heads/'+name+':'+sha,'origin',':refs/heads/'+name];
+              try{child.execFileSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});}
+              catch(e){throw new Error('CAS deletion refused '+name+' '+String(e.stderr||e.message).slice(0,500));}
+              let gone=false;
+              for(let n=0;n<8;n++){
+                try{await getRef('heads/'+name);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(n<7)await new Promise(resolve=>setTimeout(resolve,1300));
+              }
+              if(!gone)throw new Error('Deletion verification failed '+name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive changed after delete '+name);
+              deleted++;console.log('CAS_DELETED',name,sha,'archive='+prefix+name);
+            }
+            await pin();
+            if(deleted+already!==targets.length)throw new Error('Incomplete delete');
+            console.log('AGENT_SWEEP_DELETE_DONE','deleted='+deleted,'previous='+already,'archives_verified='+targets.length);
