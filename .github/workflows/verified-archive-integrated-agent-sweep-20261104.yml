@@ -26,7 +26,7 @@ jobs:
             if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+maint)
               throw new Error('Unexpected execution context');
             const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
-            const product='087a3ed9588cfe4ff99b682957f3adbe70230aa';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
             const prefix='branch-archive/2026-11-04/integrated-agent-sweep-01/';
             const targets=[
               ['agent/l32-clean-rebuild','b0ae419f97abfc6654b2963c669a97b36973f16d'],
