@@ -1,0 +1,247 @@
+name: Verified retire PR chain batch 11 (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-retire-pr-chain-20261104.yml
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+concurrency:
+  group: verified-retire-pr-chain-20261104
+  cancel-in-progress: false
+jobs:
+  retire-exact-chain:
+    name: Close 11 integrated PRs child-first and CAS-delete archived heads
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout only maintenance branch for CAS remote ref deletion
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Validate all, close 11 child-first, then lease-delete only exact tips
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Batch 11: close 11 child-to-parent PRs, then CAS-delete exact archived heads.
+            const {owner,repo}=context.repo;
+            const maintenance='maintenance/verified-branch-prune-20261104';
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/'+maintenance)
+              throw new Error('Unexpected owner/repository/branch');
+            const mainExpected='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='design/rv64gc-product-architecture-20261103';
+            const productExpected='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const archivePrefix='branch-archive/2026-11-04/chain-125-74/';
+            const targets=[
+              [
+                125,
+                "explore/rv64a-v1",
+                "2c708adc07d770e583cc9667a6f6a586416147f7"
+              ],
+              [
+                124,
+                "explore/rv64-sv39-core-v1",
+                "b247e14925597a3edd01f071bb12516fa8d7e2a6"
+              ],
+              [
+                123,
+                "explore/rv64-satp-csr-v1",
+                "848da9400cc9cae3a749ef5b0dc55b331c21be1a"
+              ],
+              [
+                122,
+                "explore/rv64-sv39-csr-v1",
+                "9b13bdd8f4e76fbf40a25c4824e3e4dd18e33049"
+              ],
+              [
+                121,
+                "explore/shared-vm-adapters-v1",
+                "eab1526d492afcb4a3598cc2888781da4ba57fbb"
+              ],
+              [
+                120,
+                "explore/shared-translation-unit-v1",
+                "a65d8d82f587829488a07d1a1254050b0d1bf8ca"
+              ],
+              [
+                119,
+                "explore/rv64-vm-shared-contract-v1",
+                "641e71020d46035742bd1461056e9ef3a0242d04"
+              ],
+              [
+                118,
+                "explore/shared-vm-walker-tlb-v1",
+                "16e3ce216bad5fce9fde11d01bdda74e265475de"
+              ],
+              [
+                117,
+                "explore/rv64-vm-geometry-v1",
+                "88ceb67c7342ff584e4819ae3d637b71dc2bec72"
+              ],
+              [
+                116,
+                "explore/rv64-pmp-v1",
+                "4b0bef0b52bd97a4ca4d32823f5c40d2d8275203"
+              ],
+              [
+                115,
+                "explore/rv64-supervisor-v1",
+                "f46cf0cb0d3b5e7db40480eaa7a6d3342f51bc06"
+              ]
+            ];
+            const nextBase='feature/rv32c-linux-userspace'; // PR #114 head, NOT touched in this batch
+            const staleRunIds=new Set([32217536226,32216610620]);
+            const staleEvidence=new Map([
+             [32217536226,['2c708adc07d770e583cc9667a6f6a586416147f7','2026-08-19T04:55:52Z',32224026646]],
+             [32216610620,['c9478de262e56dea2f8c9e75590e5f61c3f4ae56','2026-08-19T04:40:26Z',32224026615]]
+            ]);
+            const git=require('child_process');
+            const getRef=async ref=>(await github.rest.git.getRef({owner,repo,ref})).data;
+            const getPR=async num=>(await github.rest.pulls.get({owner,repo,pull_number:num})).data;
+            const openPRs=async()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100});
+            const pin=async()=>{
+              const main=(await getRef('heads/main')).object.sha;
+              const productSHA=(await getRef('heads/'+product)).object.sha;
+              if(main!==mainExpected||productSHA!==productExpected)
+                throw new Error('Main/Product moved: '+main+' / '+productSHA);
+            };
+            const referencesOther=(prs,name,number)=>prs.some(p=>p.number!==number&&
+              (p.base.ref===name||(p.head.repo&&p.head.repo.full_name===owner+'/'+repo&&p.head.ref===name)));
+            const refsExternal=(prs,name,number)=>prs.some(p=>p.number!==number&&
+              !targets.some(t=>t[0]===p.number)&&
+              (p.base.ref===name||(p.head.repo&&p.head.repo.full_name===owner+'/'+repo&&p.head.ref===name)));
+            const checkZombie=async run=>{
+              if(!staleRunIds.has(run.id)||run.status!=='queued')return false;
+              const [sha,created,successor]=staleEvidence.get(run.id);
+              const now=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:run.id})).data;
+              if(now.status!=='queued'||now.head_branch!=='explore/rv64a-v1'||
+                 now.head_sha!==sha||now.created_at!==created||now.updated_at!==created||
+                 Date.now()-Date.parse(created)<35*86400000)return false;
+              const jobs=(await github.rest.actions.listJobsForWorkflowRun({owner,repo,run_id:run.id,per_page:100})).data;
+              if(jobs.total_count!==0)return false;
+              const later=(await github.rest.actions.getWorkflowRun({owner,repo,run_id:successor})).data;
+              if(later.status!=='completed'||later.conclusion!=='success'||
+                 later.workflow_id!==now.workflow_id||
+                 later.head_sha!=='2c708adc07d770e583cc9667a6f6a586416147f7')return false;
+              return true;
+            };
+            const activeFor=async(name,number)=>{
+              for(const status of ['queued','in_progress','waiting','pending','requested']){
+                const runs=await github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+                  {owner,repo,status,per_page:100});
+                for(const run of runs){
+                  const applies=run.head_branch===name||
+                    (run.pull_requests||[]).some(p=>p.number===number);
+                  if(!applies)continue;
+                  if(await checkZombie(run)){
+                    console.log('EXACT_STUCK_CI_EXCEPTION',run.id,'still queued/no jobs since Aug19');
+                    continue;
+                  }
+                  throw new Error('STOP real CI on #'+number+' run='+run.id+' status='+run.status);
+                }
+              }
+            };
+            const targetOrder=new Map(targets.map((t,i)=>[t[0],i]));
+            const archiveSHA=async(name)=>(await getRef('tags/'+archivePrefix+name)).object.sha;
+            await pin();
+            const prs=await openPRs();
+            let initiallyClosed=0;
+            for(let i=0;i<targets.length;i++){
+              const [number,name,sha]=targets[i];
+              const expectedBase=i+1<targets.length?targets[i+1][1]:nextBase;
+              const p=await getPR(number);
+              if(!['open','closed'].includes(p.state)||p.merged_at||
+                 p.head.ref!==name||p.head.sha!==sha||p.base.ref!==expectedBase||
+                 !p.head.repo||p.head.repo.full_name!==owner+'/'+repo)
+                throw new Error('PR state/ref/SHA/base changed: #'+number);
+              if(refsExternal(prs,name,number))
+                throw new Error('External open PR references target: '+name);
+              const badInternal=prs.some(q=>q.number!==number&&targetOrder.has(q.number)&&
+                (q.base.ref===name||
+                  (q.head.repo&&q.head.repo.full_name===owner+'/'+repo&&q.head.ref===name))&&
+                targetOrder.get(q.number)>=i);
+              if(badInternal)throw new Error('Child-first order violated at #'+number);
+              if(await archiveSHA(name)!==sha)throw new Error('Exact archive SHA mismatch: '+name);
+              try{
+                const b=(await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Protected/changed branch: '+name);
+              }catch(e){
+                if(e.status!==404||p.state!=='closed')throw e;
+              }
+              const cmp=(await github.rest.repos.compareCommits({owner,repo,base:sha,head:mainExpected})).data;
+              if(!['ahead','identical'].includes(cmp.status)||cmp.behind_by!==0)
+                throw new Error('Not included in main: '+name);
+              await activeFor(name,number);
+              if(p.state==='closed')initiallyClosed++;
+              console.log('PREFLIGHT_PASS',number,name,sha,p.state,'base',expectedBase);
+            }
+            console.log('PREFLIGHT_ALL_PASS',targets.length,'openPRs',prs.length,'alreadyClosed',initiallyClosed);
+            await pin();
+            let newlyClosed=0;
+            for(const [number,name,sha] of targets){
+              const p=await getPR(number);
+              if(p.state==='closed'){
+                if(p.merged_at)throw new Error('Unexpected merged PR: #'+number);
+                console.log('ALREADY_CLOSED',number);continue;
+              }
+              if(p.state!=='open'||p.head.ref!==name||p.head.sha!==sha)
+                throw new Error('PR changed before close: #'+number);
+              if(referencesOther(await openPRs(),name,number))
+                throw new Error('STOP another open PR depends on '+name);
+              if((await getRef('heads/'+name)).object.sha!==sha||await archiveSHA(name)!==sha)
+                throw new Error('STOP head/archive moved: '+name);
+              await activeFor(name,number);
+              await pin();
+              await github.rest.pulls.update({owner,repo,pull_number:number,state:'closed'});
+              const closed=await getPR(number);
+              if(closed.state!=='closed'||closed.merged_at)
+                throw new Error('Closure not verified: #'+number);
+              newlyClosed++;
+              console.log('CLOSED_UNMERGED',number,name,sha);
+            }
+            console.log('CLOSE_ALL_PASS',newlyClosed,'previous',initiallyClosed);
+            await pin();
+            let deleted=0,alreadyDeleted=0;
+            for(const [number,name,sha] of targets){
+              const p=await getPR(number);
+              if(p.state!=='closed'||p.merged_at)throw new Error('PR reopened/merged: #'+number);
+              if(referencesOther(await openPRs(),name,number))
+                throw new Error('STOP open PR references '+name);
+              if(await archiveSHA(name)!==sha)throw new Error('Archive changed: '+name);
+              await activeFor(name,number);
+              await pin();
+              try{
+                const b=(await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+                if(b.protected||b.commit.sha!==sha)throw new Error('Branch protected/moved: '+name);
+              }catch(e){
+                if(e.status!==404)throw e;
+                alreadyDeleted++;console.log('ALREADY_DELETED',number,name);continue;
+              }
+              // This explicit expected-SHA lease is an atomic server-side compare-and-delete.
+              const args=['push','--force-with-lease=refs/heads/'+name+':'+sha,
+                'origin',':refs/heads/'+name];
+              try{
+                git.execFileSync('git',args,{cwd:process.env.GITHUB_WORKSPACE,encoding:'utf8',timeout:60000});
+              }catch(error){throw new Error('CAS git push delete refused: '+name+' '+String(error.stderr||error.message).slice(0,500));}
+              let gone=false;
+              for(let attempt=0;attempt<8;attempt++){
+                try{await getRef('heads/'+name);}
+                catch(e){if(e.status!==404)throw e;gone=true;break;}
+                if(attempt<7)await new Promise(resolve=>setTimeout(resolve,1500));
+              }
+              if(!gone)throw new Error('Delete not yet verified: '+name);
+              deleted++;
+              console.log('CAS_DELETED',number,name,sha,'archive',archivePrefix+name);
+            }
+            await pin();
+            console.log('CHAIN_BATCH_DONE','closed='+newlyClosed,
+              'deleted='+deleted,'previous_closed='+initiallyClosed,
+              'previous_deleted='+alreadyDeleted,'archive_verified='+targets.length);
+            if(newlyClosed+initiallyClosed!==targets.length||
+               deleted+alreadyDeleted!==targets.length)
+              throw new Error('Final count mismatch');
