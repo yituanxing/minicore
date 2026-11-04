@@ -1,4 +1,4 @@
-name: Verified one-shot branch pruning (2026-11-04 batch 8)
+name: Verified one-shot branch pruning (2026-11-04 batch 9)
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   prune:
-    name: Archive and prune three exact-tip redundant aliases
+    name: Archive and prune one exact-tree duplicate with separate history
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -26,7 +26,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // One-shot housekeeping. Archive exact SHAs, retain live identical keepers; never change main, Product, or a PR dependency.
+            // One-shot housekeeping. The exact archive preserves distinct history; the keeper has the same Git tree.
             const { owner, repo } = context.repo;
             if (owner !== 'yituanxing' || repo !== 'minicore') {
               throw new Error('Unexpected repository');
@@ -37,11 +37,9 @@ jobs:
             const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
             const product = 'design/rv64gc-product-architecture-20261103';
             const productExpected = '087a3ed9588c8fe4ff99b682957f3adbe70230aa';
-            const archivePrefix = 'branch-archive/2026-11-04/batch8/';
+            const archivePrefix = 'branch-archive/2026-11-04/batch9/';
             const targets = [
-              ['agent/nuttx-bringup', 'cd3ce492cc5c9d47acb673128d199cf0a3949e0b', 'freeze/nuttx-13.0.0-n1-n4'],
-              ['arch/aethercore-v2-xlen-boundary-restack', '96f129557a609cac2d869f0d0582fd18b8c47749', 'arch/aethercore-v2-decode-uop-boundary'],
-              ['perf/aethercore-v2-prehead-load-fold', 'ab0df9c9c49322cdf045b2169bca99543cff1e55', 'perf/aethercore-v2-prehead-load'],
+              ['measure/verilator-internal-cfunc-profile', 'f6776c1425fe219abce7634f58e84684074d6ad2', 'measure/verilator-host-compiler-matrix', '41ed7eaa8cb14074e91adb1e808da9efbbb20040', '0b44dad39f07529f859b2de2694e6bc3225ee9fb'],
             ];
             const getRef = async ref => (await github.rest.git.getRef({owner, repo, ref})).data;
             const getOpenPRs = async () => github.paginate(github.rest.pulls.list, {owner, repo, state:'open', per_page:100});
@@ -77,7 +75,7 @@ jobs:
             const running = await activeRuns();
             const namesToPrune = new Set(targets.map(target => target[0]));
             const alreadyDeleted = new Set();
-            for (const [name, sha, keeper] of targets) {
+            for (const [name, sha, keeper, keeperSha, treeSha] of targets) {
               if (reserved.has(name) || running.has(name) || name === keeper || namesToPrune.has(keeper)) {
                 throw new Error('Target now in use: ' + name);
               }
@@ -94,11 +92,16 @@ jobs:
                 alreadyDeleted.add(name);
               }
               const retained = (await github.rest.repos.getBranch({owner,repo,branch:keeper})).data;
-              if (retained.commit.sha !== sha) {
-                throw new Error('Keeper is not an exact SHA twin: ' + keeper);
+              if (retained.commit.sha !== keeperSha) {
+                throw new Error('Keeper SHA changed: ' + keeper);
               }
-              // Alias cleanup may contain work not in main. Exact-SHA live keeper,
-              // original branch tip and recovery tag are the safety invariants.
+              const originalCommit = (await github.rest.git.getCommit({owner,repo,commit_sha:sha})).data;
+              const keeperCommit = (await github.rest.git.getCommit({owner,repo,commit_sha:keeperSha})).data;
+              if (originalCommit.tree.sha !== treeSha || keeperCommit.tree.sha !== treeSha) {
+                throw new Error('Git tree differs from pinned identical snapshot: ' + name);
+              }
+              // Histories may differ. The archive tag preserves this original commit
+              // and all its ancestors, while the keeper preserves identical bytes.
               console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper,
                 alreadyDeleted.has(name) ? 'archived-already-deleted' : 'live');
             }
@@ -124,7 +127,7 @@ jobs:
             console.log('ARCHIVE_ALL_PASS', targets.length);
 
             let deleted = 0;
-            for (const [name, sha, keeper] of targets) {
+            for (const [name, sha, keeper, keeperSha, treeSha] of targets) {
               if (alreadyDeleted.has(name)) {
                 console.log('ALREADY_DELETED', name, sha, 'archive', archivePrefix + name);
                 continue;
@@ -138,7 +141,7 @@ jobs:
               if ((await getRef('tags/' + archivePrefix + name)).object.sha !== sha) {
                 throw new Error('STOP archive tag changed: ' + name);
               }
-              if ((await getRef('heads/' + keeper)).object.sha !== sha) {
+              if ((await getRef('heads/' + keeper)).object.sha !== keeperSha) {
                 throw new Error('STOP keeper changed: ' + keeper);
               }
               const nowRunning = await activeRuns();
