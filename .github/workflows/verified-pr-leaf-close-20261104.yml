@@ -1,0 +1,212 @@
+name: Verified archive and close six obsolete leaf PRs (2026-11-04)
+
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-pr-leaf-close-20261104.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: verified-pr-leaf-close-20261104
+  cancel-in-progress: false
+
+jobs:
+  archive-close-prune:
+    name: Verify, archive, close six old PRs, then prune heads
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate all dependencies before any write, then archive and retire
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // This run changes only six explicit PRs and their archived head refs.
+            const {owner,repo} = context.repo;
+            const maintenance = 'maintenance/verified-branch-prune-20261104';
+            if (owner !== 'yituanxing' || repo !== 'minicore' ||
+                context.ref !== 'refs/heads/' + maintenance) {
+              throw new Error('Unexpected repository or invocation branch');
+            }
+            const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const productBranch = 'design/rv64gc-product-architecture-20261103';
+            const productExpected = '087a3ed9588cfe4ff99b682957f3adbe70230aa';
+            const archivePrefix = 'branch-archive/2026-11-04/batch6/';
+            const targets = [
+              [190, 'perf/aethercore-v2-p8-static-controlflow-prediction', '85f46d1901bdff0dc93f596c2e905c3d0223b908'],
+              [133, 'explore/rv64-linux-timer-v1', 'f9c0246a923b6adab36ca519d781782a8635cf9b'],
+              [68, 'agent/l32-busybox-multiprocess', 'a6d1e47f120c9695def2c87f5e035ab4d5731937'],
+              [54, 'agent/smode-v1-minimal-trap', '9b80add28ef212cc9db2924926b2dc8f10f1a58f'],
+              [53, 'agent/nuttx-protected-p3-fault-isolation', '09d1ecfa467bb54e7ed657f85fa2e3ae6083f76b'],
+              [47, 'agent/freertos-machine-external-interrupt', '69d862344ee1964db2d319c36603cac58d40e5b3'],
+            ];
+            const getRef = async ref => (await github.rest.git.getRef({owner,repo,ref})).data;
+            const getPR = async num => (await github.rest.pulls.get({owner,repo,pull_number:num})).data;
+            const openPRs = async () => github.paginate(github.rest.pulls.list,
+              {owner,repo,state:'open',per_page:100});
+            const runsInFlight = async () => {
+              const branches = new Set();
+              const prNumbers = new Set();
+              for (const status of ['queued','in_progress']) {
+                const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo,
+                  {owner,repo,status,per_page:100});
+                for (const run of runs) {
+                  if (run.head_branch) branches.add(run.head_branch);
+                  for (const p of (run.pull_requests || [])) if (p.number) prNumbers.add(p.number);
+                }
+              }
+              return {branches,prNumbers};
+            };
+            const referencesAnotherOpenPR = (prs,name,ownNumber) =>
+              prs.some(p => p.number !== ownNumber &&
+                (p.base.ref === name ||
+                  (p.head.repo && p.head.repo.full_name === owner + '/' + repo && p.head.ref === name)));
+            const getArchive = async name => getRef('tags/' + archivePrefix + name);
+            const archiveMatches = async (name,sha) => (await getArchive(name)).object.sha === sha;
+            if ((await getRef('heads/main')).object.sha !== mainExpected ||
+                (await getRef('heads/' + productBranch)).object.sha !== productExpected) {
+              throw new Error('Main or Product SHA changed; refuse closure');
+            }
+
+            const prs = await openPRs();
+            const active = await runsInFlight();
+            const alreadyClosed = new Set();
+            const alreadyDeleted = new Set();
+            for (const [num,name,sha] of targets) {
+              if (['main',maintenance,productBranch].includes(name) ||
+                  referencesAnotherOpenPR(prs,name,num) ||
+                  active.branches.has(name) || active.prNumbers.has(num)) {
+                throw new Error('Target has active dependency or CI: #' + num);
+              }
+              const pr = await getPR(num);
+              if (pr.number !== num || pr.head.ref !== name ||
+                  (pr.head.repo && pr.head.repo.full_name !== owner + '/' + repo) ||
+                  pr.merged_at || !['open','closed'].includes(pr.state)) {
+                throw new Error('PR identity/state mismatch: #' + num);
+              }
+              if (pr.state === 'closed') {
+                if (!await archiveMatches(name,sha)) throw new Error('Closed PR lacks exact archive: #' + num);
+                alreadyClosed.add(num);
+              }
+              try {
+                const branch = (await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+                if (branch.protected || branch.commit.sha !== sha || pr.head.sha !== sha) {
+                  throw new Error('Protected or changed branch/PR: #' + num);
+                }
+              } catch (error) {
+                if (error.status !== 404 || pr.state !== 'closed' ||
+                    !await archiveMatches(name,sha)) throw error;
+                alreadyDeleted.add(name);
+              }
+              const compare = (await github.rest.repos.compareCommits({owner,repo,
+                base:sha,head:mainExpected})).data;
+              if (!['ahead','identical'].includes(compare.status)) {
+                throw new Error('PR head not in main: #' + num);
+              }
+              console.log('PREFLIGHT_PASS', num, name, sha,
+                alreadyClosed.has(num) ? 'closed' : 'open',
+                alreadyDeleted.has(name) ? 'head-archived-deleted' : 'head-live');
+            }
+            console.log('PREFLIGHT_ALL_PASS',targets.length,'openPRs',prs.length);
+
+            // Preserve every exact commit before changing any PR or deleting any branch.
+            for (const [num,name,sha] of targets) {
+              const tag = archivePrefix + name;
+              try {
+                const old = await getArchive(name);
+                if (old.object.sha !== sha) throw new Error('Archive collision: ' + tag);
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.git.createRef({owner,repo,ref:'refs/tags/' + tag,sha});
+              }
+              if (!await archiveMatches(name,sha)) throw new Error('Archive mismatch: #' + num);
+              console.log('ARCHIVE_VERIFIED',num,tag,sha);
+            }
+            console.log('ARCHIVE_ALL_PASS',targets.length);
+
+            // Closing is reversible; any interruption leaves exact archive tags.
+            let newlyClosed = 0;
+            for (const [num,name,sha] of targets) {
+              if (alreadyClosed.has(num)) {
+                console.log('ALREADY_CLOSED',num,name);
+                continue;
+              }
+              const now = await getPR(num);
+              const currentOpen = await openPRs();
+              const currentActive = await runsInFlight();
+              if (now.state !== 'open' || now.head.ref !== name || now.head.sha !== sha ||
+                  referencesAnotherOpenPR(currentOpen,name,num) ||
+                  currentActive.branches.has(name) || currentActive.prNumbers.has(num) ||
+                  (await getRef('heads/main')).object.sha !== mainExpected ||
+                  (await getRef('heads/' + productBranch)).object.sha !== productExpected ||
+                  !await archiveMatches(name,sha)) {
+                throw new Error('STOP changed PR/dependency/CI: #' + num);
+              }
+              await github.rest.pulls.update({owner,repo,pull_number:num,state:'closed'});
+              let closed = false;
+              for (let attempt=0; attempt<8; attempt++) {
+                if (attempt) await new Promise(resolve=>setTimeout(resolve,1500));
+                const reread = await getPR(num);
+                if (reread.state === 'closed' && !reread.merged_at) {closed=true;break;}
+              }
+              if (!closed) throw new Error('PR closure not yet verified: #' + num);
+              newlyClosed++;
+              console.log('CLOSED',num,name,'archive',archivePrefix + name);
+            }
+            console.log('CLOSE_ALL_PASS',newlyClosed,'previous',alreadyClosed.size);
+
+            let deleted = 0;
+            for (const [num,name,sha] of targets) {
+              if (alreadyDeleted.has(name)) {
+                console.log('ALREADY_DELETED',num,name);
+                continue;
+              }
+              const now = await getPR(num);
+              const nowOpen = await openPRs();
+              const currentActive = await runsInFlight();
+              const mainNow = (await getRef('heads/main')).object.sha;
+              const productNow = (await getRef('heads/' + productBranch)).object.sha;
+              if (now.state !== 'closed' || now.merged_at ||
+                  referencesAnotherOpenPR(nowOpen,name,num) ||
+                  nowOpen.some(p=>p.number===num) ||
+                  currentActive.branches.has(name) || currentActive.prNumbers.has(num) ||
+                  mainNow !== mainExpected || productNow !== productExpected ||
+                  !await archiveMatches(name,sha)) {
+                throw new Error('STOP head/PR/tag changed before deletion: #' + num);
+              }
+              let head;
+              try { head = await getRef('heads/' + name); }
+              catch (error) {
+                if (error.status !== 404) throw error;
+                alreadyDeleted.add(name);
+                console.log('ALREADY_DELETED_AFTER_CLOSE',num,name,'archive',archivePrefix + name);
+                continue;
+              }
+              if (head.object.sha !== sha) throw new Error('STOP branch SHA changed: #' + num);
+              await github.rest.git.deleteRef({owner,repo,ref:'heads/' + name});
+              let absent = false;
+              for (let attempt=0; attempt<8; attempt++) {
+                if (attempt) await new Promise(resolve=>setTimeout(resolve,2000));
+                try {await getRef('heads/' + name);}
+                catch (error) {
+                  if (error.status !== 404) throw error;
+                  absent=true;break;
+                }
+              }
+              if (!absent) throw new Error('Deleted head not yet verified absent: #' + num);
+              deleted++;
+              console.log('DELETED',num,name,sha,'archive',archivePrefix + name);
+            }
+            console.log('PR_RETIRE_DONE',
+              'newly_closed='+newlyClosed,'already_closed='+alreadyClosed.size,
+              'newly_deleted='+deleted,'already_deleted='+alreadyDeleted.size,
+              'archived='+targets.length);
+            if (newlyClosed+alreadyClosed.size!==targets.length ||
+                deleted+alreadyDeleted.size!==targets.length) {
+              throw new Error('Unexpected result count');
+            }
