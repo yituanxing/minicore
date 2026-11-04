@@ -102,7 +102,7 @@ class ProductLsqOwnershipContract(unittest.TestCase):
         for fragment in ("val memoryReserve = Decoupled", "val memoryKill = Valid",
                          "val memoryHead = Valid", "val memoryAvailable = Input",
                          "io.memoryReserve.valid := io.dispatch.valid && canDispatch",
-                         "io.memoryKill.valid := victim.decoded.memory.kind",
+                         "io.memoryKill.valid := victim.memoryKind",
                          "io.issue.bits.storeData :=", "io.issue.bits.memoryKind :="):
             self.assertIn(fragment, b)
         top = TOP.read_text()

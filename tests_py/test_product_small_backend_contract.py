@@ -22,8 +22,16 @@ class ProductSmallBackendContracts(unittest.TestCase):
                      "val completion = Flipped(Decoupled", "val issue = Decoupled",
                      "val retire = Decoupled", "val redirect = Valid",
                      "when(recovering)", "val victimIndex",
-                     "speculativeRat(victim.decoded.rd) := victim.oldPhysical"):
+                     "speculativeRat(victim.rd) := victim.oldPhysical",
+                     "private val systemPayload = RegInit",
+                     "systemPayload.token.generation === victim.tokenGeneration",
+                     "io.systemHead.bits.decoded.system := systemPayload.system",
+                     "val readAddr1 = Mux(readSystem, systemPayload.rs1Physical, selected.src1)",
+                     "val readAddr2 = Mux(readSystem, systemPayload.rs2Physical, selected.src2)"):
             self.assertIn(text, source)
+        rob_slot = source.split("private class ProductRobSlot", 1)[1].split(
+            "private class ProductSystemPayload", 1)[0]
+        self.assertNotIn("new DecodedInstruction", rob_slot)
         self.assertNotIn("import aethercore.core.v2", source)
         self.assertNotIn("new Tiny", source)
 
