@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   prune:
-    name: Archive and delete ten verified duplicate-tip aliases
+    name: Resume safe archive and deletion of ten duplicate-tip aliases
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -78,19 +78,28 @@ jobs:
             const reserved = prRefs(prs);
             const running = await activeRuns();
             const namesToPrune = new Set(targets.map(target => target[0]));
+            const alreadyDeleted = new Set();
             for (const [name, sha, keeper] of targets) {
               if (reserved.has(name) || running.has(name) || name === keeper || namesToPrune.has(keeper)) {
                 throw new Error('Target now in use: ' + name);
               }
-              const branch = (await github.rest.repos.getBranch({owner,repo,branch:name})).data;
-              if (branch.protected || branch.commit.sha !== sha) {
-                throw new Error('Protected/changed target ' + name + ' got ' + branch.commit.sha);
+              try {
+                const branch = (await github.rest.repos.getBranch({owner,repo,branch:name})).data;
+                if (branch.protected || branch.commit.sha !== sha) {
+                  throw new Error('Protected/changed target ' + name + ' got ' + branch.commit.sha);
+                }
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                // Only permit resuming an earlier verified deletion when its archive exists.
+                const archive = await getRef('tags/' + archivePrefix + name);
+                if (archive.object.sha !== sha) throw new Error('Deleted ref archive mismatch: ' + name);
+                alreadyDeleted.add(name);
               }
               const retained = (await github.rest.repos.getBranch({owner,repo,branch:keeper})).data;
               if (retained.commit.sha !== sha) {
                 throw new Error('Keeper is not an exact SHA twin: ' + keeper);
               }
-              console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper);
+              console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper, alreadyDeleted.has(name) ? 'archived-already-deleted' : 'live');
             }
             console.log('PREFLIGHT_ALL_PASS', targets.length, 'open_prs', prs.length);
 
@@ -115,6 +124,10 @@ jobs:
 
             let deleted = 0;
             for (const [name, sha, keeper] of targets) {
+              if (alreadyDeleted.has(name)) {
+                console.log('ALREADY_DELETED', name, sha, 'archive', archivePrefix + name);
+                continue;
+              }
               const latest = await getRef('heads/' + name);
               if (latest.object.sha !== sha) throw new Error('STOP changed ref: ' + name);
               const nowPRs = prRefs(await getOpenPRs());
@@ -130,14 +143,21 @@ jobs:
               const nowRunning = await activeRuns();
               if (nowRunning.has(name)) throw new Error('STOP active CI: ' + name);
               await github.rest.git.deleteRef({owner,repo,ref:'heads/' + name});
-              try {
-                await getRef('heads/' + name);
-                throw new Error('Deleted branch is still present: ' + name);
-              } catch (error) {
-                if (error.status !== 404) throw error;
+              let confirmedGone = false;
+              for (let attempt = 0; attempt < 8; attempt++) {
+                if (attempt) await new Promise(resolve => setTimeout(resolve, 2000));
+                try {
+                  await getRef('heads/' + name);
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  confirmedGone = true;
+                  break;
+                }
               }
+              if (!confirmedGone) throw new Error('Deleted ref not yet verified absent: ' + name);
               deleted++;
               console.log('DELETED', name, sha, 'archive', archivePrefix + name);
             }
-            console.log('BRANCH_PRUNE_DONE', 'deleted=' + deleted, 'archived=' + targets.length);
-            if (deleted !== targets.length) throw new Error('Unexpected deletion count');
+            console.log('BRANCH_PRUNE_DONE', 'newly_deleted=' + deleted,
+              'already_deleted=' + alreadyDeleted.size, 'archived=' + targets.length);
+            if (deleted + alreadyDeleted.size !== targets.length) throw new Error('Unexpected deletion count');
