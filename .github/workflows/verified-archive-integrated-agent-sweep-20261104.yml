@@ -47,9 +47,11 @@ jobs:
             };
             const ref=async x=>(await retry('ref '+x,()=>github.rest.git.getRef({owner,repo,ref:x}))).data;
             const pin=async()=>{
-              if((await ref('heads/main')).object.sha!==main||
-                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
-                throw new Error('Protected main or Product moved');
+              const actualMain=(await ref('heads/main')).object.sha;
+              const actualProduct=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              console.log('PIN_SNAPSHOT','main='+actualMain,'Product='+actualProduct);
+              if(actualMain!==main||actualProduct!==product)
+                throw new Error('Protected main or Product moved: '+actualMain+' / '+actualProduct);
             };
             await pin();
             const open=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
