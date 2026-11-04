@@ -1,4 +1,4 @@
-name: Verified one-shot branch pruning (2026-11-04 batch 4)
+name: Verified one-shot branch pruning (2026-11-04 batch 5)
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   prune:
-    name: Archive and prune thirty branches of merged PRs
+    name: Archive and prune seven exact-tip milestone aliases
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -36,38 +36,15 @@ jobs:
             }
             const mainExpected = '7ff35c6acdc3068754292bba814e4ec52ba4ec50';
             const product = 'design/rv64gc-product-architecture-20261103';
-            const archivePrefix = 'branch-archive/2026-11-04/batch4/';
+            const archivePrefix = 'branch-archive/2026-11-04/batch5/';
             const targets = [
-              ['agent/config-datapath-widths', '2dd399f44f32e6af22a31fc6ba00824af971b4b3', 14],
-              ['agent/config-rv32-decode', '17219e99da1a2cabb8af8bb56099c9118e8afd3e', 15],
-              ['agent/config-rv64-skeleton', '82f396f7af2742a73b9f43138a49af968c15f9b1', 13],
-              ['agent/machine-csr-zicsr', '977b66c0fa8974c97b068626a1e2c0f65909d123', 25],
-              ['agent/machine-trap-entry', '128a2bcbe68ec328c26fdce0309bf149a18d271f', 26],
-              ['agent/machine-trap-return', '36cf7b495ce9cfa07e227457bfc61b5b10c5a2eb', 27],
-              ['agent/rv32-commit-difftest', 'ff079cf10fe4009a06cc72c6aac369690b43a302', 20],
-              ['agent/rv32-gcc-difftest', '30dfa1ff9a9c944dcd5a9fc57de89fcd1ff304ec', 17],
-              ['agent/rv32-load-store', '664ee1f8a75529d1de27c33732c299012a80d852', 16],
-              ['agent/rv32-nemu-abi-probe', '08809b1f74ee7d009f5ed46da774d02dd5f5b17e', 18],
-              ['agent/rv32im-coremark', '213b4f7c14910ced1a54d7d0bd26d27d501c473f', 21],
-              ['agent/rv32im-embench-batch1', '8f08a2c37ed7307c7ae88efcd01f4c975ec661ed', 22],
-              ['agent/rv32im-embench-batch2', '6f7f1d4ca7e01246f5204f0f197098dc39e5ffa0', 23],
-              ['agent/rv32im-littlefs-basic', 'a2c76030a5b28872706200c7f7c41ccf5c0e9287', 24],
-              ['agent/rv32im-machine-timer-interrupt', '789472cbdd6b4bf768d0f86bee086e0773ac1b4b', 28],
-              ['agent/rv32im-preemptive-scheduler-main', 'dc5c95821d1ce48182a13948ecccad2acf544deb', 33],
-              ['agent/rv32imu-pmp-isolation', 'ee462a9c6b88853f09033f3d77c679b4bdef7c4f', 36],
-              ['agent/s0-bringup', '718e59185d43ac0761e660ac00df8c063d2e3903', 1],
-              ['agent/s0-difftest-foundation', '8f4c9313b93df49d27557f3d8ca88522a9db76d3', 6],
-              ['agent/s0-generated-difftest', 'bdd9a70cee4686ce585a16441e38cc3c1ec41fe5', 7],
-              ['agent/s0-precise-faults', '7d9dbf13b110da0d9db0d0e0a66a5d1a18a04e99', 5],
-              ['agent/s0-rv64i-complete', 'a00eaa5a97ef4d9a5e3cebd359271c19ec923151', 4],
-              ['agent/s0-rv64i-matrix', 'dce0034ce051084c05ecfa85bff2cf5acf754f06', 3],
-              ['agent/s0-rv64i-regression', '13f6b490e33e3867a8fc404ccbf8592b9aacbaca', 2],
-              ['agent/s1-compiled-workloads', 'd7d8b69a95d6cf0001b7773b09d1bed3843832a6', 9],
-              ['agent/s1-real-corpus', 'ef13c01d491ea08a8226d1614464dfbdf005f0c7', 10],
-              ['agent/s1-rv64m', '01cb11188c9096f74398a616255ddb57322ab1dc', 8],
-              ['agent/s1-upstream-software', '4ab9cfaa20d80baa3416d2eabe6535214c27038a', 11],
-              ['fix/fast-host-data-multislot-clean', '855b2bbc2c2eb94ca803feb09568497cb15bcaec', 372],
-              ['perf/shared-fast-adaptive-settle', '09cafa7509c8a49675d1e88a74a74f3b1a94d0cb', 363],
+              ['agent/l32-machine-id', '42fb3ac2eb115d65aa152069e9adb7c0bab2dc25', 'agent/l32-opensbi-linux'],
+              ['agent/nuttx-sv32-knsh-paging', '06cad804a916fee5c916cc575d3e91726c01a35e', 'agent/n5-sstc-integration'],
+              ['agent/work-nuttx-n4', 'cd3ce492cc5c9d47acb673128d199cf0a3949e0b', 'freeze/nuttx-13.0.0-n1-n4'],
+              ['explore/rv64-sv39-translation-v1', '641e71020d46035742bd1461056e9ef3a0242d04', 'explore/rv64-vm-shared-contract-v1'],
+              ['agent/umode-physical-fetch-request-valid', '2c1fc6deff8f5212911b49beaa740391b70dcfe9', 'refactor/physical-fetch-request-valid'],
+              ['productize/pa32-fpga-v1', '2698b8e4403cb7d502846073c0a5a91a3b12cd39', 'productize/pa32-fpga-v1-ready'],
+              ['productize/plic16-address22-ready', '830b1b717a47587dfbf16ce40528006e28118b96', 'area/plic16-address22-qualification'],
             ];
             const getRef = async ref => (await github.rest.git.getRef({owner, repo, ref})).data;
             const getOpenPRs = async () => github.paginate(github.rest.pulls.list, {owner, repo, state:'open', per_page:100});
@@ -97,9 +74,10 @@ jobs:
             const prs = await getOpenPRs();
             const reserved = prRefs(prs);
             const running = await activeRuns();
+            const namesToPrune = new Set(targets.map(target => target[0]));
             const alreadyDeleted = new Set();
-            for (const [name, sha, prNumber] of targets) {
-              if (reserved.has(name) || running.has(name)) {
+            for (const [name, sha, keeper] of targets) {
+              if (reserved.has(name) || running.has(name) || name === keeper || namesToPrune.has(keeper)) {
                 throw new Error('Target now in use: ' + name);
               }
               try {
@@ -114,17 +92,16 @@ jobs:
                 if (archive.object.sha !== sha) throw new Error('Deleted ref archive mismatch: ' + name);
                 alreadyDeleted.add(name);
               }
-              const pr = (await github.rest.pulls.get({owner,repo,pull_number:prNumber})).data;
-              if (pr.state !== 'closed' || !pr.merged_at || pr.base.ref !== 'main' ||
-                  pr.head.ref !== name || (!alreadyDeleted.has(name) && pr.head.sha !== sha)) {
-                throw new Error('Original merged PR metadata changed: #' + prNumber);
+              const retained = (await github.rest.repos.getBranch({owner,repo,branch:keeper})).data;
+              if (retained.commit.sha !== sha) {
+                throw new Error('Keeper is not an exact SHA twin: ' + keeper);
               }
               const compare = (await github.rest.repos.compareCommits({owner,repo,
-                base:pr.merge_commit_sha,head:main})).data;
+                base:sha,head:main})).data;
               if (!['ahead','identical'].includes(compare.status)) {
-                throw new Error('Merged PR commit no longer in main: #' + prNumber);
+                throw new Error('Target no longer in main ancestry: ' + name);
               }
-              console.log('PREFLIGHT PASS', name, sha, 'merged_pr', prNumber,
+              console.log('PREFLIGHT PASS', name, sha, 'keeper', keeper,
                 alreadyDeleted.has(name) ? 'archived-already-deleted' : 'live');
             }
             console.log('PREFLIGHT_ALL_PASS', targets.length, 'open_prs', prs.length);
@@ -149,7 +126,7 @@ jobs:
             console.log('ARCHIVE_ALL_PASS', targets.length);
 
             let deleted = 0;
-            for (const [name, sha] of targets) {
+            for (const [name, sha, keeper] of targets) {
               if (alreadyDeleted.has(name)) {
                 console.log('ALREADY_DELETED', name, sha, 'archive', archivePrefix + name);
                 continue;
@@ -162,6 +139,9 @@ jobs:
               }
               if ((await getRef('tags/' + archivePrefix + name)).object.sha !== sha) {
                 throw new Error('STOP archive tag changed: ' + name);
+              }
+              if ((await getRef('heads/' + keeper)).object.sha !== sha) {
+                throw new Error('STOP keeper changed: ' + keeper);
               }
               const nowRunning = await activeRuns();
               if (nowRunning.has(name)) throw new Error('STOP active CI: ' + name);
