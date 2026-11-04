@@ -1,0 +1,102 @@
+name: Verified archive ten closed or orphan workflow experiments (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-workflow-orphans-10-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-workflow-orphans-10-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Preflight exact ten one-to-two-commit workflow tips and archive them
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected execution context');
+            const main="7ff35c6acdc3068754292bba814e4ec52ba4ec50",product="087a3ed9588c8fe4ff99b682957f3adbe70230aa";
+            const prefix='branch-archive/2026-11-04/workflow-orphans-10/';
+            const targets=[["area/dcache-bytevalid-synth-qualification","30ba0a07c4c86beb4ae5bf1610593bebf4108cf9",1,339,"area/dcache-bytevalid-single-write-ab"],["ci/aethercore-v2-save-qualified-linux-cache","696e2b1ca524c33d43bd7b63690ee248fb282e13",1,null,null],["measure/post-46k-backend-hotspots","75fe25cbcf4e9e643bd82002b0cf0be856a829d3",1,344,"main"],["measure/shared-pmp-depth-ab","a5a7962a355b6c108b55f78b568729f8a1a58eb5",1,279,"main"],["measure/shared-pmp-perf-ab","d2f749044ca35e9b76833e6149e80f19e5f8c607",1,278,"main"],["measure/unified-data-pmp-depth-ab","9df4cf9d7d05358618c808adf44ac603e7261573",1,285,"main"],["measure/unified-data-pmp-perf-ab","656a10bbfdb5fc13989332596447b36921b66fa4",1,284,"main"],["measure/post-45k-area-ranking","30df02ac9b232c5370306e13e1b0fb77c388a502",2,346,"main"],["measure/post-dcache-46k-area-ranking","44052d5c7ca02405fe4076e4807b474324224f37",2,341,"main"],["measure/unified-data-pmp-xc7-ab","6f68c6e9f83559a4fd9161a3e715ef35e56fea97",2,286,"main"]];
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('READ_RETRY',label,i+1);
+                  await new Promise(resolve=>setTimeout(resolve,500*(2**i)));
+                }
+              }
+            };
+            const ref=async name=>(await retry('ref '+name,()=>github.rest.git.getRef({owner,repo,ref:name}))).data;
+            const pin=async()=>{
+              const m=(await ref('heads/main')).object.sha,p=(await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha;
+              if(m!==main||p!==product)throw new Error('main/Product changed '+m+'/'+p);
+            };
+            const open=await retry('openPRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            const runs=[];
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              runs.push(...await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100})));
+            }
+            await pin();
+            for(const [name,sha,unique,n,base] of targets){
+              const b=(await retry('branch '+name,()=>github.rest.repos.getBranch({owner,repo,branch:name}))).data;
+              if(b.protected||b.commit.sha!==sha)throw new Error('Branch protected/moved '+name);
+              if(open.some(p=>p.head.ref===name||p.base.ref===name))throw new Error('Open PR depends '+name);
+              if(runs.some(r=>r.head_branch===name||(r.pull_requests||[]).some(q=>q.number===n&&n!==null)))
+                throw new Error('Active CI '+name);
+              const cmp=(await retry('compare '+name,()=>github.rest.repos.compareCommits({owner,repo,base:main,head:sha}))).data;
+              if(cmp.ahead_by!==unique||!['ahead','diverged'].includes(cmp.status))
+                throw new Error('Unique history changed '+name+' ahead='+cmp.ahead_by);
+              let files=[];
+              if(n!==null){
+                const p=(await retry('PR '+n,()=>github.rest.pulls.get({owner,repo,pull_number:n}))).data;
+                if(p.state!=='closed'||p.merged_at||p.head.ref!==name||p.head.sha!==sha||p.base.ref!==base)
+                  throw new Error('Archived PR metadata changed #'+n);
+                files=await retry('files #'+n,()=>github.paginate(github.rest.pulls.listFiles,{owner,repo,pull_number:n,per_page:100}));
+              }else{
+                const c=(await retry('commit '+sha,()=>github.rest.repos.getCommit({owner,repo,ref:sha}))).data;
+                files=c.files||[];
+              }
+              if(!files.length||files.length>3||files.some(f=>!f.filename.startsWith('.github/workflows/')))
+                throw new Error('Non-workflow change found '+name);
+              try{const t=await ref('tags/'+prefix+name);if(t.object.sha!==sha)throw new Error('Conflicting tag '+name);}
+              catch(e){if(e.status!==404)throw e;}
+              console.log('WORKFLOW_ORPHAN_PREFLIGHT',name,sha,'unique='+unique,'files='+files.length,'historicalPR='+n);
+            }
+            console.log('WORKFLOW_ORPHAN_PREFLIGHT_ALL_PASS',targets.length);
+            await pin();
+            let created=0,previous=0;
+            for(const [name,sha,unique,n] of targets){
+              await pin();
+              if((await ref('heads/'+name)).object.sha!==sha)throw new Error('Head moved '+name);
+              const tag='tags/'+prefix+name;
+              let exists=false;
+              try{const old=await ref(tag);if(old.object.sha!==sha)throw new Error('Tag mismatch '+name);exists=true;}
+              catch(e){if(e.status!==404)throw e;}
+              if(!exists){await github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha});created++;}
+              else previous++;
+              let visible=false;
+              for(let attempt=0;attempt<8;attempt++){
+                try{
+                  if((await ref(tag)).object.sha!==sha)throw new Error('Tag changed '+name);
+                  visible=true;break;
+                }catch(e){
+                  if(e.status!==404||attempt===7)throw e;
+                  await new Promise(resolve=>setTimeout(resolve,1300));
+                }
+              }
+              if(!visible)throw new Error('Tag invisible '+name);
+              console.log('WORKFLOW_ORPHAN_ARCHIVE_VERIFIED',name,sha);
+            }
+            console.log('WORKFLOW_ORPHAN_ARCHIVE_DONE','verified='+targets.length,'created='+created,'previous='+previous,'branches_deleted=0');
