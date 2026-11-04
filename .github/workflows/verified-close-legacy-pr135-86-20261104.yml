@@ -1,0 +1,133 @@
+name: Verified close 86 archived legacy PR135 subtree (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-close-legacy-pr135-86-20261104.yml
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+concurrency:
+  group: verified-close-legacy-pr135-86-20261104
+  cancel-in-progress: false
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout original exact SHA manifest
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Reverify all 86 immutable tags and close PRs leaf-to-root without deleting branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Unexpected GitHub context');
+            const fs=require('fs');
+            const manifest=JSON.parse(fs.readFileSync('maintenance/legacy-pr135-86-head-manifest-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50',product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/legacy-pr135-86/';
+            if(manifest.repository!=='yituanxing/minicore'||manifest.total!==86||
+               manifest.root_pr!==135||manifest.targets?.length!==86||
+               manifest.main_pin!==main||manifest.product_pin!==product)
+              throw new Error('Unexpected manifest');
+            const targets=manifest.targets,byPR=new Map(targets.map(t=>[t.pr,t])),byHead=new Map(targets.map(t=>[t.head,t]));
+            if(byPR.size!==86||byHead.size!==86||targets.some(t=>!/^[a-f0-9]{40}$/.test(t.sha)||
+               !/^[a-f0-9]{40}$/.test(t.base_current_sha)))throw new Error('Malformed manifest');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  console.log('RETRY',label,i+1);
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async name=>(await retry('ref '+name,()=>github.rest.git.getRef({owner,repo,ref:name}))).data;
+            const pr=async n=>(await retry('PR '+n,()=>github.rest.pulls.get({owner,repo,pull_number:n}))).data;
+            const pin=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('main/Product moved');
+            };
+            await pin();
+            const open=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            const outside=open.filter(p=>!byPR.has(p.number)&&
+              (byHead.has(p.head.ref)||byHead.has(p.base.ref)));
+            if(outside.length)throw new Error('External active PR depends on legacy tree '+outside.map(x=>x.number).join(','));
+            const validation=[];
+            for(const t of targets){
+              const p=await pr(t.pr);
+              if(!['open','closed'].includes(p.state)||p.merged_at||
+                 p.head.repo?.full_name!==owner+'/'+repo||p.head.ref!==t.head||
+                 p.head.sha!==t.sha||p.base.ref!==t.base)
+                throw new Error('Changed PR #'+t.pr);
+              if(p.state==='open'&&Date.parse(p.updated_at)>Date.parse('2026-09-01T00:00:00Z'))
+                throw new Error('Recently active PR #'+t.pr);
+              if((await ref('heads/'+t.head)).object.sha!==t.sha||
+                 (await ref('heads/'+t.base)).object.sha!==t.base_current_sha)
+                throw new Error('Changed PR branch or base #'+t.pr);
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                throw new Error('Missing SHA archive #'+t.pr);
+              validation.push({pr:t.pr,state:p.state});
+            }
+            const active=[];
+            for(const status of ['queued','in_progress','waiting','pending','requested'])
+              active.push(...await retry('runs '+status,()=>github.paginate(github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100})));
+            if(active.some(r=>byHead.has(r.head_branch)||(r.pull_requests||[]).some(p=>byPR.has(p.number))))
+              throw new Error('Legacy PR still has active CI');
+            let initialOpen=validation.filter(x=>x.state==='open').length;
+            const depthMemo=new Map();
+            const depth=t=>{
+              if(depthMemo.has(t.pr))return depthMemo.get(t.pr);
+              const d=byHead.has(t.base)?1+depth(byHead.get(t.base)):1;
+              depthMemo.set(t.pr,d);
+              return d;
+            };
+            const ordered=targets.slice().sort((a,b)=>depth(b)-depth(a)||b.pr-a.pr);
+            if(new Set(ordered.map(t=>t.pr)).size!==86)throw new Error('Closure ordering invalid');
+            console.log('LEGACY86_CLOSE_PREFLIGHT_ALL_PASS','total=86','open='+initialOpen,
+                        'already_closed='+(86-initialOpen),'depth='+Math.max(...ordered.map(depth)),'external=0','active_ci=0');
+            let closed=0,already=0;
+            for(let i=0;i<ordered.length;i++){
+              const t=ordered[i];
+              if(i%8===0)await pin();
+              const p=await pr(t.pr);
+              if(p.merged_at||!['open','closed'].includes(p.state)||p.head.ref!==t.head||p.head.sha!==t.sha||
+                 p.base.ref!==t.base)
+                throw new Error('PR changed during closure #'+t.pr);
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha||
+                 (await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Archive or source branch moved #'+t.pr);
+              if(p.state==='closed'){already++;console.log('LEGACY86_ALREADY_CLOSED',t.pr);continue;}
+              if(Date.parse(p.updated_at)>Date.parse('2026-09-01T00:00:00Z'))
+                throw new Error('PR updated during closure #'+t.pr);
+              await retry('close PR '+t.pr,()=>github.rest.pulls.update({owner,repo,pull_number:t.pr,state:'closed'}));
+              const after=await pr(t.pr);
+              if(after.state!=='closed'||after.merged_at||after.head.sha!==t.sha)
+                throw new Error('Failed close #'+t.pr);
+              closed++;
+              console.log('LEGACY86_CLOSED_UNMERGED',i+1,t.pr,t.head,t.sha);
+            }
+            await pin();
+            for(const t of targets){
+              const p=await pr(t.pr);
+              if(p.state!=='closed'||p.merged_at||p.head.sha!==t.sha||
+                 (await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                throw new Error('Final archived PR closure invalid #'+t.pr);
+            }
+            const stillOpen=await retry('final open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            if(stillOpen.some(p=>byPR.has(p.number)||byHead.has(p.base.ref)||byHead.has(p.head.ref)))
+              throw new Error('Legacy PR or external base dependency still open');
+            if(closed+already!==86)throw new Error('Closure count mismatch');
+            console.log('LEGACY86_CLOSE_DONE','closed='+closed,'already='+already,
+                        'archives_verified=86','branches_deleted=0','open_prs='+stillOpen.length);
