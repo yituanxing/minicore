@@ -258,6 +258,147 @@ class ProductDataResolverSpec extends AnyFlatSpec with Matchers with ChiselSim {
     }
   }
 
+  it should "complete a younger cached hit while an older PTW waits, without mixing PMP snapshots" in {
+    simulate(new ProductDataResolver(profile)) { d =>
+      init(d)
+      allowAllPmp(d)
+      d.io.context.effectivePrivilege.poke(PrivilegeMode.Supervisor.U)
+      d.io.context.satpEnabled.poke(true.B)
+      val vaA = BigInt("80001000", 16)
+      val vaB = BigInt("80002000", 16)
+      val rootPte = (BigInt(1) << 12) + (((vaB >> 30) & 0x1ff) << 3)
+
+      // Warm an existing page through the actual three-level Sv39 walker.
+      head(d, 0)
+      issue(d, 0, vaA)
+      supplyPte(d, (BigInt(2) << 10) | 1)
+      supplyPte(d, (BigInt(3) << 10) | 1)
+      supplyPte(d, (BigInt("80000", 16) << 10) | BigInt("c7", 16))
+      awaitResult(d)
+      d.io.resolved.bits.fault.valid.expect(false.B)
+      consume(d)
+
+      // A different, older head misses and waits indefinitely for the root
+      // PTE. Only this lifetime may own the sole walker and PTE address.
+      head(d, 1)
+      issue(d, 1, vaB)
+      for (_ <- 0 until 12 if !d.io.walking.peek().litToBoolean) d.clock.step()
+      d.io.walking.expect(true.B)
+      d.io.pte.valid.expect(true.B)
+      d.io.pte.addr.expect(rootPte.U)
+
+      // Young A has a TLB hit, but a deliberately different PMP snapshot
+      // denies the final data access. It must not deny the older PTW PTE.
+      d.io.pmpConfig.poke(0.U.asTypeOf(d.io.pmpConfig))
+      d.io.pmpAddress.poke(0.U.asTypeOf(d.io.pmpAddress))
+      issue(d, 2, vaA)
+      for (_ <- 0 until 12 if !d.io.pmaValid.peek().litToBoolean) d.clock.step()
+      d.io.pmaValid.expect(true.B)
+      d.io.pte.valid.expect(false.B) // PMP decoder serves young post this cycle
+      d.clock.step()
+      d.io.pte.valid.expect(true.B) // older PTE resumes with original PMP owner
+      d.io.pte.addr.expect(rootPte.U)
+      awaitResult(d)
+      d.io.resolved.bits.token.index.expect(2.U)
+      d.io.resolved.bits.fault.valid.expect(true.B)
+      d.io.resolved.bits.fault.cause.expect(MachineExceptionCode.LoadAccessFault.U)
+      consume(d)
+
+      // Another speculative miss must not issue its own PTE while the head
+      // walk still owns the request; it remains queued without deadlocking B.
+      issue(d, 3, BigInt("80003000", 16))
+      for (_ <- 0 until 5) {
+        d.io.walking.expect(true.B)
+        d.io.pte.valid.expect(true.B)
+        d.io.pte.addr.expect(rootPte.U)
+        d.clock.step()
+      }
+      supplyPte(d, (BigInt(2) << 10) | 1)
+      supplyPte(d, (BigInt(3) << 10) | 1)
+      supplyPte(d, (BigInt("80000", 16) << 10) | BigInt("c7", 16))
+      awaitResult(d)
+      d.io.resolved.bits.token.index.expect(1.U)
+      d.io.resolved.bits.fault.valid.expect(false.B)
+      consume(d)
+    }
+  }
+
+  it should "kill a probed younger hit and retry the surviving head walker after SFENCE" in {
+    simulate(new ProductDataResolver(profile)) { d =>
+      init(d)
+      allowAllPmp(d)
+      d.io.context.effectivePrivilege.poke(PrivilegeMode.Supervisor.U)
+      d.io.context.satpEnabled.poke(true.B)
+      head(d, 0)
+      issue(d, 0, BigInt("80001000", 16))
+      supplyPte(d, (BigInt(2) << 10) | 1)
+      supplyPte(d, (BigInt(3) << 10) | 1)
+      supplyPte(d, (BigInt("80000", 16) << 10) | BigInt("c7", 16))
+      awaitResult(d)
+      consume(d)
+
+      head(d, 1)
+      issue(d, 1, BigInt("80002000", 16))
+      for (_ <- 0 until 12 if !d.io.walking.peek().litToBoolean) d.clock.step()
+      d.io.walking.expect(true.B)
+      issue(d, 2, BigInt("80001000", 16)) // younger TLB hit
+      for (_ <- 0 until 12 if !d.io.pmaValid.peek().litToBoolean) d.clock.step()
+      d.io.pmaValid.expect(true.B)
+      // Kill before the post slot can publish its resolved token. The older
+      // PTW must neither lose its PTE request nor accept the killed result.
+      d.io.kill.valid.poke(true.B)
+      d.io.kill.bits.index.poke(2.U)
+      d.io.kill.bits.generation.poke(0.U)
+      d.clock.step()
+      d.io.kill.valid.poke(false.B)
+      d.io.pmaValid.expect(false.B)
+      d.io.walking.expect(true.B)
+      d.io.resolved.valid.expect(false.B)
+
+      // A fence cancels the old traversal but does not discard its ROB slot.
+      d.io.translationFence.poke(true.B)
+      d.clock.step()
+      d.io.translationFence.poke(false.B)
+      d.io.walking.expect(false.B)
+      d.io.pending.expect(1.U)
+      supplyPte(d, (BigInt(2) << 10) | 1)
+      supplyPte(d, (BigInt(3) << 10) | 1)
+      supplyPte(d, (BigInt("80000", 16) << 10) | BigInt("c7", 16))
+      awaitResult(d)
+      d.io.resolved.bits.token.index.expect(1.U)
+      d.io.resolved.bits.fault.valid.expect(false.B)
+      consume(d)
+      d.io.pending.expect(0.U)
+    }
+  }
+
+  it should "report the original noncanonical Sv39 VA after a valid low-VPN page was cached" in {
+    simulate(new ProductDataResolver(profile)) { d =>
+      init(d)
+      allowAllPmp(d)
+      d.io.context.effectivePrivilege.poke(PrivilegeMode.Supervisor.U)
+      d.io.context.satpEnabled.poke(true.B)
+      head(d, 0)
+      issue(d, 0, BigInt("80001000", 16))
+      supplyPte(d, (BigInt(2) << 10) | 1)
+      supplyPte(d, (BigInt(3) << 10) | 1)
+      supplyPte(d, (BigInt("80000", 16) << 10) | BigInt("c7", 16))
+      awaitResult(d)
+      consume(d)
+
+      val invalidAlias = BigInt("80001000", 16) | (BigInt(1) << 39)
+      head(d, 1)
+      issue(d, 1, invalidAlias)
+      awaitResult(d)
+      d.io.pte.valid.expect(false.B)
+      d.io.resolved.bits.token.index.expect(1.U)
+      d.io.resolved.bits.fault.valid.expect(true.B)
+      d.io.resolved.bits.fault.cause.expect(MachineExceptionCode.LoadPageFault.U)
+      d.io.resolved.bits.fault.value.expect(invalidAlias.U)
+      consume(d)
+    }
+  }
+
   it should "leave capacity for an older head when three younger TLB misses cannot walk" in {
     simulate(new ProductDataResolver(profile)) { d =>
       init(d)

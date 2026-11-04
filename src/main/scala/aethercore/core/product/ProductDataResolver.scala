@@ -136,9 +136,11 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   }
 
   // Exactly one shared TranslationUnit, with a latched owner for asynchronous
-  // walk/bare responses. Same-cycle TLB hits use the current selected token.
+  // walk/bare responses. A separate lookup-only TLB probe may use its idle
+  // lookup port during a head-owned PTW stall; it cannot issue PTE traffic.
   private val translation = Module(new TranslationUnit(
-    geometry, tlbEntries, externalWalkGate = true, implementedPaddrBits = PA))
+    geometry, tlbEntries, externalWalkGate = true,
+    implementedPaddrBits = PA, withHitProbe = true))
   private val activeValid = RegInit(false.B)
   private val activeIndex = Reg(UInt(S.W))
   private val roundRobin = RegInit(0.U(S.W))
@@ -161,6 +163,8 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   private val selected = slots(selectedIndex)
   private val candidateValid = candidateMask.asUInt.orR && !activeValid &&
     !postValid && !resultValid && !io.translationFence
+  private val probeCandidate = candidateMask.asUInt.orR && activeValid &&
+    !postValid && !resultValid && !io.translationFence
   private val selectedHead = hasHead && same(selected.token, io.robHead.bits)
   private val selectedKilled = io.kill.valid && same(selected.token, io.kill.bits)
   private val alignedMask = (1.U(4.W) << selected.size.asUInt) - 1.U
@@ -180,6 +184,15 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   translation.io.sum := selected.context.sum
   translation.io.mxr := selected.context.mxr
   translation.io.walkAllowed.get := selectedHead
+  val probe = translation.io.hitProbe.get
+  probe.requestValid := probeCandidate && !misaligned && !selectedKilled
+  probe.virtualAddress := selected.virtualAddress
+  probe.rootPpn := selected.context.rootPpn
+  probe.privilege := selected.context.effectivePrivilege
+  probe.write := !selectedRead
+  probe.translationEnabled := selected.context.satpEnabled
+  probe.sum := selected.context.sum
+  probe.mxr := selected.context.mxr
   private val killActive = io.kill.valid && activeValid &&
     same(slots(activeIndex).token, io.kill.bits)
   translation.io.kill := killActive
@@ -190,6 +203,9 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
     translation.io.requestValid && translation.io.requestReady
   private val translationResponseFire =
     translation.io.responseValid && translation.io.responseReady
+  private val probeHit = probe.requestValid && probe.hit
+  private val (probePaddr, probeOutOfRange) =
+    PhysicalAddressNarrowing(probe.physicalAddress, PA)
   private val responseIndex = Mux(activeValid, activeIndex, selectedIndex)
   private val responseSlot = slots(responseIndex)
   private val responseRead = responseSlot.kind === MemoryOperationKind.Load ||
@@ -202,7 +218,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
 
   // A young miss is a rejected lookup, not a leased walk. Rotate the probe
   // candidate so a non-head miss cannot starve the next possible TLB hit.
-  when(candidateValid && !selectedHead && !selectedKilled) {
+  when((candidateValid || probeCandidate) && !selectedHead && !selectedKilled) {
     roundRobin := wrapAdd(selectedIndex, 1.U)
   }
   when(translationRequestFire && !translationResponseFire) {
@@ -235,11 +251,29 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
       }
     }
   }
+  when(probeHit) {
+    assert(!probeOutOfRange, "compact TLB must not cache out-of-range physical pages")
+    // Only a hit consumes the younger slot; a probe miss cannot lease PTW.
+    // TranslationUnit suppresses probes during walker response/refill, so
+    // these two producers cannot overwrite the same post-classification hold.
+    assert(!translationResponseFire)
+    slots(selectedIndex).translating := true.B
+    postValid := true.B
+    postIndex := selectedIndex
+    postPaddr := probePaddr
+  }
 
   // Check the real PA domain before any PTW external request. PMP PTE reads
   // are Supervisor reads regardless of the original data access privilege.
   private val pmpRanges = Module(new PmpRangeDecoder(64, PmpConstants.MaxEntries, PA))
-  private val pmpOwner = Mux(postValid, postSlot,
+  private val postKilled = io.kill.valid && same(postSlot.token, io.kill.bits)
+  private val servePost = postValid && !resultValid &&
+    !io.translationFence && !postKilled
+  // One PMP range decoder is shared in time, never in ownership. When a
+  // younger TLB hit needs post-translation classification while an older PTW
+  // is waiting on PTE, grant post for one cycle and pause the walker PTE
+  // handshake. Otherwise the PTE checker uses the exact active PTW snapshot.
+  private val pmpOwner = Mux(servePost, postSlot,
     Mux(activeValid, slots(activeIndex), selected))
   pmpRanges.io.config := pmpOwner.pmpConfig
   pmpRanges.io.pmpAddress := pmpOwner.pmpAddress
@@ -257,11 +291,12 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
   ptePmp.io.execute := false.B
   private val pteAccessFault = translation.io.pteValid &&
     (pteOutOfRange || (config.software.isa.hasPmp.B && !ptePmp.io.allow))
-  io.pte.valid := translation.io.pteValid && !pteAccessFault
+  io.pte.valid := translation.io.pteValid && !pteAccessFault && !servePost
   io.pte.addr := narrowPteAddress
-  translation.io.pteReady := Mux(pteAccessFault, true.B, io.pte.ready)
+  translation.io.pteReady := !servePost && Mux(pteAccessFault, true.B, io.pte.ready)
   translation.io.pteData := io.pte.rdata
-  translation.io.pteFault := pteAccessFault || (io.pte.valid && io.pte.fault)
+  translation.io.pteFault := !servePost &&
+    (pteAccessFault || (io.pte.valid && io.pte.fault))
 
   dataPmp.io.privilege := postSlot.context.effectivePrivilege
   dataPmp.io.address := postPaddr
@@ -275,8 +310,7 @@ class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8
 
   // A registered post-translation stage isolates TLB/PTW logic from the
   // platform PMA decoder and holds attributes through output backpressure.
-  when(postValid && !resultValid && !io.translationFence &&
-    !(io.kill.valid && same(postSlot.token, io.kill.bits))) {
+  when(servePost) {
     resultIndex := postIndex
     result := 0.U.asTypeOf(result)
     result.token := postSlot.token
