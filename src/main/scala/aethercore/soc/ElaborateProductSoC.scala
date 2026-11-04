@@ -106,3 +106,23 @@ object ElaborateProductFpgaPinsRv64gc extends App {
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }
+
+/** Board-neutral cold-start top. The board must connect real PLL/DDR ready,
+  * external image loader and exclusive DDR AXI mux to its handshake pins.
+  * This emission never claims to instantiate those board-specific elements.
+  */
+object ElaborateProductFpgaColdBootPinsRv64gc extends App {
+  require(args.nonEmpty, "RV64GC cold-boot FPGA pins need small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC cold-boot geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaColdBootPins(implementedPaddrBits = 32,
+      productConfigOverride = Some(target)),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}

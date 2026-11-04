@@ -6,6 +6,7 @@ on:
       - 'src/main/scala/aethercore/core/product/**'
       - 'src/main/scala/aethercore/soc/AetherCoreProduct*.scala'
       - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
+      - 'src/main/scala/aethercore/soc/AetherProductColdBootControl.scala'
       - 'src/main/scala/aethercore/soc/AetherSoC*.scala'
       - 'src/main/scala/aethercore/soc/AetherMemToAxi4Bridge.scala'
       - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
@@ -16,6 +17,9 @@ on:
       - 'src/main/scala/aethercore/common/Interfaces.scala'
       - 'src/test/scala/aethercore/AetherCoreProductUnifiedMemorySoCSpec.scala'
       - 'src/test/scala/aethercore/AetherCoreProductSoCElaborationSpec.scala'
+      - 'src/test/scala/aethercore/AetherProductColdBootControlSpec.scala'
+      - 'src/test/scala/aethercore/AetherProductAxiColdBootIsolationSpec.scala'
+      - 'src/test/scala/aethercore/AetherProductFpgaColdBootElaborationSpec.scala'
       - 'src/test/scala/aethercore/ProductGeometrySoCSpec.scala'
       - '.github/workflows/product-g2-soc.yml'
 
@@ -162,7 +166,10 @@ jobs:
             aethercore.ProductFloatingCommitTraceSpec \
             aethercore.AetherCoreProductUnifiedMemorySoCSpec \
             aethercore.AetherCoreProductSoCElaborationSpec \
-            aethercore.ProductGeometrySoCSpec
+            aethercore.ProductGeometrySoCSpec \
+            aethercore.AetherProductColdBootControlSpec \
+            aethercore.AetherProductAxiColdBootIsolationSpec \
+            aethercore.AetherProductFpgaColdBootElaborationSpec
 
       - name: Save G2 directed Mill output accelerator
         if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'

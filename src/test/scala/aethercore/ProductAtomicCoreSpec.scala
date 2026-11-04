@@ -155,6 +155,49 @@ class ProductAtomicCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
     d.clock.step()
   }
 
+  private def retireDwordAtomic(
+      d: ProductAtomicHarness, rd: Int, oldOrStatus: BigInt,
+      write: Boolean, traceValid: Boolean, writeData: BigInt = 0
+  ): Unit = {
+    awaitRetirement(d)
+    val r = d.io.retirement.bits
+    r.rd.expect(rd.U)
+    r.wroteRegister.expect(true.B)
+    r.value.expect(oldOrStatus.U)
+    r.exception.valid.expect(false.B)
+    r.memoryTrace.valid.expect(traceValid.B)
+    r.memoryTrace.write.expect(write.B)
+    r.memoryTrace.paddr.expect(0x100.U)
+    r.memoryTrace.wmask.expect((if (write) 255 else 0).U)
+    r.memoryTrace.wdata.expect((if (write) writeData else BigInt(0)).U)
+    d.clock.step()
+  }
+
+  /** The memory host, not Product, owns the atomic RMW and reservation.
+    * Check exactly the one dword bus operation the ROB/LSQ externalizes.
+    */
+  private def issueDwordAtomic(
+      d: ProductAtomicHarness, pc: BigInt, funct5: Int, rd: Int,
+      rs2: Int, expectedOp: AtomicOp.Type, rhs: BigInt,
+      memoryResponse: BigInt, expectedReturn: BigInt,
+      write: Boolean, traceValid: Boolean, newMemory: BigInt = 0
+  ): Unit = {
+    dispatch(d, pc, atomic(funct5, rd, 1, rs2, dword = true))
+    awaitRequest(d)
+    val q = d.io.memoryRequest.bits
+    q.op.expect(AetherMemOp.Atomic)
+    q.atomicOp.expect(expectedOp)
+    q.paddr.expect(0x100.U)
+    q.size.expect(MemSize.DWord)
+    q.wmask.expect((if (expectedOp == AtomicOp.Lr) 0 else 255).U)
+    if (expectedOp != AtomicOp.Lr) q.wdata.expect(rhs.U)
+    val txn = q.txnId.peek().litValue
+    d.clock.step()
+    response(d, txn, memoryResponse)
+    retireDwordAtomic(d, rd, expectedReturn, write, traceValid, newMemory)
+    drained(d)
+  }
+
   private def drained(d: ProductAtomicHarness): Unit = {
     d.io.occupancy.expect(0.U)
     d.io.loadCount.expect(0.U)
@@ -224,6 +267,62 @@ class ProductAtomicCoreSpec extends AnyFlatSpec with Matchers with ChiselSim {
         retireRegister(d, rd, status)
       }
       drained(d)
+    }
+  }
+
+  it should "complete LR.D and successful or failed SC.D with exact 64-bit memory ownership" in {
+    simulate(new ProductAtomicHarness) { d =>
+      init(d)
+      val pc = BigInt("80000000", 16)
+      dispatch(d, pc, BigInt("10000093", 16)) // x1 = 0x100
+      retireRegister(d, 1, 0x100)
+      dispatch(d, pc + 4, BigInt("00500113", 16)) // x2 = 5
+      retireRegister(d, 2, 5)
+
+      // A true 64-bit prior value must survive the LR return without LW-style
+      // sign extension/truncation. The memory host maintains this word.
+      var memory = BigInt("fedcba9876543210", 16)
+      issueDwordAtomic(d, pc + 8, 2, 3, 0, AtomicOp.Lr, 0,
+        memory, memory, write = false, traceValid = true)
+
+      // A successful SC returns zero, emits exactly one 8-byte memory trace,
+      // and the next LR observes the updated word from the memory host.
+      issueDwordAtomic(d, pc + 12, 3, 4, 2, AtomicOp.Sc, 5,
+        memoryResponse = 0, expectedReturn = 0,
+        write = true, traceValid = true, newMemory = 5)
+      memory = 5
+      issueDwordAtomic(d, pc + 16, 2, 5, 0, AtomicOp.Lr, 0,
+        memory, memory, write = false, traceValid = true)
+
+      // A failed SC returns a nonzero status and must never claim a write.
+      issueDwordAtomic(d, pc + 20, 3, 6, 2, AtomicOp.Sc, 5,
+        memoryResponse = 1, expectedReturn = 1,
+        write = false, traceValid = false)
+      issueDwordAtomic(d, pc + 24, 2, 7, 0, AtomicOp.Lr, 0,
+        memory, memory, write = false, traceValid = true)
+    }
+  }
+
+  it should "complete AMOADD.D carry and AMOSWAP.D using 64-bit old and new values" in {
+    simulate(new ProductAtomicHarness) { d =>
+      init(d)
+      val pc = BigInt("80000000", 16)
+      dispatch(d, pc, BigInt("10000093", 16)) // x1 = 0x100
+      retireRegister(d, 1, 0x100)
+      dispatch(d, pc + 4, BigInt("00500113", 16)) // x2 = 5
+      retireRegister(d, 2, 5)
+
+      val original = BigInt("fffffffffffffffe", 16)
+      issueDwordAtomic(d, pc + 8, 0, 3, 2, AtomicOp.Add, 5,
+        memoryResponse = original, expectedReturn = original,
+        write = true, traceValid = true, newMemory = 3)
+      // The memory host saw the wrapped 64-bit sum (2^64-2)+5 -> 3.
+      issueDwordAtomic(d, pc + 12, 1, 4, 2, AtomicOp.Swap, 5,
+        memoryResponse = 3, expectedReturn = 3,
+        write = true, traceValid = true, newMemory = 5)
+      issueDwordAtomic(d, pc + 16, 2, 5, 0, AtomicOp.Lr, 0,
+        memoryResponse = 5, expectedReturn = 5,
+        write = false, traceValid = true)
     }
   }
 

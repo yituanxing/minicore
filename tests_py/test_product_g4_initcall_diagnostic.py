@@ -16,14 +16,18 @@ class ProductG4InitcallDiagnostic(unittest.TestCase):
         self.assertIn("type: boolean", workflow)
         self.assertIn("default: false", workflow)
         self.assertIn("if [[ '${{ github.event.pull_request.draft || inputs.diagnostic_initcalls }}' == 'true' ]]", workflow)
-        self.assertIn('RV64_PAYLOAD_BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init initcall_debug"', workflow)
+        # initcall_debug uses KERN_DEBUG; the console must expose level 7
+        # rather than silently hiding the calls we need to diagnose.
+        self.assertIn('RV64_PAYLOAD_BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init initcall_debug loglevel=8"', workflow)
         self.assertIn("PRODUCT_G4_INITCALL_DIAGNOSTIC_ONLY:", workflow)
+        self.assertIn("G4 diagnostic only: DTB bootargs include initcall_debug loglevel=8", workflow)
 
         # The normal G4 recipe is unchanged; the existing payload builder
         # consumes RV64_PAYLOAD_BOOTARGS only in a diagnostic workflow run.
         script = PAYLOAD.read_text()
         self.assertIn('BOOTARGS="${RV64_PAYLOAD_BOOTARGS:-${RV64_LINUX_BOOTARGS} rdinit=/init}"', script)
         self.assertIn('echo "bootargs=${BOOTARGS}"', script)
+        self.assertNotIn("loglevel=8", script)
 
     def test_timeout_always_symbols_pcs_without_relaxing_pid1_gate(self):
         workflow = WORKFLOW.read_text()

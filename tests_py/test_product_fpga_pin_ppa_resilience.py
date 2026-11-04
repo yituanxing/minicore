@@ -51,6 +51,23 @@ class ProductPhysicalPpaResilience(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid ISA/boundary variant", result.stderr)
 
+    def test_yosys_shutdown_evidence_is_bounded_and_keeps_failure_status(self):
+        script = SCRIPT.read_text()
+        self.assertIn("set -euo pipefail", script)
+        self.assertIn('monitor_yosys_resources "$synth_pid"', script)
+        self.assertIn('tee "$run_dir/yosys.log" | publish_yosys_progress', script)
+        self.assertIn('if wait "$synth_pid"; then', script)
+        self.assertIn('exit "$synth_status"', script)
+        self.assertIn('rss_kib=', script)
+        self.assertIn('oom_kill=', script)
+        self.assertIn('stages <= 800', script)
+        self.assertIn('diagnostics <= 30', script)
+        result = subprocess.run(
+            ["bash", "-n", str(SCRIPT)], cwd=ROOT,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
