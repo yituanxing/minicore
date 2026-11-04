@@ -296,8 +296,11 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   private val committedRat = RegInit(VecInit((0 until 32).map(_.U(F.W))))
   private val free = RegInit(VecInit((0 until P).map(i => (i >= 32).B)))
   private val ready = RegInit(VecInit((0 until P).map(i => (i < 32).B)))
-  // Architectural registers begin at zero; physical zero is never written.
-  private val prf = RegInit(VecInit(Seq.fill(P)(0.U(Xlen.W))))
+  // Value RAM is shared by integer IQ issue and exact-head SYSTEM reads.
+  // Reset/rename readiness stays here; the RAM only owns value and whether a
+  // physical lifetime has ever received its exact completion.
+  private val prf = Module(new ProductPhysicalValueStore(
+    entries = P, readPorts = 2, immutableZero = true))
   // There is exactly one architectural f0..f31 mapping, including f0 (which
   // is writable, unlike x0). FP state is absent from integer-only RTLs.
   private val fpSpeculativeRat = if (enableFloating)
@@ -311,7 +314,8 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   private val fpPhysicalGenerations = if (enableFloating)
     Some(RegInit(VecInit(Seq.fill(FpP)(0.U(G.W))))) else None
   private val fpPrf = if (enableFloating)
-    Some(RegInit(VecInit(Seq.fill(FpP)(0.U(Xlen.W))))) else None
+    Some(Module(new ProductPhysicalValueStore(
+      entries = FpP, readPorts = 3))) else None
   private val head = RegInit(0.U(I.W))
   private val tail = RegInit(0.U(I.W))
   private val count = RegInit(0.U(log2Ceil(N + 1).W))
@@ -537,11 +541,18 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   val readSystem = io.systemHead.valid
   val readAddr1 = Mux(readSystem, systemPayload.rs1Physical, selected.src1)
   val readAddr2 = Mux(readSystem, systemPayload.rs2Physical, selected.src2)
-  val readValue1 = Mux(readAddr1 === 0.U, 0.U(Xlen.W), prf(readAddr1))
-  val readValue2 = Mux(readAddr2 === 0.U, 0.U(Xlen.W), prf(readAddr2))
-  val fpRead1 = if (enableFloating) fpPrf.get(selected.fpSrc1.get) else 0.U(Xlen.W)
-  val fpRead2 = if (enableFloating) fpPrf.get(selected.fpSrc2.get) else 0.U(Xlen.W)
-  val fpRead3 = if (enableFloating) fpPrf.get(selected.fpSrc3.get) else 0.U(Xlen.W)
+  prf.io.readAddress(0) := readAddr1
+  prf.io.readAddress(1) := readAddr2
+  val readValue1 = prf.io.readValue(0)
+  val readValue2 = prf.io.readValue(1)
+  if (enableFloating) {
+    fpPrf.get.io.readAddress(0) := selected.fpSrc1.get
+    fpPrf.get.io.readAddress(1) := selected.fpSrc2.get
+    fpPrf.get.io.readAddress(2) := selected.fpSrc3.get
+  }
+  val fpRead1 = if (enableFloating) fpPrf.get.io.readValue(0) else 0.U(Xlen.W)
+  val fpRead2 = if (enableFloating) fpPrf.get.io.readValue(1) else 0.U(Xlen.W)
+  val fpRead3 = if (enableFloating) fpPrf.get.io.readValue(2) else 0.U(Xlen.W)
   io.systemHead.bits.rs1Value := readValue1
   io.systemHead.bits.rs2Value := readValue2
   io.issue.bits := 0.U.asTypeOf(io.issue.bits)
@@ -777,6 +788,22 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
 
   // A validated older completion may write while a younger ROB entry is being
   // undone. Physical register reuse cannot occur until its undo is complete.
+  // All RAM writes are behind the exact ROB/physical generation match; a
+  // newly allocated tag is invalidated while its ready bit is cleared.
+  prf.io.invalidate.valid := io.dispatch.fire && writesInteger
+  prf.io.invalidate.bits := chosenPhysical
+  prf.io.write.valid := accepted && c.hasValue && !c.exception.valid &&
+    c.destinationFile === ProductRegisterFile.Integer
+  prf.io.write.bits.index := c.destination.index
+  prf.io.write.bits.value := c.value
+  if (enableFloating) {
+    fpPrf.get.io.invalidate.valid := io.dispatch.fire && writesFloating
+    fpPrf.get.io.invalidate.bits := chosenPhysical
+    fpPrf.get.io.write.valid := accepted && c.hasValue && !c.exception.valid &&
+      c.destinationFile === ProductRegisterFile.Floating
+    fpPrf.get.io.write.bits.index := c.destination.index
+    fpPrf.get.io.write.bits.value := c.value
+  }
   when(accepted) {
     rob(c.token.index).complete := true.B
     rob(c.token.index).result := c.value
@@ -787,13 +814,11 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
     rob(c.token.index).memoryTrace := c.memoryTrace
     when(c.hasValue && !c.exception.valid &&
          c.destinationFile === ProductRegisterFile.Integer) {
-      prf(c.destination.index) := c.value
       ready(c.destination.index) := true.B
     }
     if (enableFloating) {
       when(c.hasValue && !c.exception.valid &&
            c.destinationFile === ProductRegisterFile.Floating) {
-        fpPrf.get(c.destination.index) := c.value
         fpReady.get(c.destination.index) := true.B
       }
     }

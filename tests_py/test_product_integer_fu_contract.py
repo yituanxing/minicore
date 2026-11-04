@@ -55,7 +55,7 @@ class ProductIntegerExecutionContract(unittest.TestCase):
         self.assertIn("val fuAvailable = Mux(e.memoryKind =/= MemoryOperationKind.None", backend)
         self.assertIn("io.mAvailable, io.integerAvailable", backend)
         self.assertIn("iqReady(j) := e.valid && fuAvailable", backend)
-        self.assertIn("private val prf = RegInit", backend)
+        self.assertIn("private val prf = Module(new ProductPhysicalValueStore(", backend)
 
     def test_memory_and_distro_are_still_not_falsely_claimed(self):
         self.assertIn("io.unsupported := backend.io.unsupported", INT.read_text())

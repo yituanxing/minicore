@@ -21,6 +21,7 @@ on:
       - 'src/test/scala/aethercore/ProductSmallIntegerCoreSpec.scala'
       - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
       - 'src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala'
+      - 'src/test/scala/aethercore/ProductPhysicalValueStoreSpec.scala'
       - 'src/test/scala/aethercore/ProductFpUnitSpec.scala'
       - 'src/test/scala/aethercore/ProductFpArithmeticSpec.scala'
       - 'src/test/scala/aethercore/ProductFpArithmeticRecoverySpec.scala'
@@ -136,6 +137,7 @@ jobs:
             aethercore.FpSemanticDecodeSpec \
             aethercore.ProductCoreConfigSpec \
             aethercore.ProductSmallOoOBackendSpec \
+            aethercore.ProductPhysicalValueStoreSpec \
             aethercore.ProductSmallIntegerCoreSpec \
             aethercore.ProductMUnitSpec \
             aethercore.ProductFpUnitSpec \
