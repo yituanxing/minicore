@@ -1,0 +1,123 @@
+name: Verified archive 22 performance and measurement experiment SHA tips (2026-11-04)
+on:
+  push:
+    branches:
+      - maintenance/verified-branch-prune-20261104
+    paths:
+      - .github/workflows/verified-archive-measure-perf22-20261104.yml
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+concurrency:
+  group: verified-measure-perf22-archive-20261104
+  cancel-in-progress: false
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact 22-head manifest
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/verified-branch-prune-20261104
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify historical PRs and archive every SHA before any branch deletion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            if(owner!=='yituanxing'||repo!=='minicore'||context.ref!=='refs/heads/maintenance/verified-branch-prune-20261104')
+              throw new Error('Wrong repository/ref');
+            const fs=require('fs');
+            const manifest=JSON.parse(fs.readFileSync('maintenance/measure-perf22-head-manifest-20261104.json','utf8'));
+            const evidence=JSON.parse(fs.readFileSync('maintenance/measure-perf22-ci-evidence-20261104.json','utf8'));
+            const main='7ff35c6acdc3068754292bba814e4ec52ba4ec50';
+            const product='087a3ed9588c8fe4ff99b682957f3adbe70230aa';
+            const prefix='branch-archive/2026-11-04/measure-perf-22/';
+            if(manifest.repository!==owner+'/'+repo||manifest.total!==22||
+               manifest.targets?.length!==22||manifest.main_pin!==main||
+               manifest.product_pin!==product||manifest.delete_count!==21||
+               manifest.delete_branches?.length!==21||
+               manifest.preserve_live_ref!=='perf/fast-host-data-multislot'||
+               manifest.tag_prefix!==prefix||evidence.heads!==22||
+               evidence.runs!==263||evidence.entries?.length!==22)
+              throw new Error('Pinned manifest/CI evidence altered');
+            const targets=manifest.targets,heads=new Set(targets.map(x=>x.head));
+            if(heads.size!==22||targets.filter(t=>t.preserve_live_name).length!==1||
+               targets.some(t=>!/^measure\/|^perf\//.test(t.head)||!/^[0-9a-f]{40}$/.test(t.sha)))
+              throw new Error('Unexpected candidate head');
+            const retry=async(label,fn)=>{
+              for(let i=0;i<5;i++){
+                try{return await fn();}
+                catch(e){
+                  const transient=e.status===429||e.status>=500||/fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(String(e.message||''));
+                  if(!transient||i===4)throw e;
+                  await new Promise(ok=>setTimeout(ok,500*(2**i)));
+                }
+              }
+            };
+            const ref=async n=>(await retry('ref '+n,()=>github.rest.git.getRef({owner,repo,ref:n}))).data;
+            const pins=async()=>{
+              if((await ref('heads/main')).object.sha!==main||
+                 (await ref('heads/design/rv64gc-product-architecture-20261103')).object.sha!==product)
+                throw new Error('main/Product moved');
+            };
+            await pins();
+            const open=await retry('open PRs',()=>github.paginate(github.rest.pulls.list,{owner,repo,state:'open',per_page:100}));
+            if(open.length!==14||open.some(p=>heads.has(p.head.ref)||heads.has(p.base.ref)))
+              throw new Error('Open PR cohort/dependency changed');
+            for(const t of targets){
+              const b=(await retry('branch '+t.head,()=>github.rest.repos.getBranch({owner,repo,branch:t.head}))).data;
+              if(b.protected||b.commit.sha!==t.sha)throw new Error('Source branch protected or moved '+t.head);
+              if(t.pr!==null){
+                const p=(await retry('closed PR '+t.pr,()=>github.rest.pulls.get({owner,repo,pull_number:t.pr}))).data;
+                if(p.state!=='closed'||p.merged_at||p.head.sha!==t.sha||p.head.ref!==t.head)
+                  throw new Error('Historic PR ref differs '+t.pr);
+              }
+              try{
+                if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha)
+                  throw new Error('Conflicting archive tag '+t.head);
+              }catch(e){if(e.status!==404)throw e;}
+            }
+            for(const status of ['queued','in_progress','waiting','pending','requested']){
+              const runs=await retry('running CI '+status,()=>github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,{owner,repo,status,per_page:100}));
+              if(runs.some(r=>heads.has(r.head_branch)))
+                throw new Error('Active CI on selected performance branch '+status);
+            }
+            console.log('MEASURE22_ARCHIVE_PREFLIGHT_ALL_PASS','heads=22','history_runs=263','active_ci=0','open_dependencies=0');
+            let created=0,existing=0;
+            for(let i=0;i<targets.length;i++){
+              const t=targets[i];
+              if(i%6===0)await pins();
+              if((await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Source branch moved '+t.head);
+              const tag='tags/'+prefix+t.head;
+              let present=false;
+              try{
+                if((await ref(tag)).object.sha!==t.sha)throw new Error('Tag conflict '+t.head);
+                present=true;
+              }catch(e){if(e.status!==404)throw e;}
+              if(present)existing++;
+              else{
+                await retry('archive '+t.head,()=>github.rest.git.createRef({owner,repo,ref:'refs/'+tag,sha:t.sha}));
+                created++;
+              }
+              let good=false;
+              for(let k=0;k<8;k++){
+                try{if((await ref(tag)).object.sha!==t.sha)throw new Error('Tag mismatch '+t.head);good=true;break;}
+                catch(e){if(e.status!==404||k===7)throw e;await new Promise(ok=>setTimeout(ok,1200));}
+              }
+              if(!good)throw new Error('Archive invisible '+t.head);
+              console.log('MEASURE22_SHA_ARCHIVED',i+1,t.pr,t.head,t.sha);
+            }
+            await pins();
+            for(const t of targets){
+              if((await ref('tags/'+prefix+t.head)).object.sha!==t.sha||
+                 (await ref('heads/'+t.head)).object.sha!==t.sha)
+                throw new Error('Final archive/source mismatch '+t.head);
+            }
+            console.log('MEASURE22_ARCHIVE_DONE','tags=22','created='+created,'existing='+existing,
+                        'branches_deleted=0','prs_modified=0');
