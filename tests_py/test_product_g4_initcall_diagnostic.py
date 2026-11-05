@@ -1,4 +1,4 @@
-"""Draft-PR G4 diagnosis must preserve the frozen ready-PR payload."""
+"""Opt-in G4 diagnosis must preserve the frozen normal Linux PID1 payload."""
 
 from pathlib import Path
 import unittest
@@ -10,12 +10,14 @@ PAYLOAD = ROOT / "tools/ci/rv64_minimal_init_payload_build.sh"
 
 
 class ProductG4InitcallDiagnostic(unittest.TestCase):
-    def test_draft_pr_uses_diagnostic_while_manual_default_stays_frozen(self):
+    def test_only_explicit_diagnostic_uses_initcall_bootargs(self):
         workflow = WORKFLOW.read_text()
         self.assertIn("diagnostic_initcalls:", workflow)
         self.assertIn("type: boolean", workflow)
         self.assertIn("default: false", workflow)
-        self.assertIn("if [[ '${{ github.event.pull_request.draft || inputs.diagnostic_initcalls }}' == 'true' ]]", workflow)
+        self.assertIn("if [[ '${{ inputs.diagnostic_initcalls }}' == 'true' ]]", workflow)
+        self.assertIn("github.event.label.name == 'product-g4-longrun'", workflow)
+        self.assertNotIn("github.event.pull_request.draft ||", workflow)
         # initcall_debug uses KERN_DEBUG; the console must expose level 7
         # rather than silently hiding the calls we need to diagnose.
         self.assertIn('RV64_PAYLOAD_BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init initcall_debug loglevel=8"', workflow)
@@ -31,7 +33,7 @@ class ProductG4InitcallDiagnostic(unittest.TestCase):
 
     def test_timeout_always_symbols_pcs_without_relaxing_pid1_gate(self):
         workflow = WORKFLOW.read_text()
-        self.assertIn("max_cycles=850000000", workflow)
+        self.assertIn("max_cycles=1200000000", workflow)
         self.assertIn("max_cycles=1800000000", workflow)
         self.assertIn('MAX_CYCLES="$max_cycles"', workflow)
         self.assertIn("PRODUCT_G4_CYCLE_BUDGET:", workflow)

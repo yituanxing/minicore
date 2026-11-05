@@ -27,7 +27,10 @@ class ProductLsqOwnershipContract(unittest.TestCase):
             "val kill = Flipped(Valid", "val robHead = Flipped(Valid",
             "val memoryRequest = Decoupled(new AetherMemRequest",
             "val memoryResponse = Flipped(Decoupled(new AetherMemResponse",
-            "transactions(chosenTxn).active := true.B",
+            "val launchTxn = io.memoryRequest.bits.txnId",
+            "when(io.memoryRequest.fire)",
+            "transactions(launchTxn).active := true.B",
+            "transactions(launchTxn).token := launchToken",
             "transactions(responseIndex).active := false.B",
             "io.drainedKilledResponse := true.B",
             "io.droppedStaleResolution := io.resolve.fire && !resolutionLive",
@@ -42,7 +45,7 @@ class ProductLsqOwnershipContract(unittest.TestCase):
                          "safeLoad", "normalRam", "intersects", "forwardable",
                          "val write = (isStore || isAtomic) && isHead",
                          "olderAtomic",
-                         "assert(sameHead", "candidateIndex",
+                         "assert(launchLive && (heldRequest || sameHead)", "candidateIndex",
                          "when(io.kill.valid)", "io.completion <> completions.io.deq"):
             self.assertIn(fragment, s)
         self.assertNotIn("memoryDependencyPredictor", s)
@@ -117,7 +120,8 @@ class ProductLsqOwnershipContract(unittest.TestCase):
                          "completion.io.in(2) <> lsq.io.completion",
                          "completion.io.in(3) <> system.io.completion",
                          "system.io.head <> backend.io.systemHead",
-                         "backend.io.completion <> completion.io.out"):
+                         "completionHold.io.enq <> completion.io.out",
+                         "backend.io.completion <> completionHold.io.deq"):
             self.assertIn(fragment, top)
         self.assertIn("backend.io.memoryAvailable := io.memoryResourceAvailable", top)
         self.assertNotIn("backend.io.memoryAvailable := io.memoryExecute.ready", top)
@@ -130,7 +134,8 @@ class ProductLsqOwnershipContract(unittest.TestCase):
             "Seq.fill(T)(", "val token = new ProductRobId",
             "val resolveMatches = matchingSlot(io.resolve.bits.token)",
             "val responseMatches = matchingSlot(owner.token)",
-            "transactions(chosenTxn).token := candidate.token",
+            "transactions(launchTxn).token := launchToken",
+            "launchToken := Mux(heldRequest, heldRequestToken, candidate.token)",
             "val shiftedForward =", "def oldest(xs: Seq[AgeCandidate])",
         ):
             self.assertIn(fragment, lsq)

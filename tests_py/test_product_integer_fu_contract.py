@@ -9,6 +9,8 @@ M = ROOT / "src/main/scala/aethercore/core/product/ProductMUnit.scala"
 DIV = ROOT / "src/main/scala/aethercore/core/arith/UnsignedRestoringDivider.scala"
 V2 = ROOT / "src/main/scala/aethercore/core/v2/TinyExecution.scala"
 BACKEND = ROOT / "src/main/scala/aethercore/core/product/ProductSmallOoOBackend.scala"
+MEMORY_CORE = ROOT / "src/main/scala/aethercore/core/product/ProductSmallMemoryCore.scala"
+INTEGER_FIXTURE = ROOT / "src/test/scala/aethercore/ProductSmallIntegerCoreFixture.scala"
 SPEC = ROOT / "src/test/scala/aethercore/ProductSmallIntegerCoreSpec.scala"
 MSPEC = ROOT / "src/test/scala/aethercore/ProductMUnitSpec.scala"
 
@@ -40,25 +42,38 @@ class ProductIntegerExecutionContract(unittest.TestCase):
         self.assertNotIn("import aethercore.core.v2", product)
 
     def test_fu_availability_is_observed_before_iq_choice(self):
-        source = INT.read_text()
+        source = INTEGER_FIXTURE.read_text()
+        production = MEMORY_CORE.read_text()
         backend = BACKEND.read_text()
         for fragment in ("class ProductSmallIntegerCore", "new ProductMUnit(g, PA)",
                          "new ProductIntegerBranchUnit(g",
                          "completion.io.in(0) <> integer.io.response",
                          "completion.io.in(1) <> m.io.response",
-                         "backend.io.completion <> completion.io.out",
+                         "completionHold.io.enq <> completion.io.out",
+                         "backend.io.completion <> completionHold.io.deq",
                          "backend.io.integerAvailable := integer.io.available",
                          "backend.io.mAvailable := m.io.available",
                          "io.mBusy := !m.io.available",
                          "io.mUnitNeeded := false.B"):
             self.assertIn(fragment, source)
+        self.assertNotIn("class ProductSmallIntegerCore", INT.read_text())
+        for fragment in (
+            "new ProductIntegerBranchUnit(g",
+            "new ProductMUnit(g, PA)",
+            "backend.io.integerAvailable := integer.io.available",
+            "backend.io.mAvailable := m.io.available",
+            "completionHold.io.enq <> completion.io.out",
+            "backend.io.completion <> completionHold.io.deq",
+        ):
+            self.assertIn(fragment, production)
         self.assertIn("val fuAvailable = Mux(e.memoryKind =/= MemoryOperationKind.None", backend)
         self.assertIn("io.mAvailable, io.integerAvailable", backend)
         self.assertIn("iqReady(j) := e.valid && fuAvailable", backend)
         self.assertIn("private val prf = Module(new ProductPhysicalValueStore(", backend)
 
     def test_memory_and_distro_are_still_not_falsely_claimed(self):
-        self.assertIn("io.unsupported := backend.io.unsupported", INT.read_text())
+        self.assertIn("io.unsupported := backend.io.unsupported", INTEGER_FIXTURE.read_text())
+        self.assertIn("backend.io.memoryAvailable := false.B", INTEGER_FIXTURE.read_text())
         self.assertIn("dispatchDecoded.memory.kind === MemoryOperationKind.None", BACKEND.read_text())
         config = (ROOT / "src/main/scala/aethercore/core/product/ProductCoreConfig.scala").read_text()
         self.assertIn("rtlImplemented: Boolean = false", config)

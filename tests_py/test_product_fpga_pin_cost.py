@@ -52,7 +52,9 @@ class ProductPhysicalFpgaContract(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("pull_request:", workflow)
         self.assertIn("inputs.capacity || 'small'", workflow)
-        self.assertIn("'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'", workflow)
+        self.assertIn("types: [labeled]", workflow)
+        self.assertIn("github.event.label.name == 'product-fpga-physical-ppa'", workflow)
+        self.assertIn("matrix:\n        isa: [integer, floating]\n        boundary: [probe, pins]", workflow)
         self.assertIn("compare_product_fpga_pin_cost.sh", workflow)
 
     def test_report_keeps_probe_and_fp_cost_separate(self):

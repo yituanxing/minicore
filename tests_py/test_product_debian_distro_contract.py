@@ -80,18 +80,25 @@ class ProductDebianDistroContracts(unittest.TestCase):
         self.assertIn("firmware_bytes", common)
         self.assertIn("RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT", common)
 
-    def test_manual_and_initial_pr_gate_is_real_boot_not_proven_by_image(self):
+    def test_explicit_d1_d2_d3_gates_require_real_boot_not_just_an_image(self):
         workflow = G5.read_text()
         for fragment in (
             "workflow_dispatch:",
+            "github.event.label.name == 'product-g5-longrun'",
+            "RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}",
             "AetherCoreProductDebianRV64SimTop",
             "ElaborateProductDebianRV64SimTop",
             "DEBIAN_QEMU_LP64D_ORACLE_PASS",
             "MAX_CYCLES=1800000000",
             "REQUIRE_LAYERED_COMPRESSED=1",
-            "MILESTONE='DEBIAN_RISCV64_GLIBC_PID1_OK'",
+            "d1) milestone='DEBIAN_RISCV64_GLIBC_PID1_OK'",
+            "d2) milestone='DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK'",
+            "d3) milestone='login:'",
+            'MILESTONE="$milestone"',
             "grep -q '^L32_RUNTIME_MILESTONE_PASS '",
-            "PRODUCT_G5_DEBIAN_DYNAMIC_PID1_PASS",
+            "PRODUCT_G5_DEBIAN_D1_DYNAMIC_PID1_PASS",
+            "PRODUCT_G5_DEBIAN_D2_NATIVE_PROCESSES_FS_SIGNALS_PASS",
+            "PRODUCT_G5_DEBIAN_D3_NATIVE_LOGIN_PROMPT_PASS",
         ):
             self.assertIn(fragment, workflow)
         self.assertNotIn("product-g4-linux-pid1.yml'", workflow)

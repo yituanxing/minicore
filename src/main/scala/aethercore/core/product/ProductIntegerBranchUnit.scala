@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AluOp, BranchType, MachineExceptionCode}
 import aethercore.core.ALU
-import aethercore.core.semantic.{ControlFlowKind, MemoryOperationKind}
+import aethercore.core.semantic.ControlFlowKind
 
 /** Registered RV64I integer and branch FU. Deliberately no M/F/D or memory
   * datapaths: M uses a separate future iterative unit. The shared ALU has its
@@ -82,81 +82,4 @@ class ProductIntegerBranchUnit(val geometry: ProductCoreGeometry, val hasCompres
   }.elsewhen(io.response.fire) {
     held := false.B
   }
-}
-
-/** First executable same-source product integer+M+branch subset.
-  *
-  * FU resources remain independent: a long running DIV can be overtaken by
-  * independent integer operations, while one RR completion fabric validates
-  * ROB/PRF lifetime before wakeup and precise retirement.
-  * Fetch/LSQ/privileged/VM/FP/SoC are not implemented here.
-  */
-class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
-  private val g = config.geometry
-  private val PA = config.platform.paddrBits
-  private val I = log2Ceil(g.robEntries)
-  private val P = log2Ceil(g.integerPhysicalRegisters)
-  private val G = 16
-
-  val io = IO(new Bundle {
-    val dispatch = Flipped(Decoupled(new ProductDispatch(64)))
-    val retire = Decoupled(new ProductRetirement(64, I, P, G, PA))
-    val redirect = Valid(new ProductRedirect(64, I, G))
-    val trap = Valid(new ProductRetirement(64, I, P, G, PA))
-    val occupancy = Output(UInt(log2Ceil(g.robEntries + 1).W))
-    val unsupported = Output(Bool())
-    // Kept for pre-M test harness compatibility: there is now a real M unit.
-    val mUnitNeeded = Output(Bool())
-    val mBusy = Output(Bool())
-    val outOfOrderCompletion = Output(Bool())
-    val staleCompletion = Output(Bool())
-  })
-
-  private val backend = Module(new ProductSmallOoOBackend(g, paddrBits = PA))
-  private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC, PA))
-  private val m = Module(new ProductMUnit(g, PA))
-  private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA), 2))
-  private val completionHold = Module(new Queue(
-    new ProductCompletion(64, I, P, G, PA), entries = 1, pipe = false, flow = false))
-
-  backend.io.dispatch.valid := io.dispatch.valid
-  backend.io.dispatch.bits := io.dispatch.bits
-  io.dispatch.ready := backend.io.dispatch.ready
-
-  // The ready-state of both FUs is independent of issue.bits. IQ can bypass
-  // a busy M unit to issue younger, dependency-ready integer/branch work.
-  backend.io.integerAvailable := integer.io.available
-  backend.io.mAvailable := m.io.available
-  // This compatibility core has no LSQ/resolver. Never allocate memory
-  // work in its ROB or route it into an integer execution unit.
-  backend.io.memoryAvailable := false.B
-  backend.io.memoryReserve.ready := false.B
-  // Integer-only slice cannot consume a privileged completion lane.
-  backend.io.systemHead.ready := false.B
-  private val issueM = ProductMOperation.isM(backend.io.issue.bits.aluOp)
-  integer.io.request.valid := backend.io.issue.valid && !issueM
-  integer.io.request.bits := backend.io.issue.bits
-  m.io.request.valid := backend.io.issue.valid && issueM
-  m.io.request.bits := backend.io.issue.bits
-  backend.io.issue.ready := Mux(issueM, m.io.request.ready, integer.io.request.ready)
-
-  completion.io.in(0) <> integer.io.response
-  completion.io.in(1) <> m.io.response
-  // Recovery can deassert completion.ready for multiple cycles while either
-  // FU becomes valid. The one-entry hold snapshots the chosen RR winner.
-  completionHold.io.enq <> completion.io.out
-  backend.io.completion <> completionHold.io.deq
-
-  io.retire.valid := backend.io.retire.valid
-  io.retire.bits := backend.io.retire.bits
-  backend.io.retire.ready := io.retire.ready
-  io.redirect := backend.io.redirect
-  io.trap := backend.io.trap
-  io.occupancy := backend.io.occupancy
-  io.unsupported := backend.io.unsupported ||
-    (io.dispatch.valid && io.dispatch.bits.decoded.memory.kind =/= MemoryOperationKind.None)
-  io.mUnitNeeded := false.B
-  io.mBusy := !m.io.available
-  io.outOfOrderCompletion := backend.io.outOfOrderCompletion
-  io.staleCompletion := backend.io.staleCompletion
 }

@@ -1,7 +1,29 @@
 package aethercore.soc
 
 import _root_.circt.stage.ChiselStage
-import aethercore.core.product.ProductCoreProfiles
+import aethercore.core.product.{ProductCoreConfig, ProductCoreGeometry, ProductCoreProfiles}
+
+/** Keep board/profile selection identical across the public runMain entrypoints.
+  * The entrypoint object names and arguments are part of the external CI and
+  * FPGA-emission contract; only their repeated implementation is shared.
+  */
+private object ProductSoCElaboration {
+  def firtoolOptions: Array[String] =
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+
+  def geometry(args: Array[String], missingMessage: String,
+               unknownContext: String): ProductCoreGeometry = {
+    require(args.nonEmpty, missingMessage)
+    args.head match {
+      case "small" => ProductCoreProfiles.smallGeometry
+      case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+      case other => throw new IllegalArgumentException(s"unknown $unknownContext geometry: $other")
+    }
+  }
+
+  def rv64gcTarget(geometry: ProductCoreGeometry): ProductCoreConfig =
+    AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+}
 
 /** Independent emission entrypoints; never replace the qualified V2 SoC top.
   *
@@ -12,7 +34,7 @@ object ElaborateProductUnifiedMemorySoC extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductUnifiedMemorySoC(),
     args,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -20,7 +42,7 @@ object ElaborateProductAxi4SoC extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductAxi4SoC(),
     args,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -28,7 +50,7 @@ object ElaborateProductFpgaSoC extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaSoC(),
     args,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -36,17 +58,12 @@ object ElaborateProductFpgaSoC extends App {
   * Selection changes physical storage depth, never decode/issue/retire width.
   */
 object ElaborateProductFpgaSoCGeometry extends App {
-  require(args.nonEmpty, "Product FPGA PPA needs small or expanded capacity")
-  val capacity = args.head
-  val geometry = capacity match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown Product FPGA PPA geometry: $other")
-  }
+  val geometry = ProductSoCElaboration.geometry(args,
+    "Product FPGA PPA needs small or expanded capacity", "Product FPGA PPA")
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaSoC(implementedPaddrBits = 32, productGeometry = geometry),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -57,18 +74,14 @@ object ElaborateProductFpgaSoCGeometry extends App {
   * Debian boot pass.
   */
 object ElaborateProductFpgaSoCRv64gc extends App {
-  require(args.nonEmpty, "RV64GC FPGA emission needs small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC FPGA geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC FPGA emission needs small or expanded capacity", "RV64GC FPGA")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaSoC(implementedPaddrBits = 32,
       productConfigOverride = Some(target)),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -77,33 +90,25 @@ object ElaborateProductFpgaSoCRv64gc extends App {
   * SoC, target configuration and board-neutral PA32 AXI interface.
   */
 object ElaborateProductFpgaPinsGeometry extends App {
-  require(args.nonEmpty, "Product FPGA pin PPA needs small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown Product FPGA pin geometry: $other")
-  }
+  val geometry = ProductSoCElaboration.geometry(args,
+    "Product FPGA pin PPA needs small or expanded capacity", "Product FPGA pin")
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaPins(implementedPaddrBits = 32,
       productGeometry = geometry),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
 object ElaborateProductFpgaPinsRv64gc extends App {
-  require(args.nonEmpty, "RV64GC FPGA pin emission needs small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC FPGA pin geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC FPGA pin emission needs small or expanded capacity", "RV64GC FPGA pin")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaPins(implementedPaddrBits = 32,
       productConfigOverride = Some(target)),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -112,18 +117,14 @@ object ElaborateProductFpgaPinsRv64gc extends App {
   * This emission never claims to instantiate those board-specific elements.
   */
 object ElaborateProductFpgaColdBootPinsRv64gc extends App {
-  require(args.nonEmpty, "RV64GC cold-boot FPGA pins need small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC cold-boot geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC cold-boot FPGA pins need small or expanded capacity", "RV64GC cold-boot")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaColdBootPins(implementedPaddrBits = 32,
       productConfigOverride = Some(target)),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -133,19 +134,15 @@ object ElaborateProductFpgaColdBootPinsRv64gc extends App {
   * provide DDR, PLL, firmware loader, 3.3V SD wiring and timing constraints.
   */
 object ElaborateProductFpgaColdBootSpiSdPinsRv64gc extends App {
-  require(args.nonEmpty, "RV64GC SPI-SD FPGA pins need small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC SPI-SD geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC SPI-SD FPGA pins need small or expanded capacity", "RV64GC SPI-SD")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaColdBootPins(implementedPaddrBits = 32,
       productConfigOverride = Some(target),
       boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -158,19 +155,15 @@ object ElaborateProductFpgaColdBootSpiSdPinsRv64gc extends App {
   * OpenSBI, the kernel and DTB need initial DDR image loading.
   */
 object ElaborateProductFpgaColdBootDdrMuxSpiSd1PinsRv64gc extends App {
-  require(args.nonEmpty, "RV64GC G5-SD1 DDR mux FPGA pins need small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC G5-SD1 geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC G5-SD1 DDR mux FPGA pins need small or expanded capacity", "RV64GC G5-SD1")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaColdBootDdrFabric(implementedPaddrBits = 32,
       productConfigOverride = Some(target),
       boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -182,19 +175,15 @@ object ElaborateProductFpgaColdBootDdrMuxSpiSd1PinsRv64gc extends App {
   * The board still owns SD/flash transport, DDR controller/PHY and clocks.
   */
 object ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc extends App {
-  require(args.nonEmpty, "RV64GC G5-SD1 DDR-stream FPGA pins need small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC G5-SD1 stream geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC G5-SD1 DDR-stream FPGA pins need small or expanded capacity", "RV64GC G5-SD1 stream")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaColdBootDdrStreamFabric(implementedPaddrBits = 32,
       productConfigOverride = Some(target),
       boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -204,19 +193,15 @@ object ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc extends App {
   * external image source; this emission never counts as a Linux boot test.
   */
 object ElaborateProductFpgaDdrLocalWindowSpiSd1Rv64gc extends App {
-  require(args.nonEmpty, "RV64GC local-DDR FPGA emission needs small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC local-DDR geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC local-DDR FPGA emission needs small or expanded capacity", "RV64GC local-DDR")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaDdrLocalWindowBoard(implementedPaddrBits = 32,
       productConfigOverride = Some(target),
       boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }
 
@@ -225,18 +210,14 @@ object ElaborateProductFpgaDdrLocalWindowSpiSd1Rv64gc extends App {
   * the same selected SmallOoO SoC; vendor DDR/PLL/pinout is still required.
   */
 object ElaborateProductFpgaUartDdrSpiSd1Rv64gc extends App {
-  require(args.nonEmpty, "RV64GC UART-to-DDR FPGA emission needs small or expanded capacity")
-  val geometry = args.head match {
-    case "small" => ProductCoreProfiles.smallGeometry
-    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
-    case other => throw new IllegalArgumentException(s"unknown RV64GC UART-to-DDR geometry: $other")
-  }
-  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  val geometry = ProductSoCElaboration.geometry(args,
+    "RV64GC UART-to-DDR FPGA emission needs small or expanded capacity", "RV64GC UART-to-DDR")
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductFpgaUartDdrBoard(implementedPaddrBits = 32,
       productConfigOverride = Some(target),
       boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
     args.tail,
-    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+    ProductSoCElaboration.firtoolOptions
   )
 }

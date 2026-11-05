@@ -198,9 +198,11 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
         self.assertIn("private val pendingTimer =", fabric)
         self.assertIn("private val pendingPlic =", fabric)
         self.assertIn("private val pendingMmio =", fabric)
+        self.assertIn("private val pendingDeviceMmio =", fabric)
+        self.assertIn("pendingMmio = pendingDeviceMmio || pendingUnmapped", fabric)
         self.assertIn("private val pendingExternal =", fabric)
         self.assertIn("private val pendingQueue = Module(new Queue(", fabric)
-        self.assertIn("assert(!(pendingMmio && pendingAtomic)", fabric)
+        self.assertIn("assert(!(pendingDeviceMmio && pendingAtomic)", fabric)
 
         self.assertIn("final case class AetherSoCAddressMap(", address_map)
         self.assertIn("def qualifiedLinux(platform: PlatformConfig)", address_map)
@@ -224,7 +226,7 @@ class V2PlatformOwnershipSourceContract(unittest.TestCase):
             "Module(new AetherUart16550",
             "Module(new AetherAclintMtimer",
             "Module(new AetherPlic",
-            "assert(!(pendingMmio && pendingAtomic)",
+            "assert(!(pendingDeviceMmio && pendingAtomic)",
         ):
             self.assertNotIn(forbidden, platform)
 
