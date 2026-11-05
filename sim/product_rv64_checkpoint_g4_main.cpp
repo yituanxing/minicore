@@ -21,6 +21,9 @@
 #error "Product checkpoint requires a --savable RTL archive"
 #endif
 #include "l32_opensbi_runtime.h"
+#if defined(AETHERCORE_PRODUCT_CHECKPOINT_G5)
+#include "l32_g5_silence_watchdog.h"
+#endif
 #include "verilated.h"
 #include "verilated_save.h"
 
@@ -28,6 +31,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
@@ -461,6 +465,158 @@ void outputResult(const Observer& o, const VerilatedContext& ctx,
             << " wait_active=" << transport.dataWait.active
             << " wait_remaining=" << transport.dataWait.remaining << '\n';
 }
+#if defined(AETHERCORE_PRODUCT_CHECKPOINT_G5)
+// The first cold run may consume >1B Product RTL cycles.  Reuse its verified
+// complete-cycle .pre snapshot for a bounded diagnosis without replaying that
+// prefix.  This path deliberately does not affect the G4/SD1 checkpoint proof
+// or the ordinary non-savable G5 simulator.
+int resumeG5Diagnosis(const std::string& prefix, const std::string& modelSha,
+                      const std::string& firmwareSha, const Policy& policy,
+                      std::uint64_t bootMax, std::uint64_t replayCycles,
+                      Top& top, VerilatedContext& ctx, Memory& mem,
+                      TransportRuntimeState& transport, Observer& o) {
+  const char* target = std::getenv("AETHERCORE_G5_DIAGNOSTIC_MILESTONE");
+  const std::string milestone = target ? target : "";
+  if (milestone != "DEBIAN_RISCV64_GLIBC_PID1_OK" &&
+      milestone != "DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK")
+    throw std::runtime_error("G5 resume diagnosis requires an explicit D1/D2 PID1 milestone");
+  const char* requestedBudget = std::getenv("AETHERCORE_G5_STALL_WATCHDOG_CYCLES");
+  const std::string budgetText = requestedBudget ? requestedBudget : "";
+  if (budgetText.empty() || budgetText.find_first_not_of("0123456789") != std::string::npos)
+    throw std::runtime_error("G5 resume diagnosis requires decimal silence budget");
+  const auto silenceBudget = std::stoull(budgetText);
+  if (silenceBudget < 1000000 || silenceBudget > 200000000)
+    throw std::runtime_error("G5 resume silence budget outside 1M..200M cycles");
+  const auto suffix = std::getenv("AETHERCORE_G5_DIAGNOSTIC_INPUT_SUFFIX");
+  const std::string inputSuffix = suffix ? suffix : "pre";
+  const auto outSuffixEnv = std::getenv("AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX");
+  const std::string outputSuffix = outSuffixEnv ? outSuffixEnv : "diagnostic";
+  const auto validSuffix = [](const std::string& str) {
+    if (str.empty() || str.size() > 32) return false;
+    for (unsigned char ch : str)
+      if (!std::isalnum(ch) && ch != '-') return false;
+    return true;
+  };
+  if (!validSuffix(inputSuffix) || !validSuffix(outputSuffix) ||
+      inputSuffix == outputSuffix || outputSuffix == "pre" || outputSuffix == "late")
+    throw std::runtime_error("G5 resume checkpoint suffix invalid/unsafe or collides with original");
+  readHost(prefix + '.' + inputSuffix + ".host", modelSha, firmwareSha,
+           policy, ctx, mem, transport, o);
+  readRtl(prefix + '.' + inputSuffix + ".rtl", top);
+  if (top.reset || !o.sawOpenSbiBanner || !o.sawLinuxMarker ||
+      o.cycles >= bootMax || replayCycles == 0 ||
+      replayCycles > bootMax - o.cycles)
+    throw std::runtime_error("G5 diagnostic checkpoint invalid or run exceeds total bound");
+
+  const auto outRtl = prefix + '.' + outputSuffix + ".rtl";
+  const auto outHost = prefix + '.' + outputSuffix + ".host";
+  // Treat dangling symlinks and unreadable entries as occupied too: a fresh
+  // diagnostic must never follow an existing path and overwrite user data.
+  const auto occupied = [](const std::string& path) {
+    return std::filesystem::symlink_status(path).type() !=
+           std::filesystem::file_type::not_found;
+  };
+  if (occupied(outRtl) || occupied(outHost))
+    throw std::runtime_error("G5 diagnostic checkpoint output already exists");
+  const bool captureLate = inputSuffix == "pre";
+  const auto lateRtl = prefix + ".late.rtl";
+  const auto lateHost = prefix + ".late.host";
+  if (captureLate && (occupied(lateRtl) != occupied(lateHost)))
+    throw std::runtime_error("G5 late-initcall snapshot is partially occupied");
+  bool lateCaptured = !captureLate || occupied(lateRtl);
+  aethercore::l32sim::G5SilenceWatchdog watchdog(silenceBudget);
+  constexpr std::string_view clockMarker = "clk: Disabling unused clocks";
+  const auto markerAt = o.uart.find(clockMarker);
+  if (markerAt != std::string::npos) {
+    // The precise marker cycle is not part of the original checkpoint format.
+    // Reconstruct its presence while preserving the recorded last UART cycle.
+    // If the marker preceded .pre, .pre is already a reusable later state;
+    // do not falsely label a newly restored boundary as an exact marker save.
+    lateCaptured = true;
+    std::cerr << "PRODUCT_G5_LATE_MARKER_IN_INPUT_CHECKPOINT cycles=" << o.cycles << '\n';
+    for (char ch : clockMarker) watchdog.observeUart(o.lastUartCycle, ch);
+  } else {
+    const auto begin = o.uart.size() > clockMarker.size()
+        ? o.uart.size() - clockMarker.size() : 0;
+    for (std::size_t i = begin; i < o.uart.size(); ++i)
+      watchdog.observeUart(o.lastUartCycle, o.uart[i]);
+  }
+  const auto saveLate = [&]() {
+    if (lateCaptured || !watchdog.anchored()) return;
+    // The first arrival at the real late-initcall boundary becomes a second
+    // reusable checkpoint; future debugging never needs to replay 0.9-1.1B.
+    saveRtl(lateRtl, top);
+    writeHost(lateHost, modelSha, firmwareSha, policy, ctx, mem, transport, o);
+    lateCaptured = true;
+    std::cerr << "PRODUCT_G5_LATE_INITCALL_CHECKPOINT_SAVED cycles=" << o.cycles
+              << " rtl=" << lateRtl << " host=" << lateHost << '\n';
+  };
+  saveLate();
+  const auto milestoneReached = [&]() {
+    if (o.uart.find(milestone) == std::string::npos) return false;
+    return milestone != "DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK" ||
+           (o.uart.find("AETHERCORE_DEBIAN_D2_START") != std::string::npos &&
+            o.uart.find("AETHERCORE_D2_NATIVE_FP_THREADS_FUTEX_VM_OK") != std::string::npos);
+  };
+  bool reached = milestoneReached();
+  std::uint64_t nextProgress = (o.cycles / 10000000 + 1) * 10000000;
+  const std::uint64_t stopAt = o.cycles + replayCycles;
+  int status = 2;
+  while (o.cycles < stopAt) {
+    if (reached) { status = 0; break; }
+    const auto previousUart = o.uart.size();
+    const auto previousStip = o.stip;
+    oneCycle(top, ctx, mem, transport, o, policy, false, true);
+    if (o.uart.size() > previousUart) {
+      watchdog.observeUart(o.lastUartCycle, o.uart.back());
+      saveLate();
+      reached = milestoneReached();
+    }
+    if (o.stip > previousStip)
+      watchdog.observeTimerInterrupt(static_cast<std::uint64_t>(top.io_commit_interruptPc));
+    if (o.cycles >= nextProgress) {
+      std::cerr << "PRODUCT_G5_RESUME_DIAGNOSTIC_PROGRESS cycles=" << o.cycles
+                << " commits=" << o.commits << " stip=" << o.stip
+                << " uart_bytes=" << o.uart.size();
+      watchdog.emit(std::cerr);
+      std::cerr << '\n';
+      nextProgress += 10000000;
+    }
+    if (reached) { status = 0; break; }
+    if (watchdog.expired(o.cycles)) { status = 14; break; }
+    if (top.io_exitValid) { status = 15; break; }
+  }
+  // Even a diagnosed silence/guest exit is valuable reusable execution state.
+  // Only this explicit opt-in mode creates a fresh named continuation pair,
+  // preserving .pre and earlier diagnostic segments for independent replays.
+  saveRtl(outRtl, top);
+  writeHost(outHost, modelSha, firmwareSha, policy, ctx, mem, transport, o);
+  std::cerr << "\nPRODUCT_G5_RESUME_DIAGNOSTIC_RESULT status=" << status
+            << " cycles=" << o.cycles << " commits=" << o.commits
+            << " stip=" << o.stip << " uart_bytes=" << o.uart.size()
+            << " last-uart-cycle=" << o.lastUartCycle
+            << " late-clock-anchor=" << watchdog.anchored()
+            << " last-exception-pc=0x" << std::hex << o.lastExceptionPc
+            << " last-exception-cause=0x" << o.lastExceptionCause
+            << " current-commit-pc=";
+  if (top.io_commit_valid)
+    std::cerr << "0x" << static_cast<std::uint64_t>(top.io_commit_pc);
+  else
+    std::cerr << "none";
+  std::cerr << " recent-commit-pcs=";
+  if (o.recentCount == 0) std::cerr << "none";
+  for (std::uint64_t i = 0; i < o.recentCount; ++i) {
+    if (i != 0) std::cerr << ',';
+    const auto index = (o.recentIndex + kRecent - o.recentCount + i) % kRecent;
+    std::cerr << "0x" << o.recentPcs[index];
+  }
+  std::cerr << std::dec;
+  watchdog.emit(std::cerr);
+  std::cerr << " snapshot=" << outRtl << ',' << outHost << '\n';
+  outputResult(o, ctx, mem, transport, top);
+  return status;
+}
+#endif
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -469,7 +625,14 @@ int main(int argc, char** argv) {
       throw std::runtime_error("usage: PRODUCT_CHECKPOINT save|restore FW PREFIX MODEL_SHA FW_SHA BOOT_MAX LINUX_MARKER REPLAY_CYCLES [UART_TRIGGER UART_COMMAND POST_INPUT_BUDGET]");
     const std::string mode = argv[1], firmware = argv[2], prefix = argv[3];
     const std::string modelSha = argv[4], fwSha = argv[5];
-    if ((mode != "save" && mode != "restore") || !validSha(modelSha) || !validSha(fwSha))
+    const bool diagnose =
+#if defined(AETHERCORE_PRODUCT_CHECKPOINT_G5)
+        mode == "resume-diagnose";
+#else
+        false;
+#endif
+    if ((mode != "save" && mode != "restore" && !diagnose) ||
+        !validSha(modelSha) || !validSha(fwSha))
       throw std::runtime_error("G4 checkpoint mode or model/firmware SHA-256 invalid");
     const std::uint64_t bootMax = std::stoull(argv[6], nullptr, 0);
     const std::uint64_t replayCycles = std::stoull(argv[8], nullptr, 0);
@@ -478,7 +641,7 @@ int main(int argc, char** argv) {
     if (!policy.uartInput.empty() && policy.uartInput.back() != '\n')
       policy.uartInput.push_back('\n');
     if (policy.marker != kLinuxMarker || bootMax == 0 || bootMax > kMaxBootCycles ||
-        replayCycles == 0 || replayCycles > 5000000 ||
+        replayCycles == 0 || replayCycles > (diagnose ? kMaxBootCycles : 5000000) ||
         policy.uartTrigger.size() > 128 || policy.uartInput.size() > 4096 ||
         policy.postInputBudget > 5000000)
       throw std::runtime_error("G4 requires Linux 6.6.143 marker, <=100M boot, bounded replay and UART policy");
@@ -503,6 +666,9 @@ int main(int argc, char** argv) {
       checkpointAt = std::stoull(target, nullptr, 0);
     if (checkpointAt > bootMax)
       throw std::runtime_error("G5 checkpoint target exceeds bounded boot window");
+    if (diagnose)
+      return resumeG5Diagnosis(prefix, modelSha, fwSha, policy, bootMax,
+                               replayCycles, top, ctx, mem, transport, o);
 #endif
     if (mode == "save") {
       mem.loadAtBase(firmware);

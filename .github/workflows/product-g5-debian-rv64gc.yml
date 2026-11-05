@@ -41,7 +41,9 @@ on:
   # cannot workflow_dispatch a workflow absent from the default branch; a
   # specifically named human-added label is the PR-safe manual entry point.
   # product-g5-short-ab: D2 + independent 5.024/5.054 30M-cycle A/B only.
-  # product-g5-longrun: explicit D2 + proven 5.024 + reference settle.
+  # product-g5-longrun: explicit ONE D2 late-boot forensic run with savable
+  # 5.054, one cold prefix and a restartable full-RTL continuation. This path
+  # never executes either performance A/B or the throwaway non-savable model.
   # D3 requires URL and SHA inputs and therefore remains unavailable until
   # this workflow reaches main (or a separately qualified artifact bridge).
   pull_request:
@@ -64,11 +66,12 @@ jobs:
        (github.event.label.name == 'product-g5-short-ab' ||
         github.event.label.name == 'product-g5-longrun'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_G5_FORENSIC: ${{ github.event_name == 'pull_request' && github.event.label.name == 'product-g5-longrun' && '1' || '0' }}
       AETHERCORE_G5_RUN_MODE: ${{ github.event.label.name == 'product-g5-short-ab' && 'short-ab' || inputs.run_mode || 'full' }}
-      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
+      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || github.event.label.name == 'product-g5-longrun' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
       SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
       RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
       # Keep short same-cycle A/B concise; a consciously selected full boot
@@ -189,7 +192,9 @@ jobs:
           # The generic 5.024 installer honors AETHERCORE_VERILATOR_VERSION.
           # In short A/B this job is 5.054; pin the reference explicitly or
           # the next line just installs 5.054 twice and preflight fails.
-          AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ensure_verilator_5_024.sh
+          if [[ "$AETHERCORE_G5_FORENSIC" != 1 ]]; then
+            AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ensure_verilator_5_024.sh
+          fi
           if [[ "$AETHERCORE_VERILATOR_VERSION" == 5.054 ]]; then
             bash tools/ensure_verilator_5_054.sh
           fi
@@ -338,6 +343,7 @@ jobs:
           fi
 
       - name: Fingerprint exact Product Debian RTL and simulator inputs
+        if: env.AETHERCORE_G5_FORENSIC != '1'
         id: model-key
         shell: bash
         run: |
@@ -347,6 +353,7 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - name: Restore identical compiled Product Debian RTL model
+        if: env.AETHERCORE_G5_FORENSIC != '1'
         id: model-cache
         uses: actions/cache/restore@v4
         with:
@@ -354,6 +361,7 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-${{ steps.model-key.outputs.key }}
 
       - name: Prepare or verify exact Product Debian RTL simulator
+        if: env.AETHERCORE_G5_FORENSIC != '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -373,14 +381,14 @@ jobs:
           fi
 
       - name: Save qualified compiled Product Debian model before slow execution
-        if: steps.model-cache.outputs.cache-hit != 'true'
+        if: env.AETHERCORE_G5_FORENSIC != '1' && steps.model-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/aethercore-product-g5-debian/model
           key: ${{ steps.model-cache.outputs.cache-primary-key }}
 
       - name: Fingerprint independent 5.024 Debian Top baseline model
-        if: env.AETHERCORE_VERILATOR_VERSION == '5.054'
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1'
         id: baseline-key
         shell: bash
         run: |
@@ -392,7 +400,7 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - name: Restore exact independent 5.024 Debian Top reference model
-        if: env.AETHERCORE_VERILATOR_VERSION == '5.054'
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1'
         id: baseline-cache
         uses: actions/cache/restore@v4
         with:
@@ -400,7 +408,7 @@ jobs:
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-baseline-${{ steps.baseline-key.outputs.key }}
 
       - name: Qualify 5.054 on the identical native Debian RTL for bounded 30M cycles
-        if: env.AETHERCORE_VERILATOR_VERSION == '5.054'
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1'
         shell: bash
         env:
           AETHERCORE_ALLOW_PRODUCT_G5_SHORT_AB: '1'
@@ -418,14 +426,14 @@ jobs:
           cat build/product-g5-short-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache verified 5.024 Debian Top baseline before any full run
-        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && steps.baseline-cache.outputs.cache-hit != 'true'
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1' && steps.baseline-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
           key: ${{ steps.baseline-cache.outputs.cache-primary-key }}
 
       - name: Run selected real Debian D1/D2/D3 userspace milestone on Product RV64GC
-        if: env.AETHERCORE_G5_RUN_MODE == 'full'
+        if: env.AETHERCORE_G5_RUN_MODE == 'full' && env.AETHERCORE_G5_FORENSIC != '1'
         shell: bash
         env:
           # Full runs are expensive: after the known late-initcall banner,
@@ -443,6 +451,7 @@ jobs:
             d3) milestone='login:' ;;
             *) echo "unknown Debian stage $RV64_DEBIAN_STAGE" >&2; exit 19 ;;
           esac
+
           make -f Makefile.l32-linux-boot \
             BUILD_DIR="$build" TOP=AetherCoreProductDebianRV64SimTop \
             ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
@@ -476,6 +485,61 @@ jobs:
               ;;
           esac
 
+      - name: Run one restartable G5 D2 late-boot forensic session without performance A/B
+        if: env.AETHERCORE_G5_FORENSIC == '1'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_G5_PERSISTENT_CHECKPOINT: '1'
+          AETHERCORE_ALLOW_PRODUCT_G5_LONG_DIAGNOSE: '1'
+          AETHERCORE_G5_LONG_CHECKPOINT_CYCLES: '900000000'
+          AETHERCORE_G5_LONG_TOTAL_CYCLES: '1800000000'
+          AETHERCORE_G5_LONG_REPLAY_CYCLES: '900000000'
+          AETHERCORE_G5_STALL_WATCHDOG_CYCLES: '100000000'
+          PRODUCT_G5_LONG_PROOF_DIR: ${{ github.workspace }}/build/product-g5-long-forensic
+        run: |
+          set -euo pipefail
+          [[ "$RV64_DEBIAN_STAGE" == d2 && "$AETHERCORE_VERILATOR_VERSION" == 5.054 &&
+             "$SIM_SETTLE_MODE" == reference && "$RV64_DEBIAN_INITCALL_TRACE" == 1 ]] || {
+            echo 'Forensic path only supports trace-enabled D2/5.054/reference' >&2
+            exit 20
+          }
+          mkdir -p "$PRODUCT_G5_LONG_PROOF_DIR"
+          rc=0
+          bash tools/ci/product_checkpoint_g5_short.sh diagnose || rc=$?
+          if [[ -s "$PRODUCT_G5_LONG_PROOF_DIR/diagnostic.log" ]]; then
+            grep -E '^PRODUCT_G5_RESUME_DIAGNOSTIC_RESULT ' \
+              "$PRODUCT_G5_LONG_PROOF_DIR/diagnostic.log" >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+          if [[ "$rc" != 0 ]]; then
+            echo "PRODUCT_G5_FORENSIC_NOT_PID1 result_rc=$rc; preserving cold/continued RTL+DDR checkpoints for exact PC analysis" >&2
+            exit "$rc"
+          fi
+          grep -Eq '^PRODUCT_G5_RESUME_DIAGNOSTIC_RESULT status=0 ' \
+            "$PRODUCT_G5_LONG_PROOF_DIR/diagnostic.log"
+          echo 'PRODUCT_G5_DEBIAN_D2_NATIVE_PID1_FORENSIC_PASS: exact RTL+DDR replay reached Debian D2 milestone'
+
+      - name: Symbolize captured exception, interrupted and retired PCs using this run's exact vmlinux
+        if: always() && env.AETHERCORE_G5_FORENSIC == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof="$GITHUB_WORKSPACE/build/product-g5-long-forensic"
+          if [[ -s "$proof/diagnostic.log" &&
+                -s build/rv64-debian-linux/obj/vmlinux &&
+                -s build/rv64-debian-linux/obj/System.map ]]; then
+            python3 tools/ci/product_g5_forensic_symbols.py \
+              --trace "$proof/diagnostic.log" \
+              --system-map build/rv64-debian-linux/obj/System.map \
+              --vmlinux build/rv64-debian-linux/obj/vmlinux \
+              > "$proof/pc-symbols.txt" || {
+                echo 'G5 exact-kernel symbolization unavailable; raw trace and vmlinux are retained' >&2
+                exit 0
+              }
+            sed -n '1,36p' "$proof/pc-symbols.txt" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'G5 forensic trace or matching kernel symbols absent; no PC attribution attempted'
+          fi
+
       - name: Preserve artifact identity, resolved kernel config and boot trace
         if: always()
         uses: actions/upload-artifact@v4
@@ -495,4 +559,6 @@ jobs:
             build/product-g5-short-ab/qualification.txt
             build/product-g5-short-ab/*.state
             build/product-g5-short-ab/*.run.log
+            build/product-g5-long-forensic/**
+            build/product-g5-persistent-checkpoint/logs/*.log
             ${{ runner.temp }}/aethercore-product-g5-debian/model/logs/*.log

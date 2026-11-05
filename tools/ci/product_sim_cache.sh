@@ -43,6 +43,12 @@ input_identity() {
     # a snapshot schema/decoder change while RAM-only G3/G4 remain reusable.
     model_specific_sources+=(sim/l32_sd_spi_card.h sim/l32_sd_spi_snapshot_codec.h)
   fi
+  if [[ "$sim_cxxflags" == *-DAETHERCORE_PRODUCT_DEBIAN* ]]; then
+    # The G5/SD1 host includes this watchdog header, which can change the
+    # executable without touching opensbi_boot_main.cpp. A header-only fix
+    # must invalidate the exact Product Debian simulator model cache.
+    model_specific_sources+=(sim/l32_g5_silence_watchdog.h)
+  fi
   {
     printf 'top=%s\nelaborate=%s\ncompiler-flags=%s\nsettle=%s\nverilator=%s\nthreads=%s\nmodel-opt=%s\nmake-opt=%s\n' \
       "$top" "$elaborate_main" "$sim_cxxflags" "$settle_mode" \

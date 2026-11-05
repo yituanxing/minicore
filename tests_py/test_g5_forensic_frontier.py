@@ -8,9 +8,28 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "sim/opensbi_boot_main.cpp"
 PRODUCT = ROOT / "src/main/scala/aethercore/core/product/ProductSmallPagedCore.scala"
+CACHE = ROOT / "tools/ci/product_sim_cache.sh"
+WORKFLOW = ROOT / ".github/workflows/product-g5-debian-rv64gc.yml"
 
 
 class G5ForensicFrontierTest(unittest.TestCase):
+    def test_manual_d2_forensic_never_repeats_speed_ab(self):
+        workflow = WORKFLOW.read_text()
+        self.assertIn("product-g5-longrun", workflow)
+        self.assertIn("AETHERCORE_G5_FORENSIC:", workflow)
+        self.assertIn("AETHERCORE_G5_FORENSIC != '1'", workflow)
+        self.assertIn("Run one restartable G5 D2 late-boot forensic session without performance A/B", workflow)
+        self.assertIn("product_checkpoint_g5_short.sh diagnose", workflow)
+        self.assertIn("build/product-g5-long-forensic/**", workflow)
+        self.assertIn("build/rv64-debian-linux/obj/vmlinux", workflow)
+        self.assertIn("build/rv64-debian-linux/obj/System.map", workflow)
+
+    def test_debian_host_watchdog_header_invalidates_the_exact_model_cache(self):
+        cache = CACHE.read_text()
+        self.assertIn('"$sim_cxxflags" == *-DAETHERCORE_PRODUCT_DEBIAN*', cache)
+        self.assertIn('model_specific_sources+=(sim/l32_g5_silence_watchdog.h)', cache)
+        self.assertIn('"${model_specific_sources[@]}"', cache)
+
     def test_real_product_interrupt_pc_is_precise_trap_boundary(self):
         product = PRODUCT.read_text()
         self.assertIn("io.commit.interruptPc := Mux(interruptTake, pc, 0.U)", product)
