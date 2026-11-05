@@ -137,10 +137,18 @@ for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
     exit 5
   }
   unset VERILATOR_ROOT
-  verilator_identity="$("$verilator_bin" --version)"
-  [[ "$verilator_identity" == "Verilator $version" || \
-     "$verilator_identity" == "Verilator $version "* ]] || {
-    echo "wrong Verilator toolchain: selected $version but got $verilator_identity" >&2
+  # A CMake build of the pinned shallow upstream revision can legitimately
+  # report "rev UNKNOWN.REV" instead of a release-version string. The pinned
+  # installer already verifies the source revision, runtime assets and host
+  # binary; bind this invocation to that exact marker rather than a banner.
+  case "$version" in
+    5.024) expected_revision=522bead374d6b7b2adb316304126e5361b18bcf1 ;;
+    5.054) expected_revision=bbb60a403932a9f695cb6ff001ceb73de6ad9234 ;;
+  esac
+  revision_marker="$cache_root/verilator-$version/.aethercore-source-revision"
+  [[ -f "$revision_marker" && "$(cat "$revision_marker")" == "$expected_revision" &&
+     -x "$cache_root/verilator-$version/bin/verilator_bin" ]] || {
+    echo "wrong Verilator toolchain: selected $version but pinned revision/binary is missing" >&2
     exit 5
   }
   model_root="$out/model-$label"
