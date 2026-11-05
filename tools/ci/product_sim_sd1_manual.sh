@@ -39,12 +39,16 @@ if [[ "$ACTION" == longrun ]]; then
   }
 fi
 
-if [[ "${AETHERCORE_VERILATOR_VERSION:-5.024}" != 5.024 ||
-      "${SIM_SETTLE_MODE:-reference}" != reference ]]; then
-  echo 'G5-SD1 accepts only proven Verilator 5.024 + reference memory settle.' >&2
-  echo 'Qualify 5.054/adaptive separately by short Product A/B before enabling them.' >&2
-  exit 3
-fi
+export AETHERCORE_VERILATOR_VERSION="${AETHERCORE_VERILATOR_VERSION:-5.024}"
+export SIM_SETTLE_MODE="${SIM_SETTLE_MODE:-reference}"
+case "$AETHERCORE_VERILATOR_VERSION:$SIM_SETTLE_MODE" in
+  5.024:reference) sd1_fast_profile=0 ;;
+  5.054:reference|5.054:adaptive) sd1_fast_profile=1 ;;
+  *)
+    echo 'G5-SD1 supports 5.024/reference by default; 5.054/reference or 5.054/adaptive require matching SD1 short A/B evidence.' >&2
+    exit 3
+    ;;
+esac
 
 SD_RESULT="$ROOT/build/rv64-debian-sd1-sd/result.txt"
 ROOTFS_RESULT="$ROOT/build/rv64-debian-rootfs/result.txt"
@@ -53,10 +57,19 @@ LINUX_RESULT="$ROOT/build/rv64-debian-linux/result.txt"
 LINUX_IMAGE="$ROOT/build/rv64-debian-linux/obj/arch/riscv/boot/Image"
 LINUX_CONFIG="$ROOT/build/rv64-debian-linux/obj/.config"
 SD_IMAGE="$ROOT/build/rv64-debian-sd1-sd/sd-rootfs.img"
-BUILD_DIR="${AETHERCORE_SD1_MODEL_BUILD_DIR:-$ROOT/build/product-g5-sd1-model}"
+# Preserve the historical 5.024/reference model cache. Fast candidates get
+# distinct default build trees, so switching Verilator/settle cannot inherit
+# stale generated objects or an old executable from a different profile.
+if (( sd1_fast_profile )); then
+  sd1_default_model_dir="$ROOT/build/product-g5-sd1-model-$AETHERCORE_VERILATOR_VERSION-$SIM_SETTLE_MODE"
+else
+  sd1_default_model_dir="$ROOT/build/product-g5-sd1-model"
+fi
+BUILD_DIR="${AETHERCORE_SD1_MODEL_BUILD_DIR:-$sd1_default_model_dir}"
 TOP=AetherCoreProductDebianSdRV64SimTop
 ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianSdRV64SimTop
 SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -DAETHERCORE_PRODUCT_SPI_SD -I$ROOT/sim/product_rv64_opensbi_shim -I$ROOT/sim"
+cache_args=("$BUILD_DIR" "$TOP" "$ELABORATE_MAIN" "$SIM_CXXFLAGS")
 
 result_field() {
   local key="$1" file="$2"
@@ -211,11 +224,82 @@ probe_card() {
   "$probe_bin" "$SD_IMAGE"
 }
 
+verify_fast_profile_qualification() {
+  # The old V2/Linux speedups are not Product SD1 equivalence evidence.  A
+  # separate short SD1 A/B must have compared all three profiles at the same
+  # cycle and with the SAME media, independent DTB and firmware. Verify the
+  # actual current Product model fingerprint (Scala/C++/host/Verilator bytes,
+  # model flags and CPU features) and retained A/B state files before allowing
+  # a fast longrun or even spending time compiling its candidate model.
+  local evidence="${AETHERCORE_SD1_AB_EVIDENCE:-$ROOT/build/product-sim-short-ab/sd1-accelerator-qualification.txt}"
+  [[ -s "$evidence" ]] || {
+    echo "Missing SD1 fast-profile qualification: $evidence" >&2
+    echo 'Run explicit short Product SD1 A/B first; historical V2 results are insufficient.' >&2
+    exit 19
+  }
+  local evidence_dir ref_state fast_state adaptive_state state_sha model_identity fingerprint_key compared_cycles
+  evidence_dir="$(dirname "$evidence")"
+  ref_state="$evidence_dir/verilator-5.024-reference.state"
+  fast_state="$evidence_dir/verilator-5.054-reference.state"
+  adaptive_state="$evidence_dir/verilator-5.054-adaptive.state"
+  [[ -s "$ref_state" && -s "$fast_state" && -s "$adaptive_state" ]] &&
+    cmp -s "$ref_state" "$fast_state" &&
+    cmp -s "$ref_state" "$adaptive_state" || {
+      echo 'SD1 A/B reference and fast same-cycle state files are missing or disagree' >&2
+      exit 19
+    }
+  state_sha="$(sha256sum "$ref_state" | awk '{print $1}')"
+  compared_cycles="$(sed -n 's/^compared_cycles=//p' "$evidence" | head -n 1)"
+  [[ "$compared_cycles" =~ ^[0-9]+$ ]] &&
+    (( compared_cycles >= 12000000 && compared_cycles <= 20000000 )) || {
+      echo 'SD1 A/B evidence has an unqualified or missing same-cycle comparison window' >&2
+      exit 19
+    }
+  for expected in \
+      'qualification=PRODUCT_SD1_SHORT_AB_IDENTICAL_NOT_DEBIAN_PASS' \
+      "top=$TOP" "elaborate=$ELABORATE_MAIN" "compared_cycles=$compared_cycles" \
+      "state_sha256=$state_sha" \
+      "ab_script_sha256=$(sha256sum "$ROOT/tools/ci/product_sim_ab.sh" | awk '{print $1}')" \
+      "firmware_sha256=$(result_field firmware_bin_sha256 "$FW_RESULT")" \
+      "dtb_sha256=$(result_field fdt_sha256 "$FW_RESULT")" \
+      "sd_image_sha256=$(result_field sd_image_sha256 "$SD_RESULT")"; do
+    grep -Fxq "$expected" "$evidence" || {
+      echo "SD1 A/B qualification input changed: $expected" >&2
+      exit 19
+    }
+  done
+  case "$AETHERCORE_VERILATOR_VERSION:$SIM_SETTLE_MODE" in
+    5.054:reference)
+      fingerprint_key=model_identity_5054_reference
+      grep -Fxq 'eligible_5054_reference=1' "$evidence" || {
+        echo 'Short SD1 A/B did not measure >=1.03x for 5.054/reference vs 5.024/reference' >&2
+        exit 19
+      }
+      ;;
+    5.054:adaptive)
+      fingerprint_key=model_identity_5054_adaptive
+      grep -Fxq 'eligible_5054_adaptive=1' "$evidence" || {
+        echo 'Short SD1 A/B did not measure >=1.03x for 5.054/adaptive vs 5.024/reference' >&2
+        exit 19
+      }
+      ;;
+  esac
+  model_identity="$(bash tools/ci/product_sim_cache.sh fingerprint "${cache_args[@]}")"
+  grep -Fxq "$fingerprint_key=$model_identity" "$evidence" || {
+    echo 'SD1 A/B evidence does not match the current Product model and host toolchain bytes' >&2
+    exit 19
+  }
+  echo "PRODUCT_G5_SD1_SHORT_AB_PROFILE_VERIFIED profile=$AETHERCORE_VERILATOR_VERSION/$SIM_SETTLE_MODE state_sha256=$state_sha"
+  echo 'Short-window simulator equivalence only; native Debian boot remains unverified.'
+}
+
 check_artifacts
+if (( sd1_fast_profile )) && [[ "$ACTION" != preflight ]]; then
+  verify_fast_profile_qualification
+fi
 probe_card
 [[ "$ACTION" == preflight ]] && exit 0
 
-cache_args=("$BUILD_DIR" "$TOP" "$ELABORATE_MAIN" "$SIM_CXXFLAGS")
 if [[ "$ACTION" == prepare-model ]]; then
   mkdir -p "$BUILD_DIR"
   if bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"; then
@@ -226,14 +310,21 @@ if [[ "$ACTION" == prepare-model ]]; then
     AETHERCORE_VERILATOR_FAST_VERIFY=1 \
       bash tools/ensure_verilator_5_024.sh
     cache_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
-    verilator_bin="$cache_root/verilator-5.024/bin/verilator"
+    verilator_bin="$cache_root/verilator-$AETHERCORE_VERILATOR_VERSION/bin/verilator"
     [[ -x "$verilator_bin" ]] || {
-      echo 'Pinned Verilator 5.024 binary was not installed' >&2; exit 17;
+      echo "Pinned Verilator $AETHERCORE_VERILATOR_VERSION binary was not installed" >&2; exit 17;
     }
+    # If another editing agent changes RTL/C++ while this costly build runs,
+    # the resulting executable must not be recorded under a newer source key.
+    model_build_identity_before="$(bash tools/ci/product_sim_cache.sh fingerprint "${cache_args[@]}")"
     make -f Makefile.l32-linux-boot BUILD_DIR="$BUILD_DIR" \
       TOP="$TOP" ELABORATE_MAIN="$ELABORATE_MAIN" \
       VERILATOR="$verilator_bin -LDFLAGS -ldl" JOBS="${AETHERCORE_SD1_BUILD_JOBS:-4}" \
-      SIM_CXXFLAGS="$SIM_CXXFLAGS" SIM_SETTLE_MODE=reference sim
+      SIM_CXXFLAGS="$SIM_CXXFLAGS" SIM_SETTLE_MODE="$SIM_SETTLE_MODE" sim
+    [[ "$model_build_identity_before" == "$(bash tools/ci/product_sim_cache.sh fingerprint "${cache_args[@]}")" ]] || {
+      echo 'Product SD1 model inputs changed while compiling; refusing to cache an executable from stale RTL' >&2
+      exit 20
+    }
     bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
   fi
   exit 0
@@ -253,7 +344,7 @@ make -f Makefile.l32-linux-boot \
   FW_BIN="$FW_BIN" MAX_CYCLES="$sd1_max_cycles" \
   MILESTONE='login:' MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
   REQUIRE_LAYERED_COMPRESSED=1 PROGRESS_INTERVAL_CYCLES=10000000 \
-  SIM_CXXFLAGS="$SIM_CXXFLAGS" SIM_SETTLE_MODE=reference \
+  SIM_CXXFLAGS="$SIM_CXXFLAGS" SIM_SETTLE_MODE="$SIM_SETTLE_MODE" \
   run-existing
 log="$BUILD_DIR/logs/boot-probe.log"
 grep -Fq 'PRODUCT_SD1_SD_IMAGE_READY ' "$log"

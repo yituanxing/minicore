@@ -168,6 +168,9 @@ int main(int argc, char** argv) {
     std::uint64_t lastExceptionPc = 0;
     std::uint64_t milestoneCommitCount = 0;
     std::string uart;
+    // Hash the actual UART byte stream, not only its length. Short Product
+    // simulator A/B must reject divergent output with the same byte count.
+    std::uint64_t uartFingerprint = 0xcbf29ce484222325ULL;
     bool sawOpenSbiBanner = false;
     bool sawMilestone = false;
     bool inputStarted = !uartInput.empty() && uartTrigger.empty();
@@ -272,6 +275,8 @@ int main(int argc, char** argv) {
         lastUartCycle = cycles;
         const char byte = static_cast<char>(top.io_uartByte);
         uart.push_back(byte);
+        uartFingerprint ^= static_cast<std::uint8_t>(top.io_uartByte);
+        uartFingerprint *= 0x100000001b3ULL;
         std::cout.put(byte);
         if (byte == '\n') std::cout.flush();
         if (!sawOpenSbiBanner && endsWith(uart, "OpenSBI v1.6")) {
@@ -478,6 +483,7 @@ int main(int argc, char** argv) {
               << " opensbi-compressed=" << opensbiCompressedCommits
               << " linux-compressed=" << linuxCompressedCommits
               << " uart-bytes=" << uart.size()
+              << " uart-fingerprint=0x" << std::hex << uartFingerprint << std::dec
               << " banner=" << (sawOpenSbiBanner ? 1 : 0)
               << " milestone=" << (sawMilestone ? 1 : 0)
               << " min-interrupts=" << minInterrupts
@@ -508,6 +514,12 @@ int main(int argc, char** argv) {
       if (i != 0) std::cerr << ',';
       std::cerr << "0x" << recentPcs[slot];
     }
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+    // Deterministic card-side progress joins the existing same-cycle CPU/RAM
+    // timeout fingerprint for short Product SD1 simulator A/B comparisons.
+    // This is an observation, not a card-state checkpoint or runtime shortcut.
+    std::cerr << ' ' << sdCard.progress();
+#endif
     std::cerr << std::dec << "\n";
     return 2;
   } catch (const std::exception& error) {

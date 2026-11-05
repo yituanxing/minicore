@@ -5,6 +5,8 @@ set -euo pipefail
 # PR push/pull_request. Three identical-cycle Product runs qualify BOTH the
 # change from 5.024 to 5.054 and the optional adaptive settle loop. Never
 # promote a faster version using a historical V2/QEMU measurement as proof.
+# The explicit SD1 top additionally uses the SAME pinned SDHC image, independent
+# DDR DTB and firmware across all three profiles; only the simulator changes.
 
 if [[ "${AETHERCORE_ALLOW_PRODUCT_AB:-0}" != 1 ]]; then
   echo 'Product simulator A/B requires explicit AETHERCORE_ALLOW_PRODUCT_AB=1' >&2
@@ -14,12 +16,36 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 top="${TOP:-AetherCoreProductDebianRV64SimTop}"
-elaborate="${ELABORATE_MAIN:-aethercore.sim.ElaborateProductDebianRV64SimTop}"
+case "$top" in
+  AetherCoreProductDebianRV64SimTop)
+    default_elaborate=aethercore.sim.ElaborateProductDebianRV64SimTop
+    product_flag='-DAETHERCORE_PRODUCT_DEBIAN'
+    sd1=0
+    ;;
+  AetherCoreProductOpenSbiRV64SimTop)
+    default_elaborate=aethercore.sim.ElaborateProductOpenSbiRV64SimTop
+    product_flag=''
+    sd1=0
+    ;;
+  AetherCoreProductDebianSdRV64SimTop)
+    default_elaborate=aethercore.sim.ElaborateProductDebianSdRV64SimTop
+    product_flag='-DAETHERCORE_PRODUCT_DEBIAN -DAETHERCORE_PRODUCT_SPI_SD'
+    sd1=1
+    ;;
+  *) echo "unsupported Product A/B top: $top" >&2; exit 4 ;;
+esac
+elaborate="${ELABORATE_MAIN:-$default_elaborate}"
 fw_bin="${FW_BIN:-build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin}"
 max_cycles="${MAX_CYCLES:-12000000}"
 out="${OUT_ROOT:-build/product-sim-short-ab}"
 jobs="${JOBS:-4}"
 cache_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
+[[ "${VERILATOR_THREADS:-1}" == 1 &&
+   "${VERILATOR_MODEL_OPT:--O3}" == -O3 &&
+   "${VERILATOR_MAKE_OPT:--MAKEFLAGS OPT_FAST=-O3 OPT_GLOBAL=-O3}" == '-MAKEFLAGS OPT_FAST=-O3 OPT_GLOBAL=-O3' ]] || {
+  echo 'Product short A/B requires exactly one Verilator thread and the cached -O3 model/build options' >&2
+  exit 4
+}
 
 # A/B itself is short and operator-only. Large values silently defeat its
 # purpose: this is not a replacement for the separately gated G4/G5 run.
@@ -27,28 +53,70 @@ cache_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
   echo 'Product A/B MAX_CYCLES must be in the short qualification range 1..20000000' >&2
   exit 3
 }
+if (( sd1 && max_cycles < 12000000 )); then
+  echo 'Product SD1 A/B must compare at least 12000000 cycles (default) to avoid certifying a reset-only prefix' >&2
+  exit 3
+fi
 
+# SD1 is a real SPI SDHC + independent DDR-DTB top.  Require the existing
+# offline media/payload preflight before allocating a single RTL build.  Its
+# manifests select the exact same firmware/DTB/media for every A/B profile;
+# a caller cannot silently swap in a different payload via FW_BIN.
+if (( sd1 )); then
+  AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
+    bash tools/ci/product_sim_sd1_manual.sh preflight
+  fw_manifest="$root/build/rv64-debian-boot/result.txt"
+  sd_manifest="$root/build/rv64-debian-sd1-sd/result.txt"
+  manifest_fw="$(sed -n 's/^firmware_bin=//p' "$fw_manifest" | head -n 1)"
+  manifest_dtb="$(sed -n 's/^fdt=//p' "$fw_manifest" | head -n 1)"
+  manifest_sd="$(sed -n 's/^SD_IMAGE=//p' "$sd_manifest" | head -n 1)"
+  [[ -n "$manifest_fw" && -s "$manifest_fw" &&
+     -n "$manifest_dtb" && -s "$manifest_dtb" &&
+     -n "$manifest_sd" && -s "$manifest_sd" ]] || {
+    echo 'Product SD1 A/B requires matching firmware, independent DTB and raw SD artifacts' >&2
+    exit 3
+  }
+  if [[ -n "${FW_BIN:-}" && "$(readlink -f "$FW_BIN")" != "$(readlink -f "$manifest_fw")" ]]; then
+    echo 'Product SD1 A/B refuses FW_BIN differing from the preflight-approved payload' >&2
+    exit 3
+  fi
+  fw_bin="$manifest_fw"
+  export AETHERCORE_PRODUCT_DTB_IMAGE="$manifest_dtb"
+  export AETHERCORE_PRODUCT_SD_IMAGE="$manifest_sd"
+fi
 [[ -s "$fw_bin" ]] || { echo "missing Product payload: $fw_bin" >&2; exit 3; }
 firmware_bytes="$(stat -c%s "$fw_bin")"
 if (( firmware_bytes > 268435456 )); then
   echo "Product A/B payload exceeds simulator's 256MiB RAM: ${firmware_bytes} bytes" >&2
   exit 3
 fi
-case "$top" in
-  AetherCoreProductDebianRV64SimTop)
-    product_flag='-DAETHERCORE_PRODUCT_DEBIAN'
-    ;;
-  AetherCoreProductOpenSbiRV64SimTop)
-    product_flag=''
-    ;;
-  *) echo "unsupported Product A/B top: $top" >&2; exit 4 ;;
-esac
-
 mkdir -p "$out/rtl-seed/rtl" "$out/logs"
+flags="-std=c++20 -O3 -march=native $product_flag -I$root/sim/product_rv64_opensbi_shim -I$root/sim"
+if (( sd1 )); then
+  # The three builds all use the pinned toolchain layout, never an ambient
+  # VERILATOR_ROOT which could change generator/runtime linkage mid-run.
+  unset VERILATOR_ROOT
+  # Establish model identity BEFORE elaborating or running. A long-running
+  # A/B can overlap source editing; end-of-run fingerprints alone would then
+  # incorrectly certify the old binary against freshly modified source.
+  # Install both pinned toolchains first, so the initial and final identities
+  # see the same generator/runtime assets rather than an absent installation.
+  for pinned in 5.024 5.054; do
+    AETHERCORE_VERILATOR_VERSION="$pinned" AETHERCORE_VERILATOR_FAST_VERIFY=1 \
+      bash tools/ensure_verilator_5_024.sh > "$out/logs/verilator-$pinned.preflight.log" 2>&1
+  done
+  sd1_start_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
+    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  sd1_start_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
+    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  sd1_start_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
+    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  sd1_start_ab_script_sha="$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')"
+  sd1_start_preflight_script_sha="$(sha256sum "$root/tools/ci/product_sim_sd1_manual.sh" | awk '{print $1}')"
+fi
 make -f Makefile.l32-linux-boot \
   BUILD_DIR="$out/rtl-seed" TOP="$top" ELABORATE_MAIN="$elaborate" rtl
 
-flags="-std=c++20 -O3 -march=native $product_flag -I$root/sim/product_rv64_opensbi_shim -I$root/sim"
 results="$out/results.tsv"
 printf 'version\tmode\tseconds\tcycles_per_second\n' > "$results"
 
@@ -116,6 +184,9 @@ if ! diff -u "$out/verilator-5.054-reference.state" \
   exit 9
 fi
 echo 'PRODUCT_SIM_AB_ADAPTIVE_STATE_MATCH: same Product cycles, commits, traps, interrupts, RAM/LRSC and recent PCs'
+if (( sd1 )); then
+  echo 'PRODUCT_SIM_AB_SD1_STATE_MATCH: same Product SD1 UART/CPU/RAM and SD SPI command/read/write progress at the compared cycle'
+fi
 
 awk -F '\t' '
   NR == 2 {base=$4}
@@ -128,8 +199,60 @@ awk -F '\t' '
   NR == 3 {reference=$4}
   NR == 4 {
     speedup=$4/reference
-    printf "PRODUCT_SIM_AB_ADAPTIVE_RATE reference_cps=%.0f adaptive_cps=%.0f speedup=%.4fx\n", reference, $4, speedup
-    if (speedup >= 1.03) print "PRODUCT_SIM_AB_ADAPTIVE_CANDIDATE_ONLY: requires independent review before long-run promotion"
+    vs_base=$4/base
+    printf "PRODUCT_SIM_AB_ADAPTIVE_RATE reference_cps=%.0f adaptive_cps=%.0f speedup=%.4fx vs_5_024_baseline=%.4fx\n", reference, $4, speedup, vs_base
+    if (vs_base >= 1.03) print "PRODUCT_SIM_AB_ADAPTIVE_CANDIDATE_ONLY: >=1.03x vs 5.024 baseline, requires exact SD1 evidence for longrun"
     else print "PRODUCT_SIM_AB_ADAPTIVE_NO_PROMOTION"
   }
 ' "$results"
+
+if (( sd1 )); then
+  # A candidate is eligible for the MANUAL SD1 runner only while every
+  # fingerprinted model input and each independently checked media/firmware
+  # SHA still matches. Never interpret the short timeout as a Linux login.
+  # In particular the immutable SD image may have been replaced during a
+  # multi-profile run: the first preflight alone is not sufficient evidence.
+  AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
+    bash tools/ci/product_sim_sd1_manual.sh preflight
+  state_sha="$(sha256sum "$out/verilator-5.024-reference.state" | awk '{print $1}')"
+  flags="-std=c++20 -O3 -march=native $product_flag -I$root/sim/product_rv64_opensbi_shim -I$root/sim"
+  eligible_reference="$(awk -F '\t' 'NR==2 {base=$4} NR==3 {print (base > 0 && $4/base >= 1.03 ? 1 : 0)}' "$results")"
+  eligible_adaptive="$(awk -F '\t' 'NR==2 {base=$4} NR==4 {print (base > 0 && $4/base >= 1.03 ? 1 : 0)}' "$results")"
+  [[ "$eligible_reference" =~ ^[01]$ && "$eligible_adaptive" =~ ^[01]$ ]] || {
+    echo 'Product SD1 A/B failed to calculate bounded candidate speedup eligibility' >&2
+    exit 10
+  }
+  identity_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
+    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  identity_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
+    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  identity_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
+    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  [[ "$identity_baseline" == "$sd1_start_baseline" &&
+     "$identity_ref" == "$sd1_start_ref" &&
+     "$identity_adaptive" == "$sd1_start_adaptive" &&
+     "$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')" == "$sd1_start_ab_script_sha" &&
+     "$(sha256sum "$root/tools/ci/product_sim_sd1_manual.sh" | awk '{print $1}')" == "$sd1_start_preflight_script_sha" ]] || {
+    echo 'Product SD1 A/B source/toolchain or A/B runner changed during elaboration, build or comparison; refuse stale promotion' >&2
+    exit 10
+  }
+  evidence="$out/sd1-accelerator-qualification.txt"
+  {
+    printf 'qualification=PRODUCT_SD1_SHORT_AB_IDENTICAL_NOT_DEBIAN_PASS\n'
+    printf 'compared_cycles=%s\n' "$max_cycles"
+    printf 'top=%s\nelaborate=%s\n' "$top" "$elaborate"
+    printf 'firmware_sha256=%s\n' "$(sed -n 's/^firmware_bin_sha256=//p' "$fw_manifest" | head -n 1)"
+    printf 'dtb_sha256=%s\n' "$(sed -n 's/^fdt_sha256=//p' "$fw_manifest" | head -n 1)"
+    printf 'sd_image_sha256=%s\n' "$(sed -n 's/^sd_image_sha256=//p' "$sd_manifest" | head -n 1)"
+    printf 'state_sha256=%s\n' "$state_sha"
+    printf 'ab_script_sha256=%s\n' "$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')"
+    printf 'model_identity_5024_baseline=%s\n' "$identity_baseline"
+    printf 'eligible_5054_reference=%s\n' "$eligible_reference"
+    printf 'eligible_5054_adaptive=%s\n' "$eligible_adaptive"
+    printf 'model_identity_5054_reference=%s\n' "$identity_ref"
+    printf 'model_identity_5054_adaptive=%s\n' "$identity_adaptive"
+  } > "$evidence.$$.tmp"
+  mv -f "$evidence.$$.tmp" "$evidence"
+  printf 'PRODUCT_SIM_AB_SD1_SHORT_EVIDENCE_RECORDED: v5054_reference_eligible=%s v5054_adaptive_eligible=%s evidence=%s; native Debian login NOT tested\n' \
+    "$eligible_reference" "$eligible_adaptive" "$evidence"
+fi

@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     env:
+      AETHERCORE_VERILATOR_VERSION: '5.024'
+      SIM_SETTLE_MODE: reference
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
       RV64_OPENSBI_JOBS: '4'
@@ -47,6 +49,11 @@ jobs:
           mkdir -p "$root/mill-out"
           echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
           echo "G3_ROOT=$root" >> "$GITHUB_ENV"
+          # G3 and G4 use the exact same Product OpenSBI simulator TOP and
+          # C++ ABI. Share G4's model cache instead of compiling it twice.
+          model="$RUNNER_TEMP/aethercore-product-g4-pid1/model"
+          echo "PRODUCT_OPENSBI_MODEL=$model" >> "$GITHUB_ENV"
+          echo "PRODUCT_OPENSBI_OBJ=$model/obj" >> "$GITHUB_ENV"
           echo "product_exact_head=$actual"
 
       - name: Restore Scala dependency cache
@@ -134,33 +141,51 @@ jobs:
           path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
           key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
 
-      - name: Generate real Product unified OpenSBI host RTL
+      - name: Fingerprint shared Product G3/G4 OpenSBI RTL model
+        id: model-key
         shell: bash
         run: |
           set -euo pipefail
-          rtl="$G3_ROOT/rtl"
-          obj="$G3_ROOT/obj"
-          mkdir -p "$rtl" "$obj"
-          ./mill aethercore.runMain \
-            aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
-            --target-dir "$rtl"
-          find "$rtl" -maxdepth 1 -name '*.sv' -print | sort > "$G3_ROOT/rtl-sources.txt"
-          test -s "$G3_ROOT/rtl-sources.txt"
-          echo "PRODUCT_OPENSBI_RTL=$rtl" >> "$GITHUB_ENV"
-          echo "PRODUCT_OPENSBI_OBJ=$obj" >> "$GITHUB_ENV"
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          key="$(bash tools/ci/product_sim_cache.sh fingerprint "$PRODUCT_OPENSBI_MODEL" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: Compile shared OpenSBI host against Product SmallOoO
+      - name: Restore identical compiled Product G3/G4 model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g4-pid1/model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g4-${{ steps.model-key.outputs.key }}
+
+      - name: Verify or build shared Product OpenSBI host simulator
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t rtl_sources < "$G3_ROOT/rtl-sources.txt"
-          verilator --cc --exe --build -Wall -Wno-fatal \
-            --top-module AetherCoreProductOpenSbiRV64SimTop \
-            -Mdir "$PRODUCT_OPENSBI_OBJ" -j "$(nproc)" \
-            -CFLAGS "-std=c++20 -O2 -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
-            -LDFLAGS "-ldl" \
-            "${rtl_sources[@]}" \
-            "$GITHUB_WORKSPACE/sim/opensbi_boot_main.cpp"
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          cache_args=("$PRODUCT_OPENSBI_MODEL" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags")
+          if [[ '${{ steps.model-cache.outputs.cache-hit }}' == 'true' ]]; then
+            bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"
+            echo 'PRODUCT_G3_IDENTICAL_G4_MODEL_REUSED: no RTL generation or host C++ rebuild'
+          else
+            verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.024/bin/verilator"
+            [[ -x "$verilator_bin" ]] || { echo 'Pinned Verilator 5.024 missing' >&2; exit 22; }
+            make -f Makefile.l32-linux-boot BUILD_DIR="$PRODUCT_OPENSBI_MODEL" \
+              TOP=AetherCoreProductOpenSbiRV64SimTop \
+              ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
+              VERILATOR="$verilator_bin -LDFLAGS -ldl" JOBS=4 \
+              SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" sim
+            bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
+          fi
+
+      - name: Save shared Product G3/G4 model for later gates
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        # Cache uploads are an acceleration, not a firmware qualification
+        # prerequisite. A concurrent G4 writer may win the same exact key.
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g4-pid1/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
 
       - name: Require real OpenSBI banner and S-mode UART payload
         shell: bash
@@ -170,6 +195,8 @@ jobs:
           simulator="$PRODUCT_OPENSBI_OBJ/VAetherCoreProductOpenSbiRV64SimTop"
           log="$G3_ROOT/product-opensbi-first-exec.log"
           test -s "$firmware"
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          bash tools/ci/product_sim_cache.sh verify "$PRODUCT_OPENSBI_MODEL" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags"
           test -x "$simulator"
           if ! "$simulator" "$firmware" 30000000 \
               'RV64 OpenSBI S-mode payload PASS' 0 0 '' '' 0 1000000 0 \

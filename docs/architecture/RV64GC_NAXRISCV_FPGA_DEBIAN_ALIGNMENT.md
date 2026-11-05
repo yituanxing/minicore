@@ -155,7 +155,8 @@ FPU 单精度/双精度模块、三读口 FP PRF 对 LUT、FF、BRAM、Fmax 的�
 
 ### 仿真加速当前可用性（软件源码审计口径）
 
-- **已接入待核验**：`product_sim_cache.sh` 按 RTL/生成器、宿主编译器、编译选项与运行时头文件指纹复用同一 Product 仿真二进制；`product_sim_ab.sh` 具备同一 cycle 上三档 Verilator/settle 的候选差分入口，但本轮未执行，不能宣称 5.054 或 adaptive 已获 Product 资格。
+- **已接入待核验**：`product_sim_cache.sh` 按 RTL/生成器、宿主编译器、编译选项与运行时头文件指纹复用同一 Product 仿真二进制；Product G3 与 G4 的相同 OpenSBI Top 采用相同 `-O3 -march=native` 构建身份和 GitHub Actions 缓存键（命中受 CI 缓存作用域限制）；`product_sim_ab.sh` 已包含真实 SPI-SD、独立 DTB 与固件一致的 SD1 Top 三档短窗口差分，`product_sim_sd1_manual.sh` 为加速配置设置按源码/工具/介质/差分结果身份匹配的手动晋级门禁。以上均仅做源码实现，未运行、未发放 Product 资格。
+- **历史加速不直接继承**：历史 PA32/V2 路线有 GSIM 对 Verilator 的 Linux PID1 约 1.42692×、Adaptive Settle 约 13%–20% 的同工况测量，以及 forkserver 对重复工作负载的收益；Product SD1 并无对应当轮差分证明。GSIM 实现仍在独立 PR #378，当前 Product 分支没有可直接调用的 GSIM 生成/运行入口，不应假装已接入。
 - **已有历史实现但不等于 Product 快照**：`l32_opensbi_runtime.h` 可以复制主机 256MiB RAM 和 LR/SC reservation；`opensbi_forkserver_main.cpp` 在旧 L32 登录后通过进程 `fork` 复用内存和 RTL 的运行态。这不能作为 Product SD1 固件→Debian 登录的持久可恢复快照，也不能跳过新镜像的一次真实启动。
 - **尚未实现**：Product 的完整可恢复检查点必须同时保存同一时刻的 RTL/VerilatedContext、主机 RAM 与 LR/SC、TransportRuntimeState、串口/中断/时间、SPI SD 卡读写会话与 COW 等状态，并把所有对应模型、固件、DTB、SD 镜像指纹绑定到快照；此状态合同未完成，禁止把仅有 RAM 的快照标注为可恢复。
 - **QEMU 状态导入不是现成加速**：QEMU 的架构寄存器/CSR/内存快照无法自动重建 Product 的 RAT、ROB、LSQ、TLB、AXI 在途事务。只有设计并验证一个清空全部在途微架构工作、可注入架构状态和设备状态的交接边界，且经过差分校验，才可称为接力热启动；目前不把它用于下一次长跑。
