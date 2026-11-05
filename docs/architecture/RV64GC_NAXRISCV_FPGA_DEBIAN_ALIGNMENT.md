@@ -161,4 +161,23 @@ FPU 单精度/双精度模块、三读口 FP PRF 对 LUT、FF、BRAM、Fmax 的�
 - **尚未实现**：Product 的完整可恢复检查点必须同时保存同一时刻的 RTL/VerilatedContext、主机 RAM 与 LR/SC、TransportRuntimeState、串口/中断/时间、SPI SD 卡读写会话与 COW 等状态，并把所有对应模型、固件、DTB、SD 镜像指纹绑定到快照；此状态合同未完成，禁止把仅有 RAM 的快照标注为可恢复。
 - **QEMU 状态导入不是现成加速**：QEMU 的架构寄存器/CSR/内存快照无法自动重建 Product 的 RAT、ROB、LSQ、TLB、AXI 在途事务。只有设计并验证一个清空全部在途微架构工作、可注入架构状态和设备状态的交接边界，且经过差分校验，才可称为接力热启动；目前不把它用于下一次长跑。
 
-因此，下一次确有必要运行 Product RTL 时，默认仍选择已经指定的 **5.024/reference** 与经过 exact-hash 验证的可复用二进制；先做独立的短程 A/B，只有得到同周期状态一致证据后才考虑升级 simulator 或 settle 算法。无此证据不启用未知快路径。
+### Debian 前的低成本 Product 仿真择优流程（已接线，待真实运行）
+
+当前先停下 G5-SD1 原生 Debian 长跑。G3 小程序、G4 Linux PID1 **共用 `AetherCoreProductOpenSbiRV64SimTop`**；用 `product_sim_ab.sh` 生成的三档 exact-hash 二进制直接作为 G4 的输入，不能因为更换固件而再次全量编译相同 RTL：
+
+1. **G3 小程序三档筛选**：既有 `rv64_opensbi_first_exec.sh` 生成的 OpenSBI 1.6 + S-mode UART firmware；由 `product_g3_short_ab.sh` 固定三个候选各 **3000 万周期**，三者都必须真正出现 OpenSBI 和 S-mode UART 成功标记、非零指令退休及同周期 CPU/RAM/UART 状态一致。只把相对 5.024/reference 实测至少快 3% 的候选纳入最快档选择。
+2. **G4 内核早期差分**：`product_sim_pid1_ab.sh early-compare` 直接重用 G3 模型，以相同 Linux 6.6.143 initramfs 固件比较默认基线和 G3 胜者，默认 **2 亿周期**，要出现真实 Linux banner、同周期状态一致且相对基线仍至少快 3%，否则退回基线；G3 若没有更快候选，只跑基线。
+3. **仅胜者跑一次完整 PID1**：`product_sim_pid1_ab.sh selected-pid1` 使用已选模型与同一 G4 固件，最多 **12 亿周期**，按原 G4 要求验证 OpenSBI、Linux、`RV64 USER UART IRQ OK`、STIP 和 SEIP。此成功仅证明所选配置的真实 Product Linux PID1，不等于三档完整 12 亿周期同态，也不等于 Debian 登录。
+
+调用方式（先由原 G3/G4 构建流程准备带 SHA 的 `result.txt`、固件和 Linux Image；若 G3 产物位于自定义路径，设置 `G3_RESULT`）：
+
+```bash
+AETHERCORE_ALLOW_PRODUCT_AB=1 bash tools/ci/product_g3_short_ab.sh
+bash tools/ci/product_sim_pid1_ab.sh preflight
+AETHERCORE_ALLOW_PRODUCT_PID1_EARLY=1 bash tools/ci/product_sim_pid1_ab.sh early-compare
+AETHERCORE_ALLOW_PRODUCT_PID1_LONGRUN=1 bash tools/ci/product_sim_pid1_ab.sh selected-pid1
+```
+
+三个脚本都由操作员显式触发，**不属于 PR 常规 CI**，不会自行运行 Debian、重建 G4 第二份模拟器或跳过指纹/固件核验。当前只完成了源码接入与静态检查，所在临时工作容器没有两套预构建固件、Verilator 或 RTL 仿真产物，因此没有 Product G3/G4 新性能数据，也没有发放资格凭据。待 G3/G4 真正跑过并择优后，才能用新选配置开始 SD1 SPI/DTB 路径自身的短程验证，最终进入 Debian。
+
+默认安全配置仍为 **5.024/reference**。GSIM 是来自旧 PA32/V2 的独立候选后端（PR #378），不能与 Verilator 版本/Adaptive 的收益相乘，也不能不经 Product G3/G4 专属移植与差分就直接选为胜者。

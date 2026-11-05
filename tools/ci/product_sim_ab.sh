@@ -47,10 +47,12 @@ cache_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
   exit 4
 }
 
-# A/B itself is short and operator-only. Large values silently defeat its
-# purpose: this is not a replacement for the separately gated G4/G5 run.
-[[ "$max_cycles" =~ ^[0-9]+$ ]] && (( max_cycles > 0 && max_cycles <= 20000000 )) || {
-  echo 'Product A/B MAX_CYCLES must be in the short qualification range 1..20000000' >&2
+# G3's real OpenSBI + S-mode UART smoke program needs up to 30M cycles;
+# the SD1 and other short-prefix probes retain their 20M-cycle ceiling.
+ab_max_cycles=20000000
+[[ "$top" == AetherCoreProductOpenSbiRV64SimTop ]] && ab_max_cycles=30000000
+[[ "$max_cycles" =~ ^[0-9]+$ ]] && (( max_cycles > 0 && max_cycles <= ab_max_cycles )) || {
+  echo "Product A/B MAX_CYCLES must be in the short qualification range 1..$ab_max_cycles" >&2
   exit 3
 }
 if (( sd1 && max_cycles < 12000000 )); then
@@ -91,34 +93,34 @@ if (( firmware_bytes > 268435456 )); then
   exit 3
 fi
 mkdir -p "$out/rtl-seed/rtl" "$out/logs"
-flags="-std=c++20 -O3 -march=native $product_flag -I$root/sim/product_rv64_opensbi_shim -I$root/sim"
+flags="-std=c++20 -O3 -march=native"
+[[ -n "$product_flag" ]] && flags+=" $product_flag"
+flags+=" -I$root/sim/product_rv64_opensbi_shim -I$root/sim"
+# The same G3 Product OpenSBI top is used by G4 Linux. Record three exact
+# compiled model identities here so the PID1 verifier can reuse the expensive
+# RTL elaboration and host binaries without trusting stale build products.
+# Install both pinned toolchains before hashing: a missing installation must
+# never be mistaken for an immutable generator identity.
+unset VERILATOR_ROOT
+for pinned in 5.024 5.054; do
+  AETHERCORE_VERILATOR_VERSION="$pinned" AETHERCORE_VERILATOR_FAST_VERIFY=1 \
+    bash tools/ensure_verilator_5_024.sh > "$out/logs/verilator-$pinned.preflight.log" 2>&1
+done
+ab_start_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
+  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_start_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
+  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_start_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
+  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_start_script_sha="$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')"
+ab_start_fw_sha="$(sha256sum "$fw_bin" | awk '{print $1}')"
 if (( sd1 )); then
-  # The three builds all use the pinned toolchain layout, never an ambient
-  # VERILATOR_ROOT which could change generator/runtime linkage mid-run.
-  unset VERILATOR_ROOT
-  # Establish model identity BEFORE elaborating or running. A long-running
-  # A/B can overlap source editing; end-of-run fingerprints alone would then
-  # incorrectly certify the old binary against freshly modified source.
-  # Install both pinned toolchains first, so the initial and final identities
-  # see the same generator/runtime assets rather than an absent installation.
-  for pinned in 5.024 5.054; do
-    AETHERCORE_VERILATOR_VERSION="$pinned" AETHERCORE_VERILATOR_FAST_VERIFY=1 \
-      bash tools/ensure_verilator_5_024.sh > "$out/logs/verilator-$pinned.preflight.log" 2>&1
-  done
-  sd1_start_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
-    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-  sd1_start_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
-    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-  sd1_start_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
-    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-  sd1_start_ab_script_sha="$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')"
   sd1_start_preflight_script_sha="$(sha256sum "$root/tools/ci/product_sim_sd1_manual.sh" | awk '{print $1}')"
 fi
-make -f Makefile.l32-linux-boot \
-  BUILD_DIR="$out/rtl-seed" TOP="$top" ELABORATE_MAIN="$elaborate" rtl
 
 results="$out/results.tsv"
 printf 'version\tmode\tseconds\tcycles_per_second\n' > "$results"
+rtl_prepared=0
 
 for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
   version="${profile%%:*}"
@@ -141,17 +143,39 @@ for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
     echo "wrong Verilator toolchain: selected $version but got $verilator_identity" >&2
     exit 5
   }
-  obj="$out/obj-$label"
-  mkdir -p "$obj"
+  model_root="$out/model-$label"
+  obj="$model_root/obj"
+  model_args=("$model_root" "$top" "$elaborate" "$flags")
   extra=''
   [[ "$mode" == adaptive ]] && extra='-DAETHERCORE_SIM_ADAPTIVE_SETTLE'
-  PATH="$cache_root/verilator-$version/bin:$PATH" \
-  "$verilator_bin" -LDFLAGS -ldl -O3 -MAKEFLAGS 'OPT_FAST=-O3 OPT_GLOBAL=-O3' \
-    --cc --exe --build -Wall -Wno-fatal \
-    --top-module "$top" -Mdir "$obj" \
-    -CFLAGS "$flags $extra" \
-    "$out"/rtl-seed/rtl/*.sv "$root/sim/opensbi_boot_main.cpp" \
-    -j "$jobs" > "$out/logs/$label.compile.log" 2>&1
+  if AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
+      bash tools/ci/product_sim_cache.sh verify "${model_args[@]}" \
+      > "$out/logs/$label.cache.log" 2>&1; then
+    echo "PRODUCT_SIM_AB_MODEL_REUSED: $label"
+  else
+    if (( ! rtl_prepared )); then
+      make -f Makefile.l32-linux-boot \
+        BUILD_DIR="$out/rtl-seed" TOP="$top" ELABORATE_MAIN="$elaborate" rtl
+      rtl_prepared=1
+    fi
+    mkdir -p "$obj"
+    model_build_identity_before="$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
+      bash tools/ci/product_sim_cache.sh fingerprint "${model_args[@]}")"
+    PATH="$cache_root/verilator-$version/bin:$PATH" \
+    "$verilator_bin" -LDFLAGS -ldl -O3 -MAKEFLAGS 'OPT_FAST=-O3 OPT_GLOBAL=-O3' \
+      --cc --exe --build -Wall -Wno-fatal \
+      --top-module "$top" -Mdir "$obj" \
+      -CFLAGS "$flags $extra" \
+      "$out"/rtl-seed/rtl/*.sv "$root/sim/opensbi_boot_main.cpp" \
+      -j "$jobs" > "$out/logs/$label.compile.log" 2>&1
+    [[ "$model_build_identity_before" == "$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
+      bash tools/ci/product_sim_cache.sh fingerprint "${model_args[@]}")" ]] || {
+      echo "Product model sources/toolchain changed while building $label" >&2
+      exit 10
+    }
+    AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
+      bash tools/ci/product_sim_cache.sh record "${model_args[@]}" > "$out/logs/$label.cache.log"
+  fi
 
   sim="$obj/V$top"
   [[ -x "$sim" ]] || { echo "Product simulator missing: $sim" >&2; exit 5; }
@@ -170,6 +194,25 @@ for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
   cps="$(awk -v n="$max_cycles" -v sec="$elapsed" 'BEGIN { printf "%.3f", n/sec }')"
   printf '%s\t%s\t%s\t%s\n' "$version" "$mode" "$elapsed" "$cps" >> "$results"
 done
+
+# The three results are comparable only if both simulator toolchains, all
+# generated/host source inputs, the A/B script and the firmware stayed fixed
+# across the entire run. A cache record for an earlier source generation is
+# harmless, but must never grant qualification for a different generation.
+ab_end_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
+  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_end_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
+  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_end_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
+  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+[[ "$ab_start_baseline" == "$ab_end_baseline" &&
+   "$ab_start_ref" == "$ab_end_ref" &&
+   "$ab_start_adaptive" == "$ab_end_adaptive" &&
+   "$(sha256sum "$fw_bin" | awk '{print $1}')" == "$ab_start_fw_sha" &&
+   "$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')" == "$ab_start_script_sha" ]] || {
+  echo 'Product A/B firmware, runner, source or toolchain changed during comparison' >&2
+  exit 10
+}
 
 if ! diff -u "$out/verilator-5.024-reference.state" \
               "$out/verilator-5.054-reference.state" > "$out/version-state.diff"; then
@@ -215,7 +258,7 @@ if (( sd1 )); then
   AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
     bash tools/ci/product_sim_sd1_manual.sh preflight
   state_sha="$(sha256sum "$out/verilator-5.024-reference.state" | awk '{print $1}')"
-  flags="-std=c++20 -O3 -march=native $product_flag -I$root/sim/product_rv64_opensbi_shim -I$root/sim"
+  # Reuse the exact normalized flags from the first model fingerprint.
   eligible_reference="$(awk -F '\t' 'NR==2 {base=$4} NR==3 {print (base > 0 && $4/base >= 1.03 ? 1 : 0)}' "$results")"
   eligible_adaptive="$(awk -F '\t' 'NR==2 {base=$4} NR==4 {print (base > 0 && $4/base >= 1.03 ? 1 : 0)}' "$results")"
   [[ "$eligible_reference" =~ ^[01]$ && "$eligible_adaptive" =~ ^[01]$ ]] || {
@@ -228,10 +271,10 @@ if (( sd1 )); then
     bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
   identity_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
     bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-  [[ "$identity_baseline" == "$sd1_start_baseline" &&
-     "$identity_ref" == "$sd1_start_ref" &&
-     "$identity_adaptive" == "$sd1_start_adaptive" &&
-     "$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')" == "$sd1_start_ab_script_sha" &&
+  [[ "$identity_baseline" == "$ab_start_baseline" &&
+     "$identity_ref" == "$ab_start_ref" &&
+     "$identity_adaptive" == "$ab_start_adaptive" &&
+     "$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')" == "$ab_start_script_sha" &&
      "$(sha256sum "$root/tools/ci/product_sim_sd1_manual.sh" | awk '{print $1}')" == "$sd1_start_preflight_script_sha" ]] || {
     echo 'Product SD1 A/B source/toolchain or A/B runner changed during elaboration, build or comparison; refuse stale promotion' >&2
     exit 10
