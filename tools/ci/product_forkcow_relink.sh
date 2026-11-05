@@ -69,13 +69,14 @@ if ! AETHERCORE_VERILATOR_VERSION="$cached_version" SIM_SETTLE_MODE="$cached_set
   echo 'PRODUCT_FORKCOW_RELINK_REJECTED: compiled Product model is stale or not identity-verified' >&2
   exit 4
 fi
-inc="${VERILATOR_INCLUDE_DIR:-$cache_root/verilator-$verilator_version/share/verilator/include}"
-if [[ ! -f "$inc/verilated.h" ]]; then
-  alt="$cache_root/verilator-$verilator_version/include"
-  [[ -f "$alt/verilated.h" ]] && inc="$alt"
+inc="$cache_root/verilator-$verilator_version/include"
+if [[ -n "${VERILATOR_INCLUDE_DIR:-}" &&
+      "$(realpath -m "$VERILATOR_INCLUDE_DIR")" != "$(realpath -m "$inc")" ]]; then
+  echo 'PRODUCT_FORKCOW_RELINK_REJECTED: include override differs from fingerprinted pinned Verilator runtime' >&2
+  exit 4
 fi
 [[ -f "$inc/verilated.h" ]] || {
-  echo "PRODUCT_FORKCOW_RELINK_REJECTED: set VERILATOR_INCLUDE_DIR for the exact model's pinned Verilator header" >&2
+  echo "PRODUCT_FORKCOW_RELINK_REJECTED: missing fingerprinted pinned Verilator runtime header: $inc/verilated.h" >&2
   exit 4
 }
 case "$settle_mode" in

@@ -186,6 +186,20 @@ jobs:
           cat build/product-gsim-g3-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
           cat build/product-gsim-g3-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
 
+      # The exact Product 5.054/reference Verilator archive is already built
+      # and rigorously compared against GSIM above. Fork the live RTL state
+      # from a real OpenSBI banner rather than building a separate three-model
+      # experiment just to exercise short deterministic checkpoint replays.
+      - name: Replay two Product G3 fork-COW checkpoints from the cached single model
+        shell: bash
+        env:
+          G3_MODEL_TICKET: build/product-gsim-g3-ab/model-ready.txt
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_forkcow_g3_smoke.sh | tee build/product-gsim-g3-ab/forkcow-g3.log
+          grep -Fq 'PRODUCT_FORKCOW_G3_SHORT_PASS' build/product-gsim-g3-ab/forkcow-g3.log
+          echo 'Real Product OpenSBI fork-COW twice PASS from one already built Verilator model (NOT PID1 or Debian).' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload same-cycle state, identities, build logs, measured throughput
         if: always()
         uses: actions/upload-artifact@v4
@@ -200,4 +214,5 @@ jobs:
             build/product-gsim-bridge/*.log
             build/product-gsim-g3-ab/*.txt
             build/product-gsim-g3-ab/*.tsv
+            build/product-gsim-g3-ab/*.log
             build/product-gsim-g3-ab/logs/*.log
