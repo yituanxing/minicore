@@ -71,6 +71,9 @@ jobs:
       AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
       SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
       RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
+      # Keep short same-cycle A/B concise; a consciously selected full boot
+      # records initcall entry/return so a late-boot stall is not anonymous.
+      RV64_DEBIAN_INITCALL_TRACE: ${{ (github.event.label.name == 'product-g5-longrun' || inputs.run_mode == 'full') && '1' || '0' }}
       RV64_DEBIAN_FULL_ROOTFS_URL: ${{ inputs.full_rootfs_archive_url }}
       RV64_DEBIAN_FULL_ROOTFS_SHA256: ${{ inputs.full_rootfs_sha256 }}
       AETHERCORE_MILL_NO_DAEMON: '1'
@@ -316,6 +319,12 @@ jobs:
           bash tools/ci/rv64_debian_payload_build.sh
           grep -qx 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
             build/rv64-debian-boot/result.txt
+          if [[ "$RV64_DEBIAN_INITCALL_TRACE" == 1 ]]; then
+            grep -Fq 'initcall_debug loglevel=8' build/rv64-debian-boot/result.txt || {
+              echo 'Full G5 diagnosis lost initcall trace bootargs' >&2
+              exit 35
+            }
+          fi
           payload=build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin
           test -s "$payload"
           bytes="$(stat -c%s "$payload")"
@@ -415,6 +424,11 @@ jobs:
       - name: Run selected real Debian D1/D2/D3 userspace milestone on Product RV64GC
         if: env.AETHERCORE_G5_RUN_MODE == 'full'
         shell: bash
+        env:
+          # Full runs are expensive: after the known late-initcall banner,
+          # capture the interrupted (pre-IRQ) PC and stop after 100M silent
+          # cycles rather than burning another ~700M with no new evidence.
+          AETHERCORE_G5_STALL_WATCHDOG_CYCLES: '100000000'
         run: |
           set -euo pipefail
           build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
@@ -471,6 +485,8 @@ jobs:
             build/rv64-debian-rootfs/evidence/*
             build/rv64-debian-linux/result.txt
             build/rv64-debian-linux/evidence/*
+            build/rv64-debian-linux/obj/vmlinux
+            build/rv64-debian-linux/obj/System.map
             build/rv64-debian-boot/result.txt
             build/rv64-debian-boot/evidence/*
             build/product-g5-short-ab/qualification.txt

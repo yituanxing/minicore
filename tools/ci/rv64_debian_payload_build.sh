@@ -116,6 +116,22 @@ else
   export RV64_PAYLOAD_ENABLE_SPI_SD=0
 fi
 
+# A full Product G5 Linux bring-up can spend hundreds of millions of RTL
+# cycles without a new printk.  The opt-in diagnostic boot keeps the exact
+# Debian/rootfs payload but makes initcall entry/return visible in UART logs.
+# Short A/B and ordinary builds retain their frozen bootargs by default.
+case "${RV64_DEBIAN_INITCALL_TRACE:-0}" in
+  0) ;;
+  1)
+    if [[ "${STAGE}" == sd1 ]]; then
+      export RV64_PAYLOAD_BOOTARGS="${RV64_PAYLOAD_BOOTARGS} initcall_debug loglevel=8"
+    else
+      export RV64_PAYLOAD_BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init initcall_debug loglevel=8"
+    fi
+    ;;
+  *) fail 'RV64_DEBIAN_INITCALL_TRACE must be 0 or 1' ;;
+esac
+
 # Reuse the exact OpenSBI/DTS/link-address implementation of G4, changing
 # only the chosen software ISA/ABI and the qualified RV64GC Linux Image.
 bash "${ROOT_DIR}/tools/ci/rv64_minimal_init_payload_build.sh"

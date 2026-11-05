@@ -340,6 +340,34 @@ for _ in {1..8}; do
 done
 [[ -f "${loader_entry}" ]] || fail 'LP64D loader missing from extracted Debian rootfs'
 
+# Linux 6.6 usr/gen_init_cpio embeds each regular file's *filesystem mtime*
+# in the built-in cpio stream.  The OCI extraction, our generated /init, and
+# the D2 native probe otherwise inherit the host runner's current time.  That
+# makes the final vmlinux/Image differ between identical rebuilds, and blocks
+# exact PC symbolization after an expensive RTL failure.  Normalize metadata
+# only in this freshly staged, derived initramfs tree, never in the pinned
+# input archive or a host directory.  -P and touch -h prevent following guest
+# symlinks, including an absolute guest link such as /lib/... .  -xdev avoids
+# walking an unexpected mounted filesystem below the staging root.
+#
+# SD1 is an ext4 disk-root image, not an embedded initramfs.  Its externally
+# supplied Debian timestamps remain untouched and covered by the SD1 tree
+# digest and pinned source-archive identity.
+initramfs_mtime_epoch=''
+if [[ "${STAGE}" != sd1 ]]; then
+  source "${ROOT_DIR}/software/rv64/linux_early.env"
+  initramfs_mtime_epoch="$(TZ=UTC date -u -d "${RV64_LINUX_BUILD_TIMESTAMP}" +%s)" || \
+    fail 'invalid frozen Linux build timestamp for Debian initramfs'
+  [[ "${initramfs_mtime_epoch}" =~ ^[[:digit:]]+$ ]] || \
+    fail 'non-numeric frozen Debian initramfs timestamp'
+  [[ -d "${ROOTFS_DIR}" && ! -L "${ROOTFS_DIR}" && ! -L "${BUILD_DIR}" ]] || \
+    fail 'Debian initramfs staging root must be a real directory'
+  sudo find -P "${ROOTFS_DIR}" -xdev -depth \
+    -exec touch -h -d "@${initramfs_mtime_epoch}" -- {} +
+  [[ "$(stat -c %Y -- "${ROOTFS_DIR}/init")" == "${initramfs_mtime_epoch}" ]] || \
+    fail 'Debian /init timestamp normalization failed'
+fi
+
 sha256_inputs=("${ROOTFS_DIR}/bin/sh" "${ROOTFS_DIR}/usr/bin/dpkg" "${ROOTFS_DIR}/etc/debian_version")
 if [[ "${STAGE}" == sd1 ]]; then
   sha256_inputs+=("${ROOTFS_DIR}/sbin/init")
@@ -400,6 +428,9 @@ fi
   echo "interpreter=${interpreter}"
   echo "rootfs=${ROOTFS_DIR}"
   echo "rootfs_bytes=${rootfs_bytes}"
+  if [[ "${STAGE}" != sd1 ]]; then
+    echo "initramfs_mtime_epoch=${initramfs_mtime_epoch}"
+  fi
   if [[ "${STAGE}" == sd1 ]]; then
     echo "rootfs_tree_sha256=${rootfs_tree_sha}"
   fi

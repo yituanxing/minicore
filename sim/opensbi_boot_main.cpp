@@ -6,6 +6,9 @@ using OpenSbiTop = VAetherCoreOpenSbiCSimTop;
 using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 #endif
 #include "l32_opensbi_runtime.h"
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+#include "l32_g5_silence_watchdog.h"
+#endif
 #if defined(AETHERCORE_PRODUCT_SPI_SD) && !defined(AETHERCORE_PRODUCT_DEBIAN)
 #error "Product SD1 requires both AETHERCORE_PRODUCT_SPI_SD and AETHERCORE_PRODUCT_DEBIAN"
 #endif
@@ -104,6 +107,22 @@ int main(int argc, char** argv) {
         argc >= 12 ? std::stoull(argv[11], nullptr, 0) : 0ULL;
     const std::uint64_t minPostMilestoneCommits =
         argc >= 13 ? std::stoull(argv[12], nullptr, 0) : 0ULL;
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+    // Disabled unless the explicitly bounded G5 diagnosis requests it. This
+    // is not an automatic Linux boot failure criterion: a quiet late initcall
+    // may legitimately need time on RTL. Never alter short A/B or SD1 oracles.
+    std::uint64_t lateBootSilenceBudget = 0;
+    if (const char* value = std::getenv("AETHERCORE_G5_STALL_WATCHDOG_CYCLES")) {
+      const std::string requested(value);
+      if (requested.empty() || requested.find_first_not_of("0123456789") != std::string::npos)
+        throw std::runtime_error("AETHERCORE_G5_STALL_WATCHDOG_CYCLES must be decimal guest cycles");
+      lateBootSilenceBudget = std::stoull(requested);
+      if (lateBootSilenceBudget == 0)
+        throw std::runtime_error("AETHERCORE_G5_STALL_WATCHDOG_CYCLES must be nonzero when set");
+    }
+    aethercore::l32sim::G5SilenceWatchdog lateBootWatchdog(lateBootSilenceBudget);
+    std::uint64_t nextLateBootCheckCycle = 1000000;
+#endif
     std::string uartInput;
     if (!uartCommand.empty()) {
       uartInput = uartCommand;
@@ -259,6 +278,14 @@ int main(int argc, char** argv) {
                   << ' ' << sdCard.progress()
 #endif
                   << "\n";
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+        if (lateBootWatchdog.anchored()) {
+          std::cerr << "L32_G5_LATE_BOOT_PC_PROGRESS cycles=" << cycles
+                    << " silent-cycles=" << cycles - lateBootWatchdog.lastUartCycle();
+          lateBootWatchdog.emit(std::cerr);
+          std::cerr << "\n";
+        }
+#endif
         previousProgressCycle = cycles;
         previousProgressCommits = commits;
         nextProgressCycle += progressIntervalCycles;
@@ -289,6 +316,9 @@ int main(int argc, char** argv) {
       if (top.io_uartValid) {
         lastUartCycle = cycles;
         const char byte = static_cast<char>(top.io_uartByte);
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+        lateBootWatchdog.observeUart(cycles, byte);
+#endif
         uart.push_back(byte);
         uartFingerprint ^= static_cast<std::uint8_t>(top.io_uartByte);
         uartFingerprint *= 0x100000001b3ULL;
@@ -393,6 +423,13 @@ int main(int argc, char** argv) {
         }
         if (isInterruptCause(interruptCause, kSupervisorTimerInterruptCode)) {
           ++supervisorTimerInterrupts;
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+          // The Product core drives interruptPc from its precise asynchronous
+          // trap boundary PC, used as trapPc/sepc. The final 16 retire PCs can
+          // instead all be from account_process_tick(), hiding the wait site.
+          lateBootWatchdog.observeTimerInterrupt(
+              static_cast<std::uint64_t>(top.io_commit_interruptPc));
+#endif
           if (supervisorTimerInterrupts == 1) {
             std::cerr << "\nL32_FIRST_SUPERVISOR_TIMER_INTERRUPT cycles=" << cycles
                       << " commits=" << commits
@@ -422,6 +459,39 @@ int main(int argc, char** argv) {
           }
         }
       }
+
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+      if (lateBootWatchdog.enabled() && cycles >= nextLateBootCheckCycle) {
+        nextLateBootCheckCycle += 1000000;
+        if (lateBootWatchdog.expired(cycles)) {
+          std::cout.flush();
+          std::cerr << "\nL32_G5_LATE_BOOT_SILENCE_WATCHDOG"
+                    << " classification=suspected-stalled-initcall-not-proven-deadlock"
+                    << " cycles=" << cycles
+                    << " anchor-cycle=" << lateBootWatchdog.anchorCycle()
+                    << " last-uart-cycle=" << lateBootWatchdog.lastUartCycle()
+                    << " silent-cycles=" << cycles - lateBootWatchdog.lastUartCycle()
+                    << " commits=" << commits
+                    << " interrupts=" << interrupts
+                    << " stip=" << supervisorTimerInterrupts
+                    << " seip=" << supervisorExternalInterrupts
+                    << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
+                    << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)
+                    << " last-exception-pc=0x" << lastExceptionPc
+                    << " last-exception-cause=0x" << lastExceptionCause
+                    << " last-exception-value=0x" << lastExceptionValue << std::dec;
+          lateBootWatchdog.emit(std::cerr);
+          std::cerr << " recent-pcs=" << std::hex;
+          for (std::size_t i = 0; i < recentCount; ++i) {
+            const auto slot = (recentIndex + kRecentCommitCount - recentCount + i) % kRecentCommitCount;
+            if (i != 0) std::cerr << ',';
+            std::cerr << "0x" << recentPcs[slot];
+          }
+          std::cerr << std::dec << "\n";
+          return 14;
+        }
+      }
+#endif
 
       const bool inputSatisfied = uartInput.empty() ||
           (inputStarted && inputIndex == uartInput.size() && sawRxInterrupt && sawPostInputSeip);

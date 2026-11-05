@@ -70,6 +70,30 @@ fi
   -e SERIAL_OF_PLATFORM \
   --set-str INITRAMFS_SOURCE "${initramfs_source}"
 
+if [[ "${ROOTFS_STAGE}" != sd1 ]]; then
+  # The RAM-root Product target embeds the *entire* Debian cpio.  Linux's
+  # initramfs_async unpack is a major silent boot path in RTL; bypassing gzip
+  # removes its guest-CPU decompression work without removing any Debian file.
+  # SD1 uses an ext4 block root and has no built-in initramfs to compress.
+  # The firmware/DTB overlap check in rv64_minimal_init_payload_build.sh is
+  # mandatory because this trades smaller firmware for a larger raw Image.
+  "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
+    -e INITRAMFS_COMPRESSION_NONE -d INITRAMFS_COMPRESSION_GZIP
+fi
+
+# The frozen upstream RISC-V defconfig is intentionally debug-heavy.  It
+# enables the 1000-round plist selftest, page-table selftests and allocator /
+# scheduler assertions that are not Debian ABI or device requirements.  Those
+# tests appeared on the critical path of real Product RTL boots and can
+# obscure whether the distribution reached PID1.  Keep the upstream
+# baseline untouched; only the staged Debian Image selects a functional boot
+# profile.  A diagnostic boot remains available through the caller's kernel
+# command line (initcall_debug loglevel=8), without re-enabling these tests.
+"${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
+  -d DEBUG_PLIST -d DEBUG_PAGEALLOC -d DEBUG_VM -d DEBUG_VM_PGTABLE \
+  -d SCHED_DEBUG -d DEBUG_RT_MUTEXES -d DEBUG_SPINLOCK \
+  -d DEBUG_MUTEXES -d DEBUG_RWSEMS -d DEBUG_LIST -d MEMTEST
+
 # Linux's tiny PID1 image does not establish userspace filesystem and
 # service capability. The D2/D3 distribution stages deliberately request
 # the host kernel contracts their real Debian programs need, while leaving
@@ -117,7 +141,23 @@ for required in \
 done
 grep -Fqx "CONFIG_INITRAMFS_SOURCE=\"${initramfs_source}\"" "${OBJ_DIR}/.config" || \
   fail "Debian ${ROOTFS_STAGE} kernel selected an incorrect initramfs source"
+if [[ "${ROOTFS_STAGE}" != sd1 ]]; then
+  grep -Fqx 'CONFIG_INITRAMFS_COMPRESSION_NONE=y' "${OBJ_DIR}/.config" || \
+    fail "Debian ${ROOTFS_STAGE} kernel failed to select uncompressed initramfs"
+  if grep -Eq '^CONFIG_INITRAMFS_COMPRESSION_(GZIP|BZIP2|LZMA|XZ|LZO|LZ4|ZSTD)=y$' "${OBJ_DIR}/.config"; then
+    fail "Debian ${ROOTFS_STAGE} unexpectedly compressed its built-in initramfs"
+  fi
+fi
 grep -qx '# CONFIG_EFI is not set' "${OBJ_DIR}/.config" || fail 'unowned EFI path enabled'
+for disabled in \
+  DEBUG_PLIST DEBUG_PAGEALLOC DEBUG_VM DEBUG_VM_PGTABLE \
+  SCHED_DEBUG DEBUG_RT_MUTEXES DEBUG_SPINLOCK \
+  DEBUG_MUTEXES DEBUG_RWSEMS DEBUG_LIST MEMTEST; do
+  # Kconfig omits a symbol entirely when its dependencies are disabled.
+  if grep -Eq "^CONFIG_${disabled}=(y|m)$" "${OBJ_DIR}/.config"; then
+    fail "Debian ${ROOTFS_STAGE} unexpectedly enabled costly debug selftest ${disabled}"
+  fi
+done
 if [[ "${ROOTFS_STAGE}" == d2 || "${ROOTFS_STAGE}" == d3 || "${ROOTFS_STAGE}" == sd1 ]]; then
   for required in \
     'CONFIG_PROC_FS=y' 'CONFIG_SYSFS=y' 'CONFIG_TMPFS=y' \
