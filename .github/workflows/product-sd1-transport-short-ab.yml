@@ -51,6 +51,12 @@ jobs:
           gcc -std=c11 -ffreestanding -Wall -Wextra -fsyntax-only software/rv64_userspace/product_sd1_transport_smoke.c
           python3 -m unittest tests_py.test_product_sd1_transport_short_contract -v
 
+      - name: Probe real SDHC pin protocol without RTL or Debian
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_product_sd1_card_protocol -v
+
       - name: Restore Scala and Mill dependencies
         uses: actions/cache@v4
         with:
