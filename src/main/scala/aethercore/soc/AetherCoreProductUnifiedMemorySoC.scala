@@ -243,6 +243,18 @@ class AetherCoreProductUnifiedMemorySoC(
     new AetherMemResponse(DataBits, externalTxnIdBits),
     2
   ))
+  // RRArbiter's combinational choice can change while a consumer is stalled:
+  // e.g. BootROM is the only response initially, then an external DDR response
+  // becomes VALID before the hub is READY.  Hold the chosen response stable
+  // across that stall. `flow` preserves the zero-buffer-latency response path
+  // when the hub can accept immediately; `pipe` avoids an arbitration bubble
+  // when a buffered response retires and the next one is already available.
+  val responseSkid = Module(new Queue(
+    new AetherMemResponse(DataBits, externalTxnIdBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
 
   // Cache policy follows the CPU-resolved physical PMA. As in the V2 complex,
   // only ordinary RAM reads allocate; writes are write-through, atomics and
@@ -321,7 +333,8 @@ class AetherCoreProductUnifiedMemorySoC(
   responseArbiter.io.in(1).valid := io.memoryResponse.valid
   responseArbiter.io.in(1).bits := io.memoryResponse.bits
   io.memoryResponse.ready := responseArbiter.io.in(1).ready
-  hub.io.downstreamResponse <> responseArbiter.io.out
+  responseSkid.io.enq <> responseArbiter.io.out
+  hub.io.downstreamResponse <> responseSkid.io.deq
 
   fabric.io.rxValid := io.rxValid
   fabric.io.rxByte := io.rxByte

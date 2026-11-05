@@ -325,6 +325,17 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   private val recovering = RegInit(false.B)
   private val flushingTrap = RegInit(false.B)
   private val recoveryCut = Reg(UInt(I.W))
+  // FP div/sqrt readiness may depend on the selected operation even while
+  // the FP lane advertises resource availability. Once an IQ entry has been
+  // offered, lock its complete operands and token until the FU accepts it.
+  // Other IQ entries can become ready during that stall; they cannot replace
+  // a Decoupled offer already visible at the issue boundary.
+  private val issueHolding = RegInit(false.B)
+  private val heldIqIndex = Reg(UInt(math.max(1, log2Ceil(Q)).W))
+  private val heldIssue = Reg(new ProductIssue(Xlen, I, F, G))
+  private val heldFloating = if (enableFloating) Some(Reg(Bool())) else None
+  private val heldFpIssue = if (enableFloating)
+    Some(Reg(new ProductFpIssue(Xlen, I, F, G))) else None
 
   io.occupancy := count
   io.recovering := recovering
@@ -537,7 +548,10 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
       selected.memoryKind === MemoryOperationKind.None
   } else false.B
   val selectedReady = readyMask.orR && !recovering && !branchMismatch && !trapFire
-  io.issue.valid := selectedReady && !selectedFloatingExecute
+  io.issue.valid := !recovering && !branchMismatch && !trapFire &&
+    Mux(issueHolding,
+      !(if (enableFloating) heldFloating.get else false.B),
+      selectedReady && !selectedFloatingExecute)
   // Exact-head SYSTEM and normal issue are mutually exclusive: younger
   // dispatch is barred by serializedLive and all older IQ work has issued
   // before SYSTEM can become ROB head. Reuse the same two PRF read muxes.
@@ -584,10 +598,14 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
     OperandSourceKind.Zero.asUInt -> 0.U(Xlen.W)))
   io.issue.bits.rhs := Mux(selected.rhsSource === OperandSourceKind.Immediate,
     selected.immediate, readValue2)
+  when(issueHolding) {
+    io.issue.bits := heldIssue
+  }
 
   if (enableFloating) {
     val issue = io.fpIssue.get
-    issue.valid := selectedReady && selectedFloatingExecute
+    issue.valid := !recovering && !branchMismatch && !trapFire &&
+      Mux(issueHolding, heldFloating.get, selectedReady && selectedFloatingExecute)
     issue.bits := 0.U.asTypeOf(issue.bits)
     issue.bits.token := selected.token
     issue.bits.destination := selected.destination
@@ -601,6 +619,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
     issue.bits.pc := selected.pc
     issue.bits.rawInst := selected.rawInst
     issue.bits.instBytes := selected.instBytes
+    when(issueHolding) {
+      issue.bits := heldFpIssue.get
+    }
   }
 
   val normalRetire = io.retire.fire && !retiringFault
@@ -660,9 +681,14 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
       recovering := true.B
       flushingTrap := false.B
       recoveryCut := c.token.index
+      // A wrong-path stalled offer has not entered its FU. Keep the IQ slot
+      // for any older instruction and reselect it after rollback; younger
+      // held offers are removed by the ROB victim walk.
+      issueHolding := false.B
     }.elsewhen(trapFire) {
       recovering := true.B
       flushingTrap := true.B
+      issueHolding := false.B
     }.otherwise {
       when(io.dispatch.fire) {
         val d = io.dispatch.bits.decoded
@@ -758,8 +784,21 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
       }
       val issueFired = if (enableFloating) io.issue.fire || io.fpIssue.get.fire
                        else io.issue.fire
+      val fpStalled = if (enableFloating)
+        io.fpIssue.get.valid && !io.fpIssue.get.ready else false.B
+      when(!issueHolding && ((io.issue.valid && !io.issue.ready) || fpStalled)) {
+        issueHolding := true.B
+        heldIqIndex := chooseIssue
+        heldIssue := io.issue.bits
+        if (enableFloating) {
+          heldFloating.get := io.fpIssue.get.valid
+          heldFpIssue.get := io.fpIssue.get.bits
+        }
+      }.elsewhen(issueHolding && issueFired) {
+        issueHolding := false.B
+      }
       when(issueFired) {
-        iq(chooseIssue).valid := false.B
+        iq(Mux(issueHolding, heldIqIndex, chooseIssue)).valid := false.B
       }
       when(io.systemHead.fire) {
         rob(head).systemIssued := true.B

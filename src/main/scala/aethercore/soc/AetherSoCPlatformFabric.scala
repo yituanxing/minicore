@@ -393,6 +393,16 @@ class AetherSoCPlatformFabric(
       new AetherMemResponse(dataBits, txnIdBits),
       2
     ))
+    // RRArbiter can reselect when another source becomes valid while the
+    // upstream is backpressured.  Capture the selected response so its txnId,
+    // data and fault remain stable until the CPU side accepts it.  A flow-
+    // through single entry preserves the uncontended response latency.
+    val responseSkid = Module(new Queue(
+      new AetherMemResponse(dataBits, txnIdBits),
+      entries = 1,
+      pipe = true,
+      flow = true
+    ))
 
     responseArbiter.io.in(0).valid :=
       io.externalResponse.get.valid && externalResponseKnown
@@ -407,7 +417,8 @@ class AetherSoCPlatformFabric(
     responseArbiter.io.in(1).bits.fault := mmioFault
     responseArbiter.io.in(1).bits.last := true.B
 
-    io.response <> responseArbiter.io.out
+    responseSkid.io.enq <> responseArbiter.io.out
+    io.response <> responseSkid.io.deq
     responseFire := io.response.fire
     mmioResponseFire := responseArbiter.io.in(1).fire
 
@@ -449,11 +460,6 @@ class AetherSoCPlatformFabric(
     spi.foreach(_.io.complete := mmioResponseFire)
     spiCsGpio.foreach(_.io.complete := mmioResponseFire)
 
-    io.exitValid := mmioResponseFire && pendingExit && pendingWrite
-    io.exitCode := pending.wdata
-
-    assert(!(pendingDeviceMmio && pendingAtomic),
-      "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
     when(serializedExternalActive) {
       assert(normalReadCount === 0.U,
         "serialized external RAM lifetime must exclude concurrent normal reads")
@@ -496,11 +502,6 @@ class AetherSoCPlatformFabric(
 
     io.memValid := pendingExternal
 
-    io.exitValid := responseFire && pendingExit && pendingWrite
-    io.exitCode := pending.wdata
-
-    assert(!(pendingDeviceMmio && pendingAtomic),
-      "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
   }
 
   io.rxReady := uart.io.rxReady
@@ -516,7 +517,12 @@ class AetherSoCPlatformFabric(
   io.mtime := timer.io.mtime
   io.mtimecmp := timer.io.mtimecmp
 
-  io.exitValid := responseFire && pendingExit && pendingWrite
+  // In semantic-memory mode, a RAM response may retire concurrently with a
+  // queued exit MMIO write.  Only completion of that MMIO response may signal
+  // exit; an arbitrary accepted RAM response must never terminate execution.
+  io.exitValid :=
+    (if (externalSemanticMemory) mmioResponseFire else responseFire) &&
+      pendingExit && pendingWrite
   io.exitCode := pending.wdata
 
   assert(!(pendingDeviceMmio && pendingAtomic),

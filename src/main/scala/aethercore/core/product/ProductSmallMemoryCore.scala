@@ -76,6 +76,11 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   private val system = Module(new ProductSystemUnit(config))
   private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA),
     if (enableFloating) 5 else 4))
+  // An arbiter's choice can change as independently running FUs finish while
+  // ROB recovery backpressures completion. Present the backend with a held
+  // snapshot, so its Decoupled token/payload cannot change under stall.
+  private val completionHold = Module(new Queue(
+    new ProductCompletion(64, I, P, G, PA), entries = 1, pipe = false, flow = false))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits
@@ -136,7 +141,8 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   completion.io.in(1) <> m.io.response
   completion.io.in(2) <> lsq.io.completion
   completion.io.in(3) <> system.io.completion
-  backend.io.completion <> completion.io.out
+  completionHold.io.enq <> completion.io.out
+  backend.io.completion <> completionHold.io.deq
 
   io.retire.valid := backend.io.retire.valid
   io.retire.bits := backend.io.retire.bits

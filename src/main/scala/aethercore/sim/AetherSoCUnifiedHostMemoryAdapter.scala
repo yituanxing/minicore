@@ -226,7 +226,19 @@ class AetherSoCUnifiedHostMemoryAdapter(
   responses.io.in(InstructionSource).bits.fault := io.imemFault
   responses.io.in(InstructionSource).bits.last := true.B
 
-  io.response <> responses.io.out
+  // Data, PTW and instruction responses compete on a dynamic RR grant. If
+  // the upstream hub cannot yet take a response, a newly ready second source
+  // could otherwise replace the txnId/data already presented under VALID.
+  // Accept and pin the complete response at the first stalled boundary;
+  // the empty flow-through path retains the historical zero-wait host ABI.
+  private val responseSkid = Module(new Queue(
+    new AetherMemResponse(dataBits, txnIdBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  responseSkid.io.enq <> responses.io.out
+  io.response <> responseSkid.io.deq
 
   when(hostDataHandshake && !responses.io.in(DataSource).fire) {
     bufferedDataResponse := true.B

@@ -181,6 +181,11 @@ probe_card() {
     printf '%s\n' 'compiler=c++' 'flags=-std=c++20 -O2 -Wall -Wextra -Werror -I<root>/sim'
     command -v c++
     c++ --version | sed -n '1p'
+    # Do not trust only the compiler version string: an executable replaced
+    # in place can report the same version while producing a different probe.
+    # The same immutable-input rule applies to this cheap binary and to the
+    # separately content-addressed Product RTL model.
+    sha256sum "$(readlink -f "$(command -v c++)")"
     sha256sum "$ROOT/sim/l32_sd_spi_card.h" \
       "$ROOT/tools/ci/product_sim_sd1_card_probe.cpp"
   } | sha256sum | awk '{print $1}')"

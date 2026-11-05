@@ -116,6 +116,8 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
   private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC, PA))
   private val m = Module(new ProductMUnit(g, PA))
   private val completion = Module(new RRArbiter(new ProductCompletion(64, I, P, G, PA), 2))
+  private val completionHold = Module(new Queue(
+    new ProductCompletion(64, I, P, G, PA), entries = 1, pipe = false, flow = false))
 
   backend.io.dispatch.valid := io.dispatch.valid
   backend.io.dispatch.bits := io.dispatch.bits
@@ -140,7 +142,10 @@ class ProductSmallIntegerCore(val config: ProductCoreConfig) extends Module {
 
   completion.io.in(0) <> integer.io.response
   completion.io.in(1) <> m.io.response
-  backend.io.completion <> completion.io.out
+  // Recovery can deassert completion.ready for multiple cycles while either
+  // FU becomes valid. The one-entry hold snapshots the chosen RR winner.
+  completionHold.io.enq <> completion.io.out
+  backend.io.completion <> completionHold.io.deq
 
   io.retire.valid := backend.io.retire.valid
   io.retire.bits := backend.io.retire.bits
