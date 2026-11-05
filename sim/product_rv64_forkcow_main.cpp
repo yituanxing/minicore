@@ -103,18 +103,27 @@ void record(const ProductTop& top, Counts& c) {
     ++c.commits;
     if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) ++c.compressed;
     if (top.io_commit_exception) ++c.exceptions;
-    if (top.io_commit_interrupt) {
-      ++c.interrupts;
-      const auto cause = static_cast<std::uint64_t>(top.io_commit_interruptCause);
-      if (interruptCause(cause, 5)) ++c.stip;
-      if (interruptCause(cause, 9)) ++c.seip;
-    }
     mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_pc));
     mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_rawInst));
     mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_instBytes));
     mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_exception));
     mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_interrupt));
     mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_interruptCause));
+  }
+  // Interrupt delivery is an independent retirement trace event. Product
+  // may assert io_commit_interrupt without io_commit_valid, as the canonical
+  // OpenSBI/Linux runner already accounts for. Preserve the existing digest
+  // for valid commits; hash the otherwise omitted event and its PC as well.
+  if (top.io_commit_interrupt) {
+    ++c.interrupts;
+    const auto cause = static_cast<std::uint64_t>(top.io_commit_interruptCause);
+    if (interruptCause(cause, 5)) ++c.stip;
+    if (interruptCause(cause, 9)) ++c.seip;
+    if (!top.io_commit_valid) {
+      mix(c.traceHash, 1);
+      mix(c.traceHash, cause);
+      mix(c.traceHash, static_cast<std::uint64_t>(top.io_commit_interruptPc));
+    }
   }
   mix(c.traceHash, static_cast<std::uint64_t>(top.io_imemValid));
   mix(c.traceHash, static_cast<std::uint64_t>(top.io_imemAddr));
