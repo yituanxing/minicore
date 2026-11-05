@@ -1,0 +1,178 @@
+name: AetherCore Product SD1 Transport Three-Way Short A/B
+
+# Explicit opt-in, NO Debian image or G5 CI promotion. A new branch workflow
+# can run immediately via the existing 'product-sd1-short' PR label; dispatch
+# is available once the workflow lives on the default branch.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-sd1-transport-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  product-sd1-transport-ab:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-sd1-short')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      JOBS: '4'
+      TOP: AetherCoreProductDebianSdRV64SimTop
+      OUT_ROOT: build/product-sd1-transport-ab
+      MAX_CYCLES: '12000000'
+      AETHERCORE_SD1_TRANSPORT_SHORT: '1'
+      AETHERCORE_ALLOW_PRODUCT_AB: '1'
+
+    steps:
+      - name: Checkout exact SD1 branch head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Freeze bounded transport-only scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$MAX_CYCLES" = 12000000
+          echo "MILL_OUTPUT_DIR=$RUNNER_TEMP/aethercore-product-sd1-transport/mill-out" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/aethercore-product-sd1-transport/mill-out"
+          bash -n tools/ci/product_sim_ab.sh tools/ci/product_sim_cache.sh tools/ci/product_sd1_transport_short_build.sh
+          gcc -std=c11 -ffreestanding -Wall -Wextra -fsyntax-only software/rv64_userspace/product_sd1_transport_smoke.c
+          python3 -m unittest tests_py.test_product_sd1_transport_short_contract -v
+
+      - name: Restore Scala and Mill dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact Verilator 5.024 and 5.054
+        id: vcache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Restore exact RV64 Linux GCC 13.3
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Install small-program and RTL prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex build-essential git python3 openjdk-17-jdk-headless \
+            device-tree-compiler e2fsprogs
+
+      - name: Validate exact pinned host toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          for version in 5.024 5.054; do
+            AETHERCORE_VERILATOR_VERSION="$version" bash tools/ensure_verilator_5_024.sh
+          done
+
+      - name: Save Verilator toolchains even if later RTL build fails
+        if: success() && steps.vcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Hash host CPU ISA and compiler ABI for native RTL model cache
+        id: native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(g++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore source-locked Product SD1 compiled RTL models
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-transport-ab/model-verilator-5.024-reference
+            build/product-sd1-transport-ab/model-verilator-5.054-reference
+            build/product-sd1-transport-ab/model-verilator-5.054-adaptive
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-transport-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'mill', 'src/main/scala/**/*.scala', 'sim/**/*.h', 'sim/**/*.cpp', 'tools/ci/product_sim_ab.sh', 'tools/ci/product_sim_cache.sh') }}
+
+      - name: Build only 64MiB baremetal SD1 transport inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sd1_transport_short_build.sh build
+          test "$(stat -c%s build/product-sd1-transport-input/card-64m.img)" = 67108864
+          grep -Fxq 'qualification=PRODUCT_SD1_TRANSPORT_INPUTS_ONLY_NOT_LINUX_NOT_G5' build/product-sd1-transport-input/result.txt
+
+      - name: Run 12M exact-cycle three-way Product SD1 A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sim_ab.sh
+          grep -Fxq 'qualification=PRODUCT_SD1_TRANSPORT_SHORT_AB_IDENTICAL_NOT_LINUX_NOT_G5_ELIGIBLE' \
+            build/product-sd1-transport-ab/sd1-transport-qualification.txt
+          test ! -e build/product-sd1-transport-ab/sd1-accelerator-qualification.txt
+          cat build/product-sd1-transport-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-sd1-transport-ab/sd1-transport-qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save verified Product SD1 native model cache
+        if: success() && steps.model-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/product-sd1-transport-ab/model-verilator-5.024-reference
+            build/product-sd1-transport-ab/model-verilator-5.054-reference
+            build/product-sd1-transport-ab/model-verilator-5.054-adaptive
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-transport-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'mill', 'src/main/scala/**/*.scala', 'sim/**/*.h', 'sim/**/*.cpp', 'tools/ci/product_sim_ab.sh', 'tools/ci/product_sim_cache.sh') }}
+
+      - name: Attach short evidence even on a failed differential
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-transport-only-short-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/product-sd1-transport-input/result.txt
+            build/product-sd1-transport-ab/*.state
+            build/product-sd1-transport-ab/*.diff
+            build/product-sd1-transport-ab/*.txt
+            build/product-sd1-transport-ab/*.tsv
+            build/product-sd1-transport-ab/logs/*.log

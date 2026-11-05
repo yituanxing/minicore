@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fast synthetic positive/negative checks for the Product G3 state contract."""
 
-from product_gsim_compare import canonical, summary
+from product_gsim_compare import canonical, require_strict_trace, summary
 
 
 class FakeLog:
@@ -39,6 +39,14 @@ def expect_failure(fn, fragment: str):
 
 
 def main():
+    strict = dict(trace_mode="strict-same-cycle", commit_digest="0xfabc", wire_digest="0xdef1")
+    require_strict_trace(strict)
+    expect_failure(lambda: require_strict_trace({**strict, "trace_mode": "fast-g4-unqualified"}),
+                   "strict-same-cycle")
+    expect_failure(lambda: require_strict_trace({**strict, "commit_digest": "OMITTED"}),
+                   "commit_digest")
+    expect_failure(lambda: require_strict_trace({**strict, "wire_digest": "OMITTED"}),
+                   "wire_digest")
     text = "L32_OPENSBI_TIMEOUT " + " ".join(f"{k}={v}" for k, v in COMMON.items())
     got = summary(FakeLog(text + "\n"), "L32_OPENSBI_TIMEOUT")
     assert canonical(got, True) == canonical(got, False)
@@ -53,7 +61,7 @@ def main():
     assert differ != canonical(got, False), "UART discrepancy must be caught"
     differ = canonical({**got, "ram-fingerprint": "0x3333"}, True)
     assert differ != canonical(got, False), "RAM discrepancy must be caught"
-    print("PRODUCT_GSIM_G3_COMPARE_SELFTEST_PASS positive=1 negatives=7")
+    print("PRODUCT_GSIM_G3_COMPARE_SELFTEST_PASS positive=2 negatives=10 strict_trace=1")
 
 
 if __name__ == "__main__":

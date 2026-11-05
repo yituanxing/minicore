@@ -17,6 +17,22 @@ grep -Fq 'qualification=PRODUCT_GSIM_G4_%s_CYCLES_LINUX_BANNER_GSIM_ONLY_NOT_VER
   echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_FAIL qualification_does_not_name_actual_cycles' >&2
   exit 1
 }
+grep -Fq "'__PRODUCT_G4_EARLY_NEVER_MATCH__' --fast-g4-unqualified" "$SCRIPT" || {
+  echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_FAIL fast_mode_not_requested' >&2
+  exit 1
+}
+grep -Fq '"$(token "$DETAIL" trace_mode)" == fast-g4-unqualified' "$SCRIPT" || {
+  echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_FAIL fast_mode_not_verified' >&2
+  exit 1
+}
+grep -Fq '"$(token "$DETAIL" commit_digest)" == OMITTED' "$SCRIPT" || {
+  echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_FAIL omitted_commit_digest_not_verified' >&2
+  exit 1
+}
+grep -Fq '"$(token "$DETAIL" wire_digest)" == OMITTED' "$SCRIPT" || {
+  echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_FAIL omitted_wire_digest_not_verified' >&2
+  exit 1
+}
 
 reject() {
   local expected="$1"
@@ -42,4 +58,4 @@ reject 'AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES out of range' \
 reject 'AETHERCORE_PRODUCT_GSIM_G4_WALL_SECONDS out of range' \
   env AETHERCORE_PRODUCT_GSIM_G4_WALL_SECONDS=286 bash "$SCRIPT" preflight
 
-echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_PASS negative_contracts=5 default_cycles=100000000 dynamic_qualification=1 guest_cycles=0'
+echo 'PRODUCT_GSIM_G4_SHELL_SELFTEST_PASS negative_contracts=5 default_cycles=100000000 dynamic_qualification=1 fast_unqualified=1 guest_cycles=0'

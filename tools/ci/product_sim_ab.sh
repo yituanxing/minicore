@@ -39,6 +39,13 @@ fw_bin="${FW_BIN:-build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_pa
 max_cycles="${MAX_CYCLES:-12000000}"
 out="${OUT_ROOT:-build/product-sim-short-ab}"
 jobs="${JOBS:-4}"
+sd1_transport="${AETHERCORE_SD1_TRANSPORT_SHORT:-0}"
+[[ "$sd1_transport" == 0 || "$sd1_transport" == 1 ]] || {
+  echo 'AETHERCORE_SD1_TRANSPORT_SHORT must be 0 or 1' >&2; exit 4;
+}
+if (( sd1_transport )) && (( ! sd1 )); then
+  echo 'Transport-only probe requires explicit AetherCoreProductDebianSdRV64SimTop' >&2; exit 4
+fi
 cache_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
 [[ "${VERILATOR_THREADS:-1}" == 1 &&
    "${VERILATOR_MODEL_OPT:--O3}" == -O3 &&
@@ -64,7 +71,23 @@ fi
 # offline media/payload preflight before allocating a single RTL build.  Its
 # manifests select the exact same firmware/DTB/media for every A/B profile;
 # a caller cannot silently swap in a different payload via FW_BIN.
-if (( sd1 )); then
+if (( sd1 && sd1_transport )); then
+  # This opt-in short gate is NOT Debian. Its independent 64MiB SD/DTB and
+  # baremetal PLIC/SPI exerciser can never produce G5 qualification evidence.
+  bash tools/ci/product_sd1_transport_short_build.sh preflight
+  fw_manifest="${AETHERCORE_SD1_TRANSPORT_INPUT_ROOT:-$root/build/product-sd1-transport-input}/result.txt"
+  [[ "$fw_manifest" == /* ]] || fw_manifest="$root/$fw_manifest"
+  sd_manifest="$fw_manifest"
+  manifest_fw="$(sed -n 's/^firmware_path=//p' "$fw_manifest")"
+  manifest_dtb="$(sed -n 's/^dtb_path=//p' "$fw_manifest")"
+  manifest_sd="$(sed -n 's/^sd_image_path=//p' "$fw_manifest")"
+  if [[ -n "${FW_BIN:-}" && "$(readlink -f "$FW_BIN")" != "$(readlink -f "$manifest_fw")" ]]; then
+    echo 'Transport A/B refuses a firmware override differing from the input manifest' >&2; exit 3
+  fi
+  fw_bin="$manifest_fw"
+  export AETHERCORE_PRODUCT_DTB_IMAGE="$manifest_dtb"
+  export AETHERCORE_PRODUCT_SD_IMAGE="$manifest_sd"
+elif (( sd1 )); then
   AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
     bash tools/ci/product_sim_sd1_manual.sh preflight
   fw_manifest="$root/build/rv64-debian-boot/result.txt"
@@ -114,8 +137,13 @@ ab_start_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive
   bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
 ab_start_script_sha="$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')"
 ab_start_fw_sha="$(sha256sum "$fw_bin" | awk '{print $1}')"
-if (( sd1 )); then
+if (( sd1 && ! sd1_transport )); then
   sd1_start_preflight_script_sha="$(sha256sum "$root/tools/ci/product_sim_sd1_manual.sh" | awk '{print $1}')"
+elif (( sd1_transport )); then
+  sd1_start_preflight_script_sha="$(sha256sum "$root/tools/ci/product_sd1_transport_short_build.sh" | awk '{print $1}')"
+  sd1_start_manifest_sha="$(sha256sum "$fw_manifest" | awk '{print $1}')"
+  sd1_start_dtb_sha="$(sha256sum "$manifest_dtb" | awk '{print $1}')"
+  sd1_start_media_sha="$(sha256sum "$manifest_sd" | awk '{print $1}')"
 fi
 
 results="$out/results.tsv"
@@ -257,7 +285,7 @@ awk -F '\t' '
   }
 ' "$results"
 
-if (( sd1 )); then
+if (( sd1 && ! sd1_transport )); then
   # A candidate is eligible for the MANUAL SD1 runner only while every
   # fingerprinted model input and each independently checked media/firmware
   # SHA still matches. Never interpret the short timeout as a Linux login.
@@ -306,4 +334,54 @@ if (( sd1 )); then
   mv -f "$evidence.$$.tmp" "$evidence"
   printf 'PRODUCT_SIM_AB_SD1_SHORT_EVIDENCE_RECORDED: v5054_reference_eligible=%s v5054_adaptive_eligible=%s evidence=%s; native Debian login NOT tested\n' \
     "$eligible_reference" "$eligible_adaptive" "$evidence"
+fi
+
+if (( sd1_transport )); then
+  # Never certify a reset-only comparison as an SD transport check. All three
+  # real RTL simulators must have executed the same actual SPI/DDR/PLIC probe.
+  for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
+    label="verilator-${profile%%:*}-${profile#*:}"
+    log="$out/logs/$label.run.log"
+    grep -Fq 'PRODUCT_SD1_INDEPENDENT_DTB_READY address=0x87f00000' "$log" || {
+      echo "SD1 transport $label missing independent DDR DTB" >&2; exit 11;
+    }
+    grep -Fq 'PRODUCT_SD1_SD_IMAGE_READY sectors=131072 partition1_lba=2048' "$log" || {
+      echo "SD1 transport $label missing valid 64MiB media" >&2; exit 11;
+    }
+    grep -Fq 'SD1 TRANSPORT INDEPENDENT DDR FDT OK' "$log" || {
+      echo "SD1 transport $label did not read independent FDT from physical DDR" >&2; exit 11;
+    }
+    grep -Fq 'SD1 TRANSPORT SPI PLIC11 CMD17 OK' "$log" || {
+      echo "SD1 transport $label did not observe real SPI, MBR read and PLIC11" >&2; exit 11;
+    }
+    grep -Eq 'sd-cmds=([6-9]|[1-9][0-9]+) sd-reads=[1-9][0-9]* .*sd-last-cmd=17 sd-init=1' "$log" || {
+      echo "SD1 transport $label did not finish CMD0/CMD8/CMD55/ACMD41/CMD58/CMD17 and read a sector" >&2; exit 11;
+    }
+  done
+  bash tools/ci/product_sd1_transport_short_build.sh preflight
+  [[ "$(sha256sum "$fw_manifest" | awk '{print $1}')" == "$sd1_start_manifest_sha" &&
+     "$(sha256sum "$root/tools/ci/product_sd1_transport_short_build.sh" | awk '{print $1}')" == "$sd1_start_preflight_script_sha" &&
+     "$(sha256sum "$manifest_dtb" | awk '{print $1}')" == "$sd1_start_dtb_sha" &&
+     "$(sha256sum "$manifest_sd" | awk '{print $1}')" == "$sd1_start_media_sha" ]] || {
+    echo 'SD1 transport inputs changed during same-cycle A/B' >&2; exit 10
+  }
+  [[ ! -e "$out/sd1-accelerator-qualification.txt" ]] || {
+    echo 'Refusing ambiguous transport-only directory containing Debian promotion evidence' >&2; exit 10
+  }
+  evidence="$out/sd1-transport-qualification.txt"
+  {
+    printf 'qualification=PRODUCT_SD1_TRANSPORT_SHORT_AB_IDENTICAL_NOT_LINUX_NOT_G5_ELIGIBLE\n'
+    printf 'compared_cycles=%s\ntop=%s\nelaborate=%s\n' "$max_cycles" "$top" "$elaborate"
+    printf 'firmware_sha256=%s\n' "$ab_start_fw_sha"
+    printf 'dtb_sha256=%s\nsd_image_sha256=%s\n' "$sd1_start_dtb_sha" "$sd1_start_media_sha"
+    printf 'input_manifest_sha256=%s\n' "$sd1_start_manifest_sha"
+    printf 'state_sha256=%s\n' "$(sha256sum "$out/verilator-5.024-reference.state" | awk '{print $1}')"
+    printf 'ab_script_sha256=%s\n' "$ab_start_script_sha"
+    printf 'model_identity_5024_baseline=%s\n' "$ab_start_baseline"
+    printf 'model_identity_5054_reference=%s\n' "$ab_start_ref"
+    printf 'model_identity_5054_adaptive=%s\n' "$ab_start_adaptive"
+    printf 'sd_spi_plic11_probe=PASS\nlinux_pid1=NOT_RUN\ndebian_login=NOT_RUN\ng5_unlock=FORBIDDEN\n'
+  } > "$evidence.$$.tmp"
+  mv -f "$evidence.$$.tmp" "$evidence"
+  printf 'PRODUCT_SIM_AB_SD1_TRANSPORT_SHORT_PASS: %s; NOT Debian, NOT Linux PID1, NOT G5 qualification\n' "$evidence"
 fi

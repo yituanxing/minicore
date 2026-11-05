@@ -20,6 +20,15 @@ def summary(log: Path, prefix: str) -> dict[str, str]:
     return dict(re.findall(r"(?:^|\s)([A-Za-z][\w-]*)=([^\s]+)", lines[0]))
 
 
+def require_strict_trace(detail: dict[str, str]) -> None:
+    """An omitted fast-prefix digest must never qualify the strict G3 A/B."""
+    if detail.get("trace_mode") != "strict-same-cycle":
+        raise ValueError("GSIM strict G3 requires trace_mode=strict-same-cycle")
+    for key in ("commit_digest", "wire_digest"):
+        if not re.fullmatch(r"0x[0-9a-fA-F]+", detail.get(key, "")):
+            raise ValueError(f"GSIM strict G3 missing real {key}")
+
+
 def canonical(raw: dict[str, str], is_gsim: bool) -> dict[str, str]:
     aliases = {
         "cycles": ("guest_cycles", "cycles") if is_gsim else ("cycles",),
@@ -73,6 +82,7 @@ def main() -> int:
     v_raw = summary(args.verilator, "L32_OPENSBI_TIMEOUT")
     g_raw = summary(args.gsim, "L32_OPENSBI_TIMEOUT")
     g_detail = summary(args.gsim, "AETHERCORE_PRODUCT_GSIM_PREFIX")
+    require_strict_trace(g_detail)
     if int(g_detail.get("host_bridge_calls", "0")) <= 0 or int(g_detail.get("host_imem_calls", "0")) <= 0:
         raise ValueError("GSIM never exercised actual external host bridge/fetch")
     if int(g_detail.get("guest_cycles", "0")) != args.cycles - 4:

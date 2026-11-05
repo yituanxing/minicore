@@ -116,9 +116,9 @@ void printRecentPcs(const std::array<std::uint64_t, kRecentCommitCount>& recent,
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 5) {
+  if (argc < 3 || argc > 6) {
     std::fprintf(stderr,
-        "usage: product_gsim_prefix_main [--bare|--memory|FIRMWARE] MAX_CYCLES [UART_MILESTONE] [--linux]\n");
+        "usage: product_gsim_prefix_main [--bare|--memory|FIRMWARE] MAX_CYCLES [UART_MILESTONE] [--linux|--fast-g4-unqualified]\n");
     return 2;
   }
   try {
@@ -128,16 +128,22 @@ int main(int argc, char** argv) {
     const bool bareProbe = image == "--bare";
     const bool memoryProbe = image == "--memory";
     bool requireLinux = false;
+    bool fastUnqualified = false;
     const char* milestone = "Test payload running";
-    if (argc >= 4) {
-      if (std::string(argv[3]) == "--linux") requireLinux = true;
-      else milestone = argv[3];
+    bool hasMilestone = false;
+    for (int i = 3; i < argc; ++i) {
+      const std::string arg = argv[i];
+      if (arg == "--linux" && !requireLinux) requireLinux = true;
+      else if (arg == "--fast-g4-unqualified" && !fastUnqualified) fastUnqualified = true;
+      else if (arg.rfind("--", 0) != 0 && !hasMilestone) {
+        milestone = argv[i];
+        hasMilestone = true;
+      } else {
+        throw std::invalid_argument("unknown or duplicate Product GSIM option");
+      }
     }
-    if (argc == 5) {
-      if (std::string(argv[4]) != "--linux" || requireLinux)
-        throw std::invalid_argument("unknown Product GSIM option");
-      requireLinux = true;
-    }
+    if (fastUnqualified && (bareProbe || memoryProbe || requireLinux))
+      throw std::invalid_argument("fast G4 is only for fixed-cycle firmware prefixes, not probes or Linux milestone qualification");
 
     Memory memory;
     if (bareProbe) {
@@ -197,12 +203,17 @@ int main(int argc, char** argv) {
       if (reset) continue;
       ++executedCycles;
 
-      const Commit commit = ports.commit();
+      // The fast G4-only mode does not change a single RTL step or host RAM
+      // transaction. It only avoids unused read-only port getters and trace
+      // digest work; the G3 strict differential remains the default.
+      const Commit commit = fastUnqualified ? ports.commitFastUnqualified() : ports.commit();
       if (commit.valid) {
         ++commits;
         lastPc = commit.pc;
-        hashWord(commitDigest, commit.pc);
-        hashWord(commitDigest, commit.inst);
+        if (!fastUnqualified) {
+          hashWord(commitDigest, commit.pc);
+          hashWord(commitDigest, commit.inst);
+        }
         if (commit.instBytes == 2) {
           ++compressed;
           if (commit.pc < 0x80400000ULL) ++opensbiCompressed;
@@ -244,18 +255,19 @@ int main(int argc, char** argv) {
           milestoneCycle = cycle;
         }
       }
-      // Include real RTL IRQ, timer comparator and exit outputs in an
-      // independent same-cycle trace. These fields are outputs, not synthetic
-      // milestones, so the gate's differential can consume them later.
-      hashWord(wireDigest, ports.mtime());
-      hashWord(wireDigest, ports.mtimecmp());
-      hashWord(wireDigest,
-          (static_cast<std::uint64_t>(ports.timerInterrupt()) << 0) |
-          (static_cast<std::uint64_t>(ports.supervisorExternalInterrupt()) << 1) |
-          (static_cast<std::uint64_t>(ports.uartInterrupt()) << 2) |
-          (static_cast<std::uint64_t>(ports.uartRxInterrupt()) << 3) |
-          (static_cast<std::uint64_t>(ports.exitValid()) << 4));
-      hashWord(wireDigest, ports.exitCode());
+      if (!fastUnqualified) {
+        // Retain every old same-cycle trace getter and digest for G3 strict
+        // differential. G4 fast mode makes no trace-digest claim whatsoever.
+        hashWord(wireDigest, ports.mtime());
+        hashWord(wireDigest, ports.mtimecmp());
+        hashWord(wireDigest,
+            (static_cast<std::uint64_t>(ports.timerInterrupt()) << 0) |
+            (static_cast<std::uint64_t>(ports.supervisorExternalInterrupt()) << 1) |
+            (static_cast<std::uint64_t>(ports.uartInterrupt()) << 2) |
+            (static_cast<std::uint64_t>(ports.uartRxInterrupt()) << 3) |
+            (static_cast<std::uint64_t>(ports.exitValid()) << 4));
+        hashWord(wireDigest, ports.exitCode());
+      }
 
       if (cycle < 20 && commit.valid)
         std::printf("\nAETHERCORE_PRODUCT_GSIM_COMMIT cycle=%llu index=%llu pc=0x%llx inst=0x%08x\n",
@@ -281,6 +293,17 @@ int main(int argc, char** argv) {
     const auto elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - start).count();
     const auto ramFingerprint = memory.fingerprint();
+    char commitDigestField[32]{};
+    char wireDigestField[32]{};
+    if (fastUnqualified) {
+      std::snprintf(commitDigestField, sizeof(commitDigestField), "OMITTED");
+      std::snprintf(wireDigestField, sizeof(wireDigestField), "OMITTED");
+    } else {
+      std::snprintf(commitDigestField, sizeof(commitDigestField), "0x%llx",
+                    static_cast<unsigned long long>(commitDigest));
+      std::snprintf(wireDigestField, sizeof(wireDigestField), "0x%llx",
+                    static_cast<unsigned long long>(wireDigest));
+    }
     // Key names match the Verilator runner's fixed-cycle timeout record.
     // A/B must compare these, including RAM, rather than infer PASS from CPS.
     std::printf("\nL32_OPENSBI_TIMEOUT cycles=%llu commits=%llu compressed=%llu"
@@ -313,9 +336,9 @@ int main(int argc, char** argv) {
     std::putchar('\n');
     std::printf("AETHERCORE_PRODUCT_GSIM_PREFIX guest_cycles=%llu retires=%llu"
                 " exceptions=%llu interrupts=%llu stip=%llu seip=%llu"
-                " last_pc=0x%llx commit_digest=0x%llx"
+                " last_pc=0x%llx commit_digest=%s"
                 " ram_digest=0x%llx uart_bytes=%llu uart_digest=0x%llx"
-                " wire_digest=0x%llx mtime=%llu mtimecmp=%llu"
+                " wire_digest=%s trace_mode=%s mtime=%llu mtimecmp=%llu"
                 " exit_valid=%u exit_code=%llu opensbi_banner=%u"
                 " linux_banner=%u milestone_cycle=%llu"
                 " host_seconds=%.6f host_cps=%.1f"
@@ -328,11 +351,12 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(stip),
                 static_cast<unsigned long long>(seip),
                 static_cast<unsigned long long>(lastPc),
-                static_cast<unsigned long long>(commitDigest),
+                commitDigestField,
                 static_cast<unsigned long long>(ramFingerprint),
                 static_cast<unsigned long long>(uartBytes),
                 static_cast<unsigned long long>(uartFingerprint),
-                static_cast<unsigned long long>(wireDigest),
+                wireDigestField,
+                fastUnqualified ? "fast-g4-unqualified" : "strict-same-cycle",
                 static_cast<unsigned long long>(ports.mtime()),
                 static_cast<unsigned long long>(ports.mtimecmp()),
                 static_cast<unsigned>(ports.exitValid()),

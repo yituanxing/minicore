@@ -15,6 +15,8 @@ set -euo pipefail
 # Passing means that GSIM executed a Linux-banner-bearing prefix *only*.
 # The verified 30M G3 A/B is retained as transport evidence; it is NOT a
 # claim that the G4 Linux state matches Verilator at every cycle.
+# The host fast mode skips only diagnostic getters/digests; it remains a
+# real Product RTL model and is not eligible for G3 same-cycle certification.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -119,7 +121,7 @@ LOG="$RUN_ROOT/linux-early.run.log"
 start="$(date +%s%N)"
 set +e
 timeout --signal=TERM --kill-after=5s "${WALL_SECONDS}s" \
-  "$GSIM" "$FW_BIN" "$EARLY_CYCLES" '__PRODUCT_G4_EARLY_NEVER_MATCH__' \
+  "$GSIM" "$FW_BIN" "$EARLY_CYCLES" '__PRODUCT_G4_EARLY_NEVER_MATCH__' --fast-g4-unqualified \
   > "$LOG" 2>&1
 rc=$?
 set -e
@@ -131,6 +133,10 @@ end="$(date +%s%N)"
 
 TERMINAL="$(single_record L32_OPENSBI_TIMEOUT "$LOG")"
 DETAIL="$(single_record AETHERCORE_PRODUCT_GSIM_PREFIX "$LOG")"
+[[ "$(token "$DETAIL" trace_mode)" == fast-g4-unqualified &&
+   "$(token "$DETAIL" commit_digest)" == OMITTED &&
+   "$(token "$DETAIL" wire_digest)" == OMITTED ]] ||
+  fail 'G4 fast runner unexpectedly emitted strict same-cycle digests or omitted its mode flag'
 [[ "$(token "$TERMINAL" cycles)" == "$EARLY_CYCLES" ]] ||
   fail 'G4 early did not finish exact requested fixed-cycle window'
 [[ "$(token "$DETAIL" guest_cycles)" == "$(( EARLY_CYCLES - 4 ))" ]] ||
@@ -161,6 +167,7 @@ elapsed="$(awk -v a="$start" -v b="$end" 'BEGIN{printf "%.6f", (b-a)/1000000000}
   printf 'qualification=PRODUCT_GSIM_G4_%s_CYCLES_LINUX_BANNER_GSIM_ONLY_NOT_VERILATOR_AB_NOT_PID1_PASS\n' "$EARLY_CYCLES"
   printf 'top=AetherCoreProductOpenSbiRV64SimTop\n'
   printf 'guest_engine=GSIM\n'
+  printf 'trace_mode=fast-g4-unqualified\ntrace_digests=OMITTED\n'
   printf 'same_cycle_evidence_scope=G3_OPEN_SBI_UART_30000000_ONLY\n'
   printf 'cycles=%s\nwall_cap_seconds=%s\nwall_seconds=%s\n' "$EARLY_CYCLES" "$WALL_SECONDS" "$elapsed"
   printf 'gsim_sha256=%s\ngsim_identity_sha256=%s\n' "$GSIM_SHA" "$GSIM_ID_SHA"

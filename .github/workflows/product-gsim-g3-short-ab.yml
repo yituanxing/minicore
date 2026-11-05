@@ -256,6 +256,23 @@ jobs:
           grep -Fq 'PRODUCT_FORKCOW_G3_SHORT_PASS' build/product-gsim-g3-ab/forkcow-g3.log
           echo 'Real Product OpenSBI fork-COW twice PASS from one already built Verilator model (NOT PID1 or Debian).' >> "$GITHUB_STEP_SUMMARY"
 
+      # Explicit G4 opt-in only. Measure strict and fast host overhead on the
+      # *same* already-qualified G3 GSIM binary/firmware before using fast
+      # mode on Linux. Functional end-state matching is not G4 same-cycle A/B.
+      - name: Measure strict versus fast GSIM host loop on 30M real G3 cycles
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_GSIM_FAST_AB: '1'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_fast_ab.sh preflight
+          bash tools/ci/product_gsim_fast_ab.sh run
+          grep -Fxq 'qualification=PRODUCT_GSIM_FAST_AB_FUNCTIONAL_STATE_MATCH_NOT_G4_VERILATOR_AB_NOT_PID1' \
+            build/product-gsim-fast-ab/qualification.txt
+          cat build/product-gsim-fast-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-fast-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
       # Linux's unchanged source/object cache avoids the baseline compile, but
       # minimal_initramfs_build.sh normally copies and rebuilds an entire
       # second kernel on every fresh runner. Cache only the final qualified
@@ -364,6 +381,10 @@ jobs:
             build/product-gsim-g3-ab/*.tsv
             build/product-gsim-g3-ab/*.log
             build/product-gsim-g3-ab/logs/*.log
+            build/product-gsim-fast-ab/qualification.txt
+            build/product-gsim-fast-ab/compare.txt
+            build/product-gsim-fast-ab/results.tsv
+            build/product-gsim-fast-ab/logs/*.log
             build/rv64-linux-early/result.txt
             build/rv64-linux-initramfs/result.txt
             build/rv64-minimal-init-boot/result.txt

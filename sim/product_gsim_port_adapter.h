@@ -109,6 +109,30 @@ class Ports {
     };
   }
 
+  // The bounded Linux-prefix *non-differential* runner only needs the
+  // architectural commit/exception/interrupt counters and recent PCs.
+  // Read sparse payloads only when valid. Strict G3 same-cycle differential
+  // continues to use commit() above without changing its observable fields.
+  Commit commitFastUnqualified() const {
+    Commit result{};
+    result.valid = static_cast<bool>(model_.get_io$$commit$$valid());
+    result.interrupt = static_cast<bool>(model_.get_io$$commit$$interrupt());
+    if (result.valid) {
+      result.pc = static_cast<std::uint64_t>(model_.get_io$$commit$$pc());
+      result.inst = static_cast<std::uint32_t>(model_.get_io$$commit$$inst());
+      result.instBytes = static_cast<std::uint8_t>(model_.get_io$$commit$$instBytes());
+      result.exception = static_cast<bool>(model_.get_io$$commit$$exception());
+      if (result.exception) {
+        result.exceptionCause = static_cast<std::uint64_t>(model_.get_io$$commit$$exceptionCause());
+        result.exceptionValue = static_cast<std::uint64_t>(model_.get_io$$commit$$exceptionValue());
+      }
+    }
+    if (result.interrupt) {
+      result.interruptCause = static_cast<std::uint64_t>(model_.get_io$$commit$$interruptCause());
+    }
+    return result;
+  }
+
   std::uint64_t mtime() const { return model_.get_io$$mtime(); }
   std::uint64_t mtimecmp() const { return model_.get_io$$mtimecmp(); }
   bool timerInterrupt() const { return model_.get_io$$timerInterrupt(); }
