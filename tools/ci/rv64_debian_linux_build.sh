@@ -75,9 +75,11 @@ fi
 # the host kernel contracts their real Debian programs need, while leaving
 # the frozen D1 Image configuration independently reproducible.
 if [[ "${ROOTFS_STAGE}" == d2 || "${ROOTFS_STAGE}" == d3 || "${ROOTFS_STAGE}" == sd1 ]]; then
+  # In Linux 6.6, fs/devpts/ is built by CONFIG_UNIX98_PTYS; there is no
+  # independently selectable CONFIG_DEVPTS_FS symbol to demand after olddefconfig.
   "${SOURCE_DIR}/scripts/config" --file "${OBJ_DIR}/.config" \
     -e PROC_FS -e SYSFS -e TMPFS -e DEVTMPFS -e DEVTMPFS_MOUNT \
-    -e UNIX98_PTYS -e DEVPTS_FS -e TTY -e FUTEX \
+    -e UNIX98_PTYS -e TTY -e FUTEX \
     -e NET -e UNIX -e POSIX_TIMERS -e SYSVIPC \
     -e EPOLL -e EVENTFD -e SIGNALFD -e TIMERFD \
     -e INOTIFY_USER -e FHANDLE
@@ -120,7 +122,7 @@ if [[ "${ROOTFS_STAGE}" == d2 || "${ROOTFS_STAGE}" == d3 || "${ROOTFS_STAGE}" ==
   for required in \
     'CONFIG_PROC_FS=y' 'CONFIG_SYSFS=y' 'CONFIG_TMPFS=y' \
     'CONFIG_DEVTMPFS=y' 'CONFIG_DEVTMPFS_MOUNT=y' \
-    'CONFIG_UNIX98_PTYS=y' 'CONFIG_DEVPTS_FS=y' \
+    'CONFIG_UNIX98_PTYS=y' \
     'CONFIG_NET=y' 'CONFIG_UNIX=y' 'CONFIG_FUTEX=y' \
     'CONFIG_POSIX_TIMERS=y' 'CONFIG_SYSVIPC=y' \
     'CONFIG_EPOLL=y' 'CONFIG_EVENTFD=y' 'CONFIG_SIGNALFD=y' \

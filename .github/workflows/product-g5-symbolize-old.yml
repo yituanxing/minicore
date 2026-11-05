@@ -1,0 +1,167 @@
+name: AetherCore Product G5 Old Debian PC Symbolization
+
+# Explicit diagnostic only. The billion-cycle guest is NEVER started here.
+# Add the product-g5-symbolize-old label to PR #379 to run this one-shot job.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: aethercore-product-g5-old-pc-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  product-g5-symbolize-old:
+    if: >-
+      github.event.pull_request.number == 379 &&
+      github.event.label.name == 'product-g5-symbolize-old' &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OLD_G5_SHA: b481160151ab4e3e5e5c5e1f7317a74fdddc36f3
+      OLD_IMAGE_SHA: 232bdf05a96b418c2aee4de965666eaa70d572a6494f93f8cab37e511401c0f5
+      OLD_VMLINUX_SHA: 39e498db1101fb75ad14af4daf345d4a53894677b0ad6c750c58ed106c355902
+      RV64_DEBIAN_EXPECTED_IMAGE_DIGEST: debian@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+      RV64_LINUX_JOBS: '4'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+
+    steps:
+      - name: Checkout exact historical Debian source
+        uses: actions/checkout@v4
+        with:
+          ref: b481160151ab4e3e5e5c5e1f7317a74fdddc36f3
+          clean: true
+
+      # The old kernel embeds CONFIG_INITRAMFS_SOURCE's absolute directory.
+      # Reconstruct it at the original $GITHUB_WORKSPACE path (not a checkout
+      # subdirectory), or the resulting Image/vmlinux SHAs cannot be identical.
+      - name: Checkout current exact diagnostic source separately
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          clean: true
+          path: .g5-current-diagnostics
+
+      - name: Download original 167-minute G5 artifact, no simulation
+        uses: actions/download-artifact@v4
+        with:
+          name: aethercore-product-g5-debian-41868850566
+          run-id: 41868850566
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/old-g5-evidence
+
+      - name: Verify exact original evidence before any build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$OLD_G5_SHA"
+          test "$(git -C .g5-current-diagnostics rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python3 -m py_compile .g5-current-diagnostics/tools/ci/product_g5_pc_diagnose.py
+          log="$RUNNER_TEMP/old-g5-evidence/_temp/aethercore-product-g5-debian/$OLD_G5_SHA/logs/boot-probe.log"
+          manifest="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-linux/evidence/sha256.txt"
+          rootfs="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-rootfs/result.txt"
+          test -s "$log" && test -s "$manifest" && test -s "$rootfs"
+          grep -Fqx "$OLD_VMLINUX_SHA  /home/runner/work/minicore/minicore/build/rv64-debian-linux/obj/vmlinux" "$manifest"
+          grep -Fqx "$OLD_IMAGE_SHA  /home/runner/work/minicore/minicore/build/rv64-debian-linux/obj/arch/riscv/boot/Image" "$manifest"
+          grep -Fqx "image_digest=$RV64_DEBIAN_EXPECTED_IMAGE_DIGEST" "$rootfs"
+          python3 - "$log" <<'PY'
+          import pathlib
+          import sys
+          sys.path.insert(0, ".g5-current-diagnostics")
+          from tools.ci.product_g5_pc_diagnose import parse_frontier
+          fields, pcs, printk = parse_frontier(pathlib.Path(sys.argv[1]))
+          assert fields["cycles"] == "1800000000"
+          assert fields["commits"] == "534725583"
+          assert fields["uart-silent-cycles-inferred"] == "703269076"
+          assert len(pcs) == 17
+          assert "clk: Disabling unused clocks" in printk
+          print("PRODUCT_G5_OLD_EVIDENCE_PREFLIGHT_PASS no_guest_cycles=1")
+          PY
+
+      - name: Restore pinned GCC 13.3
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore qualified Linux and OpenSBI Kbuild objects
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Install exact kernel and rootfs reconstruction prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev \
+            build-essential dwarves device-tree-compiler curl xz-utils
+          docker version
+
+      - name: Provision exact GCC 13.3 for subsequent Kbuild step
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reproduce historical Image and vmlinux without running guest cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}"
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -qx 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' build/rv64-linux-early/result.txt
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -qx 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' build/rv64-debian-rootfs/result.txt
+          grep -Fqx "image_digest=$RV64_DEBIAN_EXPECTED_IMAGE_DIGEST" build/rv64-debian-rootfs/result.txt
+          bash tools/ci/rv64_debian_linux_build.sh
+          grep -qx 'RV64_DEBIAN_LINUX_BUILD_RESULT: status=PASS' build/rv64-debian-linux/result.txt
+          test "$(sha256sum build/rv64-debian-linux/obj/vmlinux | cut -d' ' -f1)" = "$OLD_VMLINUX_SHA"
+          test "$(sha256sum build/rv64-debian-linux/obj/arch/riscv/boot/Image | cut -d' ' -f1)" = "$OLD_IMAGE_SHA"
+          echo 'PRODUCT_G5_OLD_KERNEL_REPRODUCED_EXACTLY no_guest_cycles=1'
+
+      - name: Resolve exact old 1.8B-cycle PC frontier
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/product-g5-old-pc
+          log="$RUNNER_TEMP/old-g5-evidence/_temp/aethercore-product-g5-debian/$OLD_G5_SHA/logs/boot-probe.log"
+          manifest="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-linux/evidence/sha256.txt"
+          cross="$HOME/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1/bin/riscv64-linux-"
+          test -x "${cross}addr2line" && test -x "${cross}objdump" && test -x "${cross}nm"
+          python3 .g5-current-diagnostics/tools/ci/product_g5_pc_diagnose.py \
+            --boot-log "$log" \
+            --vmlinux build/rv64-debian-linux/obj/vmlinux \
+            --image build/rv64-debian-linux/obj/arch/riscv/boot/Image \
+            --sha256-manifest "$manifest" \
+            --cross-prefix "$cross" \
+            | tee build/product-g5-old-pc/symbolized.txt
+          grep -Fqx 'PRODUCT_G5_EXACT_PC_SYMBOLIZATION_PASS' build/product-g5-old-pc/symbolized.txt
+          echo 'PRODUCT_G5_OLD_PC_OFFLINE_PASS: exact historical symbols, no guest simulation' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bounded diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-old-pc-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/product-g5-old-pc/symbolized.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/evidence/sha256.txt
