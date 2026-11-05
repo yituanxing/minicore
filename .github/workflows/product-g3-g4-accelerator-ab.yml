@@ -1,0 +1,254 @@
+name: AetherCore Product G3 to G4 Simulator Accelerator A/B
+
+# Opt-in performance qualification, never a default push/PR cost. The exact
+# Product OpenSBI TOP and compiled host models are shared by small OpenSBI
+# smoke and Linux 6.6.143 PID1; Debian/SD1 is deliberately excluded.
+#
+# On a branch without a workflow_dispatch entry on default, add ONE explicit
+# label to its PR: product-g3-short-ab, product-g4-early-ab or
+# product-g4-pid1-ab. The label decides how far the single runner proceeds.
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Last stage to run on the same runner (no Debian)
+        required: true
+        type: choice
+        options: [g3-only, g4-early, g4-pid1]
+        default: g4-early
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g3-g4-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify-simulator:
+    name: Frozen Product G3 three-way A/B, optional G4 Linux differential and PID1
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(fromJSON('["product-g3-short-ab","product-g4-early-ab","product-g4-pid1-ab"]'), github.event.label.name))
+    runs-on: ubuntu-24.04
+    # 3 pinned host model builds, optional 2 x 200M-cycle Linux early A/B,
+    # and at most ONE 1.2B-cycle PID1 run. Never run the Debian SDHC image.
+    timeout-minutes: 330
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+      JOBS: '4'
+      # G3 is ~30M cycles/profile. G4 early compares only 200M cycles/profile.
+      # The first full PID1 may require ~1.02B cycles, with 1.2B as an upper cap.
+      AETHERCORE_PID1_EARLY_CYCLES: '200000000'
+      AETHERCORE_PID1_MAX_CYCLES: '1200000000'
+
+    steps:
+      - name: Checkout exact requested Product branch head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Freeze scope and reject Debian before expensive setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          scope='${{ inputs.scope }}'
+          if [[ '${{ github.event_name }}' == pull_request ]]; then
+            case '${{ github.event.label.name }}' in
+              product-g3-short-ab) scope=g3-only ;;
+              product-g4-early-ab) scope=g4-early ;;
+              product-g4-pid1-ab) scope=g4-pid1 ;;
+              *) echo 'Unexpected Product simulator A/B label' >&2; exit 3 ;;
+            esac
+          fi
+          case "$scope" in g3-only|g4-early|g4-pid1) ;; *) exit 3 ;; esac
+          echo "PRODUCT_AB_SCOPE=$scope" >> "$GITHUB_ENV"
+          echo "MILL_OUTPUT_DIR=$RUNNER_TEMP/aethercore-product-ab/mill-out" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/aethercore-product-ab/mill-out"
+          [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || {
+            echo 'Debian/SD1 media are forbidden in this Product G3/G4 gate' >&2
+            exit 3
+          }
+          echo "PRODUCT_SIM_AB_REMOTE_START: head=$TARGET_SHA scope=$scope"
+
+      - name: Reuse Scala and Mill dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore both pinned Verilator installations
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v2-
+
+      - name: Reuse exact pinned RV64 GCC 13.3 toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Reuse unchanged OpenSBI 1.6 source
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
+
+      - name: Reuse Linux 6.6.143 source, object and OpenSBI caches
+        if: env.PRODUCT_AB_SCOPE != 'g3-only'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Install original G3/G4 build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential libreadline-dev \
+            pkg-config curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves
+
+      - name: Validate exact Verilator 5.024, 5.054, RV64 GCC and scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          bash -n tools/ci/product_sim_ab.sh tools/ci/product_g3_short_ab.sh \
+            tools/ci/product_sim_pid1_ab.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          for pinned in 5.024 5.054; do
+            AETHERCORE_VERILATOR_VERSION="$pinned" \
+              bash tools/ensure_verilator_5_024.sh
+          done
+
+      - name: Stage historical unchanged OpenSBI 1.6 and S-mode UART program
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_opensbi_first_exec.sh
+          grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' \
+            build/rv64-opensbi-first-exec/result.txt
+          sha256sum --check --status \
+            build/rv64-opensbi-first-exec/evidence/sha256.txt
+
+      - name: Run three exact Product G3 small-program simulator profiles
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_AB: '1'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g3_short_ab.sh
+          grep -Fxq 'qualification=PRODUCT_G3_SHORT_AB_IDENTICAL_NOT_LINUX_PASS' \
+            build/product-g3-short-ab/small-qualification.txt
+          echo 'G3 OpenSBI real UART milestone and same-cycle reference/5.054/adaptive state all qualified.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-g3-short-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-g3-short-ab/small-qualification.txt
+
+      - name: Save complete pinned pair after verified G3 A/B
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Stage exact historical Linux 6.6.143 and deterministic PID1 firmware
+        if: env.PRODUCT_AB_SCOPE != 'g3-only'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          timeout --signal=TERM --kill-after=10s 180s \
+            bash tools/ci/rv64_minimal_init_payload_build.sh
+          grep -Fxq 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-minimal-init-boot/result.txt
+          grep -Fxq 'spi_sd=0' build/rv64-minimal-init-boot/result.txt
+
+      - name: Compare 200M-cycle early Linux prefix using SAME G3 model binaries
+        if: env.PRODUCT_AB_SCOPE != 'g3-only'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_PID1_EARLY: '1'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sim_pid1_ab.sh preflight
+          bash tools/ci/product_sim_pid1_ab.sh early-compare
+          echo 'G4 early Linux 6.6.143 same-cycle state comparison PASS; not PID1 signoff.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-g3-short-ab/pid1-early/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-g3-short-ab/pid1-early/early-qualification.txt
+
+      - name: Boot unchanged Linux PID1, STIP and SEIP with ONE selected profile
+        if: env.PRODUCT_AB_SCOPE == 'g4-pid1'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_PID1_LONGRUN: '1'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sim_pid1_ab.sh selected-pid1
+          echo 'G4 exact Linux 6.6.143 PID1, STIP and SEIP PASS (not Debian).' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve G3/G4 source SHA, same-cycle states, timings and firmware proofs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g3-g4-simulator-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-opensbi-first-exec/result.txt
+            build/rv64-opensbi-first-exec/evidence/sha256.txt
+            build/product-g3-short-ab/results.tsv
+            build/product-g3-short-ab/small-qualification.txt
+            build/product-g3-short-ab/logs/*.run.log
+            build/product-g3-short-ab/*.state
+            build/product-g3-short-ab/pid1-early/results.tsv
+            build/product-g3-short-ab/pid1-early/early-qualification.txt
+            build/product-g3-short-ab/pid1-early/*.state
+            build/product-g3-short-ab/pid1-early/*.run.log
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
