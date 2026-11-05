@@ -65,7 +65,7 @@ profile selected explicitly:
 
 ```text
 aethercore.EmitAetherSoCDts --output <board.dts> \
-  --isa rv64imafdc_zicsr_zifencei --mmu sv39 --spi-sd \
+  --isa rv64imafdc_zicsr_zifencei --mmu sv39 --product --spi-sd \
   --spi-clock-hz 50000000 --spi-max-hz 12500000
 ```
 

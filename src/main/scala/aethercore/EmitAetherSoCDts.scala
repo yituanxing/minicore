@@ -5,6 +5,40 @@ import java.nio.file.{Files, Paths}
 import aethercore.config.CoreProfiles
 import aethercore.soc.{AetherCoreProductSoCProfiles, AetherSoCBoardSpec, AetherSoCDts, ProductSoCBoardProfiles}
 
+/** Pure CLI board-profile selection, also exercised without running the emitter.
+  * An SD peripheral cannot be attached to the older V2 board's 16-source PLIC.
+  */
+private[aethercore] object AetherSoCDtsBoardSelection {
+  def select(
+      productBoard: Boolean,
+      spiSd: Boolean,
+      spiClockHz: Option[Long] = None,
+      spiMaxHz: Option[Long] = None
+  ): AetherSoCBoardSpec = {
+    require(!spiSd || productBoard,
+      "--spi-sd requires --product (Product SPI-SD uses the 52-source PLIC)")
+    require(spiSd || (spiClockHz.isEmpty && spiMaxHz.isEmpty),
+      "--spi-clock-hz and --spi-max-hz require --spi-sd")
+
+    val selectedDevices = if (spiSd) ProductSoCBoardProfiles.persistentSpiSd
+      else ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices = selectedDevices.copy(
+      spiBusClockFrequencyHz = spiClockHz.getOrElse(selectedDevices.spiBusClockFrequencyHz),
+      spiMaxFrequencyHz = spiMaxHz.getOrElse(selectedDevices.spiMaxFrequencyHz)
+    )
+    val platform = CoreProfiles.rv64imasuSv39PmpSoftware.platform
+    val originalBoard = AetherSoCBoardSpec.qualifiedLinux(platform)
+    originalBoard.copy(
+      // V2's frozen legacy board has only 16 sources; the Product RTL has 52.
+      plicSourceCount = if (productBoard)
+        AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
+      else originalBoard.plicSourceCount,
+      spiBusClockFrequencyHz = boardDevices.spiBusClockFrequencyHz,
+      spiMaxFrequencyHz = boardDevices.spiMaxFrequencyHz
+    )
+  }
+}
+
 /**
   * Emit the qualified RV64 AetherSoC device tree from the same Scala board
   * specification used to construct RTL.
@@ -15,8 +49,9 @@ import aethercore.soc.{AetherCoreProductSoCProfiles, AetherSoCBoardSpec, AetherS
   *                    [--mmu sv39]
   *                    [--bootargs "..."]
   *                    [--product] (Product SmallOoO PLIC topology)
-  *                    [--spi-sd] [--spi-clock-hz 50000000]
-  *                    [--spi-max-hz 12500000]
+  *                    [--spi-sd] (requires --product)
+  *                    [--spi-clock-hz 50000000] (requires --spi-sd)
+  *                    [--spi-max-hz 12500000] (requires --spi-sd)
   */
 object EmitAetherSoCDts extends App {
   private def option(name: String): Option[String] = {
@@ -39,26 +74,10 @@ object EmitAetherSoCDts extends App {
   private val spiClockHz = option("--spi-clock-hz").map(_.toLong)
   private val spiMaxHz = option("--spi-max-hz").map(_.toLong)
 
-  private val platform = CoreProfiles.rv64imasuSv39PmpSoftware.platform
-  private val selectedDevices = if (spiSd) ProductSoCBoardProfiles.persistentSpiSd
-    else ProductSoCBoardProfiles.existingRamOnly
-  private val boardDevices = selectedDevices.copy(
-    spiBusClockFrequencyHz = spiClockHz.getOrElse(selectedDevices.spiBusClockFrequencyHz),
-    spiMaxFrequencyHz = spiMaxHz.getOrElse(selectedDevices.spiMaxFrequencyHz)
-  )
-  private val originalBoard = AetherSoCBoardSpec.qualifiedLinux(platform)
-  private val board = originalBoard.copy(
-    // The legacy V2 Linux board exposes 16 interrupt sources. Product RTL
-    // implements all 52 QEMU-virt/OpenSBI-visible sources; its DTB must not
-    // accidentally inherit the older 16-source board preset.
-    plicSourceCount = if (productBoard)
-      AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
-    else originalBoard.plicSourceCount,
-    spiBusClockFrequencyHz = boardDevices.spiBusClockFrequencyHz,
-    spiMaxFrequencyHz = boardDevices.spiMaxFrequencyHz
-  )
+  private val board = AetherSoCDtsBoardSelection.select(
+    productBoard, spiSd, spiClockHz, spiMaxHz)
   private val text = AetherSoCDts.render(board, isa, mmu, bootargs,
-    enableSpiSd = boardDevices.spiSdEnabled)
+    enableSpiSd = spiSd)
 
   private val path = Paths.get(output)
   Option(path.getParent).foreach(parent => Files.createDirectories(parent))
