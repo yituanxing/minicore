@@ -23,6 +23,7 @@ CYCLES="${AETHERCORE_G5_AB_CYCLES:-30000000}"
 WALL_SECONDS="${AETHERCORE_G5_AB_WALL_SECONDS:-600}"
 VERILATOR_5024="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.024/bin/verilator"
 VERILATOR_5054="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.054/bin/verilator"
+TOOLCHAIN_ROOT="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
 
 fail() { echo "PRODUCT_G5_SHORT_AB_REJECTED: $*" >&2; exit 3; }
 sha_file() { sha256sum "$1" | awk '{print $1}'; }
@@ -45,8 +46,10 @@ check_inputs() {
     build/rv64-debian-boot/result.txt || fail 'not an independently built real Debian payload'
   [[ -x "$VERILATOR_5024" && -x "$VERILATOR_5054" ]] ||
     fail 'both pinned Verilator 5.024/5.054 toolchains are required'
-  [[ "$("$VERILATOR_5024" --version)" == 'Verilator 5.024'* ]] || fail '5.024 generator mismatch'
-  [[ "$("$VERILATOR_5054" --version)" == 'Verilator 5.054'* ]] || fail '5.054 generator mismatch'
+  # Shallow pinned source builds may report UNKNOWN.REV in --version.  The
+  # source revision marker is verified by ensure_verilator_5_024.sh itself.
+  [[ "$(< "$TOOLCHAIN_ROOT/verilator-5.024/.aethercore-source-revision")" == 522bead374d6b7b2adb316304126e5361b18bcf1 ]] || fail '5.024 pinned source mismatch'
+  [[ "$(< "$TOOLCHAIN_ROOT/verilator-5.054/.aethercore-source-revision")" == bbb60a403932a9f695cb6ff001ceb73de6ad9234 ]] || fail '5.054 pinned source mismatch'
   [[ "$BASELINE" != "$CANDIDATE" ]] || fail 'independent models cannot share the same path'
   [[ -x "$CANDIDATE/obj/V$TOP" ]] || fail 'selected 5.054 model is not built'
   model_cache 5.054 verify "$CANDIDATE" >/dev/null || fail 'selected Product G5 model identity changed'

@@ -188,10 +188,16 @@ jobs:
             bash tools/ensure_verilator_5_054.sh
           fi
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
-          verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-$AETHERCORE_VERILATOR_VERSION/bin/verilator"
+          toolchain_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
+          verilator_bin="$toolchain_root/verilator-$AETHERCORE_VERILATOR_VERSION/bin/verilator"
           [[ -x "$verilator_bin" ]] || { echo 'Pinned selected Product G5 Verilator missing' >&2; exit 21; }
-          [[ "$("$verilator_bin" --version)" == "Verilator $AETHERCORE_VERILATOR_VERSION"* ]] || {
-            echo 'Pinned Product G5 Verilator version mismatch' >&2
+          case "$AETHERCORE_VERILATOR_VERSION" in
+            5.024) expected_revision=522bead374d6b7b2adb316304126e5361b18bcf1 ;;
+            5.054) expected_revision=bbb60a403932a9f695cb6ff001ceb73de6ad9234 ;;
+            *) exit 22 ;;
+          esac
+          [[ "$(< "$toolchain_root/verilator-$AETHERCORE_VERILATOR_VERSION/.aethercore-source-revision")" == "$expected_revision" ]] || {
+            echo 'Pinned Product G5 Verilator source revision mismatch' >&2
             exit 22
           }
           echo "PRODUCT_VERILATOR_BIN=$verilator_bin" >> "$GITHUB_ENV"
