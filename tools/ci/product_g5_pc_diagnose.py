@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Symbolize a Product G5 boot frontier without rerunning billions of RTL cycles.
 
-The Image and vmlinux must BOTH match the hashes captured by the original G5
-workflow.  A similar kernel configuration is not sufficient: even one changed
-symbol layout makes a plausible-looking PC mapping dangerously misleading.
+Exact mode requires BOTH Image and vmlinux hashes captured by the original
+G5 workflow. Candidate mode requires independent source/config/rootfs guards,
+and every resulting address mapping remains explicitly UNVERIFIED.
 """
 
 from __future__ import annotations
@@ -112,6 +112,10 @@ def candidate_identity(
     actual_revision = invoke(["git", "-C", str(source_dir), "rev-parse", "HEAD"]).strip()
     if actual_revision != source_revision:
         die(f"candidate source mismatch: actual={actual_revision} expected={source_revision}")
+    # A matching HEAD is insufficient if the checked-out historical build
+    # scripts or kernel settings have been modified in the working tree.
+    invoke(["git", "-C", str(source_dir), "diff", "--quiet", "--exit-code"])
+    invoke(["git", "-C", str(source_dir), "diff", "--cached", "--quiet", "--exit-code"])
     if sha256(config) != config_sha.lower():
         die("candidate resolved.config SHA mismatch")
     result = rootfs_result.read_text(encoding="utf-8")
@@ -188,11 +192,12 @@ def kernel_symbols(vmlinux: Path, prefix: str) -> tuple[list[int], list[str]]:
 
 def symbolize(vmlinux: Path, prefix: str, pcs: list[int], *, candidate_only: bool = False) -> None:
     addresses, names = kernel_symbols(vmlinux, prefix)
+    pc_label = "PC_UNVERIFIED" if candidate_only else "PC_EXACT"
     for pc in pcs:
         index = bisect.bisect_right(addresses, pc) - 1
         if index < 0 or pc - addresses[index] > 0x10000:
             die(f"PC {pc:#x} cannot be associated with a nearby kernel text symbol")
-        print(f"PC {pc:#018x}: {names[index]}+0x{pc - addresses[index]:x}")
+        print(f"{pc_label} {pc:#018x}: {names[index]}+0x{pc - addresses[index]:x}")
     resolved = invoke([prefix + "addr2line", "-a", "-f", "-C", "-e", str(vmlinux), *[hex(pc) for pc in pcs]])
     provenance = "CANDIDATE_ONLY UNVERIFIED" if candidate_only else "EXACT"
     print(f"\n=== addr2line ({provenance} G5 vmlinux) ===")
