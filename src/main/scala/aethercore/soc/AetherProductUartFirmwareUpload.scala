@@ -96,8 +96,7 @@ class AetherProductUartFirmwareUpload(
   // even if the DDR writer accepts zero beats until the host stops sending.
   private val byteFifo = Module(new Queue(UInt(8.W), windowBytes))
 
-  private val pBeacon :: pHeader :: pOfferDescriptor :: pAckHeader ::
-    pPayload :: pWaitCredit :: pAckWindow :: pFinalDrain :: pDone :: pFault :: Nil = Enum(10)
+  private val pBeacon :: pHeader :: pOfferDescriptor :: pAckHeader :: pPayload :: pWaitCredit :: pAckWindow :: pFinalDrain :: pDone :: pFault :: Nil = Enum(10)
   private val state = RegInit(pBeacon)
   io.failed := state === pFault
 

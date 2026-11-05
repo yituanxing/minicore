@@ -1,0 +1,171 @@
+name: AetherCore Product GSIM real G3 short same-cycle gate
+
+# Opt-in only: one OpenSBI 1.6/S-mode UART program on Product RTL, 30M cycles
+# per engine. Reuses PA32's pinned GSIM frontend patch/bridge, not PA32 evidence.
+# Never builds/runs Linux PID1 or Debian here. PR labels work before workflow
+# dispatch appears on the default branch.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-gsim-g3-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-product-g3-gsim-ab:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'product-gsim-g3-short-ab')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_ALLOW_PRODUCT_GSIM_AB: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+      GSIM_PREFIX_OPT: '-O3'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact commit and reject Debian inputs
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Freeze Product G3 only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" && -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 2
+          echo 'PRODUCT_GSIM_G3_CI_START: OpenSBI S-mode UART, 30M cycles, no Linux or Debian'
+
+      - name: Reuse Mill Scala dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator 5.054 build
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-
+
+      - name: Reuse pinned RV64 GCC and OpenSBI 1.6 source
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g3-fw-v1
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore pinned GSIM source and native frontend cache
+        id: gsim-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Install real GSIM/RTL/OpenSBI build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make \
+            zlib1g-dev autoconf cmake ninja-build libssl-dev libelf-dev \
+            libreadline-dev pkg-config build-essential bc device-tree-compiler \
+            dwarves xz-utils
+          bash -n tools/ci/product_gsim_build.sh tools/ci/product_gsim_g3_ab.sh
+          python3 -m py_compile tools/ci/product_gsim_frontend_patch.py tools/ci/product_gsim_compare.py
+          python3 tools/ci/product_gsim_compare_selftest.py
+
+      - name: Fingerprint native CPU/clang ABI for safe generated-model reuse
+        id: native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          # -march=native binaries are unsafe to move to arbitrary x86_64 CPUs.
+          # Cache only when the host model, ISA feature flags and clang match.
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(clang++-19 --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Product generated GSIM native model for identical host ABI
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+
+      - name: Reuse/build unchanged real OpenSBI G3 UART firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ci/rv64_opensbi_first_exec.sh
+          grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' build/rv64-opensbi-first-exec/result.txt
+          sha256sum --check --status build/rv64-opensbi-first-exec/evidence/sha256.txt
+
+      - name: Compare actual Product GSIM vs one Verilator 5.054 model at 30M cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g3_ab.sh
+          grep -Fxq 'qualification=PRODUCT_GSIM_G3_IDENTICAL_NOT_LINUX_PASS' build/product-gsim-g3-ab/qualification.txt
+          cat build/product-gsim-g3-ab/compare.txt >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g3-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g3-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save GSIM generator only (Product RTL native model is host-specific)
+        if: success() && steps.gsim-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Save Product GSIM model for identical future host CPU/compiler
+        if: success() && steps.native-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+
+      - name: Upload same-cycle state, identities, build logs, measured throughput
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-gsim-g3-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-opensbi-first-exec/result.txt
+            build/rv64-opensbi-first-exec/evidence/sha256.txt
+            build/product-gsim-bridge/build-identity.txt
+            build/product-gsim-bridge/*.log
+            build/product-gsim-g3-ab/*.txt
+            build/product-gsim-g3-ab/*.tsv
+            build/product-gsim-g3-ab/logs/*.log

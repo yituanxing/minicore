@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 #include "verilated.h"
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -322,6 +324,7 @@ inline std::size_t dataBytesFromMemSize(std::uint32_t encoded) {
   }
 }
 
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 /** Drive the shared RV32/RV64 physical-memory boundary for one low phase. */
 template <typename Top>
 void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
@@ -532,5 +535,6 @@ template <typename Top>
 void initialize(Top& top, Memory& memory) {
   initialize(top, memory, legacyRuntimeState<Top>());
 }
+#endif  // !AETHERCORE_GSIM_HOST_MEMORY_ONLY
 
 }  // namespace aethercore::l32sim
