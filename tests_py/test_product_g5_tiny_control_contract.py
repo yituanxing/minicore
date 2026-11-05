@@ -49,6 +49,24 @@ class ProductG5TinyControlContract(unittest.TestCase):
         self.assertIn("not Debian userland acceptance", content)
         self.assertNotIn("DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK", content)
 
+    def test_reuses_existing_g5_toolchain_and_model_cache(self):
+        content = WORKFLOW.read_text()
+        g5 = (ROOT / ".github/workflows/product-g5-debian-rv64gc.yml").read_text()
+        for suffix in (
+            "verilator-5.024",
+            "src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1",
+            "build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1",
+            "verilator-5.054",
+            "src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234",
+            "build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234",
+        ):
+            path = "~/.cache/aethercore/toolchains/" + suffix
+            self.assertIn(path, g5)
+            self.assertIn(path, content)
+        self.assertIn("$RUNNER_TEMP/aethercore-product-g5-debian/model", content)
+        self.assertIn("${{ runner.temp }}/aethercore-product-g5-debian/model", content)
+        self.assertNotIn("aethercore-g5-tiny/model", content)
+
     def test_builder_is_valid_shell(self):
         subprocess.run(["bash", "-n", str(BUILDER)], check=True)
 

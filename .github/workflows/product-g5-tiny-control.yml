@@ -67,6 +67,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
             ~/.cache/aethercore/toolchains/verilator-5.054
             ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
             ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
@@ -144,7 +147,7 @@ jobs:
           set -euo pipefail
           flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
           key="$(bash tools/ci/product_sim_cache.sh fingerprint \
-            "$RUNNER_TEMP/aethercore-g5-tiny/model" \
+            "$RUNNER_TEMP/aethercore-product-g5-debian/model" \
             AetherCoreProductDebianRV64SimTop \
             aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")"
           echo "key=$key" >> "$GITHUB_OUTPUT"
@@ -154,7 +157,7 @@ jobs:
         id: model-cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ runner.temp }}/aethercore-g5-tiny/model
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-${{ steps.model-key.outputs.key }}
 
       - name: Prepare verified Product G5 5.054 model
@@ -162,7 +165,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          build="$RUNNER_TEMP/aethercore-g5-tiny/model"
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
           flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
           if [[ -x "$build/obj/VAetherCoreProductDebianRV64SimTop" ]]; then
             bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
@@ -179,7 +182,7 @@ jobs:
         if: steps.selected.outputs.run == '1' && steps.model-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ runner.temp }}/aethercore-g5-tiny/model
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
           key: ${{ steps.model-cache.outputs.cache-primary-key }}
 
       - name: Run real G5 RV64GC with tiny PID1 and report exact cycles
@@ -187,7 +190,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          build="$RUNNER_TEMP/aethercore-g5-tiny/model"
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
           flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
           bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
           make -f Makefile.l32-linux-boot BUILD_DIR="$build" \
@@ -221,4 +224,4 @@ jobs:
             build/product-g5-tiny-control/evidence/*.txt
             build/product-g5-tiny-control/init/initramfs.list
             build/product-g5-tiny-control/boot/opensbi/platform/generic/firmware/fw_payload.bin
-            ${{ runner.temp }}/aethercore-g5-tiny/model/logs/*.log
+            ${{ runner.temp }}/aethercore-product-g5-debian/model/logs/*.log
