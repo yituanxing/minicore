@@ -78,11 +78,32 @@ GSIM_PATCH_SHA="$(sha256sum "$OUT/gsim-product-scoped.patch" | awk '{print $1}')
 COMPILER_SHA="$(sha256sum "$SRC/build/gsim/gsim" | awk '{print $1}')"
 GEN_ID="$(printf '%s\n' "$FIR_SHA" "$GSIM_PATCH_SHA" "$COMPILER_SHA" "$SIZE" | sha256sum | awk '{print $1}')"
 if [[ ! -s "$GENERATED/.aethercore-product-generator-id" || "$(< "$GENERATED/.aethercore-product-generator-id")" != "$GEN_ID" ]]; then
-  mkdir -p "$GENERATED"
+  # A restored cache may contain generated *.cpp from a DIFFERENT Product
+  # Scala revision. Re-generating into that directory would feed stale orphan
+  # units into the glob below, even if the new generator itself succeeds.
+  # Compile each candidate from an initially EMPTY directory and only expose
+  # it at the stable path after a complete top header and ID are available.
+  candidate="$(mktemp -d "$OUT/product-generated-new.XXXXXXXX")"
   timeout --signal=TERM --kill-after=10s 1800s \
-    "$SRC/build/gsim/gsim" --supernode-max-size="$SIZE" --dir "$GENERATED" --log-level=1 "$FIR" \
+    "$SRC/build/gsim/gsim" --supernode-max-size="$SIZE" --dir "$candidate" --log-level=1 "$FIR" \
     > "$OUT/gsim-compile.log" 2>&1 || { tail -100 "$OUT/gsim-compile.log" >&2; exit 6; }
-  printf '%s\n' "$GEN_ID" > "$GENERATED/.aethercore-product-generator-id"
+  [[ -s "$candidate/AetherCoreProductOpenSbiRV64SimTop.h" ]] || {
+    echo 'GSIM candidate missing real Product top before cache publication' >&2; exit 6;
+  }
+  printf '%s\n' "$GEN_ID" > "$candidate/.aethercore-product-generator-id"
+  if [[ -d "$GENERATED" ]]; then
+    retired="$OUT/product-generated-retired-$$"
+    [[ ! -e "$retired" ]] || { echo 'GSIM retired output collision' >&2; exit 6; }
+    mv -- "$GENERATED" "$retired"
+  fi
+  if ! mv -- "$candidate" "$GENERATED"; then
+    [[ -z "${retired:-}" ]] || mv -- "$retired" "$GENERATED"
+    echo 'GSIM could not atomically publish regenerated Product model' >&2
+    exit 6
+  fi
+  # Only discard generated, reproducible C++ that a NEW exact Product model
+  # has already replaced; no source files, firmware or evidence are touched.
+  [[ -z "${retired:-}" ]] || rm -r -- "$retired"
 fi
 [[ -s "$GENERATED/AetherCoreProductOpenSbiRV64SimTop.h" ]] || {
   echo 'GSIM Product top header missing: generator/port name mismatch' >&2; exit 6;

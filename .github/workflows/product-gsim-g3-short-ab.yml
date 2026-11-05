@@ -47,6 +47,7 @@ jobs:
         with:
           ref: ${{ env.TARGET_SHA }}
           clean: true
+          persist-credentials: false
 
       - name: Freeze explicit Product G3 or bounded G4-only scope
         shell: bash
@@ -77,6 +78,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Restore pinned Verilator 5.054 build
+        id: verilator-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -100,6 +102,7 @@ jobs:
 
       - name: Reuse immutable Linux 6.6.143 and initramfs object caches for optional G4
         if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        id: linux-cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -148,6 +151,12 @@ jobs:
         with:
           path: build/product-gsim-bridge
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+          # Restore an older native model only on the exact SAME CPU/clang
+          # ABI. product_gsim_build.sh always re-elaborates actual Product
+          # CHIRRTL and checks generator/native IDs before skipping a build;
+          # a change to unrelated Scala/SoC files cannot silently pass.
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-
 
       - name: Restore the single Product Verilator 5.054 reference model safely
         id: verilator-model-cache
@@ -155,6 +164,12 @@ jobs:
         with:
           path: build/product-gsim-g3-ab/model-verilator-5.054-reference
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          # A restored cross-source object is only a candidate: the live
+          # product_sim_cache.sh fingerprint includes all Product sources,
+          # generator/toolchain bytes and the executable SHA. Stale objects
+          # are rebuilt before any guest execution or qualification ticket.
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-
 
       # The pinned provisioner writes CROSS_COMPILE to GITHUB_ENV for the NEXT
       # step. Invoking the firmware builder in the same shell step would lose
@@ -178,6 +193,17 @@ jobs:
           bash tools/ci/product_gsim_g3_ab.sh build
           grep -Fxq 'status=PRODUCT_GSIM_G3_MODELS_VERIFIED' build/product-gsim-g3-ab/model-ready.txt
           echo 'Product GSIM and Verilator models compiled and independently source/ABI fingerprinted. Runtime not yet qualified.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save pinned 5.054 toolchain before Product guest execution
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
 
       # Save BEFORE the 30M-cycle differential. A genuine CPU/UART/RAM mismatch
       # must fail the gate but must NOT throw away the expensive native builds.
@@ -242,6 +268,17 @@ jobs:
           grep -Fxq 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' \
             build/rv64-minimal-init-boot/result.txt
           grep -Fxq 'spi_sd=0' build/rv64-minimal-init-boot/result.txt
+
+      - name: Save qualified Linux source/object cache before bounded G4 runtime
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early' && success() && steps.linux-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Run at most 200M real Product GSIM early Linux cycles in 285 seconds
         if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
