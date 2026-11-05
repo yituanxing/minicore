@@ -23,6 +23,22 @@ case "$ACTION" in preflight|prepare-model|longrun) ;; *)
   ;;
 esac
 
+# Refuse accidental multi-billion-cycle requests before even hashing a large
+# disk image or compiling the lightweight offline SD-card probe. Only the
+# explicitly confirmed longrun can reach the already prepared RTL executable.
+if [[ "$ACTION" == longrun ]]; then
+  [[ "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" == RUN_REAL_DEBIAN_ON_PRODUCT ]] || {
+    echo 'Refusing slow RTL: export AETHERCORE_SD1_LONGRUN_CONFIRM=RUN_REAL_DEBIAN_ON_PRODUCT' >&2
+    exit 15
+  }
+  sd1_max_cycles="${AETHERCORE_SD1_MAX_CYCLES:-1800000000}"
+  [[ "$sd1_max_cycles" =~ ^[0-9]+$ ]] &&
+    (( sd1_max_cycles > 0 && sd1_max_cycles <= 1800000000 )) || {
+    echo 'G5-SD1 RTL cycle budget must be 1..1800000000 (single manually gated attempt)' >&2
+    exit 18
+  }
+fi
+
 if [[ "${AETHERCORE_VERILATOR_VERSION:-5.024}" != 5.024 ||
       "${SIM_SETTLE_MODE:-reference}" != reference ]]; then
   echo 'G5-SD1 accepts only proven Verilator 5.024 + reference memory settle.' >&2
@@ -153,13 +169,8 @@ if [[ "$ACTION" == prepare-model ]]; then
   exit 0
 fi
 
-# A separate human confirmation is required even after the offline/pin-level
-# probe and cached model exist. This entry never auto-builds or auto-retries
-# an expensive Product Linux simulation on failure.
-[[ "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" == RUN_REAL_DEBIAN_ON_PRODUCT ]] || {
-  echo 'Refusing slow RTL: export AETHERCORE_SD1_LONGRUN_CONFIRM=RUN_REAL_DEBIAN_ON_PRODUCT' >&2
-  exit 15
-}
+# The confirmation and bounded cycle budget were already checked before the
+# offline probe. This path never auto-builds or auto-retries the expensive RTL.
 bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}" || {
   echo 'Missing exact SD1 RTL model: explicitly run prepare-model first' >&2
   exit 16
@@ -169,7 +180,7 @@ export AETHERCORE_PRODUCT_DTB_IMAGE="$(result_field fdt "$FW_RESULT")"
 FW_BIN="$(result_field firmware_bin "$FW_RESULT")"
 make -f Makefile.l32-linux-boot \
   BUILD_DIR="$BUILD_DIR" TOP="$TOP" ELABORATE_MAIN="$ELABORATE_MAIN" \
-  FW_BIN="$FW_BIN" MAX_CYCLES="${AETHERCORE_SD1_MAX_CYCLES:-1800000000}" \
+  FW_BIN="$FW_BIN" MAX_CYCLES="$sd1_max_cycles" \
   MILESTONE='login:' MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
   REQUIRE_LAYERED_COMPRESSED=1 PROGRESS_INTERVAL_CYCLES=10000000 \
   SIM_CXXFLAGS="$SIM_CXXFLAGS" SIM_SETTLE_MODE=reference \

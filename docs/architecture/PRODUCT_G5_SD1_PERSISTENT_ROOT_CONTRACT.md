@@ -25,9 +25,10 @@ login has passed. No long test belongs to this patch series.
 | Responsibility | Concrete contract |
 | --- | --- |
 | Product CPU | Small/Expanded single-lane RV64GC/LP64D, Sv39, OpenSBI M/S/U |
-| Primary FPGA elaboration | `aethercore.soc.ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc` (FW+DTB two-stream loader, DDR ownership mux, CPU, SPI-SD pins) |
-| Lower-level DDR mux elaboration | `aethercore.soc.ElaborateProductFpgaColdBootDdrMuxSpiSd1PinsRv64gc` (external stream integration distinct from primary firmware/DTB streaming top) |
-| DDR | Board-supplied DDR controller/PHY, PLL and wiring; loader/CPU AXI owner mux |
+| Physical UART-upload FPGA elaboration | `aethercore.soc.ElaborateProductFpgaUartDdrSpiSd1Rv64gc` (real 1 Mbaud serial FW+DTB source, CRC/credit handshake, cold boot, DDR address remap, CPU and SD pins) |
+| External-stream FPGA elaboration | `aethercore.soc.ElaborateProductFpgaDdrLocalWindowSpiSd1Rv64gc` (same DDR-local window with an independent board-provided byte source) |
+| Lower-level debugging boundaries | `ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc` and `ElaborateProductFpgaColdBootDdrMuxSpiSd1PinsRv64gc` remain isolated ABI-compatible RTL entrypoints |
+| DDR | Product physical `0x80000000..0x8fffffff` remapped to DDR controller local `0..0x0fffffff`; board supplies 50 MHz clock-compatible DDR controller/PHY, PLL and wiring |
 | SPI/SD | `ProductSoCBoardProfiles.persistentSpiSd`, OpenCores tiny SPI + Altera PIO GPIO CS, PLIC11 |
 | DTB | `EmitAetherSoCDts --spi-sd --isa rv64imafdc_zicsr_zifencei` with the same SPI clock as actual Product RTL |
 | SD image | Raw SDHC-compatible file, DOS/MBR, one Linux `0x83` partition starting at LBA2048 |
@@ -46,8 +47,10 @@ Do **not** execute these commands during a source-only architecture round;
 they document the later explicit, separate construction of a real SD1 image.
 
 ```bash
-# The user provides a full native Debian riscv64 rootfs archive with
-# systemd (or SysV init), agetty, login, a real dpkg database and LP64D ELF.
+# The user can prepare a pinned official Debian riscv64 full-root supplier
+# with tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh, then import
+# its exact signed-source provenance, native init/getty/login and tar SHA.
+# See PRODUCT_G5_SD1_OFFICIAL_ROOTFS_SUPPLIER.md for required source pins.
 export RV64_DEBIAN_STAGE=sd1
 export RV64_DEBIAN_FULL_ROOTFS_ARCHIVE=/path/to/debian-riscv64-full.tar
 export RV64_DEBIAN_FULL_ROOTFS_SHA256=...64-character-hex-digest...
@@ -110,6 +113,12 @@ running kernel and processes **still** must fit in available physical RAM.
 No onboard SD ROM boot is implied: the board DDR loader must first stream
 the OpenSBI `fw_payload.bin` and DTB into their pinned DDR addresses, drain
 the loader writes, then surrender the DDR AXI ownership to the CPU safely.
+The board-neutral UART source and finite-window upload protocol are implemented
+in `AetherProductUartFirmwareUpload`, with a pinned-manifest host uploader
+`tools/ci/product_sd1_uart_firmware_upload.py`. They close the **logical**
+external byte-source gap, not the electrical USB-UART wiring. See
+`PRODUCT_SD1_PHYSICAL_UART_UPLOAD.md` for the required host READY/header,
+CRC, AXI-drained window credit and post-release 115200 baud handoff.
 The SPI SD card supplies the Linux root filesystem *after* OpenSBI and Linux
 are running. The SD1 storage contract is an input to the broader G5 D4
 **FPGA board acceptance milestone**, not completion of the independently
@@ -135,7 +144,9 @@ named architecture-roadmap D4 **performance** stage.
    independent of a Debian boot, then capture OpenSBI→Linux→`mmcblk0p1`
    mount→native Debian init→getty/login evidence for the exact board/image.
 
-Remaining physical dependencies are a real DDR PHY/PLL and pin/clock
-constraints, board-specific external media loader, and SD socket electrical
-implementation. Implementing this software/storage contract does not invent
-or conceal those board-specific responsibilities.
+Remaining physical dependencies are the actual board's DDR PHY/PLL and pin/clock
+constraints, **50 MHz DDR UI/Product clock compatibility or a proper CDC**,
+vendor AXI ID/data-width adaptation if needed, electrical USB-UART connection,
+and SD socket voltage/pullups. The UART upload controller and Debian supplier
+are real source-level implementations, not evidence of a finished bitstream,
+real hardware boot or a successfully authenticated Debian login.

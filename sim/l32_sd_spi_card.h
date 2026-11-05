@@ -58,7 +58,17 @@ class SdSpiCard {
   void observe(bool sclk, bool mosi, bool csHigh) {
     if (csHigh) {
       if (!lastCsHigh_) deselect();
-      if (!lastSclk_ && sclk) ++unselectedClocks_;
+      if (!lastSclk_ && sclk) {
+        // A physical SD card must see at least 74 startup clocks with both
+        // CS and DI high before it can enter SPI mode via CMD0. Count only
+        // a contiguous valid preamble, saturating to avoid wraparound on a
+        // long Debian simulation that deasserts CS between transactions.
+        if (!startupClockSequenceSeen_) {
+          if (!mosi) unselectedClocks_ = 0;
+          else if (unselectedClocks_ < 74) ++unselectedClocks_;
+          if (unselectedClocks_ >= 74) startupClockSequenceSeen_ = true;
+        }
+      }
       miso_ = true;
     } else {
       // Selection and the first SPI edge can coincide. Treat the electrical
@@ -279,6 +289,12 @@ class SdSpiCard {
 
   void executeCommand() {
     const auto opcode = static_cast<std::uint8_t>(command_[0] & 0x3f);
+    if (opcode == 0 && !startupClockSequenceSeen_) {
+      // Reject an emulator-only success before burning billions of RTL
+      // cycles. Real hardware would not recognize this premature CMD0.
+      throw std::runtime_error(
+          "Product SD1 CMD0 before 74 CS-high/DI-high initialization clocks");
+    }
     const auto argument = (static_cast<std::uint32_t>(command_[1]) << 24) |
         (static_cast<std::uint32_t>(command_[2]) << 16) |
         (static_cast<std::uint32_t>(command_[3]) << 8) | command_[4];
@@ -466,6 +482,7 @@ class SdSpiCard {
   std::uint64_t reads_ = 0;
   std::uint64_t writes_ = 0;
   std::uint64_t unselectedClocks_ = 0;
+  bool startupClockSequenceSeen_ = false;
   unsigned lastCommand_ = 0;
   bool lastSclk_ = false;
   bool lastCsHigh_ = true;

@@ -1,21 +1,17 @@
 name: AetherCore Product G4 Real Linux 6.6.143 Early Boot
 
-# This is intentionally an opt-in kernel gate. The Product CPU already has
-# independent G1/G2/G3 gates for short PR feedback. A real Linux kernel can
-# require hundreds of millions of simulated cycles, so do not attach it to
-# every Product Scala edit.
+# The early real Linux boot is also a costly gate. Keep it manual-only,
+# including changes to this workflow itself: PR path triggers previously
+# re-enqueued the 200M-cycle cold boot just to audit its YAML.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/product-g4-linux-early.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethercore-product-g4-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: aethercore-product-g4-early-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   product-linux-banner:
@@ -98,6 +94,13 @@ jobs:
             tools/ensure_riscv64_linux_gcc_13_3.sh
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.024/bin/verilator"
+          [[ -x "$verilator_bin" ]] || { echo 'Product G4 early requires pinned Verilator 5.024' >&2; exit 16; }
+          [[ "$("$verilator_bin" --version)" == 'Verilator 5.024'* ]] || {
+            echo 'Product G4 early toolchain identity differs from pinned 5.024' >&2
+            exit 16
+          }
+          echo "PRODUCT_VERILATOR_BIN=$verilator_bin" >> "$GITHUB_ENV"
           test -f sim/product_rv64_opensbi_shim/VAetherCoreOpenSbiSimTop.h
           test -f src/main/scala/aethercore/sim/AetherCoreProductUnifiedMemoryCompatSimTop.scala
 
@@ -133,7 +136,7 @@ jobs:
             MILESTONE='Linux version 6.6.143' \
             MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
             PROGRESS_INTERVAL_CYCLES=10000000 \
-            VERILATOR='verilator -LDFLAGS -ldl' \
+            VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" SIM_SETTLE_MODE=reference \
             SIM_CXXFLAGS="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
             run-local
           log="$build/logs/boot-probe.log"

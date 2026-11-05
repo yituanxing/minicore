@@ -197,3 +197,46 @@ object ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc extends App {
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }
+
+/** G5-SD1 native DDR-controller aperture: real FW/DTB stream in, zero-based
+  * DDR AXI out, with synthesized UART/timebase clock-enables and SPI-SD pads.
+  * The physical board must provide its DDR IP, clocks, IO constraints and
+  * external image source; this emission never counts as a Linux boot test.
+  */
+object ElaborateProductFpgaDdrLocalWindowSpiSd1Rv64gc extends App {
+  require(args.nonEmpty, "RV64GC local-DDR FPGA emission needs small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC local-DDR geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaDdrLocalWindowBoard(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+/** G5-SD1 board-neutral UART firmware upload -> DDR -> native Debian on SD.
+  * This is the first Product FPGA emission with a physical byte source in
+  * the same selected SmallOoO SoC; vendor DDR/PLL/pinout is still required.
+  */
+object ElaborateProductFpgaUartDdrSpiSd1Rv64gc extends App {
+  require(args.nonEmpty, "RV64GC UART-to-DDR FPGA emission needs small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC UART-to-DDR geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaUartDdrBoard(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
