@@ -180,8 +180,16 @@ class AetherSoCPlatformFabric(
     pendingValid && accessWithin(uartBase, uartLimit)
   private val pendingExit =
     pendingValid && pending.paddr === exitAddress
-  private val pendingTimer =
-    pendingValid && (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
+  // ACLINT advertises *two eight-byte registers* to OpenSBI/Linux, not two
+  // isolated addresses. RV32-style firmware uses 32-bit accesses at +0/+4
+  // (and byte/half accesses are legal inside the register aperture). Reject
+  // any access crossing the eight-byte register, then align the semantic
+  // AetherMem payload to the targeted byte lanes below.
+  private val pendingMtime = pendingValid && accessWithin(
+    mtimeAddress, (addressMap.mtimeAddress + 8).U(paddrBits.W))
+  private val pendingMtimecmp = pendingValid && accessWithin(
+    mtimecmpAddress, (addressMap.mtimecmpAddress + 8).U(paddrBits.W))
+  private val pendingTimer = pendingMtime || pendingMtimecmp
   private val pendingPlic =
     pendingValid && accessWithin(plicBase, plicLimit)
   private val pendingSpi =
@@ -273,11 +281,14 @@ class AetherSoCPlatformFabric(
     dataBits = dataBits
   ))
   private val timerComplete = WireDefault(false.B)
+  private val timerRegisterBase = Mux(pendingMtimecmp, mtimecmpAddress, mtimeAddress)
+  private val timerByteOffset = (pending.paddr - timerRegisterBase)(2, 0)
+  private val timerBitOffset = timerByteOffset << 3
   timer.io.request := pendingTimer
   timer.io.write := pendingWrite
-  timer.io.selectMtimecmp := pending.paddr === mtimecmpAddress
-  timer.io.wdata := pending.wdata
-  timer.io.wmask := pending.wmask
+  timer.io.selectMtimecmp := pendingMtimecmp
+  timer.io.wdata := (pending.wdata << timerBitOffset)(dataBits - 1, 0)
+  timer.io.wmask := (pending.wmask << timerByteOffset)(busBytes - 1, 0)
   timer.io.complete := timerComplete
   timer.io.timebaseTick := io.timebaseTick
 
@@ -292,7 +303,7 @@ class AetherSoCPlatformFabric(
   private val mmioData = Mux(
     pendingPlic,
     plic.io.rdata.pad(dataBits),
-    Mux(pendingTimer, timer.io.rdata,
+    Mux(pendingTimer, timer.io.rdata >> timerBitOffset,
       Mux(pendingUart, uart.io.rdata,
         Mux(pendingSpi, spi.map(_.io.rdata).getOrElse(0.U(dataBits.W)),
           Mux(pendingSpiCsGpio, spiCsGpio.map(_.io.rdata.pad(dataBits)).getOrElse(0.U(dataBits.W)), 0.U))))

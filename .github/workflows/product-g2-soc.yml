@@ -1,27 +1,18 @@
 name: AetherCore Product G2 SoC and Commit Trace Gate
 
+# Separate structural elaboration from directed Verilator qualification. Both
+# are explicit operator actions; neither is queued on a routine source push.
 on:
+  workflow_dispatch:
+    inputs:
+      gate:
+        description: Product SoC RTL elaboration, directed checks, or both
+        required: true
+        type: choice
+        options: [rtl, directed, both]
+        default: rtl
   pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/product/**'
-      - 'src/main/scala/aethercore/soc/AetherCoreProduct*.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
-      - 'src/main/scala/aethercore/soc/AetherProductColdBootControl.scala'
-      - 'src/main/scala/aethercore/soc/AetherSoC*.scala'
-      - 'src/main/scala/aethercore/soc/AetherMemToAxi4Bridge.scala'
-      - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreProductUnifiedMemoryCompatSimTop.scala'
-      - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
-      - 'src/test/scala/aethercore/ProductCommitTraceSpec.scala'
-      - 'src/test/scala/aethercore/ProductFloatingCommitTraceSpec.scala'
-      - 'src/main/scala/aethercore/common/Interfaces.scala'
-      - 'src/test/scala/aethercore/AetherCoreProductUnifiedMemorySoCSpec.scala'
-      - 'src/test/scala/aethercore/AetherCoreProductSoCElaborationSpec.scala'
-      - 'src/test/scala/aethercore/AetherProductColdBootControlSpec.scala'
-      - 'src/test/scala/aethercore/AetherProductAxiColdBootIsolationSpec.scala'
-      - 'src/test/scala/aethercore/AetherProductFpgaColdBootElaborationSpec.scala'
-      - 'src/test/scala/aethercore/ProductGeometrySoCSpec.scala'
-      - '.github/workflows/product-g2-soc.yml'
+    types: [labeled]
 
 permissions:
   contents: read
@@ -33,6 +24,7 @@ concurrency:
 jobs:
   product-g2-rtl:
     name: Product unified, AXI4, FPGA and OpenSBI-host RTL
+    if: github.event_name == 'workflow_dispatch' && (inputs.gate == 'rtl' || inputs.gate == 'both') || (github.event_name == 'pull_request' && (github.event.label.name == 'product-g2-rtl' || github.event.label.name == 'product-g2-both'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -82,6 +74,7 @@ jobs:
 
   product-g2-directed:
     name: Product physical trace and BootROM-to-UART smoke
+    if: github.event_name == 'workflow_dispatch' && (inputs.gate == 'directed' || inputs.gate == 'both') || (github.event_name == 'pull_request' && (github.event.label.name == 'product-g2-directed' || github.event.label.name == 'product-g2-both'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:

@@ -71,19 +71,37 @@ safe retry point; reset the board and begin with a new READY beacon.
 ## Later opt-in physical use
 
 After producing and auditing **exactly matched** SD1 firmware/DTB/SD image
-with the existing offline artifact builders, program the separate complete
-MBR/ext4 SD card image onto a real SD device. On a host connected to the
-board's serial pins, install `pyserial`, then explicitly invoke:
+with the existing offline artifact builders, first check the exact staged
+native Debian supply chain **without opening a UART or requiring pyserial**:
+
+```bash
+python3 tools/ci/product_sd1_uart_firmware_upload.py --preflight-only
+```
+
+This verifies the final SD1 firmware PASS marker, Product board selection,
+disk-root bootargs, firmware and independent DTB content SHA256, the DTB
+header/DDR address, the complete raw MBR/ext4 SD image SHA256, and the tied
+Linux Image/.config/rootfs/SD manifests. It validates the **offline image**,
+not the contents of a physical removable SD card.
+
+Later, once a board exists, program that separate complete MBR/ext4 SD image
+onto a real SD device. On a host connected to the board's serial pins,
+install `pyserial`, then explicitly invoke:
 
 ```bash
 python3 tools/ci/product_sd1_uart_firmware_upload.py --port /dev/ttyUSB0 --follow-console
 ```
 
-The utility reads `build/rv64-debian-boot/result.txt`, requires the SD1
-storage manifest binding, checks pinned SHA256 identities, validates bounds,
-waits for the DDR READY beacon, sends windowed frames and switches the host
-serial port to 115200 after the final DTB bytes. It **does not** claim success
-merely because serial bytes were written.
+The utility reads `build/rv64-debian-boot/result.txt`, repeats all of the
+offline supply-chain checks, validates the firmware/DTB bounds, waits for
+the DDR READY beacon, sends checked windowed frames, then switches the host
+port to 115200 after the final DTB bytes. In addition to the board's CRC32
+verification, it SHA256-checks the **file bytes handed to the host UART** to
+detect a concurrent host-side image mutation. For the last DTB window, the
+CPU may already have been released before this final host SHA check finishes;
+any mismatch means **reset before retry**. It **does not** claim success
+merely because serial bytes were written, nor because the offline SD image
+matches the SD card that may eventually be inserted into a board.
 
 This entire source round deliberately performs **no compilation, simulator
 run, board run, long Linux validation, or CI launch**.

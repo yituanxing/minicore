@@ -57,7 +57,12 @@ class AetherProductDdrOwnershipMux(
     val validSize = address.size <= maxAxiSize.U
     val aligned = (address.addr(2, 0) &
       ((1.U(3.W) << address.size)(2, 0) - 1.U)) === 0.U
-    address.len === 0.U && validSize && aligned &&
+    // Apply the same one-beat, non-exclusive INCR contract at *both* cold-boot
+    // boundaries. The ownership fabric is independently instantiable without
+    // the later local-address adapter, so it must never pass a malformed
+    // burst/locked loader transaction to a physical DDR controller.
+    address.len === 0.U && address.burst === Axi4Burst.Incr && !address.lock &&
+      validSize && aligned &&
       extendedAddress >= allowedStart &&
       extendedAddress + transferBytes <= allowedLimit
   }
@@ -72,6 +77,17 @@ class AetherProductDdrOwnershipMux(
   }
   io.loaderAddressFault := loaderAddressFault
 
+  // These lifetimes are also the write-data admission authority. AXI lets
+  // W handshake before AW, but a loader W beat without either an already
+  // accepted AW or a simultaneously presented *legal* AW must not be able to
+  // enter DDR. A rejected loader address would otherwise still send its W
+  // in the cycle before the sticky fault register updates.
+  private val writeAddresses = RegInit(0.U(outstandingBits.W))
+  private val writeBeats = RegInit(0.U(outstandingBits.W))
+  private val readAddresses = RegInit(0.U(outstandingBits.W))
+  private val loaderWriteAddressKnown =
+    writeAddresses =/= 0.U || (io.loader.aw.valid && loaderAwAllowed)
+
   io.ddr.aw.valid := (io.loaderOwnsDdr && io.loader.aw.valid &&
     loaderAwAllowed && !loaderAddressFault) ||
     (io.cpuOwnsDdr && io.cpu.aw.valid)
@@ -81,10 +97,11 @@ class AetherProductDdrOwnershipMux(
   io.cpu.aw.ready := io.cpuOwnsDdr && io.ddr.aw.ready
 
   io.ddr.w.valid := (io.loaderOwnsDdr && io.loader.w.valid &&
-    loaderWAllowed && !loaderAddressFault) ||
+    loaderWAllowed && loaderWriteAddressKnown && !loaderAddressFault) ||
     (io.cpuOwnsDdr && io.cpu.w.valid)
   io.ddr.w.bits := Mux(io.loaderOwnsDdr, io.loader.w.bits, io.cpu.w.bits)
   io.loader.w.ready := io.loaderOwnsDdr && loaderWAllowed &&
+    loaderWriteAddressKnown &&
     !loaderAddressFault && io.ddr.w.ready
   io.cpu.w.ready := io.cpuOwnsDdr && io.ddr.w.ready
 
@@ -114,10 +131,6 @@ class AetherProductDdrOwnershipMux(
   // accepted in either order; only B retires both. Likewise R.last retires
   // one accepted AR. No ledger is needed for CPU->loader re-entry because the
   // cold-boot controller makes post-release faults sticky until board reset.
-  private val writeAddresses = RegInit(0.U(outstandingBits.W))
-  private val writeBeats = RegInit(0.U(outstandingBits.W))
-  private val readAddresses = RegInit(0.U(outstandingBits.W))
-
   private val awFire = io.loader.aw.fire
   private val wFire = io.loader.w.fire
   private val bFire = io.loader.b.fire

@@ -337,8 +337,11 @@ void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
 
   const bool dvalid = top.io_memValid;
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
-  const auto dbytes = dataBytesFromMemSize(
-      static_cast<std::uint32_t>(top.io_memSize));
+  // Valid gates the architectural size/operation contract. In particular an
+  // idle or not-yet-initialized Verilator output need not carry a meaningful
+  // MemSize enum; only decode it when an actual host transaction exists.
+  const auto dbytes = dvalid ? dataBytesFromMemSize(
+      static_cast<std::uint32_t>(top.io_memSize)) : std::size_t{1};
   const bool dfault = dvalid && !memory.contains(daddr, dbytes);
   top.io_memReady = dataReady;
   top.io_memFault = dfault;

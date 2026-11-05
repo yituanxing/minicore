@@ -1,19 +1,12 @@
 name: AetherCore Product G1 Paged and Privileged Gate
 
+# Source-only architecture work is deliberately not followed by automatic
+# Verilator/Chisel validation. Request this bounded gate at an explicit batch
+# boundary (or use workflow_dispatch once this workflow is on the default branch).
 on:
+  workflow_dispatch:
   pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/product/**'
-      - 'src/main/scala/aethercore/core/semantic/**'
-      - 'src/main/scala/aethercore/core/v2/**'
-      - 'src/main/scala/aethercore/core/MachineCsrFile.scala'
-      - 'src/main/scala/aethercore/ElaborateProductSmallPagedCore.scala'
-      - 'src/test/scala/aethercore/SystemSemanticEvaluatorSpec.scala'
-      - 'src/test/scala/aethercore/ProductSystemCoreSpec.scala'
-      - 'src/test/scala/aethercore/ProductSmallPagedCoreSpec.scala'
-      - 'src/test/scala/aethercore/ProductSmallPagedFloatingSpec.scala'
-      - 'src/test/scala/aethercore/FloatingCsrFileSpec.scala'
-      - '.github/workflows/product-g1-privileged.yml'
+    types: [labeled]
 
 permissions:
   contents: read
@@ -25,6 +18,7 @@ concurrency:
 jobs:
   product-g1:
     name: Product shared SYSTEM, paged frontend and RTL
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g1-directed')
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     env:

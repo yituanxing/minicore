@@ -1,34 +1,11 @@
 name: RV64GC product G0 ownership and protocol contract
 
+# Product migration is source-first. Request G0 only when the architecture
+# batch is ready; a routine Product code edit does not enqueue verification.
 on:
-  pull_request:
-    paths:
-      - 'docs/architecture/**'
-      - 'docs/RV64GC_FPGA_PRODUCT_ARCHITECTURE_GAP_2026-11-03.md'
-      - 'tests_py/test_product_g0_contract.py'
-      - 'tests_py/test_product_g1_migration_contract.py'
-      - 'tests_py/product_g1_rename_reference.py'
-      - 'tests_py/test_product_g1_rename_reference.py'
-      - 'tests_py/test_product_nax_distro_target.py'
-      - 'tests_py/test_shared_semantic_owner.py'
-      - 'tests_py/test_product_config_contract.py'
-      - 'tests_py/test_product_small_backend_contract.py'
-      - 'tests_py/test_product_integer_fu_contract.py'
-      - 'tests_py/test_product_lsq_integration.py'
-      - 'tests_py/test_product_fpga_pin_cost.py'
-      - 'tools/compare_product_fpga_pin_cost.sh'
-      - 'tools/report_product_fpga_pin_cost.py'
-      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
-      - '.github/workflows/product-fpga-physical-pin-ppa.yml'
-      - 'src/main/scala/aethercore/core/ALU.scala'
-      - 'src/main/scala/aethercore/core/arith/**'
-      - 'src/test/scala/aethercore/ProductMUnitSpec.scala'
-      - 'src/main/scala/aethercore/core/product/**'
-      - 'tests_py/test_v2_foundation_contract.py'
-      - 'tests_py/test_v2_decode_boundary.py'
-      - 'src/main/scala/aethercore/core/semantic/**'
-      - '.github/workflows/rv64gc-product-g0.yml'
   workflow_dispatch:
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -40,6 +17,7 @@ concurrency:
 jobs:
   g0-contract:
     name: State ownership, identities, example protocols, current RTL anchors
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g0-source')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

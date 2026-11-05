@@ -149,7 +149,16 @@ class AetherSoCUnifiedHostMemoryAdapter(
   io.ptwAddr := ptwRequest.paddr
 
   private val dataReadSelectValid = dataReadActive.asUInt.orR
-  private val dataReadSelect = PriorityEncoder(dataReadActive)
+  // A new lower-numbered LoadQ slot may become active while a higher-numbered
+  // read is waiting for host RAM. Re-prioritizing the queue every cycle would
+  // change memAddr/memSize underneath an asserted memValid while memReady=0.
+  // Pin the chosen slot until its physical memory handshake. This keeps the
+  // same stable valid/payload contract as the synthesizable AXI path even when
+  // the C++ runner injects arbitrary memory wait cycles.
+  private val dataReadPinned = RegInit(false.B)
+  private val dataReadPinnedSlot = Reg(UInt(localTxnIdBits.W))
+  private val dataReadSelect = Mux(
+    dataReadPinned, dataReadPinnedSlot, PriorityEncoder(dataReadActive))
   private val selectedDataReadRequest = dataReadRequest(dataReadSelect)
   private val selectedDataValid = dataSerialActive || dataReadSelectValid
   private val selectedDataRequest =
@@ -186,6 +195,13 @@ class AetherSoCUnifiedHostMemoryAdapter(
   )
 
   private val hostDataHandshake = io.memValid && io.memReady
+  when(io.memValid && !io.memReady && !dataSerialActive) {
+    dataReadPinned := true.B
+    dataReadPinnedSlot := dataReadSelect
+  }
+  when(hostDataHandshake) {
+    dataReadPinned := false.B
+  }
   responses.io.in(DataSource).valid := bufferedDataResponse || hostDataHandshake
   responses.io.in(DataSource).bits.txnId :=
     Mux(bufferedDataResponse, bufferedTxnId, selectedDataRequest.txnId)
@@ -247,6 +263,11 @@ class AetherSoCUnifiedHostMemoryAdapter(
   when(dataReadSelectValid) {
     assert(!dataSerialActive,
       "ordinary Data reads must not overlap a serialized Data request")
+  }
+
+  when(dataReadPinned) {
+    assert(dataReadActive(dataReadPinnedSlot) && !dataSerialActive,
+      "a stalled host read must retain its original live transaction slot")
   }
 
   when(instructionActive) {
