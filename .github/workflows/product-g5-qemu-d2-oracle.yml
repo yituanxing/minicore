@@ -4,6 +4,8 @@ name: AetherCore Product G5 D2 native Debian QEMU system oracle
 # First boot the exact D2 Image on QEMU's independent generic OpenSBI/DTB;
 # then independently boot the exact Product fw_payload/DTB on QEMU virt.
 # Both are QEMU CPU tests, never Product RTL or an FPGA qualification.
+# A SECOND explicit label, product-g5-qemu-export, adds a diagnostic QEMU
+# pre-PID1 architectural export after both Product-fw QEMU D2 oracles PASS.
 on:
   workflow_dispatch:
   pull_request:
@@ -21,7 +23,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
-       github.event.label.name == 'product-g5-qemu-d2-oracle')
+       (github.event.label.name == 'product-g5-qemu-d2-oracle' ||
+        github.event.label.name == 'product-g5-qemu-export'))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -181,6 +184,59 @@ jobs:
           grep -Fxq 'qualification=QEMU_SYSTEM_PRODUCT_FW_DTB_D2_ORACLE_NOT_PRODUCT_RTL_PASS' \
             build/product-g5-qemu-product-fw-dtb/result.txt
           cat build/product-g5-qemu-product-fw-dtb/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate optional pre-PID1 architectural export helper
+        if: github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_g5_qemu_arch_export.sh
+          python3 -m py_compile tools/ci/product_g5_qemu_export/qemu_arch_export.py \
+            tools/ci/product_g5_qemu_export/selftest.py
+          python3 tools/ci/product_g5_qemu_export/selftest.py
+
+      - name: Freeze pre-PID1 QEMU Product-fw CPU and export architectural checkpoint
+        if: github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        shell: bash
+        timeout-minutes: 4
+        env:
+          AETHERCORE_ALLOW_G5_QEMU_PRODUCT_EXPORT: '1'
+          AETHERCORE_G5_EXPORT_WALL_SECONDS: '180'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_arch_export.sh run
+          grep -Fxq 'qualification=QEMU_ARCH_EXPORT_DIAGNOSTIC_ONLY_NOT_RTL_HANDOFF_PASS' \
+            build/product-g5-qemu-export/result.txt
+          cat build/product-g5-qemu-export/result.txt >> "$GITHUB_STEP_SUMMARY"
+          echo 'QEMU export only; no Product G5 RTL state was injected or executed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload opt-in pre-PID1 QEMU RAM and architectural manifest for RTL handoff work
+        if: success() && github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-architectural-export-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 1
+          path: |
+            build/product-g5-qemu-export/export/ram-0x80000000-0x10000000.bin
+            build/product-g5-qemu-export/export/manifest.json
+            build/product-g5-qemu-export/result.txt
+            build/product-g5-qemu-export/sha256sums.txt
+            build/product-g5-qemu-export/serial.log
+            build/product-g5-qemu-export/export.log
+
+      - name: Upload optional export failure diagnostics without implying qualification
+        if: failure() && github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-export-failure-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/product-g5-qemu-export/qemu.log
+            build/product-g5-qemu-export/export.log
+            build/product-g5-qemu-export/serial.log
 
       - name: Preserve kernel SHA, native rootfs identity, QEMU firmware boundary and serial trace
         if: always()
