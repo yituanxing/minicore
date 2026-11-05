@@ -53,6 +53,8 @@ private class ProductTranslationSlot(val indexBits: Int, val generationBits: Int
   */
 class ProductDataResolver(val config: ProductCoreConfig, val tlbEntries: Int = 8) extends Module {
   private val g = config.geometry
+  require(config.rtlElaboratable,
+    "Product data resolver requires a physically implemented ISA, memory and port configuration")
   require(g.decodeWidth == 1 && g.dispatchWidth == 1 && g.issueWidth == 1 &&
     g.retireWidth == 1, "this resolver currently serves the Small one-wide CPU")
   private val geometry = PageTableGeometry.Sv39

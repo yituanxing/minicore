@@ -48,6 +48,44 @@ input_identity() {
     # actual host ISA/model and compiler identity are part of the key.
     printf 'host-arch=%s\n' "$(uname -m)"
     printf 'host-compiler=%s\n' "$(c++ --version | sed -n '1p')"
+    # A version string alone does not identify a compiler or a pinned
+    # Verilator installation: two binaries can print the same version after
+    # a local toolchain replacement. Exact Product model reuse must also bind
+    # the live host tool bytes and Verilator generator/runtime assets.
+    printf 'host-CXX=%s\nhost-CC=%s\nhost-CXXFLAGS=%s\nhost-CFLAGS=%s\nverilator-root=%s\n' \
+      "${CXX:-}" "${CC:-}" "${CXXFLAGS:-}" "${CFLAGS:-}" "${VERILATOR_ROOT:-}"
+    local tool resolved
+    for tool in c++ g++ cc ar ld; do
+      resolved="$(command -v "$tool" || true)"
+      printf 'host-tool=%s path=%s\n' "$tool" "$resolved"
+      if [[ -n "$resolved" && -f "$resolved" ]]; then
+        sha256sum "$(readlink -f "$resolved")"
+      else
+        printf 'host-tool-missing=%s\n' "$tool"
+      fi
+    done
+    local verilator_prefix="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-$verilator_version"
+    local verilator_asset
+    for verilator_asset in \
+      .aethercore-source-revision \
+      bin/verilator bin/verilator_bin bin/verilator_includer; do
+      if [[ -f "$verilator_prefix/$verilator_asset" ]]; then
+        sha256sum "$verilator_prefix/$verilator_asset"
+      else
+        printf 'verilator-asset-missing=%s\n' "$verilator_asset"
+      fi
+    done
+    # Generated C++ always compiles against this runtime header/source tree.
+    # Hashing only verilator_bin misses locally replaced verilated_*.h/cpp
+    # while retaining the same generator version.
+    if [[ -d "$verilator_prefix/include" ]]; then
+      find "$verilator_prefix/include" -type f -print0 | LC_ALL=C sort -z | \
+        while IFS= read -r -d '' verilator_asset; do
+          sha256sum "$verilator_asset"
+        done
+    else
+      printf 'verilator-runtime-includes-missing\n'
+    fi
     if [[ -r /proc/cpuinfo ]]; then
       awk -F: '/^(vendor_id|cpu family|model|model name|flags)[[:space:]]*:/ {if (!seen[$1]++) print $1 ":" $2}' /proc/cpuinfo
     fi

@@ -155,7 +155,20 @@ class AetherSoCUnifiedHostMemoryAdapter(
   private val selectedDataRequest =
     Mux(dataSerialActive, dataSerialRequest, selectedDataReadRequest)
 
-  io.memValid := selectedDataValid
+  // The historical C++ host commits a store/AMO on memValid && memReady,
+  // independently of whether the three-source response arbiter selects Data
+  // this cycle. Without a skid entry, a competing instruction/PTW response
+  // leaves memValid asserted for another cycle and can commit the SAME store
+  // or atomic operation twice. Capture its one terminal response exactly once
+  // on the host handshake, then wait for the output arbiter to consume it.
+  private val bufferedDataResponse = RegInit(false.B)
+  private val bufferedTxnId = Reg(UInt(txnIdBits.W))
+  private val bufferedRdata = Reg(UInt(dataBits.W))
+  private val bufferedFault = Reg(Bool())
+  private val bufferedWasSerial = Reg(Bool())
+  private val bufferedReadSlot = Reg(UInt(localTxnIdBits.W))
+
+  io.memValid := selectedDataValid && !bufferedDataResponse
   io.memWrite := selectedDataRequest.op === AetherMemOp.Write
   io.memAtomic := selectedDataRequest.op === AetherMemOp.Atomic
   io.memOp := selectedDataRequest.op
@@ -163,16 +176,23 @@ class AetherSoCUnifiedHostMemoryAdapter(
   io.memAddr := selectedDataRequest.paddr
   io.memWdata := selectedDataRequest.wdata
   io.memWmask := selectedDataRequest.wmask
-  io.memSize := selectedDataRequest.size
+  // The frozen C++ host decodes memSize unconditionally, including idle
+  // cycles. Do not expose the undefined contents of an uninitialized request
+  // register as an illegal enum while memValid is low.
+  io.memSize := Mux(selectedDataValid, selectedDataRequest.size, MemSize.Byte)
 
   private val responses = Module(
     new RRArbiter(new AetherMemResponse(dataBits, txnIdBits), 3)
   )
 
-  responses.io.in(DataSource).valid := selectedDataValid && io.memReady
-  responses.io.in(DataSource).bits.txnId := selectedDataRequest.txnId
-  responses.io.in(DataSource).bits.rdata := io.memRdata
-  responses.io.in(DataSource).bits.fault := io.memFault
+  private val hostDataHandshake = io.memValid && io.memReady
+  responses.io.in(DataSource).valid := bufferedDataResponse || hostDataHandshake
+  responses.io.in(DataSource).bits.txnId :=
+    Mux(bufferedDataResponse, bufferedTxnId, selectedDataRequest.txnId)
+  responses.io.in(DataSource).bits.rdata :=
+    Mux(bufferedDataResponse, bufferedRdata, io.memRdata)
+  responses.io.in(DataSource).bits.fault :=
+    Mux(bufferedDataResponse, bufferedFault, io.memFault)
   responses.io.in(DataSource).bits.last := true.B
 
   responses.io.in(PtwSource).valid := ptwActive && io.ptwReady
@@ -192,11 +212,24 @@ class AetherSoCUnifiedHostMemoryAdapter(
 
   io.response <> responses.io.out
 
+  when(hostDataHandshake && !responses.io.in(DataSource).fire) {
+    bufferedDataResponse := true.B
+    bufferedTxnId := selectedDataRequest.txnId
+    bufferedRdata := io.memRdata
+    bufferedFault := io.memFault
+    bufferedWasSerial := dataSerialActive
+    bufferedReadSlot := dataReadSelect
+  }
+
   when(responses.io.in(DataSource).fire) {
-    when(dataSerialActive) {
+    when(bufferedDataResponse) {
+      bufferedDataResponse := false.B
+    }
+    when(Mux(bufferedDataResponse, bufferedWasSerial, dataSerialActive)) {
       dataSerialActive := false.B
     }.otherwise {
-      dataReadActive(dataReadSelect) := false.B
+      dataReadActive(Mux(bufferedDataResponse, bufferedReadSlot,
+        dataReadSelect)) := false.B
     }
   }
   when(responses.io.in(PtwSource).fire) {

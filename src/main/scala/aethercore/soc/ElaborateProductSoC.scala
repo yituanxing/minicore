@@ -129,7 +129,7 @@ object ElaborateProductFpgaColdBootPinsRv64gc extends App {
 
 /** Opt-in Product RV64GC FPGA with a real SPI/MMC PIO pin and MMIO path.
   * The same SPI-SD target must be selected when emitting the corresponding
-  * device tree (`EmitAetherSoCDts --spi-sd`). The physical board must still
+  * device tree (`EmitAetherSoCDts --product --spi-sd`). The physical board must still
   * provide DDR, PLL, firmware loader, 3.3V SD wiring and timing constraints.
   */
 object ElaborateProductFpgaColdBootSpiSdPinsRv64gc extends App {

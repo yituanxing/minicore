@@ -2,7 +2,8 @@ package aethercore.sim
 
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
-import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC, ProductSoCBoardProfiles}
+import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC, AetherSoCBoardSpec, ProductSoCBoardProfiles}
+import aethercore.soc.phy.AetherFractionalTickGenerator
 import _root_.circt.stage.ChiselStage
 import chisel3._
 
@@ -71,7 +72,12 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
-    val commit = Output(new CommitTrace(Xlen, PA, DataBits))
+    // The same Product target that enables F/D in the core must export its
+    // floating retirement trace through the host top. The engineering IMAC
+    // ABI remains unchanged; a Debian RV64GC top cannot silently discard
+    // floating register writes and FCSR/FS retirement visibility.
+    val commit = Output(new CommitTrace(Xlen, PA, DataBits,
+      withFloating = debianTarget))
     val halted = Output(Bool())
 
     // Product SD1 independently enables the same physical card pins as the
@@ -87,10 +93,25 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
   // with the hardware RV64GC/LP64D target selected at its sole board owner.
   private val requestedTarget = if (debianTarget)
     Some(AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(PA)) else None
+  private val selectedBoardDevices = if (spiSdTarget)
+    ProductSoCBoardProfiles.persistentSpiSd else ProductSoCBoardProfiles.existingRamOnly
   val soc = Module(new AetherCoreProductUnifiedMemorySoC(
+    // The legacy IMAC/G4 host oracle intentionally retains its old one-tick-
+    // per-cycle ABI. Debian targets must see the actual board's 10MHz MTIME
+    // cadence relative to the 50MHz SPI/CPU clock, or kernel and SD timeouts
+    // become five times shorter than on the Product FPGA shell.
+    externalPhysicalSeams = debianTarget,
     productConfigOverride = requestedTarget,
-    boardDevices = if (spiSdTarget) ProductSoCBoardProfiles.persistentSpiSd
-      else ProductSoCBoardProfiles.existingRamOnly))
+    boardDevices = selectedBoardDevices))
+  if (debianTarget) {
+    val board = AetherSoCBoardSpec.qualifiedLinux(soc.config.platform)
+    val timeTick = Module(new AetherFractionalTickGenerator(
+      sourceFrequencyHz = selectedBoardDevices.spiBusClockFrequencyHz,
+      targetFrequencyHz = board.timebaseFrequencyHz
+    ))
+    soc.io.timebaseTick.get := timeTick.io.tick
+    soc.io.uartTxReady.get := true.B
+  }
   val core = soc.core
   val hostMemory = Module(new AetherSoCUnifiedHostMemoryAdapter(
     addrBits = PA,

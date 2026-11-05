@@ -49,6 +49,9 @@ fi
 SD_RESULT="$ROOT/build/rv64-debian-sd1-sd/result.txt"
 ROOTFS_RESULT="$ROOT/build/rv64-debian-rootfs/result.txt"
 FW_RESULT="$ROOT/build/rv64-debian-boot/result.txt"
+LINUX_RESULT="$ROOT/build/rv64-debian-linux/result.txt"
+LINUX_IMAGE="$ROOT/build/rv64-debian-linux/obj/arch/riscv/boot/Image"
+LINUX_CONFIG="$ROOT/build/rv64-debian-linux/obj/.config"
 SD_IMAGE="$ROOT/build/rv64-debian-sd1-sd/sd-rootfs.img"
 BUILD_DIR="${AETHERCORE_SD1_MODEL_BUILD_DIR:-$ROOT/build/product-g5-sd1-model}"
 TOP=AetherCoreProductDebianSdRV64SimTop
@@ -65,11 +68,12 @@ result_field() {
 }
 
 check_artifacts() {
-  local required sd_bytes disk_bytes rootfs_sha firmware dtb
+  local required sd_bytes disk_bytes rootfs_sha firmware dtb linux_image_sha linux_config_sha
   grep -Fxq 'RV64_DEBIAN_SD1_SD_IMAGE_RESULT: status=READY_UNVERIFIED' "$SD_RESULT" || {
     echo 'SD1 raw media manifest is not ready for preflight' >&2; exit 4;
   }
   grep -Fxq 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' "$ROOTFS_RESULT"
+  grep -Fxq 'RV64_DEBIAN_LINUX_BUILD_RESULT: status=PASS' "$LINUX_RESULT"
   grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' "$FW_RESULT"
   for required in 'stage=sd1' 'partition_table=MBR' 'partition_count=1' \
       'partition1_type=0x83' 'partition1_fs=ext4' \
@@ -79,6 +83,10 @@ check_artifacts() {
     }
   done
   grep -Fxq 'stage=sd1' "$ROOTFS_RESULT"
+  grep -Fxq 'stage=sd1' "$LINUX_RESULT"
+  [[ "$(result_field linux_stage "$FW_RESULT")" == sd1 ]] || {
+    echo 'SD1 firmware is not tied to a real SD1 Linux Image' >&2; exit 5;
+  }
   grep -Fxq 'spi_sd=1' "$FW_RESULT"
   # Older Product payloads inherited the V2 DTS's 16-source PLIC despite
   # Product RTL implementing 52 sources. Do not spend another longrun on a
@@ -106,6 +114,25 @@ check_artifacts() {
   }
   [[ "$(result_field rootfs_result_sha256 "$FW_RESULT")" == "$rootfs_sha" ]] || {
     echo 'SD1 rootfs differs from OpenSBI firmware payload' >&2; exit 11;
+  }
+  [[ "$(result_field rootfs_result_sha256 "$LINUX_RESULT")" == "$rootfs_sha" &&
+     "$(result_field rootfs_tree_sha256 "$LINUX_RESULT")" == "$(result_field rootfs_tree_sha256 "$ROOTFS_RESULT")" &&
+     "$(result_field rootfs_tree_sha256 "$FW_RESULT")" == "$(result_field rootfs_tree_sha256 "$SD_RESULT")" ]] || {
+    echo 'SD1 Linux, firmware and SD image reference different full Debian rootfs generations' >&2; exit 11;
+  }
+  [[ -s "$LINUX_IMAGE" && -s "$LINUX_CONFIG" &&
+     "$(result_field image "$LINUX_RESULT")" == "$LINUX_IMAGE" &&
+     "$(result_field linux_image "$FW_RESULT")" == "$LINUX_IMAGE" ]] || {
+    echo 'SD1 Linux Image/config is missing or differs from the firmware input' >&2; exit 11;
+  }
+  linux_image_sha="$(sha256sum "$LINUX_IMAGE" | awk '{print $1}')"
+  linux_config_sha="$(sha256sum "$LINUX_CONFIG" | awk '{print $1}')"
+  [[ "$(result_field image_sha256 "$LINUX_RESULT")" == "$linux_image_sha" &&
+     "$(result_field linux_image_sha256 "$FW_RESULT")" == "$linux_image_sha" &&
+     "$(result_field config_sha256 "$LINUX_RESULT")" == "$linux_config_sha" &&
+     "$(result_field linux_config_sha256 "$FW_RESULT")" == "$linux_config_sha" &&
+     "$(result_field linux_result_sha256 "$FW_RESULT")" == "$(sha256sum "$LINUX_RESULT" | awk '{print $1}')" ]] || {
+    echo 'SD1 Linux Image, resolved config or qualified Linux manifest changed after firmware preparation' >&2; exit 11;
   }
   sd_bytes="$(stat -c%s "$SD_IMAGE")"
   disk_bytes="$(result_field disk_bytes "$SD_RESULT")"

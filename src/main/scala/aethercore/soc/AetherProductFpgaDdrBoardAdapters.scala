@@ -58,7 +58,8 @@ class AetherProductDdrLocalAxiWindow(
     val bytes = 1.U((physicalAddrBits + 1).W) << a.size
     val offsetMask = ((1.U(8.W) << a.size) - 1.U)(2, 0)
     val aligned = (a.addr(2, 0) & offsetMask) === 0.U
-    a.len === 0.U && a.size <= 3.U && aligned &&
+    a.len === 0.U && a.size <= 3.U && a.burst === Axi4Burst.Incr &&
+      !a.lock && aligned &&
       addr >= base && addr + bytes <= limit
   }
 
@@ -75,10 +76,24 @@ class AetherProductDdrLocalAxiWindow(
   }
 
   private val awAllowed = validAddress(io.physical.aw.bits)
-  private val arAllowed = validAddress(io.physical.ar.bits)
+  private val arAddressAllowed = validAddress(io.physical.ar.bits)
   private val wAllowed = io.physical.w.bits.last
+
+  // Concurrent Product RAM reads may complete out of order. Exactly one AR
+  // per AXI ID is live; no DDR R may be forwarded unless that ID was actually
+  // accepted, and single-beat ARs must terminate with RLAST. This is the
+  // read-channel counterpart of the AW/W/B ledger below. DDR protocol faults
+  // are board-fatal, not arbitrary AetherMem data returned to Linux.
+  private val readOutstanding =
+    RegInit(VecInit(Seq.fill(1 << txnIdBits)(false.B)))
+  private val arSlotFree = !readOutstanding(io.physical.ar.bits.id)
+  private val arAllowed = arAddressAllowed && arSlotFree
+  // A duplicate-ID AR held VALID while waiting for its predecessor is legal
+  // backpressure, not an accepted protocol fault. Only malformed addresses
+  // are board-fatal; the slot ledger prevents accepting the duplicate until
+  // its earlier R has retired.
   when((io.physical.aw.valid && !awAllowed) ||
-       (io.physical.ar.valid && !arAllowed) ||
+       (io.physical.ar.valid && !arAddressAllowed) ||
        (io.physical.w.valid && !wAllowed)) {
     stickyFatal := true.B
   }
@@ -137,9 +152,26 @@ class AetherProductDdrLocalAxiWindow(
   translate(io.physical.ar.bits, io.local.ar.bits)
   io.physical.ar.ready := io.local.ar.ready && arAllowed && !stickyFatal
 
-  io.physical.r.valid := io.local.r.valid && !stickyFatal
+  private val arFire = io.physical.ar.fire
+  private val returningReadId = io.local.r.bits.id
+  // A legal zero-latency slave may assert R in the cycle AR handshakes.
+  private val returningReadKnown = readOutstanding(returningReadId) ||
+    (arFire && io.physical.ar.bits.id === returningReadId)
+  private val coherentReadResponse = returningReadKnown && io.local.r.bits.last
+  when(io.local.r.valid && !coherentReadResponse) {
+    stickyFatal := true.B
+  }
+  io.physical.r.valid := io.local.r.valid && !stickyFatal && coherentReadResponse
   io.physical.r.bits := io.local.r.bits
-  io.local.r.ready := io.physical.r.ready || stickyFatal
+  io.local.r.ready := Mux(coherentReadResponse,
+    io.physical.r.ready || stickyFatal, true.B)
+  private val validReadRetire = io.local.r.fire && coherentReadResponse
+  when(arFire) {
+    readOutstanding(io.physical.ar.bits.id) := true.B
+  }
+  when(validReadRetire) {
+    readOutstanding(returningReadId) := false.B
+  }
 }
 
 /** Asynchronous-assert, synchronous-release board readiness qualification.
