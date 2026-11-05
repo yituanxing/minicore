@@ -12,7 +12,9 @@ permissions:
 
 concurrency:
   group: rv64gc-g0-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # An unrelated PR label also creates a skipped run in this concurrency group;
+  # it must not cancel an explicitly requested G0 qualification.
+  cancel-in-progress: false
 
 jobs:
   g0-contract:

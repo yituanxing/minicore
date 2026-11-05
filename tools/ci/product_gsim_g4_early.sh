@@ -4,15 +4,17 @@ set -euo pipefail
 # Bounded G4 Linux 6.6.143 *early* smoke on the exact Product G3 GSIM model.
 # G3 and G4 use AetherCoreProductOpenSbiRV64SimTop; only the RAM firmware
 # changes. No Product RTL re-elaboration, GSIM regeneration, native recompile,
-# Verilator 200M run, Debian, SD card, full PID1, or CI auto-trigger here.
+# Verilator G4 same-cycle A/B, Debian, SD card, full PID1, or CI auto-trigger.
 #
 #   bash tools/ci/product_gsim_g4_early.sh preflight
 #   AETHERCORE_ALLOW_PRODUCT_GSIM_G4_EARLY=1 \
 #     bash tools/ci/product_gsim_g4_early.sh run
 #
+# The default 100M-cycle budget fits the existing 285s CI wall cap; an
+# explicit diagnostic override remains bounded to 50M..200M cycles.
 # Passing means that GSIM executed a Linux-banner-bearing prefix *only*.
 # The verified 30M G3 A/B is retained as transport evidence; it is NOT a
-# claim that the complete 200M Linux state matches Verilator at every cycle.
+# claim that the G4 Linux state matches Verilator at every cycle.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -56,7 +58,7 @@ token() {
    -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] ||
   fail 'Debian/SD1 media are not valid inputs to the G4 RAM-initramfs proof'
 
-EARLY_CYCLES="${AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES:-200000000}"
+EARLY_CYCLES="${AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES:-100000000}"
 WALL_SECONDS="${AETHERCORE_PRODUCT_GSIM_G4_WALL_SECONDS:-285}"
 check_integer "$EARLY_CYCLES" 50000000 200000000 AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES
 check_integer "$WALL_SECONDS" 30 285 AETHERCORE_PRODUCT_GSIM_G4_WALL_SECONDS
@@ -154,7 +156,9 @@ grep -aFq 'AETHERCORE_PRODUCT_GSIM_FIXED_CYCLE_UNQUALIFIED_REQUIRES_VERILATOR_AB
 
 elapsed="$(awk -v a="$start" -v b="$end" 'BEGIN{printf "%.6f", (b-a)/1000000000}')"
 {
-  printf 'qualification=PRODUCT_GSIM_G4_LINUX_BANNER_OBSERVED_NOT_200M_AB_NOT_PID1_PASS\n'
+  # Encode the *actual* bounded cycle count so diagnostic overrides cannot
+  # masquerade as the routine 100M proof or as G4 Verilator A/B/PID1.
+  printf 'qualification=PRODUCT_GSIM_G4_%s_CYCLES_LINUX_BANNER_GSIM_ONLY_NOT_VERILATOR_AB_NOT_PID1_PASS\n' "$EARLY_CYCLES"
   printf 'top=AetherCoreProductOpenSbiRV64SimTop\n'
   printf 'guest_engine=GSIM\n'
   printf 'same_cycle_evidence_scope=G3_OPEN_SBI_UART_30000000_ONLY\n'

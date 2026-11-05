@@ -12,7 +12,9 @@ permissions:
 
 concurrency:
   group: aethercore-product-sd1-short-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Other labeled events enter this workflow even when its job is skipped.
+  # Never let an unrelated label cancel a genuine manually requested SD1 run.
+  cancel-in-progress: false
 
 jobs:
   product-sd1-peripheral-short:

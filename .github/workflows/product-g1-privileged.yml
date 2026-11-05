@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: aethercore-product-g1-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Labeled events for other gates also enter this concurrency group and then
+  # skip the job. They must not cancel the explicit G1 RTL qualification.
+  cancel-in-progress: false
 
 jobs:
   product-g1:

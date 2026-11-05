@@ -342,7 +342,7 @@ jobs:
           bash tools/ci/product_gsim_g4_early_selftest.sh
           bash tools/ci/product_gsim_g4_early.sh preflight
           bash tools/ci/product_gsim_g4_early.sh run
-          grep -Fxq 'qualification=PRODUCT_GSIM_G4_LINUX_BANNER_OBSERVED_NOT_200M_AB_NOT_PID1_PASS' \
+          grep -Fxq 'qualification=PRODUCT_GSIM_G4_100000000_CYCLES_LINUX_BANNER_GSIM_ONLY_NOT_VERILATOR_AB_NOT_PID1_PASS' \
             build/product-gsim-g4-early/qualification.txt
           grep -Fxq 'cycles=100000000' build/product-gsim-g4-early/qualification.txt
           echo 'Product GSIM G4 early: exactly 100M real Linux-prefix cycles with a kernel banner; NOT G4 Verilator A/B, PID1, or Debian.' >> "$GITHUB_STEP_SUMMARY"

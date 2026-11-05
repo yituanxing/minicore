@@ -19,7 +19,9 @@ permissions:
 
 concurrency:
   group: aethercore-product-g2-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # All PR label events share the group, including events whose jobs will skip.
+  # Keep operator-started G2 RTL/directed runs alive across unrelated labels.
+  cancel-in-progress: false
 
 jobs:
   product-g2-rtl:
