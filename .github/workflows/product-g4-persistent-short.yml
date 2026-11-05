@@ -145,18 +145,38 @@ jobs:
           path: build/product-g3-persistent-checkpoint/savable-model
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-savable-v2-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_rv64_checkpoint_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_checkpoint_g3_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
 
-      - name: Reject missing or ABI-mismatched savable Product model
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ '${{ steps.savable-model-cache.outputs.cache-hit }}' == true ]] || {
-            echo 'PRODUCT_G4_PERSISTENT_SAVABLE_REQUIRED: run the qualified persistent G3 short gate first' >&2
-            exit 16
-          }
-
       - name: Provision pinned RV64 Linux GCC 13.3
         shell: bash
         run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Cold native-ABI cache fallback only, no guest cycles
+        if: steps.savable-model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Each GitHub runner may expose different -march=native CPU features.
+          # Never reuse an archive built under a different native ABI. Rebuild
+          # only the same pinned G3 --savable RTL model on this runner, with
+          # no guest cycles or G3 replay, and save it for subsequent runs.
+          echo 'PRODUCT_G4_PERSISTENT_ABI_CACHE_MISS: bounded same-runner RTL source build only'
+          bash tools/ci/rv64_board_lean_linux_warm_guard.sh
+          timeout --signal=TERM --kill-after=10s 240s \
+            bash tools/ci/rv64_opensbi_first_exec.sh
+          grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' \
+            build/rv64-opensbi-first-exec/result.txt
+          sha256sum --check --status build/rv64-opensbi-first-exec/evidence/sha256.txt
+          timeout --signal=TERM --kill-after=10s 900s \
+            bash tools/ci/product_checkpoint_g3_short.sh build
+          [[ -s build/product-g3-persistent-checkpoint/savable-model/.savable-source-key &&
+             -s build/product-g3-persistent-checkpoint/savable-model/obj/VAetherCoreProductOpenSbiRV64SimTop__ALL.a ]]
+          echo 'PRODUCT_G4_PERSISTENT_ABI_CACHE_BUILT: same Product RTL, G3 --savable model, no guest cycles'
+
+      - name: Cache exact native Product --savable model before G4 Linux run
+        if: success() && steps.savable-model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-g3-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-savable-v2-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_rv64_checkpoint_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_checkpoint_g3_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
 
       - name: Revalidate warm full Linux and stage real unchanged G4 firmware
         shell: bash
