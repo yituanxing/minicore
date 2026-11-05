@@ -85,9 +85,10 @@ jobs:
             ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
 
-      - name: Test SD1 SPI transfer IRQ and GPIO chip-select pins only
+      - name: Test SD1 pins and Product fabric GPIO/SPI/PLIC11 MMIO routing
         shell: bash
         run: |
           set -euo pipefail
           ./mill aethercore.test.testOnly aethercore.ProductSd1SpiGpioSpec
-          echo 'PRODUCT_SD1_PERIPHERAL_SHORT_PASS: SPI/GPIO RTL directed only; no Linux PID1, MMC mount, or Debian qualification'
+          ./mill aethercore.test.testOnly aethercore.ProductSd1FabricSpec
+          echo 'PRODUCT_SD1_PERIPHERAL_SHORT_PASS: standalone SPI/GPIO and Product fabric PLIC11 directed RTL only; no Linux PID1, MMC mount, or Debian qualification'
