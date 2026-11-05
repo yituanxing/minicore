@@ -40,6 +40,19 @@ class ProductG5InitcallBootargs(unittest.TestCase):
             self.workflow,
         )
 
+    def test_g5_dual_toolchain_gate_provisions_reference_despite_candidate_env(self):
+        setup = self.workflow.split(
+            '- name: Provision selected pinned Verilator and frozen GCC', 1
+        )[1].split('- name: Save selected Verilator toolchain', 1)[0]
+        # The job selects 5.054 for short A/B, but the first invocation of
+        # ensure_verilator_5_024.sh dynamically reads that same environment.
+        # An explicit 5.024 override is required to preserve a real A/B.
+        self.assertIn(
+            'AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ensure_verilator_5_024.sh',
+            setup,
+        )
+        self.assertIn('bash tools/ensure_verilator_5_054.sh', setup)
+
 
 if __name__ == "__main__":
     unittest.main()

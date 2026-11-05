@@ -186,7 +186,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           chmod +x ./mill tools/ensure_verilator_5_024.sh tools/ensure_verilator_5_054.sh \
             tools/ensure_riscv64_linux_gcc_13_3.sh
-          bash tools/ensure_verilator_5_024.sh
+          # The generic 5.024 installer honors AETHERCORE_VERILATOR_VERSION.
+          # In short A/B this job is 5.054; pin the reference explicitly or
+          # the next line just installs 5.054 twice and preflight fails.
+          AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ensure_verilator_5_024.sh
           if [[ "$AETHERCORE_VERILATOR_VERSION" == 5.054 ]]; then
             bash tools/ensure_verilator_5_054.sh
           fi
