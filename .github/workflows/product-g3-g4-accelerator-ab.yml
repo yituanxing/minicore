@@ -151,12 +151,51 @@ jobs:
           set -euo pipefail
           chmod +x ./mill
           bash -n tools/ci/product_sim_ab.sh tools/ci/product_g3_short_ab.sh \
-            tools/ci/product_sim_pid1_ab.sh
+            tools/ci/product_sim_pid1_ab.sh tools/ci/product_forkcow_relink.sh \
+            tools/ci/product_forkcow_g3_smoke.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
           for pinned in 5.024 5.054; do
             AETHERCORE_VERILATOR_VERSION="$pinned" \
               bash tools/ensure_verilator_5_024.sh
           done
+
+      # Save an already validated installation BEFORE RTL generation/runtime.
+      # A failed Product Scala build must not throw away ten minutes of pinned
+      # Verilator compilation and force the next short retry to start over.
+      - name: Cache exact pinned Verilator installations before G3 simulation
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      # Product native models use -march=native. Cache them only for runners
+      # with the same CPU model/features and GCC ABI, never across X64 blindly.
+      - name: Fingerprint CPU and compiler for safe G3 native-model reuse
+        id: g3-native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(g++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore identical compiled G3 Product RTL model binaries
+        id: g3-model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-g3-short-ab/model-verilator-5.024-reference
+            build/product-g3-short-ab/model-verilator-5.054-reference
+            build/product-g3-short-ab/model-verilator-5.054-adaptive
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-native-v1-${{ steps.g3-native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'mill', 'src/main/scala/**/*.scala', 'sim/**/*.h', 'sim/**/*.cpp', 'tools/ci/product_sim_ab.sh', 'tools/ci/product_sim_cache.sh', 'tools/ci/product_g3_short_ab.sh') }}
 
       - name: Stage historical unchanged OpenSBI 1.6 and S-mode UART program
         shell: bash
@@ -181,19 +220,26 @@ jobs:
           cat build/product-g3-short-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
           cat build/product-g3-short-ab/small-qualification.txt
 
-      - name: Save complete pinned pair after verified G3 A/B
-        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+      - name: Verify fork-COW hot replay from real G3 OpenSBI checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_forkcow_g3_smoke.sh
+          echo 'G3 Product stateful fork-COW replay PASS; no PID1 or Debian claimed.' >> "$GITHUB_STEP_SUMMARY"
+
+      # Retain costly generated RTL archives even if a later strict state
+      # comparison or checkpoint gate fails. On restore, product_sim_cache.sh
+      # rechecks every source/toolchain/model identity before using an object.
+      - name: Preserve compiled G3 Product models for next short retry
+        if: always() && steps.g3-model-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: |
-            ~/.cache/aethercore/toolchains/verilator-5.024
-            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
-            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
-            ~/.cache/aethercore/toolchains/verilator-5.054
-            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
-            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+            build/product-g3-short-ab/model-verilator-5.024-reference
+            build/product-g3-short-ab/model-verilator-5.054-reference
+            build/product-g3-short-ab/model-verilator-5.054-adaptive
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-native-v1-${{ steps.g3-native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'mill', 'src/main/scala/**/*.scala', 'sim/**/*.h', 'sim/**/*.cpp', 'tools/ci/product_sim_ab.sh', 'tools/ci/product_sim_cache.sh', 'tools/ci/product_g3_short_ab.sh') }}
 
       - name: Stage exact historical Linux 6.6.143 and deterministic PID1 firmware
         if: env.PRODUCT_AB_SCOPE != 'g3-only'

@@ -119,6 +119,13 @@ jobs:
           path: build/product-gsim-bridge
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
 
+      - name: Restore the single Product Verilator 5.054 reference model safely
+        id: verilator-model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-g3-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
       # The pinned provisioner writes CROSS_COMPILE to GITHUB_ENV for the NEXT
       # step. Invoking the firmware builder in the same shell step would lose
       # the exported path and fail before any Product simulation begins.
@@ -134,17 +141,17 @@ jobs:
           grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' build/rv64-opensbi-first-exec/result.txt
           sha256sum --check --status build/rv64-opensbi-first-exec/evidence/sha256.txt
 
-      - name: Compare actual Product GSIM vs one Verilator 5.054 model at 30M cycles
+      - name: Build and fingerprint BOTH actual Product models, no guest run yet
         shell: bash
         run: |
           set -euo pipefail
-          bash tools/ci/product_gsim_g3_ab.sh
-          grep -Fxq 'qualification=PRODUCT_GSIM_G3_IDENTICAL_NOT_LINUX_PASS' build/product-gsim-g3-ab/qualification.txt
-          cat build/product-gsim-g3-ab/compare.txt >> "$GITHUB_STEP_SUMMARY"
-          cat build/product-gsim-g3-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
-          cat build/product-gsim-g3-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+          bash tools/ci/product_gsim_g3_ab.sh build
+          grep -Fxq 'status=PRODUCT_GSIM_G3_MODELS_VERIFIED' build/product-gsim-g3-ab/model-ready.txt
+          echo 'Product GSIM and Verilator models compiled and independently source/ABI fingerprinted. Runtime not yet qualified.' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Save GSIM generator only (Product RTL native model is host-specific)
+      # Save BEFORE the 30M-cycle differential. A genuine CPU/UART/RAM mismatch
+      # must fail the gate but must NOT throw away the expensive native builds.
+      - name: Save pinned GSIM frontend immediately after verified builds
         if: success() && steps.gsim-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
@@ -152,13 +159,32 @@ jobs:
           path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
 
-      - name: Save Product GSIM model for identical future host CPU/compiler
+      - name: Save generated Product GSIM model immediately after verified build
         if: success() && steps.native-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: build/product-gsim-bridge
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+
+      - name: Save verified Product Verilator model before the differential
+        if: success() && steps.verilator-model-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-g3-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Compare real G3 UART CPU/RAM/IRQ state at exactly 30M cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This phase MUST NOT rebuild or silently accept stale model inputs.
+          bash tools/ci/product_gsim_g3_ab.sh run
+          grep -Fxq 'qualification=PRODUCT_GSIM_G3_IDENTICAL_NOT_LINUX_PASS' build/product-gsim-g3-ab/qualification.txt
+          cat build/product-gsim-g3-ab/compare.txt >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g3-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g3-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload same-cycle state, identities, build logs, measured throughput
         if: always()
