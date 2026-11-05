@@ -146,7 +146,18 @@ class AetherDirectMappedReadCache(
   responses.io.in(1).valid := io.downstreamResponse.valid
   responses.io.in(1).bits := io.downstreamResponse.bits
   io.downstreamResponse.ready := responses.io.in(1).ready
-  io.upstreamResponse <> responses.io.out
+  // A previously offered miss response must not change identity just because
+  // a fresh cache hit becomes eligible while the consumer is backpressured.
+  // RR arbitration is dynamic; the flow-through skid pins the FULL response
+  // after the first stalled offer and is transparent on the fast path.
+  private val responseSkid = Module(new Queue(
+    new AetherMemResponse(dataBits, txnIdBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  responseSkid.io.enq <> responses.io.out
+  io.upstreamResponse <> responseSkid.io.deq
 
   private val hitResponseFire = responses.io.in(0).fire
   private val hitCanAccept = !hitResponseValid || hitResponseFire

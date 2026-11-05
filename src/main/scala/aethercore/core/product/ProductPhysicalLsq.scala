@@ -116,6 +116,14 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     0.U.asTypeOf(new ProductMemSlot(paddrBits, I, P, G)))))
   private val transactions = RegInit(VecInit(Seq.fill(T)(
     0.U.asTypeOf(new ProductTxnOwner(I, G)))))
+  // AetherMem is a real Decoupled boundary: once VALID is offered, neither
+  // the payload nor its leased identity may be replaced just because ready
+  // stalls. Keep the *offered* record separate from the changing eligible
+  // age tournament and the pool of IDs not yet accepted by downstream.
+  private val heldRequest = RegInit(false.B)
+  private val heldRequestBits = Reg(new AetherMemRequest(paddrBits, 64, TxBits))
+  private val heldRequestSlot = Reg(UInt(TxBits.W))
+  private val heldRequestToken = Reg(new ProductRobId(I, G))
   private def equal(a: ProductRobId, b: ProductRobId): Bool =
     a.index === b.index && a.generation === b.generation
   private def bytesOf(size: MemSize.Type): UInt = 1.U(4.W) << size.asUInt
@@ -208,7 +216,8 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   io.reserve.ready := (reserveLoad && loadCount < L.U ||
                        (reserveStore || reserveAtomic) && storeCount < S.U) &&
     freeSlotMask.orR && !matchingSlot(io.reserve.bits.token).asUInt.orR &&
-    !outstandingSameLifetime
+    !outstandingSameLifetime &&
+    !(heldRequest && equal(heldRequestToken, io.reserve.bits.token))
   when(io.reserve.fire) {
     assert(reserveLoad || reserveStore || reserveAtomic,
       "LSQ only reserves ordinary or atomic memory operations")
@@ -352,7 +361,12 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
     val write = (isStore || isAtomic) && isHead && !localFault
     eligible(j) := item.valid && item.resolved && !item.launched &&
       (localFault || forward || read || write) && io.robHead.valid &&
-      !io.kill.valid && (hasTxn || forward || localFault)
+      !io.kill.valid && (hasTxn || forward || localFault) &&
+      // The offered request owns this ROB lifetime even before its physical
+      // handshake. Excluding it from the tournament prevents a later changed
+      // forwarding/fault candidate from completing the same Load a second
+      // time while its stable external request remains backpressured.
+      !(heldRequest && equal(item.token, heldRequestToken))
     forwardable(j) := forward
     forwardOwner(j) := source
     faulted(j) := localFault
@@ -384,33 +398,68 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
   val shiftedForward = (forwardingStore.storeData << (forwardingStore.paddr(2, 0) << 3))(63, 0)
   val candidateForwardData = shiftedForward >> (candidate.paddr(2, 0) << 3)
   val immediate = candidateForward || candidateLocalFault
-  io.memoryRequest.valid := candidateValid && !immediate && hasTxn
-  io.memoryRequest.bits := 0.U.asTypeOf(io.memoryRequest.bits)
-  io.memoryRequest.bits.txnId := chosenTxn
-  io.memoryRequest.bits.op := Mux(candidate.kind === MemoryOperationKind.Atomic,
+  private val offeredRequest = Wire(new AetherMemRequest(paddrBits, 64, TxBits))
+  offeredRequest := 0.U.asTypeOf(offeredRequest)
+  offeredRequest.txnId := chosenTxn
+  offeredRequest.op := Mux(candidate.kind === MemoryOperationKind.Atomic,
     AetherMemOp.Atomic, Mux(candidate.kind === MemoryOperationKind.Store,
       AetherMemOp.Write, AetherMemOp.Read))
-  io.memoryRequest.bits.paddr := candidate.paddr
-  io.memoryRequest.bits.size := candidate.size
-  io.memoryRequest.bits.wdata := candidate.storeData
+  offeredRequest.paddr := candidate.paddr
+  offeredRequest.size := candidate.size
+  offeredRequest.wdata := candidate.storeData
   val writePayload = candidate.kind === MemoryOperationKind.Store ||
     (candidate.kind === MemoryOperationKind.Atomic && candidate.atomicOp =/= AtomicOp.Lr)
-  io.memoryRequest.bits.wmask := Mux(writePayload, accessMask(candidate.size), 0.U)
-  io.memoryRequest.bits.atomicOp := Mux(candidate.kind === MemoryOperationKind.Atomic,
+  offeredRequest.wmask := Mux(writePayload, accessMask(candidate.size), 0.U)
+  offeredRequest.atomicOp := Mux(candidate.kind === MemoryOperationKind.Atomic,
     candidate.atomicOp, AtomicOp.None)
-  io.memoryRequest.bits.attributes := candidate.attributes
+  offeredRequest.attributes := candidate.attributes
+
+  io.memoryRequest.valid := heldRequest || (candidateValid && !immediate && hasTxn)
+  io.memoryRequest.bits := Mux(heldRequest, heldRequestBits, offeredRequest)
+  val launchSlot = Mux(heldRequest, heldRequestSlot, candidateIndex)
+  val launchToken = Wire(new ProductRobId(I, G))
+  launchToken := Mux(heldRequest, heldRequestToken, candidate.token)
+  val launchTxn = io.memoryRequest.bits.txnId
+  val launchLive = slots(launchSlot).valid &&
+    equal(slots(launchSlot).token, launchToken) &&
+    !(io.kill.valid && equal(io.kill.bits, launchToken))
+
+  when(io.memoryRequest.valid && !io.memoryRequest.ready && !heldRequest) {
+    heldRequest := true.B
+    heldRequestBits := offeredRequest
+    heldRequestSlot := candidateIndex
+    heldRequestToken := candidate.token
+  }
 
   when(io.memoryRequest.fire) {
-    assert(!transactions(chosenTxn).active, "external txn ID is leased exactly once")
-    transactions(chosenTxn).active := true.B
-    transactions(chosenTxn).token := candidate.token
-    transactions(chosenTxn).isLoad := candidate.kind === MemoryOperationKind.Load ||
-      (candidate.kind === MemoryOperationKind.Atomic && candidate.atomicOp === AtomicOp.Lr)
-    slots(candidateIndex).launched := true.B
-    when(candidate.kind === MemoryOperationKind.Store ||
-      candidate.kind === MemoryOperationKind.Atomic) {
-      val sameHead = io.robHead.valid && equal(candidate.token, io.robHead.bits)
-      assert(sameHead, "Store/Atomic must NEVER externalize before exact ROB head")
+    heldRequest := false.B
+    assert(!transactions(launchTxn).active, "external txn ID is leased exactly once")
+    transactions(launchTxn).active := true.B
+    transactions(launchTxn).token := launchToken
+    transactions(launchTxn).isLoad := io.memoryRequest.bits.op === AetherMemOp.Read ||
+      (io.memoryRequest.bits.op === AetherMemOp.Atomic &&
+        io.memoryRequest.bits.atomicOp === AtomicOp.Lr)
+    when(launchLive) {
+      slots(launchSlot).launched := true.B
+    }.otherwise {
+      // An idempotent speculative RAM Load may already be VALID when a
+      // younger mispredicted branch squashes its ROB owner. Decoupled cannot
+      // silently retract it: issue the unchanged read, then drain its reply
+      // using the independent transaction lease, without a ROB completion.
+      // Stores, atomics and device reads can only have been offered at head;
+      // backend recovery is youngest-first and cannot kill that older head.
+      assert(io.memoryRequest.bits.op === AetherMemOp.Read &&
+        io.memoryRequest.bits.attributes.cacheable &&
+        io.memoryRequest.bits.attributes.idempotent &&
+        !io.memoryRequest.bits.attributes.sideEffecting &&
+        !io.memoryRequest.bits.attributes.ordered,
+        "only idempotent RAM reads may be issued after owner squash")
+    }
+    when(io.memoryRequest.bits.op === AetherMemOp.Write ||
+      io.memoryRequest.bits.op === AetherMemOp.Atomic) {
+      val sameHead = io.robHead.valid && equal(launchToken, io.robHead.bits)
+      assert(launchLive && (heldRequest || sameHead),
+        "Store/Atomic must be live and first offered at exact ROB head")
     }
   }
 
@@ -503,7 +552,7 @@ class ProductPhysicalLsq(val geometry: ProductCoreGeometry, val paddrBits: Int =
 
   // One source may write enq.valid per cycle: ensure a non-fault local result
   // does not mutate a completed or killed ROB lifetime after its owner leaves.
-  when(io.memoryRequest.fire) {
+  when(io.memoryRequest.fire && !heldRequest) {
     assert(!candidateForward && !candidateLocalFault)
   }
   assert(loadCount <= L.U && storeCount <= S.U)

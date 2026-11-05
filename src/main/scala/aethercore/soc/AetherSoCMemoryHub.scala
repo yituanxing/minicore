@@ -69,30 +69,43 @@ class AetherSoCMemoryHub(
     requestArbiter.io.in(client) <> io.clients(client).request
   }
 
-  io.downstreamRequest.valid := requestArbiter.io.out.valid
-  requestArbiter.io.out.ready := io.downstreamRequest.ready
+  // RR arbitration chooses among *currently* valid clients. A new client can
+  // become eligible while the physical memory boundary is stalled, changing
+  // the combinational chosen/source tag and request bits under a held VALID.
+  // One flow-through entry accepts and pins the COMPLETE tagged transaction
+  // on the first stalled cycle. With ready high and no queued request, normal
+  // requests still pass straight through with no added request-cycle latency.
+  private val requestSkid = Module(new Queue(
+    new AetherMemRequest(addrBits, dataBits, downstreamTxnIdBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  requestSkid.io.enq.valid := requestArbiter.io.out.valid
+  requestArbiter.io.out.ready := requestSkid.io.enq.ready
+  io.downstreamRequest <> requestSkid.io.deq
 
-  io.downstreamRequest.bits.txnId :=
+  requestSkid.io.enq.bits.txnId :=
     Cat(requestArbiter.io.chosen, requestArbiter.io.out.bits.txnId)
-  io.downstreamRequest.bits.op := requestArbiter.io.out.bits.op
-  io.downstreamRequest.bits.paddr := requestArbiter.io.out.bits.paddr
-  io.downstreamRequest.bits.size := requestArbiter.io.out.bits.size
-  io.downstreamRequest.bits.wdata := requestArbiter.io.out.bits.wdata
-  io.downstreamRequest.bits.wmask := requestArbiter.io.out.bits.wmask
-  io.downstreamRequest.bits.atomicOp := requestArbiter.io.out.bits.atomicOp
-  io.downstreamRequest.bits.attributes.cacheable :=
+  requestSkid.io.enq.bits.op := requestArbiter.io.out.bits.op
+  requestSkid.io.enq.bits.paddr := requestArbiter.io.out.bits.paddr
+  requestSkid.io.enq.bits.size := requestArbiter.io.out.bits.size
+  requestSkid.io.enq.bits.wdata := requestArbiter.io.out.bits.wdata
+  requestSkid.io.enq.bits.wmask := requestArbiter.io.out.bits.wmask
+  requestSkid.io.enq.bits.atomicOp := requestArbiter.io.out.bits.atomicOp
+  requestSkid.io.enq.bits.attributes.cacheable :=
     requestArbiter.io.out.bits.attributes.cacheable
-  io.downstreamRequest.bits.attributes.idempotent :=
+  requestSkid.io.enq.bits.attributes.idempotent :=
     requestArbiter.io.out.bits.attributes.idempotent
-  io.downstreamRequest.bits.attributes.sideEffecting :=
+  requestSkid.io.enq.bits.attributes.sideEffecting :=
     requestArbiter.io.out.bits.attributes.sideEffecting
-  io.downstreamRequest.bits.attributes.ordered :=
+  requestSkid.io.enq.bits.attributes.ordered :=
     requestArbiter.io.out.bits.attributes.ordered
-  io.downstreamRequest.bits.attributes.executable :=
+  requestSkid.io.enq.bits.attributes.executable :=
     requestArbiter.io.out.bits.attributes.executable
-  io.downstreamRequest.bits.attributes.supportsAtomic :=
+  requestSkid.io.enq.bits.attributes.supportsAtomic :=
     requestArbiter.io.out.bits.attributes.supportsAtomic
-  io.downstreamRequest.bits.attributes.supportsPartial :=
+  requestSkid.io.enq.bits.attributes.supportsPartial :=
     requestArbiter.io.out.bits.attributes.supportsPartial
 
   private val responseSource =

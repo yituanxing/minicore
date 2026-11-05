@@ -64,6 +64,30 @@ input_identity() {
         printf 'host-tool-missing=%s\n' "$tool"
       fi
     done
+    # Verilator's generated makefile can honor explicit CC/CXX/AR/LD
+    # overrides instead of the default c++/g++/cc tools above. A caller may
+    # also override the Verilator generator command in the environment.
+    # Recording only the override string would accept a stale cached model after that
+    # custom compiler or linker executable was replaced in place. Pin the
+    # *resolved bytes* of named executable tokens (including a wrapper plus
+    # its wrapped compiler), retaining the full override in the key. This
+    # only fingerprints files; it never invokes the override command.
+    local role custom_command custom_tool
+    local -a override_words
+    for role in CC CXX AR LD VERILATOR; do
+      custom_command="${!role:-}"
+      [[ -n "$custom_command" ]] || continue
+      printf 'override-tool=%s command=%s\n' "$role" "$custom_command"
+      read -r -a override_words <<< "$custom_command"
+      for custom_tool in "${override_words[@]}"; do
+        [[ "$custom_tool" == -* || "$custom_tool" == *=* ]] && continue
+        resolved="$(command -v "$custom_tool" || true)"
+        printf 'override-executable=%s resolved=%s\n' "$custom_tool" "$resolved"
+        if [[ -n "$resolved" && -f "$resolved" ]]; then
+          sha256sum "$(readlink -f "$resolved")"
+        fi
+      done
+    done
     local verilator_prefix="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-$verilator_version"
     local verilator_asset
     for verilator_asset in \

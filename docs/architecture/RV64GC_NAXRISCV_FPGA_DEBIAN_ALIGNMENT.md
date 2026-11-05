@@ -152,3 +152,12 @@ FPU 单精度/双精度模块、三读口 FP PRF 对 LUT、FF、BRAM、Fmax 的�
 5. **未来板级设计预留**：保持 DDR/时钟/固件源和 SPI SD 的清晰接口及正确的地址协议；不在无原理图、无器件的情况下写伪造的器件专用 DDR PHY 或约束。
 
 **本阶段的工作模式**：先多轮读完整相关调用链，集中修确定性缺陷；暂停全量编译、测试、QEMU、RTL/发行版长模拟和反复 CI。软件静态收口后，才由单独明确批准的轮次一次性执行短成本门禁，再决定是否值得进行一个长时真实发行版负载。没有当轮运行记录时只能报“源代码已实现/待验”，不得沿用过往 Linux PASS 表示新配置已通过。
+
+### 仿真加速当前可用性（软件源码审计口径）
+
+- **已接入待核验**：`product_sim_cache.sh` 按 RTL/生成器、宿主编译器、编译选项与运行时头文件指纹复用同一 Product 仿真二进制；`product_sim_ab.sh` 具备同一 cycle 上三档 Verilator/settle 的候选差分入口，但本轮未执行，不能宣称 5.054 或 adaptive 已获 Product 资格。
+- **已有历史实现但不等于 Product 快照**：`l32_opensbi_runtime.h` 可以复制主机 256MiB RAM 和 LR/SC reservation；`opensbi_forkserver_main.cpp` 在旧 L32 登录后通过进程 `fork` 复用内存和 RTL 的运行态。这不能作为 Product SD1 固件→Debian 登录的持久可恢复快照，也不能跳过新镜像的一次真实启动。
+- **尚未实现**：Product 的完整可恢复检查点必须同时保存同一时刻的 RTL/VerilatedContext、主机 RAM 与 LR/SC、TransportRuntimeState、串口/中断/时间、SPI SD 卡读写会话与 COW 等状态，并把所有对应模型、固件、DTB、SD 镜像指纹绑定到快照；此状态合同未完成，禁止把仅有 RAM 的快照标注为可恢复。
+- **QEMU 状态导入不是现成加速**：QEMU 的架构寄存器/CSR/内存快照无法自动重建 Product 的 RAT、ROB、LSQ、TLB、AXI 在途事务。只有设计并验证一个清空全部在途微架构工作、可注入架构状态和设备状态的交接边界，且经过差分校验，才可称为接力热启动；目前不把它用于下一次长跑。
+
+因此，下一次确有必要运行 Product RTL 时，默认仍选择已经指定的 **5.024/reference** 与经过 exact-hash 验证的可复用二进制；先做独立的短程 A/B，只有得到同周期状态一致证据后才考虑升级 simulator 或 settle 算法。无此证据不启用未知快路径。
