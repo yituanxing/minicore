@@ -2,7 +2,7 @@ name: AetherCore Product GSIM real G3 short same-cycle gate
 
 # Opt-in only: one OpenSBI 1.6/S-mode UART program on Product RTL, 30M cycles
 # per engine. Reuses PA32's pinned GSIM frontend patch/bridge, not PA32 evidence.
-# Optionally stage unchanged Linux 6.6.143 and run a bounded GSIM-only 200M
+# Optionally stage unchanged Linux 6.6.143 and run a bounded GSIM-only 100M
 # early prefix, after G3 strict A/B and fork-COW qualify. NEVER Debian or PID1.
 on:
   workflow_dispatch:
@@ -330,12 +330,12 @@ jobs:
             build/rv64-linux-initramfs/result.txt
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-minimal-initramfs-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
-      - name: Run at most 200M real Product GSIM early Linux cycles in 285 seconds
+      - name: Run exactly 100M real Product GSIM early Linux cycles within 285 seconds
         if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
         shell: bash
         env:
           AETHERCORE_ALLOW_PRODUCT_GSIM_G4_EARLY: '1'
-          AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES: '200000000'
+          AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES: '100000000'
           AETHERCORE_PRODUCT_GSIM_G4_WALL_SECONDS: '285'
         run: |
           set -euo pipefail
@@ -344,6 +344,8 @@ jobs:
           bash tools/ci/product_gsim_g4_early.sh run
           grep -Fxq 'qualification=PRODUCT_GSIM_G4_LINUX_BANNER_OBSERVED_NOT_200M_AB_NOT_PID1_PASS' \
             build/product-gsim-g4-early/qualification.txt
+          grep -Fxq 'cycles=100000000' build/product-gsim-g4-early/qualification.txt
+          echo 'Product GSIM G4 early: exactly 100M real Linux-prefix cycles with a kernel banner; NOT G4 Verilator A/B, PID1, or Debian.' >> "$GITHUB_STEP_SUMMARY"
           cat build/product-gsim-g4-early/qualification.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload same-cycle state, identities, build logs, measured throughput

@@ -167,5 +167,5 @@ elapsed="$(awk -v a="$start" -v b="$end" 'BEGIN{printf "%.6f", (b-a)/1000000000}
 } > "$RUN_ROOT/qualification.txt.$$.tmp"
 mv -f "$RUN_ROOT/qualification.txt.$$.tmp" "$RUN_ROOT/qualification.txt"
 rm -f "$RUN_ROOT/inprogress"
-printf 'PRODUCT_GSIM_G4_LINUX_EARLY_OBSERVED cycles=%s wall_seconds=%s gsim_sha=%s (G3 A/B qualified; G4 200M GSIM-only, no G4 A/B/PID1/Debian claim)\n' \
+printf 'PRODUCT_GSIM_G4_LINUX_EARLY_OBSERVED cycles=%s wall_seconds=%s gsim_sha=%s (G3 A/B qualified; bounded G4 GSIM-only, no G4 A/B/PID1/Debian claim)\n' \
   "$EARLY_CYCLES" "$elapsed" "$GSIM_SHA"
