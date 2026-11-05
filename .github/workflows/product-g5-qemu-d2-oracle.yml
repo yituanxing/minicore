@@ -1,8 +1,9 @@
 name: AetherCore Product G5 D2 native Debian QEMU system oracle
 
 # Human opt-in only; this job has NO Verilator, GSIM, Product RTL or SD1 longrun.
-# QEMU virt's firmware/DTB differ from the Product board, but this boots the
-# exact D2 Linux Image (with embedded native Debian LP64D initramfs) to PID1.
+# First boot the exact D2 Image on QEMU's independent generic OpenSBI/DTB;
+# then independently boot the exact Product fw_payload/DTB on QEMU virt.
+# Both are QEMU CPU tests, never Product RTL or an FPGA qualification.
 on:
   workflow_dispatch:
   pull_request:
@@ -29,6 +30,7 @@ jobs:
       RV64_LINUX_JOBS: '4'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
       AETHERCORE_ALLOW_G5_QEMU_SYSTEM_ORACLE: '1'
+      AETHERCORE_ALLOW_G5_QEMU_PRODUCT_FIRMWARE: '1'
       AETHERCORE_G5_QEMU_WALL_SECONDS: '180'
 
     steps:
@@ -47,9 +49,12 @@ jobs:
           [[ "$RV64_DEBIAN_STAGE" == d2 &&
              -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
              -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 2
-          bash -n tools/ci/product_g5_qemu_oracle.sh tools/ci/product_g5_qemu_oracle_selftest.sh
+          bash -n tools/ci/product_g5_qemu_oracle.sh tools/ci/product_g5_qemu_oracle_selftest.sh \
+            tools/ci/product_g5_qemu_product_firmware_oracle.sh \
+            tools/ci/product_g5_qemu_product_firmware_oracle_selftest.sh
           bash tools/ci/product_g5_qemu_oracle_selftest.sh
-          echo 'D2 native Debian QEMU **system** oracle only; Product RTL/DTB/F7/SD1/PID1 timing remain unqualified' >> "$GITHUB_STEP_SUMMARY"
+          bash tools/ci/product_g5_qemu_product_firmware_oracle_selftest.sh
+          echo 'D2 native Debian QEMU **system** only; Product RTL/FPGA/SD1 timing remain unqualified' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Restore frozen RV64 GCC 13.3 toolchain from G4/G5
         id: gcc-cache
@@ -69,6 +74,7 @@ jobs:
           path: |
             ~/.cache/aethercore/rv64/linux
             ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
@@ -82,7 +88,7 @@ jobs:
             autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
             libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
             curl xz-utils git python3 device-tree-compiler dwarves \
-            qemu-system-misc
+            qemu-system-misc openjdk-17-jdk-headless
           command -v qemu-system-riscv64
           qemu-system-riscv64 --version | head -1
           docker version
@@ -118,7 +124,18 @@ jobs:
           path: |
             ~/.cache/aethercore/rv64/linux
             ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
           key: ${{ steps.linux-cache.outputs.cache-primary-key }}
+
+      - name: Restore Scala emitter dependencies for Product DTB
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Stage exact native Debian riscv64 D2 rootfs and F/D probe
         shell: bash
@@ -146,6 +163,25 @@ jobs:
             build/product-g5-qemu-system-oracle/result.txt
           cat build/product-g5-qemu-system-oracle/result.txt >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build and qualify exact G5 Product OpenSBI firmware and 52-source DTB
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          bash tools/ci/rv64_debian_payload_build.sh
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-boot/result.txt
+          grep -Fq 'riscv,ndev = <52>;' build/rv64-debian-boot/aethersoc-v0-initramfs.dts
+
+      - name: Boot Product fw_payload and DTB on bounded QEMU virt CPU oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_product_firmware_oracle.sh run
+          grep -Fxq 'qualification=QEMU_SYSTEM_PRODUCT_FW_DTB_D2_ORACLE_NOT_PRODUCT_RTL_PASS' \
+            build/product-g5-qemu-product-fw-dtb/result.txt
+          cat build/product-g5-qemu-product-fw-dtb/result.txt >> "$GITHUB_STEP_SUMMARY"
+
       - name: Preserve kernel SHA, native rootfs identity, QEMU firmware boundary and serial trace
         if: always()
         uses: actions/upload-artifact@v4
@@ -162,3 +198,9 @@ jobs:
             build/rv64-debian-linux/evidence/resolved.config
             build/product-g5-qemu-system-oracle/d2-serial.log
             build/product-g5-qemu-system-oracle/result.txt
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/evidence/sha256.txt
+            build/rv64-debian-boot/evidence/inputs.txt
+            build/rv64-debian-boot/evidence/aethersoc-rv64-initramfs-dts.txt
+            build/product-g5-qemu-product-fw-dtb/serial.log
+            build/product-g5-qemu-product-fw-dtb/result.txt

@@ -44,6 +44,9 @@ on:
   # product-g5-longrun: explicit ONE D2 late-boot forensic run with savable
   # 5.054, one cold prefix and a restartable full-RTL continuation. This path
   # never executes either performance A/B or the throwaway non-savable model.
+  # product-g5-resume-artifact: restore the SHA-checked 900M Product RTL/DDR
+  # checkpoint from run 42028338206 and execute ONLY 50M additional cycles.
+  # This exact-source job refuses changed RTL/host/firmware; no cold run.
   # D3 requires URL and SHA inputs and therefore remains unavailable until
   # this workflow reaches main (or a separately qualified artifact bridge).
   pull_request:
@@ -51,6 +54,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: aethercore-product-g5-debian-${{ github.event.pull_request.number || github.ref }}
@@ -64,19 +68,22 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        (github.event.label.name == 'product-g5-short-ab' ||
-        github.event.label.name == 'product-g5-longrun'))
+        github.event.label.name == 'product-g5-longrun' ||
+        github.event.label.name == 'product-g5-resume-artifact'))
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
-      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      AETHERCORE_G5_FORENSIC: ${{ github.event_name == 'pull_request' && github.event.label.name == 'product-g5-longrun' && '1' || '0' }}
+      # A persisted Verilator checkpoint is tied to byte-identical source.
+      TARGET_SHA: ${{ github.event.label.name == 'product-g5-resume-artifact' && '99a5c86e99f52ed12f95b304635d77613c9505c4' || github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_G5_RESUME_ONLY: ${{ github.event.label.name == 'product-g5-resume-artifact' && '1' || '0' }}
+      AETHERCORE_G5_FORENSIC: ${{ github.event_name == 'pull_request' && (github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact') && '1' || '0' }}
       AETHERCORE_G5_RUN_MODE: ${{ github.event.label.name == 'product-g5-short-ab' && 'short-ab' || inputs.run_mode || 'full' }}
-      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || github.event.label.name == 'product-g5-longrun' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
+      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
       SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
       RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
       # Keep short same-cycle A/B concise; a consciously selected full boot
       # records initcall entry/return so a late-boot stall is not anonymous.
-      RV64_DEBIAN_INITCALL_TRACE: ${{ (github.event.label.name == 'product-g5-longrun' || inputs.run_mode == 'full') && '1' || '0' }}
+      RV64_DEBIAN_INITCALL_TRACE: ${{ (github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact' || inputs.run_mode == 'full') && '1' || '0' }}
       RV64_DEBIAN_FULL_ROOTFS_URL: ${{ inputs.full_rootfs_archive_url }}
       RV64_DEBIAN_FULL_ROOTFS_SHA256: ${{ inputs.full_rootfs_sha256 }}
       AETHERCORE_MILL_NO_DAEMON: '1'
@@ -342,6 +349,61 @@ jobs:
             exit 34
           fi
 
+      - name: Download exact prior 900M G5 RTL/DDR state (no cold execution)
+        if: env.AETHERCORE_G5_RESUME_ONLY == '1'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42028338206
+          name: aethercore-product-g5-debian-42028338206
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/g5-900m-source-artifact
+
+      - name: Verify and stage original 900M same-image Product checkpoint
+        if: env.AETHERCORE_G5_RESUME_ONLY == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == 99a5c86e99f52ed12f95b304635d77613c9505c4 ]] || {
+            echo 'G5 resume must use the exact historic code, never current mutable PR head' >&2; exit 41;
+          }
+          staged="$RUNNER_TEMP/g5-900m-source-artifact/minicore/minicore/build/product-g5-long-forensic"
+          target="$GITHUB_WORKSPACE/build/product-g5-long-forensic"
+          [[ -d "$staged" && ! -L "$staged" && ! -e "$target" ]] || {
+            echo 'Original 900M artifact layout differs, or destination already exists' >&2; exit 42;
+          }
+          [[ -z "$(find "$staged" -type l -print -quit)" ]] || {
+            echo 'Refuse symlinks in imported 900M checkpoint evidence' >&2; exit 42;
+          }
+          for required in identity.txt pre.sha256 persistent.pre.rtl persistent.pre.host save.log restore.log; do
+            [[ -s "$staged/$required" ]] || { echo "Missing original checkpoint $required" >&2; exit 43; }
+          done
+          for expected in \
+              'model_sha256=aa35c80024238420bea3976db677db2e0ef028aad9800482926b926e50155b71' \
+              'firmware_sha256=d525de6a58422de93da6de5312d38867611153da94c580bca31f90ebf13eff2c' \
+              'linux_image_sha256=02f054667dd67028545c20929b1e332d1a0ff358280ab431ce479f87f72345af' \
+              'rootfs_result_sha256=7b664594a266914585d2621e6ec1e918b60721ee6c5ba7e810cebc9e70f9edb5' \
+              'vmlinux_sha256=6f5afbdc6fabd14819219d4928289c163d73f3aee9b38c72c4c866b1c50c5c69' \
+              'checkpoint_cycles=900000000' \
+              'top=AetherCoreProductDebianRV64SimTop'; do
+            grep -Fxq "$expected" "$staged/identity.txt" || {
+              echo "Original G5 checkpoint identity mismatch: $expected" >&2; exit 44;
+            }
+          done
+          [[ "$(stat -c%s "$staged/persistent.pre.host")" -gt 268435456 &&
+             "$(head -c8 "$staged/persistent.pre.host")" == AETG5CP1 ]] || {
+            echo 'Imported 900M host RAM state damaged' >&2; exit 45;
+          }
+          (cd "$staged" && sha256sum --check --status pre.sha256) || {
+            echo 'Imported 900M RTL+DDR digest mismatch' >&2; exit 46;
+          }
+          [[ "$(sha256sum build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin | awk '{print $1}')" == d525de6a58422de93da6de5312d38867611153da94c580bca31f90ebf13eff2c &&
+             "$(sha256sum build/rv64-debian-linux/obj/vmlinux | awk '{print $1}')" == 6f5afbdc6fabd14819219d4928289c163d73f3aee9b38c72c4c866b1c50c5c69 ]] || {
+            echo 'Current Product firmware/vmlinux differs from archived 900M binary' >&2; exit 47;
+          }
+          mkdir -p "$(dirname "$target")"
+          mv "$staged" "$target"
+          echo 'PRODUCT_G5_RESTORED_900M_ARTIFACT_PASS code_sha=99a5c86 checkpoint_sha256=PASS rerun_cold=0'
+
       - name: Fingerprint exact Product Debian RTL and simulator inputs
         if: env.AETHERCORE_G5_FORENSIC != '1'
         id: model-key
@@ -493,8 +555,13 @@ jobs:
           AETHERCORE_ALLOW_PRODUCT_G5_LONG_DIAGNOSE: '1'
           AETHERCORE_G5_LONG_CHECKPOINT_CYCLES: '900000000'
           AETHERCORE_G5_LONG_TOTAL_CYCLES: '1800000000'
-          AETHERCORE_G5_LONG_REPLAY_CYCLES: '900000000'
-          AETHERCORE_G5_STALL_WATCHDOG_CYCLES: '100000000'
+          # The archived snapshot already contains 188.6M cycles of UART
+          # silence. The original host binary has no rearm knob; changing it
+          # would invalidate model_sha and strand the checkpoint. Permit 50M
+          # NEW cycles, bounded below the historic + 300M silence threshold.
+          AETHERCORE_G5_LONG_REPLAY_CYCLES: ${{ env.AETHERCORE_G5_RESUME_ONLY == '1' && '50000000' || '900000000' }}
+          AETHERCORE_G5_STALL_WATCHDOG_CYCLES: ${{ env.AETHERCORE_G5_RESUME_ONLY == '1' && '300000000' || '100000000' }}
+          AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX: ${{ env.AETHERCORE_G5_RESUME_ONLY == '1' && 'resume2' || 'diagnostic' }}
           PRODUCT_G5_LONG_PROOF_DIR: ${{ github.workspace }}/build/product-g5-long-forensic
         run: |
           set -euo pipefail
@@ -506,9 +573,19 @@ jobs:
           mkdir -p "$PRODUCT_G5_LONG_PROOF_DIR"
           rc=0
           bash tools/ci/product_checkpoint_g5_short.sh diagnose || rc=$?
-          if [[ -s "$PRODUCT_G5_LONG_PROOF_DIR/diagnostic.log" ]]; then
+          log="$PRODUCT_G5_LONG_PROOF_DIR/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX}.log"
+          if [[ -s "$log" ]]; then
             grep -E '^PRODUCT_G5_RESUME_DIAGNOSTIC_RESULT ' \
-              "$PRODUCT_G5_LONG_PROOF_DIR/diagnostic.log" >> "$GITHUB_STEP_SUMMARY" || true
+              "$log" >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+          if [[ "$AETHERCORE_G5_RESUME_ONLY" == 1 ]]; then
+            [[ "$rc" == 0 || "$rc" == 2 ]] || {
+              echo "PRODUCT_G5_RESTORED_900M_PROBE_FAILED status=$rc" >&2; exit "$rc";
+            }
+            grep -Eq '^PRODUCT_G5_RESUME_DIAGNOSTIC_RESULT status=(0|2) ' "$log"
+            test -s "$PRODUCT_G5_LONG_PROOF_DIR/resume2.sha256"
+            echo "PRODUCT_G5_900M_TO_950M_RESTORED_RTL_PROBE_PASS cold_replayed=0 cycles_added=50000000 pid1_qualified=$([[ $rc == 0 ]] && echo 1 || echo 0)"
+            exit 0
           fi
           if [[ "$rc" != 0 ]]; then
             echo "PRODUCT_G5_FORENSIC_NOT_PID1 result_rc=$rc; preserving cold/continued RTL+DDR checkpoints for exact PC analysis" >&2
@@ -521,21 +598,24 @@ jobs:
       - name: Symbolize captured exception, interrupted and retired PCs using this run's exact vmlinux
         if: always() && env.AETHERCORE_G5_FORENSIC == '1'
         shell: bash
+        env:
+          AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX: ${{ env.AETHERCORE_G5_RESUME_ONLY == '1' && 'resume2' || 'diagnostic' }}
         run: |
           set -euo pipefail
           proof="$GITHUB_WORKSPACE/build/product-g5-long-forensic"
-          if [[ -s "$proof/diagnostic.log" &&
+          logfile="$proof/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX:-diagnostic}.log"
+          if [[ -s "$logfile" &&
                 -s build/rv64-debian-linux/obj/vmlinux &&
                 -s build/rv64-debian-linux/obj/System.map ]]; then
             python3 tools/ci/product_g5_forensic_symbols.py \
-              --trace "$proof/diagnostic.log" \
+              --trace "$logfile" \
               --system-map build/rv64-debian-linux/obj/System.map \
               --vmlinux build/rv64-debian-linux/obj/vmlinux \
-              > "$proof/pc-symbols.txt" || {
+              > "$proof/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX:-diagnostic}-pc-symbols.txt" || {
                 echo 'G5 exact-kernel symbolization unavailable; raw trace and vmlinux are retained' >&2
                 exit 0
               }
-            sed -n '1,36p' "$proof/pc-symbols.txt" >> "$GITHUB_STEP_SUMMARY"
+            sed -n '1,36p' "$proof/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX:-diagnostic}-pc-symbols.txt" >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'G5 forensic trace or matching kernel symbols absent; no PC attribution attempted'
           fi
