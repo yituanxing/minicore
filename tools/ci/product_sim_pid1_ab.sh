@@ -15,6 +15,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source "$ROOT/tools/ci/product_model_identity.sh"
 ACTION="${1:-}"
 case "$ACTION" in preflight|early-compare|selected-pid1) ;; *)
   echo 'usage: product_sim_pid1_ab.sh preflight|early-compare|selected-pid1' >&2
@@ -67,13 +68,15 @@ verify_model() {
   local profile="$1" identity
   profile_info "$profile"
   [[ -x "$SIM" ]] || fail "missing previously compiled G3 Product model $SIM"
-  identity="$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
-    bash tools/ci/product_sim_cache.sh fingerprint "$MODEL" "$TOP" "$ELABORATE" "$SIM_FLAGS")"
+  # Verification itself computes the complete source/tool/executable identity.
+  # Reuse that checked value for the G3 evidence instead of hashing the RTL
+  # tree again and then independently verifying the same model.
+  identity="$(product_model_verified_fingerprint "$version" "$mode" \
+    "$MODEL" "$TOP" "$ELABORATE" "$SIM_FLAGS")" ||
+    fail "Product compiled model $profile was built with different sources/tools"
   has_field "model_identity_$suffix" "$identity" "$SMALL_EVIDENCE"
   has_field "binary_sha_$suffix" "$(sha_file "$SIM")" "$SMALL_EVIDENCE"
-  AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
-    bash tools/ci/product_sim_cache.sh verify "$MODEL" "$TOP" "$ELABORATE" "$SIM_FLAGS" >/dev/null ||
-    fail "Product compiled model $profile was built with different sources/tools"
+  MODEL_ID="$identity"
 }
 
 check_inputs() {
@@ -216,7 +219,7 @@ case "$ACTION" in
       printf 'selected_profile=%s\n' "$SELECTED"
       printf 'baseline_state_sha256=%s\n' "$(sha_file "$EARLY_ROOT/verilator-5.024-reference.state")"
       printf 'selected_state_sha256=%s\n' "$(sha_file "$EARLY_ROOT/$name.state")"
-      printf 'selected_model_identity=%s\n' "$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" bash tools/ci/product_sim_cache.sh fingerprint "$MODEL" "$TOP" "$ELABORATE" "$SIM_FLAGS")"
+      printf 'selected_model_identity=%s\n' "$MODEL_ID"
       printf 'selected_binary_sha256=%s\n' "$(sha_file "$SIM")"
     } > "$EARLY_EVIDENCE.$$.tmp"
     mv -f "$EARLY_EVIDENCE.$$.tmp" "$EARLY_EVIDENCE"
@@ -242,7 +245,7 @@ case "$ACTION" in
     has_field selected_state_sha256 "$(sha_file "$EARLY_ROOT/$name.state")" "$EARLY_EVIDENCE"
     cmp -s "$EARLY_ROOT/verilator-5.024-reference.state" "$EARLY_ROOT/$name.state" ||
       fail 'qualified early Linux states changed after comparison'
-    has_field selected_model_identity "$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" bash tools/ci/product_sim_cache.sh fingerprint "$MODEL" "$TOP" "$ELABORATE" "$SIM_FLAGS")" "$EARLY_EVIDENCE"
+    has_field selected_model_identity "$MODEL_ID" "$EARLY_EVIDENCE"
     has_field selected_binary_sha256 "$(sha_file "$SIM")" "$EARLY_EVIDENCE"
     mkdir -p "$EARLY_ROOT"
     log="$EARLY_ROOT/selected-pid1-$name.run.log"

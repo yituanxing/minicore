@@ -11,6 +11,7 @@ set -euo pipefail
 # legitimate runtime differential failure never triggers another native build.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source "$ROOT/tools/ci/product_model_identity.sh"
 ACTION="${1:-all}"
 case "$ACTION" in build|run|all) ;; *) echo 'usage: product_gsim_g3_ab.sh build|run|all' >&2; exit 2 ;; esac
 [[ "${AETHERCORE_ALLOW_PRODUCT_GSIM_AB:-0}" == 1 ]] || {
@@ -72,14 +73,14 @@ VERILATOR_BIN="$TOOLCHAIN/verilator-$VERSION/bin/verilator"
 [[ -x "$VERILATOR_BIN" ]] || fail 'pinned Verilator binary missing'
 unset VERILATOR_ROOT
 VERILATOR_CACHE_ARGS=("$MODEL" "$TOP" "$ELABORATE" "$FLAGS")
-if ! AETHERCORE_VERILATOR_VERSION="$VERSION" SIM_SETTLE_MODE="$MODE" \
-  bash tools/ci/product_sim_cache.sh verify "${VERILATOR_CACHE_ARGS[@]}" > "$OUT/logs/verilator-cache.log" 2>&1; then
+if ! product_model_verify "$VERSION" "$MODE" \
+  "${VERILATOR_CACHE_ARGS[@]}" > "$OUT/logs/verilator-cache.log" 2>&1; then
   # Do not overwrite a G3 three-way qualification folder with an unrelated
   # single-model build. Build into our separate managed scratch directory.
   MODEL="$OUT/model-$NAME"
   VERILATOR_CACHE_ARGS=("$MODEL" "$TOP" "$ELABORATE" "$FLAGS")
-  if ! AETHERCORE_VERILATOR_VERSION="$VERSION" SIM_SETTLE_MODE="$MODE" \
-    bash tools/ci/product_sim_cache.sh verify "${VERILATOR_CACHE_ARGS[@]}" > "$OUT/logs/verilator-cache.log" 2>&1; then
+  if ! product_model_verify "$VERSION" "$MODE" \
+    "${VERILATOR_CACHE_ARGS[@]}" > "$OUT/logs/verilator-cache.log" 2>&1; then
     [[ "$ACTION" != run ]] || fail 'run phase cannot compile missing/stale Verilator binary; rerun build phase'
     mkdir -p "$OUT/rtl-seed/rtl" "$MODEL/obj"
     make -f Makefile.l32-linux-boot BUILD_DIR="$OUT/rtl-seed" \
@@ -95,14 +96,14 @@ if ! AETHERCORE_VERILATOR_VERSION="$VERSION" SIM_SETTLE_MODE="$MODE" \
       -j "${JOBS:-4}" > "$OUT/logs/verilator-build.log" 2>&1 || {
         tail -70 "$OUT/logs/verilator-build.log" >&2; fail 'Product Verilator host build';
       }
-    AETHERCORE_VERILATOR_VERSION="$VERSION" SIM_SETTLE_MODE="$MODE" \
-      bash tools/ci/product_sim_cache.sh record "${VERILATOR_CACHE_ARGS[@]}" > "$OUT/logs/verilator-cache.log"
+    product_model_record "$VERSION" "$MODE" \
+      "${VERILATOR_CACHE_ARGS[@]}" > "$OUT/logs/verilator-cache.log"
   fi
 fi
 VERILATOR="$MODEL/obj/V$TOP"
 [[ -x "$VERILATOR" ]] || fail 'verified Product Verilator model missing'
-MODEL_ID="$(AETHERCORE_VERILATOR_VERSION="$VERSION" SIM_SETTLE_MODE="$MODE" \
-  bash tools/ci/product_sim_cache.sh fingerprint "${VERILATOR_CACHE_ARGS[@]}")"
+MODEL_ID="$(product_model_verified_fingerprint "$VERSION" "$MODE" \
+  "${VERILATOR_CACHE_ARGS[@]}")" || fail 'Verilator exact model identity not verified'
 VERILATOR_SHA="$(sha_file "$VERILATOR")"
 
 if [[ "$ACTION" == run ]]; then
@@ -159,8 +160,8 @@ python3 tools/ci/product_gsim_compare.py \
   --verilator "$OUT/logs/verilator.run.log" --gsim "$OUT/logs/gsim.run.log" \
   --cycles "$CYCLES" > "$OUT/compare.txt" || { cat "$OUT/compare.txt" >&2; fail 'CPU/RAM/UART/IRQ mismatch'; }
 [[ "$(sha_file "$FIRMWARE")" == "$FW_SHA" && "$(sha_file "$GSIM")" == "$GSIM_SHA" ]] || fail 'firmware or GSIM executable changed'
-AETHERCORE_VERILATOR_VERSION="$VERSION" SIM_SETTLE_MODE="$MODE" \
-  bash tools/ci/product_sim_cache.sh verify "${VERILATOR_CACHE_ARGS[@]}" >/dev/null || fail 'Verilator cache invalidated'
+product_model_verify "$VERSION" "$MODE" \
+  "${VERILATOR_CACHE_ARGS[@]}" >/dev/null || fail 'Verilator cache invalidated'
 
 awk -v vc="$CYCLES" -v v="$V_SECONDS" -v g="$G_SECONDS" \
   'BEGIN {if(v<=0||g<=0) exit 2; printf "engine\tseconds\tcycles_per_second\nVerilator\t%.6f\t%.1f\nGSIM\t%.6f\t%.1f\n", v,vc/v,g,vc/g}' \

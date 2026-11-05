@@ -16,6 +16,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source "$ROOT/tools/ci/product_model_identity.sh"
 ACTION="${1:-}"
 case "$ACTION" in preflight|prepare-model|longrun) ;; *)
   echo 'usage: product_sim_sd1_manual.sh preflight|prepare-model|longrun' >&2
@@ -284,7 +285,8 @@ verify_fast_profile_qualification() {
       }
       ;;
   esac
-  model_identity="$(bash tools/ci/product_sim_cache.sh fingerprint "${cache_args[@]}")"
+  model_identity="$(product_model_fingerprint "$AETHERCORE_VERILATOR_VERSION" \
+    "$SIM_SETTLE_MODE" "${cache_args[@]}")"
   grep -Fxq "$fingerprint_key=$model_identity" "$evidence" || {
     echo 'SD1 A/B evidence does not match the current Product model and host toolchain bytes' >&2
     exit 19
@@ -302,7 +304,7 @@ probe_card
 
 if [[ "$ACTION" == prepare-model ]]; then
   mkdir -p "$BUILD_DIR"
-  if bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"; then
+  if product_model_verify "$AETHERCORE_VERILATOR_VERSION" "$SIM_SETTLE_MODE" "${cache_args[@]}"; then
     echo 'PRODUCT_G5_SD1_EXACT_MODEL_REUSED: no RTL re-elaboration or model rebuild'
   else
     # This is deliberately absent from the cheap preflight path. Only an
@@ -316,23 +318,25 @@ if [[ "$ACTION" == prepare-model ]]; then
     }
     # If another editing agent changes RTL/C++ while this costly build runs,
     # the resulting executable must not be recorded under a newer source key.
-    model_build_identity_before="$(bash tools/ci/product_sim_cache.sh fingerprint "${cache_args[@]}")"
+    model_build_identity_before="$(product_model_fingerprint "$AETHERCORE_VERILATOR_VERSION" \
+      "$SIM_SETTLE_MODE" "${cache_args[@]}")"
     make -f Makefile.l32-linux-boot BUILD_DIR="$BUILD_DIR" \
       TOP="$TOP" ELABORATE_MAIN="$ELABORATE_MAIN" \
       VERILATOR="$verilator_bin -LDFLAGS -ldl" JOBS="${AETHERCORE_SD1_BUILD_JOBS:-4}" \
       SIM_CXXFLAGS="$SIM_CXXFLAGS" SIM_SETTLE_MODE="$SIM_SETTLE_MODE" sim
-    [[ "$model_build_identity_before" == "$(bash tools/ci/product_sim_cache.sh fingerprint "${cache_args[@]}")" ]] || {
+    [[ "$model_build_identity_before" == "$(product_model_fingerprint "$AETHERCORE_VERILATOR_VERSION" \
+      "$SIM_SETTLE_MODE" "${cache_args[@]}")" ]] || {
       echo 'Product SD1 model inputs changed while compiling; refusing to cache an executable from stale RTL' >&2
       exit 20
     }
-    bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
+    product_model_record "$AETHERCORE_VERILATOR_VERSION" "$SIM_SETTLE_MODE" "${cache_args[@]}"
   fi
   exit 0
 fi
 
 # The confirmation and bounded cycle budget were already checked before the
 # offline probe. This path never auto-builds or auto-retries the expensive RTL.
-bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}" || {
+product_model_verify "$AETHERCORE_VERILATOR_VERSION" "$SIM_SETTLE_MODE" "${cache_args[@]}" || {
   echo 'Missing exact SD1 RTL model: explicitly run prepare-model first' >&2
   exit 16
 }

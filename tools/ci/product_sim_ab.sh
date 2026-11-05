@@ -15,6 +15,7 @@ fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
+source "$root/tools/ci/product_model_identity.sh"
 top="${TOP:-AetherCoreProductDebianRV64SimTop}"
 case "$top" in
   AetherCoreProductDebianRV64SimTop)
@@ -129,12 +130,9 @@ for pinned in 5.024 5.054; do
   AETHERCORE_VERILATOR_VERSION="$pinned" AETHERCORE_VERILATOR_FAST_VERIFY=1 \
     bash tools/ensure_verilator_5_024.sh > "$out/logs/verilator-$pinned.preflight.log" 2>&1
 done
-ab_start_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
-  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-ab_start_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
-  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-ab_start_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
-  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_start_baseline="$(product_model_fingerprint 5.024 reference "$out" "$top" "$elaborate" "$flags")"
+ab_start_ref="$(product_model_fingerprint 5.054 reference "$out" "$top" "$elaborate" "$flags")"
+ab_start_adaptive="$(product_model_fingerprint 5.054 adaptive "$out" "$top" "$elaborate" "$flags")"
 ab_start_script_sha="$(sha256sum "$root/tools/ci/product_sim_ab.sh" | awk '{print $1}')"
 ab_start_fw_sha="$(sha256sum "$fw_bin" | awk '{print $1}')"
 if (( sd1 && ! sd1_transport )); then
@@ -184,8 +182,7 @@ for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
   model_args=("$model_root" "$top" "$elaborate" "$flags")
   extra=''
   [[ "$mode" == adaptive ]] && extra='-DAETHERCORE_SIM_ADAPTIVE_SETTLE'
-  if AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
-      bash tools/ci/product_sim_cache.sh verify "${model_args[@]}" \
+  if product_model_verify "$version" "$mode" "${model_args[@]}" \
       > "$out/logs/$label.cache.log" 2>&1; then
     echo "PRODUCT_SIM_AB_MODEL_REUSED: $label"
   else
@@ -195,8 +192,7 @@ for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
       rtl_prepared=1
     fi
     mkdir -p "$obj"
-    model_build_identity_before="$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
-      bash tools/ci/product_sim_cache.sh fingerprint "${model_args[@]}")"
+    model_build_identity_before="$(product_model_fingerprint "$version" "$mode" "${model_args[@]}")"
     PATH="$cache_root/verilator-$version/bin:$PATH" \
     "$verilator_bin" -LDFLAGS -ldl -O3 -MAKEFLAGS 'OPT_FAST=-O3 OPT_GLOBAL=-O3' \
       --cc --exe --build -Wall -Wno-fatal \
@@ -204,13 +200,11 @@ for profile in 5.024:reference 5.054:reference 5.054:adaptive; do
       -CFLAGS "$flags $extra" \
       "$out"/rtl-seed/rtl/*.sv "$root/sim/opensbi_boot_main.cpp" \
       -j "$jobs" > "$out/logs/$label.compile.log" 2>&1
-    [[ "$model_build_identity_before" == "$(AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
-      bash tools/ci/product_sim_cache.sh fingerprint "${model_args[@]}")" ]] || {
+    [[ "$model_build_identity_before" == "$(product_model_fingerprint "$version" "$mode" "${model_args[@]}")" ]] || {
       echo "Product model sources/toolchain changed while building $label" >&2
       exit 10
     }
-    AETHERCORE_VERILATOR_VERSION="$version" SIM_SETTLE_MODE="$mode" \
-      bash tools/ci/product_sim_cache.sh record "${model_args[@]}" > "$out/logs/$label.cache.log"
+    product_model_record "$version" "$mode" "${model_args[@]}" > "$out/logs/$label.cache.log"
   fi
 
   sim="$obj/V$top"
@@ -235,12 +229,9 @@ done
 # generated/host source inputs, the A/B script and the firmware stayed fixed
 # across the entire run. A cache record for an earlier source generation is
 # harmless, but must never grant qualification for a different generation.
-ab_end_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
-  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-ab_end_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
-  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-ab_end_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
-  bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+ab_end_baseline="$(product_model_fingerprint 5.024 reference "$out" "$top" "$elaborate" "$flags")"
+ab_end_ref="$(product_model_fingerprint 5.054 reference "$out" "$top" "$elaborate" "$flags")"
+ab_end_adaptive="$(product_model_fingerprint 5.054 adaptive "$out" "$top" "$elaborate" "$flags")"
 [[ "$ab_start_baseline" == "$ab_end_baseline" &&
    "$ab_start_ref" == "$ab_end_ref" &&
    "$ab_start_adaptive" == "$ab_end_adaptive" &&
@@ -301,12 +292,9 @@ if (( sd1 && ! sd1_transport )); then
     echo 'Product SD1 A/B failed to calculate bounded candidate speedup eligibility' >&2
     exit 10
   }
-  identity_ref="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
-    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-  identity_adaptive="$(AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=adaptive \
-    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
-  identity_baseline="$(AETHERCORE_VERILATOR_VERSION=5.024 SIM_SETTLE_MODE=reference \
-    bash tools/ci/product_sim_cache.sh fingerprint "$out" "$top" "$elaborate" "$flags")"
+  identity_ref="$(product_model_fingerprint 5.054 reference "$out" "$top" "$elaborate" "$flags")"
+  identity_adaptive="$(product_model_fingerprint 5.054 adaptive "$out" "$top" "$elaborate" "$flags")"
+  identity_baseline="$(product_model_fingerprint 5.024 reference "$out" "$top" "$elaborate" "$flags")"
   [[ "$identity_baseline" == "$ab_start_baseline" &&
      "$identity_ref" == "$ab_start_ref" &&
      "$identity_adaptive" == "$ab_start_adaptive" &&
