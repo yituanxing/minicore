@@ -10,6 +10,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CORE = ROOT / "src/main/scala/aethercore/core/product/ProductSmallOoOBackend.scala"
 SPEC = ROOT / "src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala"
 CONFIG = ROOT / "src/main/scala/aethercore/core/product/ProductCoreConfig.scala"
+INTEGER_FU = ROOT / "src/main/scala/aethercore/core/product/ProductIntegerBranchUnit.scala"
+INTEGER_FIXTURE = ROOT / "src/test/scala/aethercore/ProductSmallIntegerCoreFixture.scala"
+PRODUCTION_CORE = ROOT / "src/main/scala/aethercore/core/product/ProductSmallMemoryCore.scala"
 
 class ProductSmallBackendContracts(unittest.TestCase):
     def test_real_chisel_rob_iq_and_physreg_owners(self):
@@ -58,9 +61,20 @@ class ProductSmallBackendContracts(unittest.TestCase):
         self.assertIn("(!memoryDispatch || exceptionOnly || io.memoryReserve.ready)", source)
         self.assertIn("not a complete CPU", source)
         self.assertIn("rtlImplemented: Boolean = false", CONFIG.read_text())
-        standalone = (ROOT / "src/main/scala/aethercore/core/product/ProductIntegerBranchUnit.scala").read_text()
-        self.assertIn("new ProductSmallOoOBackend(g, paddrBits = PA)", standalone)
-        self.assertIn("backend.io.systemHead.ready := false.B", standalone)
+        # The integer-only, memory/privilege-disabled slice is test-only.
+        # Production owns its backend through ProductSmallMemoryCore and must
+        # connect real system/LSQ consumers rather than tie them off.
+        fixture = INTEGER_FIXTURE.read_text()
+        production = PRODUCTION_CORE.read_text()
+        self.assertIn("class ProductSmallIntegerCore", fixture)
+        self.assertIn("new ProductSmallOoOBackend(g, paddrBits = PA)", fixture)
+        self.assertIn("backend.io.systemHead.ready := false.B", fixture)
+        self.assertIn("backend.io.memoryReserve.ready := false.B", fixture)
+        self.assertNotIn("new ProductSmallOoOBackend", INTEGER_FU.read_text())
+        self.assertIn("new ProductSmallOoOBackend(", production)
+        self.assertIn("system.io.head <> backend.io.systemHead", production)
+        self.assertIn("lsq.io.reserve <> backend.io.memoryReserve", production)
+        self.assertNotIn("backend.io.systemHead.ready := false.B", production)
 
     def test_simulation_actually_exercises_age_recovery_and_precise_traps(self):
         test = SPEC.read_text()
