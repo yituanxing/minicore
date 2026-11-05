@@ -22,9 +22,8 @@ class AetherCoreProductFpgaSoC(
     val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
-  val config: ProductCoreConfig = productConfigOverride.getOrElse(
-    AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
-  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  val config: ProductCoreConfig = AetherCoreProductSoCProfiles.selectEngineeringTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride)
   private val geometry = config.geometry
   private val Xlen = 64
   private val DataBits = 64

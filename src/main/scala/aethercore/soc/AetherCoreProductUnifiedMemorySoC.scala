@@ -66,6 +66,46 @@ object AetherCoreProductSoCProfiles {
     ProductCoreProfiles.smallDebianTarget,
     "small-rv64gc-opensbi-product", implementedPaddrBits, productGeometry)
 
+  /** Resolve the legacy two-argument constructors once, at a board boundary.
+    * `productGeometry` is an old convenience preset; an exact ProductCoreConfig
+    * is the single authoritative target forwarded to all lower modules.
+    *
+    * The old default Small geometry must remain compatible with explicitly
+    * selecting Expanded through an override. A *non-default* geometry is an
+    * affirmative request, though, and may not silently disagree with a
+    * separately supplied target.
+    */
+  private def selectBoardTarget(
+      implementedPaddrBits: Int,
+      productGeometry: ProductCoreGeometry,
+      productConfigOverride: Option[ProductCoreConfig],
+      defaultTarget: => ProductCoreConfig
+  ): ProductCoreConfig = {
+    val selected = productConfigOverride.getOrElse(defaultTarget)
+    require(productConfigOverride.isEmpty ||
+      productGeometry == ProductCoreProfiles.smallGeometry ||
+      productGeometry == selected.geometry,
+      "Product SoC explicit geometry disagrees with its selected CPU target")
+    requireBoardCompatible(selected, implementedPaddrBits)
+    selected
+  }
+
+  def selectEngineeringTarget(
+      implementedPaddrBits: Int,
+      productGeometry: ProductCoreGeometry,
+      productConfigOverride: Option[ProductCoreConfig]
+  ): ProductCoreConfig = selectBoardTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride,
+    smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
+
+  def selectDistroTarget(
+      implementedPaddrBits: Int,
+      productGeometry: ProductCoreGeometry,
+      productConfigOverride: Option[ProductCoreConfig]
+  ): ProductCoreConfig = selectBoardTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride,
+    smallOpenSbiDistroTarget(implementedPaddrBits, productGeometry))
+
   private def bindOpenSbiBoard(
       base: ProductCoreConfig,
       name: String,
@@ -117,9 +157,8 @@ class AetherCoreProductUnifiedMemorySoC(
     val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
-  val config: ProductCoreConfig = productConfigOverride.getOrElse(
-    AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
-  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  val config: ProductCoreConfig = AetherCoreProductSoCProfiles.selectEngineeringTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride)
   private val geometry = config.geometry
   private val Xlen = 64
   private val DataBits = 64

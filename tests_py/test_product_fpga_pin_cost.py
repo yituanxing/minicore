@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PINS = ROOT / "src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala"
+PROFILES = ROOT / "src/main/scala/aethercore/soc/AetherCoreProductUnifiedMemorySoC.scala"
 EMITTER = ROOT / "src/main/scala/aethercore/soc/ElaborateProductSoC.scala"
 SCRIPT = ROOT / "tools/compare_product_fpga_pin_cost.sh"
 REPORT = ROOT / "tools/report_product_fpga_pin_cost.py"
@@ -22,7 +23,8 @@ class ProductPhysicalFpgaContract(unittest.TestCase):
         source = PINS.read_text()
         self.assertIn("new AetherCoreProductFpgaSoC(", source)
         self.assertIn("productConfigOverride = Some(config)", source)
-        self.assertIn("requireBoardCompatible(config, implementedPaddrBits)", source)
+        self.assertIn("AetherCoreProductSoCProfiles.selectEngineeringTarget(", source)
+        self.assertIn("requireBoardCompatible(selected, implementedPaddrBits)", PROFILES.read_text())
         for port in ("axi", "uartClockTick", "timebaseTick", "serialRx", "serialTx"):
             self.assertIn(f"val {port} =", source)
         for debug in ("val commit =", "val retire =", "val frontendPc =",

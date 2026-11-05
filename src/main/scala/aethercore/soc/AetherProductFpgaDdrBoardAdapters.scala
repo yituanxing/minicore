@@ -222,9 +222,8 @@ class AetherCoreProductFpgaDdrLocalWindowBoard(
     "G5-SD1 physical DDR adapter matches the frozen 32-bit board seam")
   require(boardDevices.spiSdEnabled,
     "G5-SD1 persistent Debian board requires physical SPI SD support")
-  private val config = productConfigOverride.getOrElse(
-    AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(implementedPaddrBits, productGeometry))
-  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  private val config = AetherCoreProductSoCProfiles.selectDistroTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride)
   private val txnBits = AetherCoreProductSoCProfiles.externalTransactionBits(config.geometry)
   private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform)
   private val map = board.addressMap
@@ -363,10 +362,8 @@ class AetherCoreProductFpgaUartDdrBoard(
   require(boardDevices.spiBusClockFrequencyHz == 50_000_000L,
     "the Product UART-upload PHY and FPGA/UI clock contract is 50 MHz")
 
-  private val config = productConfigOverride.getOrElse(
-    AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(
-      implementedPaddrBits, productGeometry))
-  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  private val config = AetherCoreProductSoCProfiles.selectDistroTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride)
   private val txnBits =
     AetherCoreProductSoCProfiles.externalTransactionBits(config.geometry)
 

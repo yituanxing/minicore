@@ -244,10 +244,8 @@ class AetherCoreProductFpgaColdBootDdrStreamFabric(
   require(boardDevices.spiSdEnabled,
     "The persistent-root FPGA stream wrapper needs the Product SPI-SD board profile")
 
-  private val config = productConfigOverride.getOrElse(
-    AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
-      implementedPaddrBits, productGeometry))
-  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  private val config = AetherCoreProductSoCProfiles.selectEngineeringTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride)
   private val txnBits =
     AetherCoreProductSoCProfiles.externalTransactionBits(config.geometry)
   private val addressMap = AetherSoCAddressMap.qualifiedLinux(config.platform)

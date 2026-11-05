@@ -24,10 +24,8 @@ class AetherCoreProductFpgaColdBootPins(
     val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
-  private val config = productConfigOverride.getOrElse(
-    AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
-      implementedPaddrBits, productGeometry))
-  AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
+  private val config = AetherCoreProductSoCProfiles.selectEngineeringTarget(
+    implementedPaddrBits, productGeometry, productConfigOverride)
   private val txnBits =
     AetherCoreProductSoCProfiles.externalTransactionBits(config.geometry)
 
