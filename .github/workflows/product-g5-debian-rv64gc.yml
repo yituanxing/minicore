@@ -5,8 +5,14 @@ name: AetherCore Product G5 Real Debian RV64GC Dynamic PID1
 on:
   workflow_dispatch:
     inputs:
+      run_mode:
+        description: First qualify a short same-cycle Debian Top A/B; full PID1 is explicitly opt-in
+        required: true
+        type: choice
+        options: [short-ab, full]
+        default: short-ab
       verilator_version:
-        description: Pinned simulator version (5.054 requires Product A/B qualification)
+        description: Full runs select 5.024 or 5.054 (the latter self-qualifies by bounded Debian Top A/B)
         required: true
         type: choice
         options: ['5.024', '5.054']
@@ -34,7 +40,8 @@ on:
   # This workflow exists only on the Product PR branch until merged. GitHub
   # cannot workflow_dispatch a workflow absent from the default branch; a
   # specifically named human-added label is the PR-safe manual entry point.
-  # PR labels have no inputs: they select D2 + proven 5.024 + reference settle.
+  # product-g5-short-ab: D2 + independent 5.024/5.054 30M-cycle A/B only.
+  # product-g5-longrun: explicit D2 + proven 5.024 + reference settle.
   # D3 requires URL and SHA inputs and therefore remains unavailable until
   # this workflow reaches main (or a separately qualified artifact bridge).
   pull_request:
@@ -50,13 +57,18 @@ concurrency:
 
 jobs:
   product-debian-rv64gc:
-    name: Product SmallOoO RV64GC native Debian D1/D2/D3 milestone
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g5-longrun')
+    name: Product SmallOoO RV64GC bounded A/B or manual Debian D1/D2/D3
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       (github.event.label.name == 'product-g5-short-ab' ||
+        github.event.label.name == 'product-g5-longrun'))
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      AETHERCORE_VERILATOR_VERSION: ${{ inputs.verilator_version || '5.024' }}
+      AETHERCORE_G5_RUN_MODE: ${{ github.event.label.name == 'product-g5-short-ab' && 'short-ab' || inputs.run_mode || 'full' }}
+      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
       SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
       RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
       RV64_DEBIAN_FULL_ROOTFS_URL: ${{ inputs.full_rootfs_archive_url }}
@@ -73,17 +85,22 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           clean: true
 
-      - name: Reject unqualified Product simulator accelerations before heavy setup
+      - name: Reject unsupported or unqualified simulation modes before heavy setup
         shell: bash
         run: |
           set -euo pipefail
-          # Product 5.054 and adaptive settle have no same-cycle independent
-          # equivalence proof for this RTL. V2/GSIM results do not count.
-          [[ "$AETHERCORE_VERILATOR_VERSION" == 5.024 &&
-             "$SIM_SETTLE_MODE" == reference ]] || {
-            echo 'Product G5 requires proven 5.024/reference; qualify faster candidates by separate bounded Product A/B' >&2
+          [[ "$AETHERCORE_G5_RUN_MODE" == short-ab || "$AETHERCORE_G5_RUN_MODE" == full ]] || {
+            echo 'unknown G5 run mode' >&2; exit 20;
+          }
+          [[ "$SIM_SETTLE_MODE" == reference &&
+             ( "$AETHERCORE_VERILATOR_VERSION" == 5.024 || "$AETHERCORE_VERILATOR_VERSION" == 5.054 ) ]] || {
+            echo 'G5 only allows 5.024/5.054 reference; adaptive requires an independent Debian Top proof' >&2
             exit 20
           }
+          if [[ "$AETHERCORE_G5_RUN_MODE" == short-ab ]]; then
+            [[ "$AETHERCORE_VERILATOR_VERSION" == 5.054 ]] || exit 20
+            echo 'PRODUCT_G5_SHORT_AB_ONLY: no full PID1 or distribution longrun in this job'
+          fi
 
       - name: Reject unsupported or underspecified Debian stage before heavy work
         shell: bash
@@ -167,10 +184,13 @@ jobs:
           chmod +x ./mill tools/ensure_verilator_5_024.sh tools/ensure_verilator_5_054.sh \
             tools/ensure_riscv64_linux_gcc_13_3.sh
           bash tools/ensure_verilator_5_024.sh
+          if [[ "$AETHERCORE_VERILATOR_VERSION" == 5.054 ]]; then
+            bash tools/ensure_verilator_5_054.sh
+          fi
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
-          verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.024/bin/verilator"
-          [[ -x "$verilator_bin" ]] || { echo 'Pinned Verilator 5.024 executable missing' >&2; exit 21; }
-          [[ "$("$verilator_bin" --version)" == 'Verilator 5.024'* ]] || {
+          verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-$AETHERCORE_VERILATOR_VERSION/bin/verilator"
+          [[ -x "$verilator_bin" ]] || { echo 'Pinned selected Product G5 Verilator missing' >&2; exit 21; }
+          [[ "$("$verilator_bin" --version)" == "Verilator $AETHERCORE_VERILATOR_VERSION"* ]] || {
             echo 'Pinned Product G5 Verilator version mismatch' >&2
             exit 22
           }
@@ -341,7 +361,53 @@ jobs:
           path: ${{ runner.temp }}/aethercore-product-g5-debian/model
           key: ${{ steps.model-cache.outputs.cache-primary-key }}
 
+      - name: Fingerprint independent 5.024 Debian Top baseline model
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054'
+        id: baseline-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          baseline="$RUNNER_TEMP/aethercore-product-g5-debian/baseline-5.024"
+          key="$(AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ci/product_sim_cache.sh fingerprint \
+            "$baseline" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact independent 5.024 Debian Top reference model
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054'
+        id: baseline-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-baseline-${{ steps.baseline-key.outputs.key }}
+
+      - name: Qualify 5.054 on the identical native Debian RTL for bounded 30M cycles
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_G5_SHORT_AB: '1'
+          AETHERCORE_G5_AB_BASELINE_MODEL: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
+          AETHERCORE_G5_AB_CANDIDATE_MODEL: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          AETHERCORE_G5_AB_CYCLES: '30000000'
+          AETHERCORE_G5_AB_WALL_SECONDS: '600'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_short_ab_selftest.sh
+          bash tools/ci/product_g5_short_ab.sh preflight
+          bash tools/ci/product_g5_short_ab.sh run
+          grep -Fxq 'qualification=PRODUCT_G5_DEBIAN_TOP_5054_REFERENCE_SAME_CYCLE_NOT_PID1_PASS' \
+            build/product-g5-short-ab/qualification.txt
+          cat build/product-g5-short-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache verified 5.024 Debian Top baseline before any full run
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && steps.baseline-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
+          key: ${{ steps.baseline-cache.outputs.cache-primary-key }}
+
       - name: Run selected real Debian D1/D2/D3 userspace milestone on Product RV64GC
+        if: env.AETHERCORE_G5_RUN_MODE == 'full'
         shell: bash
         run: |
           set -euo pipefail
@@ -401,4 +467,7 @@ jobs:
             build/rv64-debian-linux/evidence/*
             build/rv64-debian-boot/result.txt
             build/rv64-debian-boot/evidence/*
+            build/product-g5-short-ab/qualification.txt
+            build/product-g5-short-ab/*.state
+            build/product-g5-short-ab/*.run.log
             ${{ runner.temp }}/aethercore-product-g5-debian/model/logs/*.log

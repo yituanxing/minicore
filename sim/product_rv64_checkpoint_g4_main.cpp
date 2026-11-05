@@ -1,14 +1,25 @@
-// Real RAM-initramfs Linux G4 cross-process checkpoint qualification.
-// Uses the *same* AetherCoreProductOpenSbiRV64SimTop as G3, but G4 host
-// observation and fw_payload bytes are distinct. No G3 checkpoint is valid
-// for a Linux payload, and no SD1/Debian top is supported here.
-#if defined(AETHERCORE_PRODUCT_SPI_SD) || defined(AETHERCORE_PRODUCT_DEBIAN)
-#error "G4 persistent checkpoint cannot carry an SD card or Debian top"
+// Real RAM-initramfs Linux cross-process checkpoint qualification. The G4 and
+// G5 hosts share the same complete-state protocol but compile against distinct
+// Product RTL tops and have incompatible on-disk checkpoint identities.
+// The G5 path is ONLY the RAM-initramfs Debian D1/D2 Product top. The external
+// SD1 card is a different device model and must never silently be omitted.
+#if defined(AETHERCORE_PRODUCT_SPI_SD)
+#error "RAM-only Product checkpoint cannot carry an SD card"
 #endif
-#ifndef AETHERCORE_PRODUCT_CHECKPOINT_SAVABLE
-#error "G4 checkpoint must relink the pinned --savable Product RTL archive"
+#if defined(AETHERCORE_PRODUCT_CHECKPOINT_G5)
+#if !defined(AETHERCORE_PRODUCT_DEBIAN)
+#error "G5 checkpoint requires the Debian Product top"
+#endif
+#include "VAetherCoreProductDebianRV64SimTop.h"
+#else
+#if defined(AETHERCORE_PRODUCT_DEBIAN)
+#error "G4 checkpoint cannot carry a Debian Product top"
 #endif
 #include "VAetherCoreProductOpenSbiRV64SimTop.h"
+#endif
+#ifndef AETHERCORE_PRODUCT_CHECKPOINT_SAVABLE
+#error "Product checkpoint requires a --savable RTL archive"
+#endif
 #include "l32_opensbi_runtime.h"
 #include "verilated.h"
 #include "verilated_save.h"
@@ -26,12 +37,21 @@
 #include <string_view>
 
 namespace {
+#if defined(AETHERCORE_PRODUCT_CHECKPOINT_G5)
+using Top = VAetherCoreProductDebianRV64SimTop;
+constexpr std::string_view kMagic = "AETG5CP1";
+constexpr std::string_view kScope = "PRODUCT_G5";
+constexpr std::uint64_t kMaxBootCycles = 1800000000ULL;
+#else
 using Top = VAetherCoreProductOpenSbiRV64SimTop;
+constexpr std::string_view kMagic = "AETG4CP1";
+constexpr std::string_view kScope = "PRODUCT_G4";
+constexpr std::uint64_t kMaxBootCycles = 100000000ULL;
+#endif
 using aethercore::l32sim::Memory;
 using aethercore::l32sim::TransportRuntimeState;
 constexpr std::uint64_t kFnv = 14695981039346656037ULL;
 constexpr std::uint64_t kPrime = 1099511628211ULL;
-constexpr std::string_view kMagic = "AETG4CP1";
 constexpr std::uint64_t kVersion = 1;
 constexpr std::size_t kMaxUart = 32ULL << 20;
 constexpr std::size_t kRecent = 16;
@@ -422,7 +442,7 @@ void oneCycle(Top& top, VerilatedContext& ctx, Memory& mem,
 void outputResult(const Observer& o, const VerilatedContext& ctx,
                   const Memory& mem, const TransportRuntimeState& transport,
                   const Top& top) {
-  std::cout << "PRODUCT_G4_PERSISTENT_CONTINUATION"
+  std::cout << kScope << "_PERSISTENT_CONTINUATION"
             << " cycles=" << o.cycles << " time=" << ctx.time()
             << " commits=" << o.commits << " compressed=" << o.compressed
             << " linux_compressed=" << o.linuxCompressed
@@ -446,7 +466,7 @@ void outputResult(const Observer& o, const VerilatedContext& ctx,
 int main(int argc, char** argv) {
   try {
     if (argc != 9 && argc != 12)
-      throw std::runtime_error("usage: G4_CHECKPOINT save|restore FW PREFIX MODEL_SHA FW_SHA BOOT_MAX LINUX_MARKER REPLAY_CYCLES [UART_TRIGGER UART_COMMAND POST_INPUT_BUDGET]");
+      throw std::runtime_error("usage: PRODUCT_CHECKPOINT save|restore FW PREFIX MODEL_SHA FW_SHA BOOT_MAX LINUX_MARKER REPLAY_CYCLES [UART_TRIGGER UART_COMMAND POST_INPUT_BUDGET]");
     const std::string mode = argv[1], firmware = argv[2], prefix = argv[3];
     const std::string modelSha = argv[4], fwSha = argv[5];
     if ((mode != "save" && mode != "restore") || !validSha(modelSha) || !validSha(fwSha))
@@ -457,7 +477,7 @@ int main(int argc, char** argv) {
                   argc == 12 ? std::stoull(argv[11], nullptr, 0) : 0};
     if (!policy.uartInput.empty() && policy.uartInput.back() != '\n')
       policy.uartInput.push_back('\n');
-    if (policy.marker != kLinuxMarker || bootMax == 0 || bootMax > 100000000 ||
+    if (policy.marker != kLinuxMarker || bootMax == 0 || bootMax > kMaxBootCycles ||
         replayCycles == 0 || replayCycles > 5000000 ||
         policy.uartTrigger.size() > 128 || policy.uartInput.size() > 4096 ||
         policy.postInputBudget > 5000000)
@@ -473,14 +493,25 @@ int main(int argc, char** argv) {
     Memory mem;
     TransportRuntimeState transport;
     Observer o;
+    std::uint64_t checkpointAt = 0;
+#if defined(AETHERCORE_PRODUCT_CHECKPOINT_G5)
+    // On the Debian Product top a Linux-banner-only checkpoint saves little
+    // of the costly pre-PID1 path. Allow a deliberate later cycle boundary;
+    // the bounded short CI sets 100M, while manual long runs can retain a
+    // checkpoint near the actual failing phase without changing guest state.
+    if (const char* target = std::getenv("AETHERCORE_PRODUCT_G5_CHECKPOINT_AT_CYCLES"))
+      checkpointAt = std::stoull(target, nullptr, 0);
+    if (checkpointAt > bootMax)
+      throw std::runtime_error("G5 checkpoint target exceeds bounded boot window");
+#endif
     if (mode == "save") {
       mem.loadAtBase(firmware);
       aethercore::l32sim::initialize(top, mem, transport);
       o.inputStarted = !policy.uartInput.empty() && policy.uartTrigger.empty();
-      while (o.cycles < bootMax && !o.sawLinuxMarker) {
+      while (o.cycles < bootMax && (!o.sawLinuxMarker || o.cycles < checkpointAt)) {
         oneCycle(top, ctx, mem, transport, o, policy, false, true);
         if (o.cycles % 10000000 == 0)
-          std::cerr << "PRODUCT_G4_PERSISTENT_BOOT_PROGRESS cycles=" << o.cycles
+          std::cerr << kScope << "_PERSISTENT_BOOT_PROGRESS cycles=" << o.cycles
                     << " commits=" << o.commits << " linux_banner=" << o.sawLinuxMarker
                     << " uart_bytes=" << o.uart.size() << '\n';
         if (top.io_exitValid && !o.sawLinuxMarker)
@@ -495,7 +526,7 @@ int main(int argc, char** argv) {
                 ctx, mem, transport, o);
       // The Linux version marker is a prefix of its boot-log line. Separate
       // evidence from that unfinished guest UART line before proof parsing.
-      std::cout << "\nPRODUCT_G4_PERSISTENT_CHECKPOINT_SAVED cycles=" << o.cycles
+      std::cout << '\n' << kScope << "_PERSISTENT_CHECKPOINT_SAVED cycles=" << o.cycles
                 << " commits=" << o.commits << " opensbi=1 linux_banner=1"
                 << " mode=full-rtl-and-host-not-fork\n";
     } else {
@@ -504,7 +535,7 @@ int main(int argc, char** argv) {
       readRtl(prefix + ".pre.rtl", top);
       if (top.reset || !o.sawOpenSbiBanner || !o.sawLinuxMarker)
         throw std::runtime_error("G4 checkpoint does not represent running Linux");
-      std::cout << "PRODUCT_G4_PERSISTENT_CHECKPOINT_RESTORED cycles=" << o.cycles
+      std::cout << kScope << "_PERSISTENT_CHECKPOINT_RESTORED cycles=" << o.cycles
                 << " commits=" << o.commits << " opensbi=1 linux_banner=1"
                 << " mode=new-process-disk-snapshot\n";
     }
@@ -517,7 +548,7 @@ int main(int argc, char** argv) {
               modelSha, fwSha, policy, ctx, mem, transport, o);
     return 0;
   } catch (const std::exception& e) {
-    std::cerr << "PRODUCT_G4_PERSISTENT_CHECKPOINT_REJECTED: " << e.what() << '\n';
+    std::cerr << kScope << "_PERSISTENT_CHECKPOINT_REJECTED: " << e.what() << '\n';
     return 1;
   }
 }
