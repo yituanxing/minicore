@@ -1,0 +1,168 @@
+name: AetherCore Product SD1 Official Offline Media Seed
+
+# Explicit human opt-in on reviewed default branch only. This job creates the
+# real Debian package/rootfs/kernel/OpenSBI/SD artifacts with ZERO Product RTL
+# or QEMU-system guest cycles. Debian package maintainer scripts DO execute in
+# the isolated riscv64 OCI/QEMU-user container; this is not a simulated boot.
+# No guest DDR snapshot, simulator model or password-bearing image is uploaded.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Deliberately authorize bounded cold official SD1 source/media build (no RTL boot)
+        required: true
+        type: choice
+        options:
+          - 'NO'
+          - SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES
+        default: 'NO'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-sd1-official-seed-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  product-sd1-official-seed:
+    if: inputs.confirmation == 'SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    # HARD cold limit, including external OCI/APT, cross compiler, Linux,
+    # OpenSBI and cache compression/upload. No automatic retry or fallback.
+    timeout-minutes: 150
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      RV64_LINUX_JOBS: '4'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_DEBIAN_STAGE: sd1
+
+    steps:
+      - name: Checkout reviewed exact Product revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Reject missing or unreviewed official supply pins before network
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$RV64_DEBIAN_STAGE" = sd1
+          test ! -e build/rv64-debian-sd1-official-rootfs
+          test ! -e build/product-sd1-official-seed
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          python3 -m unittest tests_py.test_product_sd1_official_seed_contract -v
+          bash -n tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh \
+            tools/ci/rv64_debian_rootfs_build.sh \
+            tools/ci/rv64_debian_sd1_sd_image_build.sh \
+            tools/ci/rv64_debian_linux_build.sh \
+            tools/ci/rv64_debian_payload_build.sh
+          echo 'ONLY OFFLINE SD1 MEDIA: no Product RTL elaboration/boot, no guest DDR snapshot, no login credentials' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore exact fixed Bootlin GCC 13.3 toolchain when available
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore G4 source/build cache for pinned Linux and OpenSBI
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore G4 Mill and Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Provision ephemeral native build tools and riscv64 OCI user emulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 15m sudo apt-get update
+          timeout --signal=TERM --kill-after=30s 15m sudo apt-get install -y \
+            bc libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves qemu-user-static binfmt-support \
+            e2fsprogs autoconf cmake ninja-build bison flex
+          docker version
+          command -v gpgv
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64 || {
+            echo 'Pinned Debian OCI package configuration requires installed/enabled qemu-riscv64 binfmt on this ephemeral runner; refusing unqualified host execution' >&2
+            exit 13
+          }
+          chmod +x mill
+
+      - name: Validate and activate immutable RV64 Linux GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 20m bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build unchanged source-verified Linux baseline and OpenSBI
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 35m bash tools/ci/rv64_linux_early_build.sh
+          grep -Fxq 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' build/rv64-linux-early/result.txt
+
+      - name: Supply official Debian riscv64 snapshot-pinned configured rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No console credentials or crypt hashes are allowed into the
+          # shared GitHub Actions cache (including public PR restore scope).
+          unset RV64_SD1_LOGIN_USER RV64_SD1_LOGIN_PASSWORD_HASH_FILE
+          timeout --signal=TERM --kill-after=30s 75m \
+            bash tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh
+          # source.env contains only absolute archive path and its actual SHA.
+          source build/rv64-debian-sd1-official-rootfs/source.env
+          test "$RV64_DEBIAN_STAGE" = sd1
+          timeout --signal=TERM --kill-after=30s 20m bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -Fxq 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' build/rv64-debian-rootfs/result.txt
+          grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
+            build/rv64-debian-sd1-official-rootfs/console-provisioning.txt
+
+      - name: Build native MBR ext4 media, then matching RV64GC Linux and independent DTB
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 15m bash tools/ci/rv64_debian_sd1_sd_image_build.sh
+          timeout --signal=TERM --kill-after=30s 35m bash tools/ci/rv64_debian_linux_build.sh
+          timeout --signal=TERM --kill-after=30s 15m bash tools/ci/rv64_debian_payload_build.sh
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-debian-boot/result.txt
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Run no-RTL offline SD/firmware preflight and seal provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 5m bash tools/ci/product_sim_sd1_manual.sh preflight
+          python3 tools/ci/product_sd1_official_seed.py seal
+          python3 tools/ci/product_sd1_official_seed.py verify
+          cat build/product-sd1-official-seed/seed-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save EXACT SHA-checked official SD1 media supply cache, never guest DDR
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'src/main/scala/**/*.scala', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}

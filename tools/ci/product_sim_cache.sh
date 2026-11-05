@@ -38,7 +38,10 @@ input_identity() {
   # nor depend upon this header and must not recompile when it is edited.
   local model_specific_sources=()
   if [[ "$sim_cxxflags" == *-DAETHERCORE_PRODUCT_SPI_SD* ]]; then
-    model_specific_sources+=(sim/l32_sd_spi_card.h)
+    # The SDHC state codec is compiled into the same physical-card host.
+    # Bind both header byte streams or a stale SD1 executable could survive
+    # a snapshot schema/decoder change while RAM-only G3/G4 remain reusable.
+    model_specific_sources+=(sim/l32_sd_spi_card.h sim/l32_sd_spi_snapshot_codec.h)
   fi
   {
     printf 'top=%s\nelaborate=%s\ncompiler-flags=%s\nsettle=%s\nverilator=%s\nthreads=%s\nmodel-opt=%s\nmake-opt=%s\n' \

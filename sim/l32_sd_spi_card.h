@@ -1,8 +1,11 @@
 #pragma once
 
+#include "l32_sd_spi_snapshot_codec.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +13,8 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace aethercore::l32sim {
 
@@ -29,7 +34,7 @@ namespace aethercore::l32sim {
 class SdSpiCard {
  public:
   explicit SdSpiCard(const std::string& imagePath)
-      : disk_(imagePath, std::ios::binary) {
+      : imagePath_(imagePath), disk_(imagePath, std::ios::binary) {
     if (!disk_) throw std::runtime_error("Product SD1 SD image cannot be opened: " + imagePath);
     const auto bytes = std::filesystem::file_size(imagePath);
     if (bytes < (64ULL << 20) || bytes % (512ULL << 10) != 0 ||
@@ -49,6 +54,10 @@ class SdSpiCard {
     const auto ext4Superblock = readSector(firstPartitionLba_ + 2);
     if (ext4Superblock[56] != 0x53 || ext4Superblock[57] != 0xef)
       throw std::runtime_error("Product SD1 partition 1 is not an ext2/3/4 filesystem");
+    // Pin the whole underlying image at construction, not just its MBR,
+    // geometry or file metadata. The immutable-source contract must reject
+    // same-size edits even when another process restores the old mtime.
+    sourceSha256_ = snapshot_detail::sha256File(imagePath_);
   }
 
   bool miso() const { return miso_; }
@@ -107,10 +116,147 @@ class SdSpiCard {
   std::uint64_t sourceSectors() const { return sectorCount_; }
   std::uint32_t partitionStartLba() const { return firstPartitionLba_; }
 
+  // Versioned, endian-stable host-state bytes. Save only at a complete Product
+  // simulated clock boundary (after observe()); all partial SPI bit/command/
+  // write data phases are still serialized. The physical image stays strictly
+  // read-only: the sorted COW overlay is the sole persisted write state.
+  // This is the SD card HOST component of a future RTL+RAM+peripheral
+  // checkpoint; using it alone is NOT a savable Product/Debian RTL run.
+  std::vector<std::uint8_t> snapshot() const {
+    using namespace snapshot_detail;
+    Writer body;
+    body.u64(sectorCount_);
+    body.u32(firstPartitionLba_);
+    body.u32(partitionSectors_);
+    body.bytes(immutableMediaSha256());
+    for (const bool b : {idle_, highCapacity_, crcEnabled_, appCommand_, multiRead_, multiWrite_,
+                         startupClockSequenceSeen_, lastSclk_, lastCsHigh_, miso_})
+      body.u8(b ? 1 : 0);
+    body.u8(static_cast<std::uint8_t>(writeState_));
+    body.u8(rxByte_); body.u8(static_cast<std::uint8_t>(rxBits_));
+    body.u8(txByte_); body.u8(static_cast<std::uint8_t>(txBit_));
+    body.u32(static_cast<std::uint32_t>(commandBytes_));
+    body.u32(static_cast<std::uint32_t>(writeBytes_));
+    body.u64(nextReadLba_); body.u64(nextWriteLba_);
+    body.u64(commands_); body.u64(reads_); body.u64(writes_);
+    body.u64(unselectedClocks_); body.u32(lastCommand_);
+    body.bytes(command_);
+    body.bytes(writePacket_);
+    if (output_.size() > std::numeric_limits<std::uint32_t>::max())
+      throw std::runtime_error("SD checkpoint TX queue too large");
+    body.u32(static_cast<std::uint32_t>(output_.size()));
+    for (auto byte : output_) body.u8(byte);
+    std::vector<std::uint64_t> keys;
+    keys.reserve(overlay_.size());
+    for (const auto& [lba, _] : overlay_) keys.push_back(lba);
+    std::sort(keys.begin(), keys.end());
+    body.u64(keys.size());
+    for (const auto lba : keys) {
+      body.u64(lba);
+      body.bytes(overlay_.at(lba));
+    }
+    constexpr std::array<std::uint8_t, 8> Magic{'A','C','S','D','S','P','0','1'};
+    Writer envelope;
+    envelope.bytes(Magic);
+    envelope.u32(1);  // checkpoint schema version; no silent migrations
+    envelope.u64(body.out.size());
+    envelope.bytes(sha256(body.out));  // reject corruption before mutation
+    envelope.bytes(body.out);
+    return std::move(envelope.out);
+  }
+
+  void restore(std::span<const std::uint8_t> bytes) {
+    using namespace snapshot_detail;
+    constexpr std::array<std::uint8_t, 8> Magic{'A','C','S','D','S','P','0','1'};
+    Reader input(bytes);
+    const auto magic = input.bytes(Magic.size());
+    if (!std::equal(magic.begin(), magic.end(), Magic.begin()) || input.u32() != 1)
+      throw std::runtime_error("SD checkpoint magic/version mismatch");
+    const auto bodyLength = input.u64();
+    const auto expectedDigest = input.bytes(32);
+    if (bodyLength != input.remaining())
+      throw std::runtime_error("SD checkpoint has truncated/trailing bytes");
+    const auto bodyBytes = input.bytes(static_cast<std::size_t>(bodyLength));
+    const auto actualDigest = sha256(bodyBytes);
+    if (!std::equal(expectedDigest.begin(), expectedDigest.end(), actualDigest.begin()))
+      throw std::runtime_error("SD checkpoint SHA256 checksum differs");
+
+    // Transactional: all verification/allocations happen in this distinct
+    // card; the live object remains byte-for-byte unchanged on any failure.
+    SdSpiCard staged(imagePath_);
+    Reader body(bodyBytes);
+    if (body.u64() != staged.sectorCount_ ||
+        body.u32() != staged.firstPartitionLba_ ||
+        body.u32() != staged.partitionSectors_)
+      throw std::runtime_error("SD checkpoint media geometry/partition differs");
+    const auto mediaDigest = body.bytes(32);
+    const auto realMediaDigest = staged.immutableMediaSha256();
+    if (!std::equal(mediaDigest.begin(), mediaDigest.end(), realMediaDigest.begin()))
+      throw std::runtime_error("SD checkpoint immutable image SHA256 differs");
+    staged.idle_=body.flag(); staged.highCapacity_=body.flag(); staged.crcEnabled_=body.flag();
+    staged.appCommand_=body.flag(); staged.multiRead_=body.flag(); staged.multiWrite_=body.flag();
+    staged.startupClockSequenceSeen_=body.flag(); staged.lastSclk_=body.flag();
+    staged.lastCsHigh_=body.flag(); staged.miso_=body.flag();
+    const auto writeState=body.u8();
+    if (writeState > static_cast<std::uint8_t>(WriteState::ReceiveData))
+      throw std::runtime_error("SD checkpoint write FSM state invalid");
+    staged.writeState_=static_cast<WriteState>(writeState);
+    staged.rxByte_=body.u8(); staged.rxBits_=body.u8();
+    staged.txByte_=body.u8(); staged.txBit_=body.u8();
+    staged.commandBytes_=body.u32(); staged.writeBytes_=body.u32();
+    staged.nextReadLba_=body.u64(); staged.nextWriteLba_=body.u64();
+    staged.commands_=body.u64(); staged.reads_=body.u64(); staged.writes_=body.u64();
+    staged.unselectedClocks_=body.u64(); staged.lastCommand_=body.u32();
+    const auto command=body.bytes(staged.command_.size());
+    std::copy(command.begin(), command.end(), staged.command_.begin());
+    const auto packet=body.bytes(staged.writePacket_.size());
+    std::copy(packet.begin(), packet.end(), staged.writePacket_.begin());
+    if (staged.rxBits_ > 7 || staged.txBit_ > 7 || staged.commandBytes_ > 5 ||
+        staged.writeBytes_ > staged.writePacket_.size() || staged.lastCommand_ > 63 ||
+        staged.unselectedClocks_ > 74 ||
+        (staged.writeState_ == WriteState::ReceiveData &&
+         staged.writeBytes_ >= staged.writePacket_.size()) ||
+        (!staged.startupClockSequenceSeen_ && staged.unselectedClocks_ >= 74))
+      throw std::runtime_error("SD checkpoint contains invalid SPI protocol position");
+    const auto outputBytes=body.u32();
+    const auto output=body.bytes(outputBytes);
+    staged.output_.assign(output.begin(), output.end());
+    const auto overlayCount=body.u64();
+    if (overlayCount > staged.sectorCount_ || overlayCount > body.remaining()/(8+SectorSize))
+      throw std::runtime_error("SD checkpoint overlay entry count invalid");
+    std::uint64_t previous=0;
+    for (std::uint64_t i=0; i<overlayCount; ++i) {
+      const auto lba=body.u64();
+      if (lba >= staged.sectorCount_ || (i>0 && lba<=previous))
+        throw std::runtime_error("SD checkpoint overlay LBA invalid/unsorted/duplicated");
+      previous=lba;
+      Sector sector{};
+      const auto data=body.bytes(SectorSize);
+      std::copy(data.begin(), data.end(), sector.begin());
+      staged.overlay_.emplace(lba, std::move(sector));
+    }
+    if (body.remaining() != 0)
+      throw std::runtime_error("SD checkpoint contains unexpected trailing fields");
+    *this=std::move(staged);
+  }
+
  private:
   static constexpr std::size_t SectorSize = 512;
   using Sector = std::array<std::uint8_t, SectorSize>;
   enum class WriteState { None, WaitToken, ReceiveData };
+
+  std::array<std::uint8_t,32> immutableMediaSha256() const {
+    // Never use an mtime/size-only shortcut: callers might restore an old
+    // timestamp after overwriting an arbitrary SD sector. A true checkpoint
+    // must bind exact media *bytes* independently of host filesystem stats.
+    if (std::filesystem::file_size(imagePath_) != sectorCount_ * SectorSize)
+      throw std::runtime_error("SD checkpoint source image length changed");
+    const auto actual = snapshot_detail::sha256File(imagePath_);
+    if (std::filesystem::file_size(imagePath_) != sectorCount_ * SectorSize ||
+        actual != sourceSha256_)
+      throw std::runtime_error("SD checkpoint immutable source image SHA256 differs");
+    return actual;
+  }
 
   static std::uint32_t le32(const std::uint8_t* b) {
     return static_cast<std::uint32_t>(b[0]) |
@@ -459,7 +605,9 @@ class SdSpiCard {
     }
   }
 
+  std::string imagePath_;
   std::ifstream disk_;
+  std::array<std::uint8_t,32> sourceSha256_{};
   std::uint64_t sectorCount_ = 0;
   std::uint32_t firstPartitionLba_ = 0;
   std::uint32_t partitionSectors_ = 0;

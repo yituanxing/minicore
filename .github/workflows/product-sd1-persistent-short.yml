@@ -1,0 +1,199 @@
+name: AetherCore Product SD1 frozen-media persistent checkpoint short
+
+# Operator-only, RAM+SPI-SD Product RTL checkpoint experiment. It requires a
+# separate, authenticated, zero-guest-cycle official Debian SD1 seed cache.
+# NO full Debian/PID1 boot, login, SD1 longrun, raw RAM/snapshot upload, or
+# generation of a substitute rootfs/image is allowed in this workflow.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-sd1-persistent-short-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  product-sd1-persistent-short:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'product-sd1-persistent-short')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_ALLOW_PRODUCT_SD1_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      AETHERCORE_SD1_PERSISTENT_BOOT_CYCLES: '12000000'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product SD1 code and reject full longrun
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Cheap SD1 contract and explicit frozen-source pin gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" ]] || exit 3
+          bash -n tools/ci/product_checkpoint_sd1_short.sh tools/ci/product_checkpoint_sd1_selftest.sh
+          bash tools/ci/product_checkpoint_sd1_selftest.sh
+          python3 -m unittest tests_py.test_product_sd1_card_protocol -v
+          bash tools/ci/product_sd1_card_checkpoint_host_selftest.sh
+          test -s software/rv64/product_sd1_official_seed.lock
+          ! grep -Eqi 'UNSET|PLACEHOLDER|TODO' software/rv64/product_sd1_official_seed.lock
+          echo 'PRODUCT_SD1_PERSISTENT_SCOPE: full official seed required; <=20M real RTL cycles + 500k replay; no PID1/Debian runtime qualification'
+
+      - name: Restore only externally seeded exact official SD1 media and firmware
+        id: seed-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'src/main/scala/**/*.scala', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+
+      - name: Fail closed before any source or model build on missing seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ]] || {
+            echo 'PRODUCT_SD1_PERSISTENT_OFFICIAL_SEED_REQUIRED: run the independently opted-in zero-cycle trusted seed workflow first' >&2
+            exit 16
+          }
+          test -s build/product-sd1-official-seed/seed-manifest.txt
+          test -s build/rv64-debian-sd1-sd/sd-rootfs.img
+          test -s build/rv64-debian-boot/result.txt
+          test -s build/rv64-debian-linux/obj/arch/riscv/boot/Image
+          echo 'PRODUCT_SD1_PERSISTENT_OFFICIAL_SEED_HIT: immutable source-key cache; byte-level preflight follows'
+
+      - name: Restore proven Mill and Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore proven pinned Verilator 5.054 --savable runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Install pinned RTL host dependencies after trusted seed gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 bison flex \
+            libfl-dev libgmp-dev git curl make zlib1g-dev autoconf cmake \
+            ninja-build libssl-dev libelf-dev libreadline-dev pkg-config \
+            build-essential bc device-tree-compiler dwarves xz-utils
+          AETHERCORE_VERILATOR_VERSION=5.054 bash tools/ensure_verilator_5_024.sh
+
+      - name: Validate official full Debian SD media firmware Linux and DTB hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/product_sd1_official_seed.py verify
+          # Product SD1's existing source-of-truth preflight binds the raw
+          # MBR/ext4 disk, rootfs-tree generation, Linux .config/Image,
+          # OpenSBI firmware and independent Product 52-IRQ DTB hashes.
+          AETHERCORE_VERILATOR_VERSION=5.054 SIM_SETTLE_MODE=reference \
+            bash tools/ci/product_sim_sd1_manual.sh preflight
+          test -s build/product-sd1-official-seed/seed-manifest.txt
+          echo 'PRODUCT_SD1_PERSISTENT_MEDIA_VERIFIED: exact official rootfs/Linux/fw/DTB/raw SD bytes, no cold Debian build'
+
+      - name: Fingerprint exact native CPU and C++ ABI
+        id: native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore distinct same-ABI SD1 savable Product model only
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+
+      - name: Verify or boundedly build SD1 savable model without guest cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 900s \
+            bash tools/ci/product_checkpoint_sd1_short.sh build
+          echo 'PRODUCT_SD1_PERSISTENT_MODEL_READY: separate SD1 Top and exact source/native ABI; zero guest cycles' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save distinct source native-ABI SD1 model before guest run
+        if: success() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+
+      - name: Run bounded authentic SD1 SPI card checkpoint and two-process replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/product-sd1-persistent-checkpoint
+          timeout --signal=TERM --kill-after=10s 600s \
+            bash tools/ci/product_checkpoint_sd1_short.sh run |
+            tee build/product-sd1-persistent-checkpoint/run-summary.log
+          grep -Fq 'PRODUCT_SD1_PERSISTENT_CROSS_PROCESS_PASS ' \
+            build/product-sd1-persistent-checkpoint/run-summary.log
+          proof_dir="$(sed -n 's/^PRODUCT_SD1_PERSISTENT_PROOF_DIR=//p' build/product-sd1-persistent-checkpoint/run-summary.log | tail -1)"
+          [[ -n "$proof_dir" && -d "$proof_dir" ]]
+          bash tools/ci/product_checkpoint_sd1_short.sh verify-proof "$proof_dir"
+          echo 'PRODUCT_SD1_PERSISTENT_SHORT_PASS: frozen official SD media; distinct processes/bytes; NOT Debian PID1/root mount or login' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hashes logs and summaries only no raw guest media or RAM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-persistent-short-evidence-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/product-sd1-official-seed/seed-manifest.txt
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-sd1-sd/result.txt
+            build/product-sd1-persistent-checkpoint/run-summary.log
+            build/product-sd1-persistent-checkpoint/logs/*.log
+            build/product-sd1-persistent-checkpoint/persist-SD1.*/qualification.txt
+            build/product-sd1-persistent-checkpoint/persist-SD1.*/sha256.txt
+            build/product-sd1-persistent-checkpoint/persist-SD1.*/save.log
+            build/product-sd1-persistent-checkpoint/persist-SD1.*/restore.log

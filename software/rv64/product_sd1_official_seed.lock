@@ -1,0 +1,10 @@
+# G5-SD1 official source lock. These values are deliberately NOT guessed.
+# An operator must independently verify the official OCI riscv64 digest and
+# the signed Debian trixie/trixie-security snapshot InRelease SHA256 bytes,
+# commit this reviewed lock, then explicitly dispatch the zero-cycle seed.
+# No workflow inputs, rolling tags, fallback rootfs or password hashes here.
+RV64_SD1_DEBIAN_OCI_DIGEST=UNSET
+RV64_SD1_DEBIAN_SNAPSHOT_UTC=UNSET
+RV64_SD1_DEBIAN_SECURITY_SNAPSHOT_UTC=UNSET
+RV64_SD1_DEBIAN_INRELEASE_SHA256=UNSET
+RV64_SD1_DEBIAN_SECURITY_INRELEASE_SHA256=UNSET
