@@ -113,6 +113,18 @@ int main(int argc, char** argv) {
     VerilatedContext context;
     context.commandArgs(argc, argv);
     OpenSbiTop top{&context};
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+    static_assert(requires(OpenSbiTop& hardware) {
+      hardware.io_commit_rdWrite;
+      hardware.io_commit_rd;
+      hardware.io_commit_rdData;
+      hardware.io_commit_floating_rdWrite;
+      hardware.io_commit_floating_rd;
+      hardware.io_commit_floating_rdData;
+      hardware.io_commit_floating_fflags;
+      hardware.io_commit_floating_stateDirty;
+    }, "G5 Verilator A/B must expose all real RV64GC integer and floating retirement ports");
+#endif
     Memory memory;
     memory.loadAtBase(image);
 #ifdef AETHERCORE_PRODUCT_SPI_SD
@@ -166,6 +178,9 @@ int main(int argc, char** argv) {
     std::uint64_t lastExceptionCause = 0;
     std::uint64_t lastExceptionValue = 0;
     std::uint64_t lastExceptionPc = 0;
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+    aethercore::l32sim::ProductDebianRetireDigest g5Retire;
+#endif
     std::uint64_t milestoneCommitCount = 0;
     std::string uart;
     // Hash the actual UART byte stream, not only its length. Short Product
@@ -310,6 +325,18 @@ int main(int argc, char** argv) {
       if (top.io_commit_valid) {
         ++commits;
         const auto commitPc = static_cast<std::uint64_t>(top.io_commit_pc);
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+        g5Retire.record(
+            commitPc, static_cast<std::uint32_t>(top.io_commit_inst),
+            static_cast<bool>(top.io_commit_rdWrite),
+            static_cast<std::uint8_t>(top.io_commit_rd),
+            static_cast<std::uint64_t>(top.io_commit_rdData),
+            static_cast<bool>(top.io_commit_floating_rdWrite),
+            static_cast<std::uint8_t>(top.io_commit_floating_rd),
+            static_cast<std::uint64_t>(top.io_commit_floating_rdData),
+            static_cast<std::uint8_t>(top.io_commit_floating_fflags),
+            static_cast<bool>(top.io_commit_floating_stateDirty));
+#endif
         if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
           ++compressedCommits;
           if (commitPc < kLinuxPayloadBase) {
@@ -519,6 +546,13 @@ int main(int argc, char** argv) {
     // timeout fingerprint for short Product SD1 simulator A/B comparisons.
     // This is an observation, not a card-state checkpoint or runtime shortcut.
     std::cerr << ' ' << sdCard.progress();
+#endif
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+    std::cerr << " g5-retire-digest=0x" << std::hex << g5Retire.retirement
+              << " g5-int-digest=0x" << g5Retire.integer
+              << " g5-fp-digest=0x" << g5Retire.floating << std::dec
+              << " g5-fp-writes=" << g5Retire.floatingWrites
+              << " g5-fflags-events=" << g5Retire.flagEvents;
 #endif
     std::cerr << std::dec << "\n";
     return 2;

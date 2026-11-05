@@ -69,6 +69,51 @@ struct TransportRuntimeState {
   DataMemoryWaitState dataWait;
 };
 
+// Optional G5 RV64GC differential retirement oracle, shared by the Verilator
+// and GSIM host runners. Hash architectural integer and floating retirement
+// *values*, not just the PCs/instructions: an F/D register or fflags mismatch
+// must not be hidden behind an identical Linux UART banner and memory hash.
+// Neither G3 nor legacy V2 enable or call this observer.
+struct ProductDebianRetireDigest {
+  static constexpr std::uint64_t kBasis = 14695981039346656037ULL;
+  static constexpr std::uint64_t kPrime = 1099511628211ULL;
+  std::uint64_t retirement = kBasis;
+  std::uint64_t integer = kBasis;
+  std::uint64_t floating = kBasis;
+  std::uint64_t floatingWrites = 0;
+  std::uint64_t flagEvents = 0;
+
+  static void mix(std::uint64_t& hash, std::uint64_t value) {
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+      hash ^= static_cast<std::uint8_t>(value >> shift);
+      hash *= kPrime;
+    }
+  }
+
+  void record(std::uint64_t pc, std::uint32_t inst,
+              bool integerWrite, std::uint8_t integerRd,
+              std::uint64_t integerData, bool floatingWrite,
+              std::uint8_t floatingRd, std::uint64_t floatingData,
+              std::uint8_t fflags, bool floatingDirty) {
+    mix(retirement, pc);
+    mix(retirement, inst);
+    mix(integer, integerWrite ? 1 : 0);
+    if (integerWrite) {
+      mix(integer, integerRd);
+      mix(integer, integerData);
+    }
+    mix(floating, floatingWrite ? 1 : 0);
+    mix(floating, fflags);
+    mix(floating, floatingDirty ? 1 : 0);
+    if (floatingWrite) {
+      mix(floating, floatingRd);
+      mix(floating, floatingData);
+      ++floatingWrites;
+    }
+    flagEvents += fflags != 0;
+  }
+};
+
 
 /**
  * Shared byte-addressed RAM for the OpenSBI/Linux simulation boundary.

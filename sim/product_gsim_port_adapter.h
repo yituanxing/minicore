@@ -1,14 +1,24 @@
 #pragma once
 
 // GSIM exposes accessors rather than Verilator's public flattened data members.
-// The instantiated model is *Product G3*, not historical V2/PA32. Keep every
-// physical address as uint64_t: Product's host aperture uses PA=56.
+// The default model remains the independently qualified G3 IMAC Top. The
+// explicit Debian build instantiates G5 RV64GC/LP64D with the same host RAM
+// transport; SD1 is intentionally excluded until a separate card bridge is
+// modelled. Both use PA=56 and uint64_t host addresses.
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+#include "AetherCoreProductDebianRV64SimTop.h"
+#else
 #include "AetherCoreProductOpenSbiRV64SimTop.h"
+#endif
 
 #include <cstdint>
 
 namespace aethercore::product_gsim {
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+using Model = SAetherCoreProductDebianRV64SimTop;
+#else
 using Model = SAetherCoreProductOpenSbiRV64SimTop;
+#endif
 
 struct Request {
   bool imemValid;
@@ -50,6 +60,16 @@ struct Commit {
   bool interrupt;
   std::uint64_t interruptCause;
   std::uint64_t interruptPc;
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+  bool rdWrite;
+  std::uint8_t rd;
+  std::uint64_t rdData;
+  bool fpRdWrite;
+  std::uint8_t fpRd;
+  std::uint64_t fpRdData;
+  std::uint8_t fpFlags;
+  bool fpStateDirty;
+#endif
 };
 
 class Ports {
@@ -128,7 +148,7 @@ class Ports {
   }
 
   Commit commit() const {
-    return {
+    Commit result{
       static_cast<bool>(model_.get_io$$commit$$valid()),
       static_cast<std::uint64_t>(model_.get_io$$commit$$pc()),
       static_cast<std::uint32_t>(model_.get_io$$commit$$inst()),
@@ -141,6 +161,17 @@ class Ports {
       static_cast<std::uint64_t>(model_.get_io$$commit$$interruptCause()),
       static_cast<std::uint64_t>(model_.get_io$$commit$$interruptPc()),
     };
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+    result.rdWrite = static_cast<bool>(model_.get_io$$commit$$rdWrite());
+    result.rd = static_cast<std::uint8_t>(model_.get_io$$commit$$rd());
+    result.rdData = static_cast<std::uint64_t>(model_.get_io$$commit$$rdData());
+    result.fpRdWrite = static_cast<bool>(model_.get_io$$commit$$floating$$rdWrite());
+    result.fpRd = static_cast<std::uint8_t>(model_.get_io$$commit$$floating$$rd());
+    result.fpRdData = static_cast<std::uint64_t>(model_.get_io$$commit$$floating$$rdData());
+    result.fpFlags = static_cast<std::uint8_t>(model_.get_io$$commit$$floating$$fflags());
+    result.fpStateDirty = static_cast<bool>(model_.get_io$$commit$$floating$$stateDirty());
+#endif
+    return result;
   }
 
   // The bounded Linux-prefix *non-differential* runner only needs the

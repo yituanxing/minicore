@@ -26,6 +26,8 @@ jobs:
       OLD_G5_SHA: b481160151ab4e3e5e5c5e1f7317a74fdddc36f3
       OLD_IMAGE_SHA: 232bdf05a96b418c2aee4de965666eaa70d572a6494f93f8cab37e511401c0f5
       OLD_VMLINUX_SHA: 39e498db1101fb75ad14af4daf345d4a53894677b0ad6c750c58ed106c355902
+      OLD_CONFIG_SHA: 653a2c707762c5344cb6e44bd13362f4a3d23cb1baa912dcc655b365c4d7d5b5
+      OLD_ROOTFS_BYTES: '64477542'
       RV64_DEBIAN_EXPECTED_IMAGE_DIGEST: debian@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
       RV64_LINUX_JOBS: '4'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
@@ -65,10 +67,12 @@ jobs:
           log="$RUNNER_TEMP/old-g5-evidence/_temp/aethercore-product-g5-debian/$OLD_G5_SHA/logs/boot-probe.log"
           manifest="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-linux/evidence/sha256.txt"
           rootfs="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-rootfs/result.txt"
-          test -s "$log" && test -s "$manifest" && test -s "$rootfs"
+          old_rootfs_manifest="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-rootfs/evidence/sha256.txt"
+          test -s "$log" && test -s "$manifest" && test -s "$rootfs" && test -s "$old_rootfs_manifest"
           grep -Fqx "$OLD_VMLINUX_SHA  /home/runner/work/minicore/minicore/build/rv64-debian-linux/obj/vmlinux" "$manifest"
           grep -Fqx "$OLD_IMAGE_SHA  /home/runner/work/minicore/minicore/build/rv64-debian-linux/obj/arch/riscv/boot/Image" "$manifest"
           grep -Fqx "image_digest=$RV64_DEBIAN_EXPECTED_IMAGE_DIGEST" "$rootfs"
+          grep -Fqx "rootfs_bytes=$OLD_ROOTFS_BYTES" "$rootfs"
           python3 - "$log" <<'PY'
           import pathlib
           import sys
@@ -119,7 +123,7 @@ jobs:
           set -euo pipefail
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
 
-      - name: Reproduce historical Image and vmlinux without running guest cycles
+      - name: Rebuild bounded candidate Image and vmlinux without guest cycles
         shell: bash
         run: |
           set -euo pipefail
@@ -129,13 +133,17 @@ jobs:
           bash tools/ci/rv64_debian_rootfs_build.sh
           grep -qx 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' build/rv64-debian-rootfs/result.txt
           grep -Fqx "image_digest=$RV64_DEBIAN_EXPECTED_IMAGE_DIGEST" build/rv64-debian-rootfs/result.txt
+          grep -Fqx "rootfs_bytes=$OLD_ROOTFS_BYTES" build/rv64-debian-rootfs/result.txt
+          old_rootfs_manifest="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-rootfs/evidence/sha256.txt"
+          test -s build/rv64-debian-rootfs/evidence/sha256.txt
+          test -s "$old_rootfs_manifest"
+          diff -u "$old_rootfs_manifest" build/rv64-debian-rootfs/evidence/sha256.txt
           bash tools/ci/rv64_debian_linux_build.sh
           grep -qx 'RV64_DEBIAN_LINUX_BUILD_RESULT: status=PASS' build/rv64-debian-linux/result.txt
-          test "$(sha256sum build/rv64-debian-linux/obj/vmlinux | cut -d' ' -f1)" = "$OLD_VMLINUX_SHA"
-          test "$(sha256sum build/rv64-debian-linux/obj/arch/riscv/boot/Image | cut -d' ' -f1)" = "$OLD_IMAGE_SHA"
-          echo 'PRODUCT_G5_OLD_KERNEL_REPRODUCED_EXACTLY no_guest_cycles=1'
+          test "$(sha256sum build/rv64-debian-linux/evidence/resolved.config | cut -d' ' -f1)" = "$OLD_CONFIG_SHA"
+          echo 'PRODUCT_G5_OLD_CANDIDATE_SOURCE_CONFIG_ROOTFS_VERIFIED no_guest_cycles=1'
 
-      - name: Resolve exact old 1.8B-cycle PC frontier
+      - name: Produce explicitly UNVERIFIED candidate mapping of historical PC frontier
         shell: bash
         run: |
           set -euo pipefail
@@ -144,15 +152,32 @@ jobs:
           manifest="$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-linux/evidence/sha256.txt"
           cross="$HOME/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1/bin/riscv64-linux-"
           test -x "${cross}addr2line" && test -x "${cross}objdump" && test -x "${cross}nm"
+          "${cross}nm" -n build/rv64-debian-linux/obj/vmlinux > build/product-g5-old-pc/candidate.System.map
+          sha256sum build/rv64-debian-linux/obj/vmlinux \
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image \
+            build/rv64-debian-linux/evidence/resolved.config \
+            > build/product-g5-old-pc/candidate-sha256.txt
           python3 .g5-current-diagnostics/tools/ci/product_g5_pc_diagnose.py \
             --boot-log "$log" \
             --vmlinux build/rv64-debian-linux/obj/vmlinux \
             --image build/rv64-debian-linux/obj/arch/riscv/boot/Image \
             --sha256-manifest "$manifest" \
             --cross-prefix "$cross" \
+            --candidate-only \
+            --source-dir . \
+            --source-revision "$OLD_G5_SHA" \
+            --config build/rv64-debian-linux/evidence/resolved.config \
+            --expected-config-sha256 "$OLD_CONFIG_SHA" \
+            --rootfs-result build/rv64-debian-rootfs/result.txt \
+            --expected-rootfs-bytes "$OLD_ROOTFS_BYTES" \
+            --expected-debian-digest "$RV64_DEBIAN_EXPECTED_IMAGE_DIGEST" \
+            --original-rootfs-manifest "$RUNNER_TEMP/old-g5-evidence/minicore/minicore/build/rv64-debian-rootfs/evidence/sha256.txt" \
+            --candidate-rootfs-manifest build/rv64-debian-rootfs/evidence/sha256.txt \
+            --candidate-rootfs-dir build/rv64-debian-rootfs/rootfs \
             | tee build/product-g5-old-pc/symbolized.txt
-          grep -Fqx 'PRODUCT_G5_EXACT_PC_SYMBOLIZATION_PASS' build/product-g5-old-pc/symbolized.txt
-          echo 'PRODUCT_G5_OLD_PC_OFFLINE_PASS: exact historical symbols, no guest simulation' >> "$GITHUB_STEP_SUMMARY"
+          grep -Fqx 'PRODUCT_G5_CANDIDATE_PC_SYMBOLIZATION_UNVERIFIED no_exact_image_claim=1' build/product-g5-old-pc/symbolized.txt
+          ! grep -Fq 'PRODUCT_G5_EXACT_PC_SYMBOLIZATION_PASS' build/product-g5-old-pc/symbolized.txt
+          echo 'PRODUCT_G5_OLD_PC_CANDIDATE_ONLY_UNVERIFIED: source/config/rootfs verified but original Image differs. No guest simulation.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload bounded diagnostic evidence
         if: always()
@@ -163,5 +188,8 @@ jobs:
           if-no-files-found: warn
           path: |
             build/product-g5-old-pc/symbolized.txt
+            build/product-g5-old-pc/candidate.System.map
+            build/product-g5-old-pc/candidate-sha256.txt
+            build/rv64-debian-rootfs/evidence/sha256.txt
             build/rv64-debian-linux/result.txt
             build/rv64-debian-linux/evidence/sha256.txt

@@ -30,6 +30,13 @@ constexpr std::uint64_t kHashBasis = 14695981039346656037ULL;
 constexpr std::uint64_t kHashPrime = 1099511628211ULL;
 constexpr std::size_t kRecentCommitCount = 16;
 constexpr std::uint64_t kResetTicks = 4;  // Same four reset steps as opensbi_boot_main.cpp.
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+constexpr std::uint64_t kLinuxPayloadBase = 0x80200000ULL;
+constexpr const char* kActualTop = "AetherCoreProductDebianRV64SimTop";
+#else
+constexpr std::uint64_t kLinuxPayloadBase = 0x80400000ULL;
+constexpr const char* kActualTop = "AetherCoreProductOpenSbiRV64SimTop";
+#endif
 
 void hashWord(std::uint64_t& digest, std::uint64_t word) {
   for (unsigned shift = 0; shift != 64; shift += 8) {
@@ -146,6 +153,10 @@ int main(int argc, char** argv) {
     }
     if (fastUnqualified && (bareProbe || memoryProbe || requireLinux))
       throw std::invalid_argument("fast G4 is only for fixed-cycle firmware prefixes, not probes or Linux milestone qualification");
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+    if (fastUnqualified || bareProbe || memoryProbe)
+      throw std::invalid_argument("G5 Debian GSIM permits only strict real-firmware prefixes; no G3 probes or sparse host loop");
+#endif
 
     Memory memory;
     if (bareProbe) {
@@ -175,7 +186,7 @@ int main(int argc, char** argv) {
     ports.reset(true);
     ports.rx(false, 0);
     ports.respond({});
-    std::puts("AETHERCORE_PRODUCT_GSIM_HOST_BRIDGE_ENABLED actual_top=AetherCoreProductOpenSbiRV64SimTop pa_bits=56");
+    std::printf("AETHERCORE_PRODUCT_GSIM_HOST_BRIDGE_ENABLED actual_top=%s pa_bits=56\n", kActualTop);
 
     std::uint64_t commits = 0, compressed = 0, opensbiCompressed = 0;
     std::uint64_t linuxCompressed = 0, exceptions = 0, interrupts = 0;
@@ -185,6 +196,9 @@ int main(int argc, char** argv) {
     std::uint64_t uartBytes = 0, uartFingerprint = kHashBasis;
     std::uint64_t wireDigest = kHashBasis, milestoneCycle = 0;
     std::uint64_t matchingBare = 0, executedCycles = 0, observedTicks = 0;
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+    aethercore::l32sim::ProductDebianRetireDigest g5Retire;
+#endif
     bool opensbiBanner = false, linuxBanner = false, sawMilestone = false;
     std::string tail;
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
@@ -217,9 +231,15 @@ int main(int argc, char** argv) {
           hashWord(commitDigest, commit.pc);
           hashWord(commitDigest, commit.inst);
         }
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+        g5Retire.record(commit.pc, commit.inst,
+                        commit.rdWrite, commit.rd, commit.rdData,
+                        commit.fpRdWrite, commit.fpRd, commit.fpRdData,
+                        commit.fpFlags, commit.fpStateDirty);
+#endif
         if (commit.instBytes == 2) {
           ++compressed;
-          if (commit.pc < 0x80400000ULL) ++opensbiCompressed;
+          if (commit.pc < kLinuxPayloadBase) ++opensbiCompressed;
           else ++linuxCompressed;
         }
         recentPcs[recentNext] = commit.pc;
@@ -336,6 +356,15 @@ int main(int argc, char** argv) {
                 static_cast<unsigned long long>(lastExceptionValue),
                 static_cast<unsigned long long>(ramFingerprint));
     printRecentPcs(recentPcs, recentCount, recentNext);
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN
+    std::printf(" g5-retire-digest=0x%llx g5-int-digest=0x%llx g5-fp-digest=0x%llx"
+                " g5-fp-writes=%llu g5-fflags-events=%llu",
+                static_cast<unsigned long long>(g5Retire.retirement),
+                static_cast<unsigned long long>(g5Retire.integer),
+                static_cast<unsigned long long>(g5Retire.floating),
+                static_cast<unsigned long long>(g5Retire.floatingWrites),
+                static_cast<unsigned long long>(g5Retire.flagEvents));
+#endif
     std::putchar('\n');
     std::printf("AETHERCORE_PRODUCT_GSIM_PREFIX guest_cycles=%llu retires=%llu"
                 " exceptions=%llu interrupts=%llu stip=%llu seip=%llu"

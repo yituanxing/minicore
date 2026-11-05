@@ -53,6 +53,27 @@ def frozen_hashes(manifest: Path) -> tuple[str, str]:
     return image, vmlinux
 
 
+def rootfs_content_hashes(manifest: Path) -> dict[str, str]:
+    required = {"bin/sh", "usr/bin/dpkg", "init", "etc/debian_version"}
+    entries: dict[str, str] = {}
+    if not manifest.is_file():
+        die(f"missing Debian rootfs hash manifest: {manifest}")
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = HASH_LINE.fullmatch(line.strip())
+        if not match:
+            continue
+        digest, name = match.groups()
+        if "/rootfs/" not in name:
+            die(f"rootfs hash entry is not bound to a rootfs tree: {name}")
+        suffix = name.split("/rootfs/", 1)[1]
+        if suffix in entries:
+            die(f"duplicate rootfs hash entry: {suffix}")
+        entries[suffix] = digest.lower()
+    if set(entries) != required:
+        die(f"rootfs hash manifest entries differ: {set(entries)}")
+    return entries
+
+
 def verify_identity(image: Path, vmlinux: Path, manifest: Path) -> tuple[str, str]:
     for label, path in (("Image", image), ("vmlinux", vmlinux), ("manifest", manifest)):
         if not path.is_file() or path.stat().st_size == 0:
@@ -64,6 +85,50 @@ def verify_identity(image: Path, vmlinux: Path, manifest: Path) -> tuple[str, st
     if actual_vmlinux != expected_vmlinux:
         die(f"vmlinux SHA mismatch: actual={actual_vmlinux} expected={expected_vmlinux}")
     return actual_image, actual_vmlinux
+
+
+def candidate_identity(
+    image: Path, vmlinux: Path, manifest: Path, *,
+    source_dir: Path, source_revision: str, config: Path, config_sha: str,
+    rootfs_result: Path, rootfs_bytes: int, debian_digest: str,
+    original_rootfs_manifest: Path, candidate_rootfs_manifest: Path,
+    candidate_rootfs_dir: Path,
+) -> tuple[str, str, str, str]:
+    """Guard a useful but explicitly UNVERIFIED symbol candidate.
+
+    The original vmlinux is unavailable.  Even when source, config and key
+    rootfs files match, the reconstructed Image bytes can still differ for
+    reasons not yet established.  Never conflate a candidate mapping with
+    exact-symbol qualification.
+    """
+    for label, path in (
+        ("Image", image), ("vmlinux", vmlinux), ("manifest", manifest),
+        ("config", config), ("rootfs result", rootfs_result),
+    ):
+        if not path.is_file() or path.stat().st_size == 0:
+            die(f"missing candidate {label}: {path}")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
+        die("candidate source revision must be an exact 40-character commit")
+    actual_revision = invoke(["git", "-C", str(source_dir), "rev-parse", "HEAD"]).strip()
+    if actual_revision != source_revision:
+        die(f"candidate source mismatch: actual={actual_revision} expected={source_revision}")
+    if sha256(config) != config_sha.lower():
+        die("candidate resolved.config SHA mismatch")
+    result = rootfs_result.read_text(encoding="utf-8")
+    if f"rootfs_bytes={rootfs_bytes}" not in result.splitlines():
+        die("candidate Debian rootfs byte count mismatch")
+    if f"image_digest={debian_digest}" not in result.splitlines():
+        die("candidate official Debian image digest mismatch")
+    original_contents = rootfs_content_hashes(original_rootfs_manifest)
+    candidate_contents = rootfs_content_hashes(candidate_rootfs_manifest)
+    if original_contents != candidate_contents:
+        die("candidate Debian /init, /bin/sh, /usr/bin/dpkg or release content differs")
+    for relative, expected in candidate_contents.items():
+        actual_path = candidate_rootfs_dir / relative
+        if not actual_path.is_file() or sha256(actual_path) != expected:
+            die(f"candidate rootfs content does not match its hash manifest: {relative}")
+    expected_image, expected_vmlinux = frozen_hashes(manifest)
+    return sha256(image), sha256(vmlinux), expected_image, expected_vmlinux
 
 
 def parse_frontier(log: Path) -> tuple[dict[str, str], list[int], str]:
@@ -121,7 +186,7 @@ def kernel_symbols(vmlinux: Path, prefix: str) -> tuple[list[int], list[str]]:
     return [entry[0] for entry in entries], [entry[1] for entry in entries]
 
 
-def symbolize(vmlinux: Path, prefix: str, pcs: list[int]) -> None:
+def symbolize(vmlinux: Path, prefix: str, pcs: list[int], *, candidate_only: bool = False) -> None:
     addresses, names = kernel_symbols(vmlinux, prefix)
     for pc in pcs:
         index = bisect.bisect_right(addresses, pc) - 1
@@ -129,7 +194,8 @@ def symbolize(vmlinux: Path, prefix: str, pcs: list[int]) -> None:
             die(f"PC {pc:#x} cannot be associated with a nearby kernel text symbol")
         print(f"PC {pc:#018x}: {names[index]}+0x{pc - addresses[index]:x}")
     resolved = invoke([prefix + "addr2line", "-a", "-f", "-C", "-e", str(vmlinux), *[hex(pc) for pc in pcs]])
-    print("\n=== addr2line (exact G5 vmlinux) ===")
+    provenance = "CANDIDATE_ONLY UNVERIFIED" if candidate_only else "EXACT"
+    print(f"\n=== addr2line ({provenance} G5 vmlinux) ===")
     print(resolved.rstrip())
 
     last_exception = pcs[0]
@@ -158,11 +224,48 @@ def main() -> int:
     parser.add_argument("--sha256-manifest", type=Path, required=True)
     parser.add_argument("--cross-prefix", required=True,
                         help="e.g. /opt/riscv64-linux/bin/riscv64-linux-")
+    parser.add_argument("--candidate-only", action="store_true",
+                        help="emit explicitly UNVERIFIED mapping if historical binary hashes differ")
+    parser.add_argument("--source-dir", type=Path)
+    parser.add_argument("--source-revision")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--expected-config-sha256")
+    parser.add_argument("--rootfs-result", type=Path)
+    parser.add_argument("--expected-rootfs-bytes", type=int)
+    parser.add_argument("--expected-debian-digest")
+    parser.add_argument("--original-rootfs-manifest", type=Path)
+    parser.add_argument("--candidate-rootfs-manifest", type=Path)
+    parser.add_argument("--candidate-rootfs-dir", type=Path)
     args = parser.parse_args()
     try:
-        image_sha, elf_sha = verify_identity(args.image, args.vmlinux, args.sha256_manifest)
+        if args.candidate_only:
+            required = (
+                args.source_dir, args.source_revision, args.config,
+                args.expected_config_sha256, args.rootfs_result,
+                args.expected_rootfs_bytes, args.expected_debian_digest,
+                args.original_rootfs_manifest, args.candidate_rootfs_manifest,
+                args.candidate_rootfs_dir,
+            )
+            if any(item is None for item in required):
+                die("CANDIDATE_ONLY requires source, config and Debian rootfs identity guards")
+            image_sha, elf_sha, old_image, old_elf = candidate_identity(
+                args.image, args.vmlinux, args.sha256_manifest,
+                source_dir=args.source_dir, source_revision=args.source_revision,
+                config=args.config, config_sha=args.expected_config_sha256,
+                rootfs_result=args.rootfs_result,
+                rootfs_bytes=args.expected_rootfs_bytes,
+                debian_digest=args.expected_debian_digest,
+                original_rootfs_manifest=args.original_rootfs_manifest,
+                candidate_rootfs_manifest=args.candidate_rootfs_manifest,
+                candidate_rootfs_dir=args.candidate_rootfs_dir,
+            )
+            print("PRODUCT_G5_CANDIDATE_IMAGE_UNVERIFIED "
+                  f"candidate_image_sha256={image_sha} original_image_sha256={old_image} "
+                  f"candidate_vmlinux_sha256={elf_sha} original_vmlinux_sha256={old_elf}")
+        else:
+            image_sha, elf_sha = verify_identity(args.image, args.vmlinux, args.sha256_manifest)
+            print(f"PRODUCT_G5_EXACT_IMAGE_PASS image_sha256={image_sha} vmlinux_sha256={elf_sha}")
         fields, pcs, last_printk = parse_frontier(args.boot_log)
-        print(f"PRODUCT_G5_EXACT_IMAGE_PASS image_sha256={image_sha} vmlinux_sha256={elf_sha}")
         print("last_kernel_printk=" + last_printk)
         print("terminal_cycles=" + fields.get("cycles", "<missing>"))
         print("terminal_commits=" + fields.get("commits", "<missing>"))
@@ -170,10 +273,15 @@ def main() -> int:
         # Preserve exception first and the retire range thereafter.
         exception = int(fields["last-exception-pc"], 16)
         retire = sorted({int(pc, 16) for pc in fields["recent-pcs"].split(",")})
-        symbolize(args.vmlinux, args.cross_prefix, [exception, *retire])
-        print("PRODUCT_G5_EXACT_PC_SYMBOLIZATION_PASS")
+        symbolize(args.vmlinux, args.cross_prefix, [exception, *retire],
+                  candidate_only=args.candidate_only)
+        if args.candidate_only:
+            print("PRODUCT_G5_CANDIDATE_PC_SYMBOLIZATION_UNVERIFIED no_exact_image_claim=1")
+        else:
+            print("PRODUCT_G5_EXACT_PC_SYMBOLIZATION_PASS")
     except ValueError as exc:
-        print("PRODUCT_G5_EXACT_PC_SYMBOLIZATION_FAIL: " + str(exc), file=sys.stderr)
+        kind = "CANDIDATE_ONLY_UNVERIFIED" if args.candidate_only else "EXACT"
+        print(f"PRODUCT_G5_{kind}_PC_SYMBOLIZATION_FAIL: " + str(exc), file=sys.stderr)
         return 1
     return 0
 

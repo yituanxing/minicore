@@ -1,18 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Product OpenSBI GSIM: reuse PA32 pinned GSIM generator + same-cycle RAM bridge.
-# Builds ONE generated Product model, shared by G3 and any later Linux prefix.
+# Product GSIM generator/native bridge. Default is the historically qualified
+# G3 IMAC Top. Explicit Product G5 mode builds the *different* RV64GC/LP64D
+# Debian RAM Top with the same memory transport implementation, but separate
+# generated outputs, identity, and verification gates. Never claim G3=A/B G5.
 # It never downloads/builds Debian or runs a guest by itself.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 REV=45a73d6afb9b1893781cfb57ccd54096987bb23d
 GSIM_URL=https://github.com/OpenXiangShan/gsim.git
-OUT="${PRODUCT_GSIM_OUT:-$ROOT/build/product-gsim-bridge}"
+DEBIAN_MODE="${PRODUCT_GSIM_DEBIAN_MODE:-0}"
+case "$DEBIAN_MODE" in
+  0)
+    OUT="${PRODUCT_GSIM_OUT:-$ROOT/build/product-gsim-bridge}"
+    MODEL_TOP=AetherCoreProductOpenSbiRV64SimTop
+    ELABORATOR=aethercore.sim.ElaborateProductOpenSbiRV64GSIMCHIRRTL
+    BIN_NAME=product-gsim-prefix
+    NATIVE_DEFINES=()
+    ;;
+  1)
+    OUT="${PRODUCT_GSIM_OUT:-$ROOT/build/product-gsim-debian-bridge}"
+    MODEL_TOP=AetherCoreProductDebianRV64SimTop
+    ELABORATOR=aethercore.sim.ElaborateProductDebianRV64GSIMCHIRRTL
+    BIN_NAME=product-gsim-debian-prefix
+    NATIVE_DEFINES=(-DAETHERCORE_PRODUCT_GSIM_DEBIAN)
+    ;;
+  *) echo 'PRODUCT_GSIM_DEBIAN_MODE must be 0 or 1' >&2; exit 2 ;;
+esac
 SRC="${PRODUCT_GSIM_SOURCE_CACHE:-$HOME/.cache/aethercore/gsim/product-$REV}"
 FIR="$OUT/product.fir"
 GENERATED="$OUT/generated"
-BIN="$OUT/product-gsim-prefix"
+BIN="$OUT/$BIN_NAME"
 SIZE="${GSIM_SUPERNODE_MAX_SIZE:-35}"
 OPT="${GSIM_PREFIX_OPT:--O3}"
 JOBS="${JOBS:-4}"
@@ -20,7 +39,7 @@ JOBS="${JOBS:-4}"
 case "$OPT" in -O0|-O1|-O2|-O3) ;; *) echo 'Unsupported GSIM native optimization' >&2; exit 2 ;; esac
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] && (( JOBS <= 16 )) || exit 2
 [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" && -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || {
-  echo 'Product G3 GSIM refuses Debian SDHC/DTB media' >&2; exit 2;
+  echo 'Product GSIM RAM adapter refuses SD1 media/independent DTB (card bridge not qualified)' >&2; exit 2;
 }
 command -v clang++-19 >/dev/null || { echo 'clang++-19 required' >&2; exit 2; }
 [[ -f "$ROOT/sim/product_gsim_prefix_main.cpp" && -f "$ROOT/sim/product_gsim_port_adapter.h" ]] || {
@@ -30,9 +49,9 @@ command -v clang++-19 >/dev/null || { echo 'clang++-19 required' >&2; exit 2; }
 mkdir -p "$OUT" "$(dirname "$SRC")"
 chmod +x "$ROOT/mill"
 
-# Chisel/Product firrtl is itself the model identity. The GSIM Product
-# emitter is dedicated to this real Product OpenSBI top, not PA32 or Debian.
-./mill aethercore.runMain aethercore.sim.ElaborateProductOpenSbiRV64GSIMCHIRRTL "$FIR" \
+# Chisel/Product FIRRTL is itself the model identity. The G5 opt-in exporter
+# uses the real Debian F/D/LP64D top; the G3 default remains byte-identical.
+./mill aethercore.runMain "$ELABORATOR" "$FIR" \
   > "$OUT/chirrtl-export.log" 2>&1 || { tail -80 "$OUT/chirrtl-export.log" >&2; exit 3; }
 [[ -s "$FIR" ]] || { echo 'GSIM Product FIRRTL emission missing' >&2; exit 3; }
 
@@ -87,7 +106,7 @@ if [[ ! -s "$GENERATED/.aethercore-product-generator-id" || "$(< "$GENERATED/.ae
   timeout --signal=TERM --kill-after=10s 1800s \
     "$SRC/build/gsim/gsim" --supernode-max-size="$SIZE" --dir "$candidate" --log-level=1 "$FIR" \
     > "$OUT/gsim-compile.log" 2>&1 || { tail -100 "$OUT/gsim-compile.log" >&2; exit 6; }
-  [[ -s "$candidate/AetherCoreProductOpenSbiRV64SimTop.h" ]] || {
+  [[ -s "$candidate/$MODEL_TOP.h" ]] || {
     echo 'GSIM candidate missing real Product top before cache publication' >&2; exit 6;
   }
   printf '%s\n' "$GEN_ID" > "$candidate/.aethercore-product-generator-id"
@@ -105,22 +124,34 @@ if [[ ! -s "$GENERATED/.aethercore-product-generator-id" || "$(< "$GENERATED/.ae
   # has already replaced; no source files, firmware or evidence are touched.
   [[ -z "${retired:-}" ]] || rm -r -- "$retired"
 fi
-[[ -s "$GENERATED/AetherCoreProductOpenSbiRV64SimTop.h" ]] || {
+[[ -s "$GENERATED/$MODEL_TOP.h" ]] || {
   echo 'GSIM Product top header missing: generator/port name mismatch' >&2; exit 6;
 }
 native_inputs=("$ROOT/sim/product_gsim_prefix_main.cpp" "$ROOT/sim/product_gsim_port_adapter.h" "$ROOT/sim/l32_opensbi_runtime.h")
-NATIVE_ID="$(printf '%s\n' "$GEN_ID" "$OPT" "$(clang++-19 --version | head -1)" "$(sha256sum "${native_inputs[@]}" | sha256sum | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+if [[ "$DEBIAN_MODE" == 0 ]]; then
+  # Keep the historical G3 cache identity format exactly; the extra G5
+  # selector must never force recompilation of an already-qualified G3 binary.
+  NATIVE_ID="$(printf '%s\n' "$GEN_ID" "$OPT" "$(clang++-19 --version | head -1)" "$(sha256sum "${native_inputs[@]}" | sha256sum | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+else
+  NATIVE_ID="$(printf '%s\n' "$GEN_ID" "$OPT" "$DEBIAN_MODE" "$MODEL_TOP" "$(clang++-19 --version | head -1)" "$(sha256sum "${native_inputs[@]}" | sha256sum | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+fi
 if [[ ! -x "$BIN" || ! -s "$OUT/product-gsim-native-id" || "$(< "$OUT/product-gsim-native-id")" != "$NATIVE_ID" ]]; then
   timeout --signal=TERM --kill-after=10s 2400s \
     clang++-19 -std=gnu++20 "$OPT" -march=native \
-    -DAETHERCORE_PRODUCT_GSIM_HOST_BRIDGE \
+    -DAETHERCORE_PRODUCT_GSIM_HOST_BRIDGE "${NATIVE_DEFINES[@]}" \
     -I"$GENERATED" -I"$ROOT/sim" "$GENERATED/"*.cpp \
     "$ROOT/sim/product_gsim_prefix_main.cpp" -pthread -lz -o "$BIN" \
     > "$OUT/native-build.log" 2>&1 || { tail -100 "$OUT/native-build.log" >&2; exit 7; }
   printf '%s\n' "$NATIVE_ID" > "$OUT/product-gsim-native-id"
 fi
 [[ -x "$BIN" ]] || exit 7
-printf 'gsim_revision=%s\nfir_sha256=%s\npatch_sha256=%s\ngenerator_sha256=%s\ngenerator_id=%s\nnative_id=%s\nmodel_sha256=%s\n' \
-  "$REV" "$FIR_SHA" "$GSIM_PATCH_SHA" "$COMPILER_SHA" "$GEN_ID" "$NATIVE_ID" \
-  "$(sha256sum "$BIN" | awk '{print $1}')" > "$OUT/build-identity.txt"
+if [[ "$DEBIAN_MODE" == 0 ]]; then
+  printf 'gsim_revision=%s\nfir_sha256=%s\npatch_sha256=%s\ngenerator_sha256=%s\ngenerator_id=%s\nnative_id=%s\nmodel_sha256=%s\n' \
+    "$REV" "$FIR_SHA" "$GSIM_PATCH_SHA" "$COMPILER_SHA" "$GEN_ID" "$NATIVE_ID" \
+    "$(sha256sum "$BIN" | awk '{print $1}')" > "$OUT/build-identity.txt"
+else
+  printf 'gsim_revision=%s\ntop=%s\ndebian_mode=%s\nfir_sha256=%s\npatch_sha256=%s\ngenerator_sha256=%s\ngenerator_id=%s\nnative_id=%s\nmodel_sha256=%s\n' \
+    "$REV" "$MODEL_TOP" "$DEBIAN_MODE" "$FIR_SHA" "$GSIM_PATCH_SHA" "$COMPILER_SHA" "$GEN_ID" "$NATIVE_ID" \
+    "$(sha256sum "$BIN" | awk '{print $1}')" > "$OUT/build-identity.txt"
+fi
 echo "PRODUCT_GSIM_MODEL_READY path=$BIN generator_id=$GEN_ID native_id=$NATIVE_ID"
