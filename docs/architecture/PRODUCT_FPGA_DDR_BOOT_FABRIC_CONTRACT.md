@@ -1,10 +1,12 @@
 # Product RV64GC FPGA external-DDR ownership contract (G5-SD1)
 
 Status: **implemented RTL interface, not an FPGA or Debian boot signoff**. The
-board-specific PLL, DDR PHY/controller, firmware byte-source transport, pin
-constraints, SD wiring and rootfs have not been delivered or qualified by this
-source tree. The bounded FW+DTB byte-stream-to-AXI write engine **is** present,
-but does not provide its own flash/SD reader or byte source.
+board-specific PLL, DDR PHY/controller, pin constraints and SD wiring have
+not been delivered or qualified by this source tree. The bounded FW+DTB
+byte-stream-to-AXI write engine **is** present. A separately named Product
+FPGA UART-to-DDR shell now also implements a CRC/credit-checked physical UART
+firmware byte source, but neither shell contains a board-specific DDR PHY or
+guarantees a mounted rootfs.
 
 ## Why the board needs one physical DDR AXI master
 
@@ -63,8 +65,9 @@ silently remap addresses or data width.
    ready/valid handshakes and bounds both address ranges, rejects malformed
    segments, and converts the final
    partial word into its exact AXI WSTRB mask. The board source still must
-   prove the payload identity/hash and provide the bytes. There is no
-   SD/flash/UART-reader implementation in this hardware.
+   prove the payload identity/hash and provide the bytes. The stream-only
+   shell has no byte source; the separate `AetherCoreProductFpgaUartDdrBoard`
+   supplies one over UART. Neither adds a flash or SD firmware reader.
 4. The optional stream engine waits for the final DTB **B response with OKAY
    status and the expected ID**, then asserts its `imageLoaded` and
    `loaderIdle` together. The mux separately observes its own outstanding
@@ -95,7 +98,7 @@ to the implementation, and both keep the existing ColdBootPins ABI intact.
 
 This is an *emission example*, not evidence that the command was run. The
 same CPU source supports `expanded` single-lane geometry. A matching device
-tree must be generated with `EmitAetherSoCDts --spi-sd`, with the actual board
+tree must be generated with `EmitAetherSoCDts --product --spi-sd`, with the actual board
 clock and SPI limits reflected in the SPI node's `clock-frequency`.
 
 ## Persistent Linux rootfs belongs on SD, not in the boot payload

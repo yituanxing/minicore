@@ -1,0 +1,183 @@
+name: AetherCore Product G3 persistent cross-process checkpoint short
+
+# Opt-in G3 RAM-only qualification. Never cold-run Linux/SD1/Debian here.
+# 1 genuine OpenSBI v1.6 UART boot + 2 x 500k same-model post-save cycles.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-g3-persistent-short-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  persistent-g3-short:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'product-g3-persistent-short')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_ALLOW_PRODUCT_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product source and forbid SD1/Debian inputs
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Run cheap host-only negative checkpoint contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}"
+          test -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}"
+          bash -n tools/ci/product_checkpoint_g3_short.sh tools/ci/product_checkpoint_g3_selftest.sh
+          bash tools/ci/product_checkpoint_g3_selftest.sh
+
+      - name: Reuse Mill Scala dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned 5.054 toolchain including savable runtime
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-
+
+      - name: Restore pinned real G3 GCC and OpenSBI source
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g3-fw-v1
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Install Product build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 bison flex \
+            libfl-dev libgmp-dev git curl make zlib1g-dev autoconf cmake \
+            ninja-build libssl-dev libelf-dev libreadline-dev pkg-config \
+            build-essential bc device-tree-compiler dwarves xz-utils
+
+      - name: Fingerprint host native ABI for -march=native model cache
+        id: native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact savable Product G3 model candidate
+        id: savable-model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-g3-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-savable-v2-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_rv64_checkpoint_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_checkpoint_g3_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-savable-v2-${{ steps.native-abi.outputs.signature }}-
+
+      - name: Provision pinned RV64 toolchain for following firmware step
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build signed OpenSBI v1.6 S-mode UART firmware only
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_opensbi_first_exec.sh
+          grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' build/rv64-opensbi-first-exec/result.txt
+          sha256sum --check --status build/rv64-opensbi-first-exec/evidence/sha256.txt
+
+      - name: Build or verify isolated pinned 5.054 --savable Product G3 model
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_checkpoint_g3_short.sh build
+          echo 'Exact standalone --savable Product G3 RAM-only model built/source-validated; NO runtime proof yet.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve verified pinned Verilator 5.054 toolchain before guest run
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Preserve savable Product model before guest replay
+        if: success() && steps.savable-model-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-g3-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g3-savable-v2-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_rv64_checkpoint_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_checkpoint_g3_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+
+      - name: Run one real OpenSBI boot then two distinct processes 500k-cycle replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 900s \
+            bash tools/ci/product_checkpoint_g3_short.sh run |
+            tee build/product-g3-persistent-checkpoint/run-summary.log
+          grep -Fq 'PRODUCT_G3_PERSISTENT_CROSS_PROCESS_PASS ' build/product-g3-persistent-checkpoint/run-summary.log
+          proof_dir="$(sed -n 's/^PRODUCT_G3_PERSISTENT_PROOF_DIR=//p' build/product-g3-persistent-checkpoint/run-summary.log | tail -1)"
+          [[ -n "$proof_dir" && -d "$proof_dir" ]]
+          bash tools/ci/product_checkpoint_g3_short.sh verify-proof "$proof_dir"
+          echo 'G3 REAL cross-process RTL/256MiB DDR/CSR/PLIC/UART deterministic checkpoint PASS; 500k post-restart cycles. This is NOT Linux/SD1/Debian qualification.' >> "$GITHUB_STEP_SUMMARY"
+
+      # DDR checkpoints are 256MiB * 3; never upload them as artifacts.
+      # The source/model-executable SHA identity and finite proof logs remain.
+      - name: Upload only short proof logs and hashes, NOT DDR/RTL images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g3-persistent-short-evidence
+          if-no-files-found: warn
+          path: |
+            build/product-g3-persistent-checkpoint/run-summary.log
+            build/product-g3-persistent-checkpoint/logs/*.log
+            build/product-g3-persistent-checkpoint/persist-G3.*/qualification.txt
+            build/product-g3-persistent-checkpoint/persist-G3.*/sha256.txt
+            build/product-g3-persistent-checkpoint/persist-G3.*/.complete
+            build/product-g3-persistent-checkpoint/persist-G3.*/save.log
+            build/product-g3-persistent-checkpoint/persist-G3.*/restore.log

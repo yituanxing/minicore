@@ -156,7 +156,7 @@ FPU 单精度/双精度模块、三读口 FP PRF 对 LUT、FF、BRAM、Fmax 的�
 ### 仿真加速当前可用性（软件源码审计口径）
 
 - **已接入待核验**：`product_sim_cache.sh` 按 RTL/生成器、宿主编译器、编译选项与运行时头文件指纹复用同一 Product 仿真二进制；Product G3 与 G4 的相同 OpenSBI Top 采用相同 `-O3 -march=native` 构建身份和 GitHub Actions 缓存键（命中受 CI 缓存作用域限制）；`product_sim_ab.sh` 已包含真实 SPI-SD、独立 DTB 与固件一致的 SD1 Top 三档短窗口差分，`product_sim_sd1_manual.sh` 为加速配置设置按源码/工具/介质/差分结果身份匹配的手动晋级门禁。以上均仅做源码实现，未运行、未发放 Product 资格。
-- **历史加速不直接继承**：历史 PA32/V2 路线有 GSIM 对 Verilator 的 Linux PID1 约 1.42692×、Adaptive Settle 约 13%–20% 的同工况测量，以及 forkserver 对重复工作负载的收益；Product SD1 并无对应当轮差分证明。GSIM 实现仍在独立 PR #378，当前 Product 分支没有可直接调用的 GSIM 生成/运行入口，不应假装已接入。
+- **历史加速不直接继承**：历史 PA32/V2 路线有 GSIM 对 Verilator 的 Linux PID1 约 1.42692×、Adaptive Settle 约 13%–20% 的同工况测量，以及 forkserver 对重复工作负载的收益；Product SD1 并无对应当轮差分证明。此段最初记录时 GSIM 仍在独立 PR #378，**当前 Product 分支已合入 `product_gsim_build.sh`、`product_gsim_g3_ab.sh`、`product_gsim_g4_early.sh` 与独立手动 CI**；这仅改变“代码可调用”的状态，不把旧 V2 测速或新 G3/G4 有界前缀冒充 SD1/Debian 加速资格。
 - **已有历史实现但不等于 Product 快照**：`l32_opensbi_runtime.h` 可以复制主机 256MiB RAM 和 LR/SC reservation；`opensbi_forkserver_main.cpp` 在旧 L32 登录后通过进程 `fork` 复用内存和 RTL 的运行态。这不能作为 Product SD1 固件→Debian 登录的持久可恢复快照，也不能跳过新镜像的一次真实启动。
 - **尚未实现**：Product 的完整可恢复检查点必须同时保存同一时刻的 RTL/VerilatedContext、主机 RAM 与 LR/SC、TransportRuntimeState、串口/中断/时间、SPI SD 卡读写会话与 COW 等状态，并把所有对应模型、固件、DTB、SD 镜像指纹绑定到快照；此状态合同未完成，禁止把仅有 RAM 的快照标注为可恢复。
 - **QEMU 状态导入不是现成加速**：QEMU 的架构寄存器/CSR/内存快照无法自动重建 Product 的 RAT、ROB、LSQ、TLB、AXI 在途事务。只有设计并验证一个清空全部在途微架构工作、可注入架构状态和设备状态的交接边界，且经过差分校验，才可称为接力热启动；目前不把它用于下一次长跑。
@@ -178,6 +178,32 @@ AETHERCORE_ALLOW_PRODUCT_PID1_EARLY=1 bash tools/ci/product_sim_pid1_ab.sh early
 AETHERCORE_ALLOW_PRODUCT_PID1_LONGRUN=1 bash tools/ci/product_sim_pid1_ab.sh selected-pid1
 ```
 
-三个脚本都由操作员显式触发，**不属于 PR 常规 CI**，不会自行运行 Debian、重建 G4 第二份模拟器或跳过指纹/固件核验。当前只完成了源码接入与静态检查，所在临时工作容器没有两套预构建固件、Verilator 或 RTL 仿真产物，因此没有 Product G3/G4 新性能数据，也没有发放资格凭据。待 G3/G4 真正跑过并择优后，才能用新选配置开始 SD1 SPI/DTB 路径自身的短程验证，最终进入 Debian。
+三个脚本都由操作员显式触发，**不属于 PR 常规 CI**，不会自行运行 Debian、重建 G4 第二份模拟器或跳过指纹/固件核验。此段所列三档 **Verilator G4 PID1 择优链**仍需逐项运行，不能用独立的 GSIM G3/G4 短证据替代；2026-11-05 已有 GSIM G3/G4 与 SD1 transport 的真实短程测量，详见下方当前凭证。最终 Debian 长程验证依然未完成。
 
-默认安全配置仍为 **5.024/reference**。GSIM 是来自旧 PA32/V2 的独立候选后端（PR #378），不能与 Verilator 版本/Adaptive 的收益相乘，也不能不经 Product G3/G4 专属移植与差分就直接选为胜者。
+原正式长程默认安全配置仍为 **5.024/reference**（未按短测自动变更）。GSIM 源于旧 PA32/V2 候选后端（最初独立于 PR #378，现已有 Product 移植源码），不能与 Verilator 版本/Adaptive 的收益相乘；G3 的严格短同态、G4 的 GSIM-only Linux 前缀及 G4 Verilator 对照具有不同资格边界，任何一个都不能单独把 GSIM 选为 SD1 或 Debian 的获胜引擎。
+
+## 11. 顶层配置与发行版剩余关口快照（2026-11-05，源码基线 `6b453ab`）
+
+本节校正上文历史阶段记录，并附 2026-11-05 **已完成的短程实测**；它们不授予 PID1、SD1 Debian 或 FPGA 产品运行资格。具体状态以原始 CI run ID、镜像 SHA、主机模型指纹和日志为准；缺少这些记录就只能写“已接线/待验”。
+
+| 已完成短程门禁 | 同轮实测与资格边界 |
+| --- | --- |
+| [GSIM G3/G4 #41993449022](https://github.com/yituanxing/minicore/actions/runs/41993449022) | G3 3000 万周期 GSIM/Verilator 严格差分及 fork-COW PASS；同 GSIM 严格 29.183919s、fast 28.681202s，fast 仅 **1.018×**；G4 1 亿真实 Linux 周期 **143.443074s**，Linux banner PASS、无 PID1；完整 CI **9m04s**，G4 initramfs Image 缓存 HIT。 |
+| [SD1 transport #41993431855](https://github.com/yituanxing/minicore/actions/runs/41993431855) | 1200 万周期 Product SPI/PLIC11/CMD17 三档终态一致；5.024/reference 228597cps，5.054/reference 326495cps（**1.4283×**），5.054/adaptive 322702cps（相对 reference **0.9884×**）；非 Linux/SD rootfs。 |
+| [SD1 pin-level RTL #41993431848](https://github.com/yituanxing/minicore/actions/runs/41993431848) | SPI/GPIO/PLIC 定点短门禁 PASS，非实卡和非 Linux。 |
+
+| 独立配置轴 | 已接线或已实现 | 仍不可推导的能力 |
+| --- | --- | --- |
+| ISA/ABI | `ProductCoreProfiles.smallCompressedEngineering` 是 RV64IMAC/LP64，F/D 关闭；显式 `smallOpenSbiDistroTarget` 请求 RV64GC/LP64D，在同一核开启 FPR、HardFloat、FCSR/FS 路径。CPU decode 与 `misa` 由所选软件 ISA 驱动。 | **可描述 ISA** 与 **当次启用的硬件** 不等价；FP 数值正确性、S/U 上下文切换和 Debian LP64D 运行仍须单独证明。 |
+| 几何 | `smallGeometry` ROB8/IQ4/XPR48，`expandedSingleLaneGeometry` ROB16/IQ8/XPR64；两者均为 decode/dispatch/issue/retire **1/1/1/1**，有同一 Product RTL 构造路径。 | Medium/Large 虽有配置记录，但多发射/多退休后端未实现；`rtlElaboratable` 与 PagedCore 的 `require` 会拒绝，不是可发布产品。 |
+| SoC/外设 | 工程默认 RAM-only；SD1 显式选择 `persistentSpiSd`，Product PLIC52、SPI IRQ11、DDR 物理地址到本地零基址映射、双段 FW+DTB loader、UART CRC/credit FW 来源均有源码实现。 | 不能把 RAM-only 顶层或 legacy PLIC16 DTS 作为 SD1；`EmitAetherSoCDts --spi-sd` 必须同时指定 `--product`。FPGA DDR PHY/PLL/板级引脚和时序仍需真实器件。 |
+| 资源 | Small/Expanded、F-off/F-on 的面积代理和 pin-only RTL 顶层有显式 opt-in PPA 工作流。 | `synth_ecp5` 面积/逻辑深度不等于确定板卡的 Place & Route Fmax、BRAM/DDR 资源或功耗报告。 |
+
+**不同运行关口不能互相替代：**
+
+1. **G3 仿真迁移/加速**：`product-gsim-g3-short-ab`、`product-gsim-g3-ab` 用真实 OpenSBI/UART、固定 3000 万周期和 Product GSIM/Verilator 相同周期状态比对；`product_gsim_fast_ab.sh` 仅证明快模式与严格模式的终态，不证明完整周期对等。
+2. **G4 Linux**：`product-gsim-g4-early` 和 `product_gsim_g4_early.sh` 仅最多 1 亿常规周期的 Linux banner 前缀，明确非 PID1、非 Verilator Linux 同态；`product-g4-early-ab` 是另一套 Verilator 有界对比；完整 G4 PID1 由人工选定 `product-g4-pid1-ab`，最多 12 亿周期，仍非 Debian。
+3. **G5 D1/D2/D3**：`.github/workflows/product-g5-debian-rv64gc.yml` 仅手动 dispatch 或明确 `product-g5-longrun` PR label；label 无输入时限定 D2、5.024/reference，D3 需要原生完整 Debian 供应商 URL+SHA，且现阶段用 initramfs。QEMU 用户态 oracle 仅提前拦截坏二进制，不能替代真实 Product RTL 执行。没有相应 run ID、日志和 `D1/D2/D3` marker 就算未过。
+4. **G5-SD1 持久根**：`.github/workflows/product-sd1-peripheral-short-gate.yml` 与 `product-sd1-transport-short-ab.yml` 仅证明 SPI/GPIO/事务/短模拟门禁；`rv64_debian_sd1_official_full_rootfs_prepare.sh`、`rv64_debian_sd1_sd_image_build.sh`、`rv64_debian_linux_build.sh`、`rv64_debian_payload_build.sh` 提供带来源哈希的离线全 Debian/ext4、无 initramfs 内核和 FW+DTB 构建路径。**真实 RTL 从 SD 卡识别、Linux `mmcblk0p1` 挂载、原生 `init`、getty/login、apt/dpkg、持久文件跨重启均待一条完整同镜像证明链**；D3 的 initramfs `login:` 不能代替它。
+
+上述关口均为人工触发/显式 label；源码推送不应自动排队昂贵 G4 PID1、G5 Debian 或 SD1 长跑。完整发行版最终仍受硬件/软件两个不同边界限制：软件侧要有 SPI/MMC/ext4/PLIC/DDR/Linux 用户态的真实运行迹线，板级侧要在选定具体 FPGA 和接线后提供 DDR 校准、SPI 电气、时钟域和布局布线证明。

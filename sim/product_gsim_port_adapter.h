@@ -82,6 +82,40 @@ class Ports {
     };
   }
 
+  // GSIM G4 unqualified-only transport: read three validity bits first, then
+  // only the addresses and payloads consumed by the real host RAM callback.
+  // No host wait state, ready/valid, fault or store acceptance is changed.
+  // Strict G3 same-cycle qualification keeps request() above verbatim.
+  Request requestFastUnqualified() const {
+    Request result{};
+    result.imemValid = static_cast<bool>(model_.get_io$$imemValid());
+    result.memValid = static_cast<bool>(model_.get_io$$memValid());
+    result.ptwValid = static_cast<bool>(model_.get_io$$ptwValid());
+    if (result.imemValid) {
+      result.imemAddr = static_cast<std::uint64_t>(model_.get_io$$imemAddr());
+      result.imemBytes = static_cast<std::uint8_t>(model_.get_io$$imemBytes());
+    }
+    if (result.memValid) {
+      result.memWrite = static_cast<bool>(model_.get_io$$memWrite());
+      result.memAtomic = static_cast<bool>(model_.get_io$$memAtomic());
+      result.memAddr = static_cast<std::uint64_t>(model_.get_io$$memAddr());
+      result.memSize = static_cast<std::uint8_t>(model_.get_io$$memSize());
+      // memOp is never consumed by readResponses/commitAcceptedMemory;
+      // atomicOp and write data matter only for their corresponding requests.
+      if (result.memAtomic) {
+        result.memAtomicOp = static_cast<std::uint8_t>(model_.get_io$$memAtomicOp());
+      }
+      if (result.memWrite || result.memAtomic) {
+        result.memWdata = static_cast<std::uint64_t>(model_.get_io$$memWdata());
+        result.memWmask = static_cast<std::uint8_t>(model_.get_io$$memWmask());
+      }
+    }
+    if (result.ptwValid) {
+      result.ptwAddr = static_cast<std::uint64_t>(model_.get_io$$ptwAddr());
+    }
+    return result;
+  }
+
   void respond(const Response& response) {
     model_.set_io$$imemInst(response.imemInst);
     model_.set_io$$imemFault(response.imemFault ? 1 : 0);

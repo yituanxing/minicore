@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """No-guest negative checks for strict/fast G3 functional-state comparison."""
 
-from product_gsim_fast_ab import DETAIL_FIELDS, TERMINAL_FIELDS, compare_functional
+from product_gsim_fast_ab import (DETAIL_FIELDS, TERMINAL_FIELDS,
+                                  bridge_getter_budget, compare_functional)
 
 
 def reject(fn, needle: str) -> None:
@@ -24,6 +25,9 @@ def main() -> None:
     fast_detail = dict(detail, trace_mode="fast-g4-unqualified",
                        commit_digest="OMITTED", wire_digest="OMITTED")
     compare_functional(terminal, terminal, strict_detail, fast_detail, 30000000)
+    assert bridge_getter_budget(strict_detail, 30000000) == (4000, 56000, 16000, 16000)
+    reject(lambda: bridge_getter_budget({**strict_detail, "host_imem_calls": "4001"}, 30000000),
+           "invalid Product host callback/getter budget counters")
     reject(lambda: compare_functional(terminal, terminal, strict_detail,
                                       {**fast_detail, "trace_mode": "strict-same-cycle"}, 30000000),
            "fast-g4-unqualified")
@@ -42,7 +46,7 @@ def main() -> None:
     reject(lambda: compare_functional(terminal, terminal,
                                       {**strict_detail, "trace_mode": "fast-g4-unqualified"},
                                       fast_detail, 30000000), "strict-same-cycle")
-    print("PRODUCT_GSIM_FAST_AB_SELFTEST_PASS positive=1 negatives=6 guest_cycles=0")
+    print("PRODUCT_GSIM_FAST_AB_SELFTEST_PASS positive=2 negatives=7 guest_cycles=0")
 
 
 if __name__ == "__main__":

@@ -266,6 +266,8 @@ jobs:
           AETHERCORE_ALLOW_PRODUCT_GSIM_FAST_AB: '1'
         run: |
           set -euo pipefail
+          python3 tools/ci/product_gsim_fast_ab_selftest.py
+          bash tools/ci/product_gsim_sparse_request_selftest.sh
           bash tools/ci/product_gsim_fast_ab.sh preflight
           bash tools/ci/product_gsim_fast_ab.sh run
           grep -Fxq 'qualification=PRODUCT_GSIM_FAST_AB_FUNCTIONAL_STATE_MATCH_NOT_G4_VERILATOR_AB_NOT_PID1' \

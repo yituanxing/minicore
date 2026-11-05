@@ -81,6 +81,7 @@ void commitAcceptedMemory(const Request& request, const Response& response,
 struct HostBridgeContext {
   Ports* ports;
   const Memory* memory;
+  bool fastUnqualified;
   std::uint64_t calls = 0;
   std::uint64_t validFetchCalls = 0;
   std::uint64_t validDataCalls = 0;
@@ -93,7 +94,8 @@ struct HostBridgeContext {
 // combinational protocol.
 void hostBridge(void* opaque) {
   auto& context = *static_cast<HostBridgeContext*>(opaque);
-  const Request request = context.ports->request();
+  const Request request = context.fastUnqualified
+      ? context.ports->requestFastUnqualified() : context.ports->request();
   context.ports->respond(readResponses(request, *context.memory));
   ++context.calls;
   context.validFetchCalls += request.imemValid;
@@ -166,7 +168,7 @@ int main(int argc, char** argv) {
 
     auto model = std::make_unique<Model>();
     Ports ports(*model);
-    HostBridgeContext bridge{&ports, &memory};
+    HostBridgeContext bridge{&ports, &memory, fastUnqualified};
     model->productHostBridge = &hostBridge;
     model->productHostContext = &bridge;
     ports.clock(true);
@@ -195,7 +197,8 @@ int main(int argc, char** argv) {
       ports.reset(reset);
       // Observe the settled previous low phase, apply its accepted host-side
       // write once, then compute the next hardware tick with the bridge active.
-      const Request request = ports.request();
+      const Request request = fastUnqualified
+          ? ports.requestFastUnqualified() : ports.request();
       const Response response = readResponses(request, memory);
       ports.respond(response);
       commitAcceptedMemory(request, response, memory, reset);

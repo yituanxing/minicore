@@ -1,0 +1,279 @@
+name: AetherCore Product GSIM G4 board-lean 40M early boot gate
+
+# Explicitly opt-in: label the Product PR with product-gsim-g4-lean after the
+# qualified G4 Linux/GSIM caches exist. Never run on push, ordinary PR changes,
+# Debian/SD1 labels, or a scheduled timer. This is a new *fast diagnostic*
+# image, not the frozen defconfig or a full PID1/distribution qualification.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-gsim-g4-board-lean-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name || github.event_name }}
+  # An unrelated PR label creates a skipped workflow but must never cancel
+  # a real Product board-lean short run already consuming a warm model cache.
+  cancel-in-progress: false
+
+jobs:
+  product-board-lean-short:
+    name: Warm qualified Linux Kbuild and real Product GSIM 40M early UART
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-gsim-g4-lean')
+    runs-on: ubuntu-24.04
+    # The full cold Product/Linux bring-up is explicitly forbidden here. If
+    # warm caches still cannot finish in 35m, report the slow path as a gate
+    # failure instead of silently spending another 60–90 minutes.
+    timeout-minutes: 35
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+      GSIM_PREFIX_OPT: '-O3'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product commit and freeze warm-only scope
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Reject Debian/SD1 and prove opt-in selected the intended SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 3
+          bash tools/ci/product_gsim_g4_board_lean_selftest.sh
+          echo 'PRODUCT_BOARD_LEAN_CI_SCOPE: exact Product source, RAM-only 40M, Linux banner observational until first-cycle milestone proven; no Debian/PID1 claim'
+
+      - name: Restore Scala/Mill dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned RV64 GCC and OpenSBI source
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g3-fw-v1
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore FULL qualified Linux source and Kbuild objects
+        id: linux-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore only qualified frozen G4 sparse initramfs bytes
+        id: initramfs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-linux-initramfs/obj/arch/riscv/boot/Image
+            build/rv64-linux-initramfs/obj/vmlinux
+            build/rv64-linux-initramfs/obj/.config
+            build/rv64-linux-initramfs/minimal-init/init
+            build/rv64-linux-initramfs/minimal-init/initramfs.list
+            build/rv64-linux-initramfs/evidence
+            build/rv64-linux-initramfs/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-minimal-initramfs-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Reject cold Linux sources or a sparse-only false object-cache hit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.linux-cache.outputs.cache-hit }}' == true ]] || {
+            echo 'PRODUCT_BOARD_LEAN_WARM_CACHE_REQUIRED: full baseline Linux source/Kbuild cache missing; bootstrap with regular G4 first' >&2
+            exit 16
+          }
+          [[ '${{ steps.initramfs-cache.outputs.cache-hit }}' == true ]] || {
+            echo 'PRODUCT_BOARD_LEAN_WARM_CACHE_REQUIRED: qualified frozen G4 initramfs Image/PID1 cache missing; bootstrap with regular G4 first' >&2
+            exit 16
+          }
+          echo 'PRODUCT_BOARD_LEAN_WARM_INPUTS_READY: both immutable caches restored; qualified object count verified by board-lean builder'
+
+      - name: Restore pinned GSIM frontend/compiler sources
+        id: gsim-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Install real source-build and native GSIM prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make \
+            zlib1g-dev autoconf cmake ninja-build libssl-dev libelf-dev \
+            libreadline-dev pkg-config build-essential bc device-tree-compiler \
+            dwarves xz-utils
+          bash -n tools/ci/product_gsim_build.sh tools/ci/rv64_board_lean_linux_build.sh
+
+      - name: Freeze host CPU and clang ABI for native GSIM cache reuse
+        id: native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(clang++-19 --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore identical Product native GSIM model under exact host ABI
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-
+
+      - name: Restore sparse byte-verified board-lean Image and OpenSBI outputs
+        id: lean-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-linux-board-lean/obj/arch/riscv/boot/Image
+            build/rv64-linux-board-lean/obj/vmlinux
+            build/rv64-linux-board-lean/obj/.config
+            build/rv64-linux-board-lean/evidence
+            build/rv64-linux-board-lean/result.txt
+          # Kernel is source/config/initramfs-specific, not Chisel-specific.
+          # RTL changes may invalidate the model/DTB but not this Linux Image.
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-board-lean-kernel-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ci/rv64_board_lean_linux_build.sh') }}
+
+      - name: Restore lean firmware bytes with exact RTL/DTB identity
+        id: lean-payload-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-board-lean-payload/opensbi/platform/generic/firmware/fw_payload.elf
+            build/rv64-board-lean-payload/opensbi/platform/generic/firmware/fw_payload.bin
+            build/rv64-board-lean-payload/aethercore-rv64-initramfs.dtb
+            build/rv64-board-lean-payload/aethersoc-v0-initramfs.dts
+            build/rv64-board-lean-payload/evidence
+            build/rv64-board-lean-payload/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-board-lean-payload-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ci/rv64_board_lean_linux_build.sh', 'build.mill', 'src/main/scala/**/*.scala') }}
+
+      - name: Provision pinned RV64 GCC in the following step environment
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Requalify FULL frozen Linux baseline and build isolated lean firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The base builder would delete a non-qualified cache and rebuild
+          # Linux from scratch. Reject it BEFORE invoking that code path.
+          bash tools/ci/rv64_board_lean_linux_warm_guard.sh
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_board_lean_linux_build.sh build
+          grep -Fxq 'RV64_BOARD_LEAN_LINUX_BUILD_RESULT: status=PASS' build/rv64-linux-board-lean/result.txt
+          grep -Fxq 'RV64_BOARD_LEAN_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-board-lean-payload/result.txt
+          echo 'PRODUCT_BOARD_LEAN_IMAGE_READY: proven full Kbuild object seed, resolved Kconfig and exact Linux/OpenSBI image hashes' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Revalidate or build exact real Product native GSIM model
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_build.sh
+          test -x build/product-gsim-bridge/product-gsim-prefix
+          echo 'PRODUCT_BOARD_LEAN_MODEL_READY: GSIM model generated from the exact Product Chisel sources; no claim of G3/G4 strict A/B' >> "$GITHUB_STEP_SUMMARY"
+
+      # Cache BEFORE guest run: an actual RTL fault must not waste previously
+      # compiled native model and kernel outputs on the next diagnostic pass.
+      - name: Save pinned GSIM frontend before bounded runtime
+        if: success() && steps.gsim-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Save verified Product native GSIM model before bounded runtime
+        if: success() && steps.native-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+
+      - name: Save only lean Image/vmlinux/config and firmware bytes for next warm run
+        if: success() && steps.lean-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-linux-board-lean/obj/arch/riscv/boot/Image
+            build/rv64-linux-board-lean/obj/vmlinux
+            build/rv64-linux-board-lean/obj/.config
+            build/rv64-linux-board-lean/evidence
+            build/rv64-linux-board-lean/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-board-lean-kernel-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ci/rv64_board_lean_linux_build.sh') }}
+
+      - name: Save only exact OpenSBI firmware and generated DTB bytes
+        if: success() && steps.lean-payload-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-board-lean-payload/opensbi/platform/generic/firmware/fw_payload.elf
+            build/rv64-board-lean-payload/opensbi/platform/generic/firmware/fw_payload.bin
+            build/rv64-board-lean-payload/aethercore-rv64-initramfs.dtb
+            build/rv64-board-lean-payload/aethersoc-v0-initramfs.dts
+            build/rv64-board-lean-payload/evidence
+            build/rv64-board-lean-payload/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-board-lean-payload-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ci/rv64_board_lean_linux_build.sh', 'build.mill', 'src/main/scala/**/*.scala') }}
+
+      - name: Run exactly 40M Product GSIM OpenSBI/Linux prefix cycles, max 180 seconds
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_GSIM_BOARD_LEAN: '1'
+          AETHERCORE_PRODUCT_GSIM_BOARD_LEAN_CYCLES: '40000000'
+          AETHERCORE_PRODUCT_GSIM_BOARD_LEAN_WALL_SECONDS: '180'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g4_board_lean_early.sh preflight
+          bash tools/ci/product_gsim_g4_board_lean_early.sh run
+          grep -Eq '^qualification=PRODUCT_GSIM_BOARD_LEAN_40000000_CYCLES_(OPENSBI_UART_ONLY|LINUX_BANNER)_NOT_PID1_OR_DEBIAN_PASS$' build/product-gsim-g4-board-lean/qualification.txt
+          echo 'Real Product GSIM 40M board-lean UART evidence below: Linux kernel banner is credited ONLY if actually observed; separate from frozen G4, not PID1 or Debian.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g4-board-lean/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve fast Linux configuration and bounded GSIM evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-gsim-g4-board-lean-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-board-lean/result.txt
+            build/rv64-linux-board-lean/evidence/qualified.env
+            build/rv64-linux-board-lean/evidence/resolved.config
+            build/rv64-linux-board-lean/evidence/base-vs-lean.config.diff
+            build/rv64-board-lean-payload/result.txt
+            build/product-gsim-bridge/build-identity.txt
+            build/product-gsim-g4-board-lean/qualification.txt
+            build/product-gsim-g4-board-lean/linux-lean-early.run.log
