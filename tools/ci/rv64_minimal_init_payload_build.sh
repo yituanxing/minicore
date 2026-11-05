@@ -25,6 +25,7 @@ PAYLOAD_ABI="${RV64_PAYLOAD_ABI:-${RV64_OPENSBI_ABI}}"
 LINUX_QUALIFIER="${RV64_PAYLOAD_LINUX_QUALIFIER:-RV64_MINIMAL_INITRAMFS_BUILD_RESULT}"
 PAYLOAD_RESULT_TAG="${RV64_PAYLOAD_RESULT_TAG:-RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT}"
 PAYLOAD_INPUT_TAG="${RV64_PAYLOAD_INPUT_TAG:-RV64_MINIMAL_INIT_PAYLOAD_INPUT}"
+PAYLOAD_ENABLE_SPI_SD="${RV64_PAYLOAD_ENABLE_SPI_SD:-0}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -49,11 +50,28 @@ mkdir -p "${OPENSBI_BUILD_DIR}" "${EVIDENCE_DIR}"
 
 command -v dtc >/dev/null 2>&1 || fail "device-tree-compiler (dtc) is required for RV64 AetherSoC DTS"
 chmod +x "${ROOT_DIR}/mill"
+spi_dts_args=()
+case "${PAYLOAD_ENABLE_SPI_SD}" in
+  0) ;;
+  1)
+    spi_dts_args+=(--spi-sd)
+    if [[ -n "${RV64_PAYLOAD_SPI_CLOCK_HZ:-}" ]]; then
+      [[ "${RV64_PAYLOAD_SPI_CLOCK_HZ}" =~ ^[0-9]+$ ]] || fail 'non-integer SPI clock Hz'
+      spi_dts_args+=(--spi-clock-hz "${RV64_PAYLOAD_SPI_CLOCK_HZ}")
+    fi
+    if [[ -n "${RV64_PAYLOAD_SPI_MAX_HZ:-}" ]]; then
+      [[ "${RV64_PAYLOAD_SPI_MAX_HZ}" =~ ^[0-9]+$ ]] || fail 'non-integer SPI max Hz'
+      spi_dts_args+=(--spi-max-hz "${RV64_PAYLOAD_SPI_MAX_HZ}")
+    fi
+    ;;
+  *) fail "invalid RV64_PAYLOAD_ENABLE_SPI_SD=${PAYLOAD_ENABLE_SPI_SD}" ;;
+esac
 "${ROOT_DIR}/mill" aethercore.runMain aethercore.EmitAetherSoCDts \
   --output "${DTS}" \
   --isa "${PAYLOAD_ISA}" \
   --mmu "${RV64_OPENSBI_MMU}" \
   --bootargs "${BOOTARGS}" \
+  "${spi_dts_args[@]}" \
   | tee "${EVIDENCE_DIR}/aethersoc-rv64-initramfs-dts.txt"
 dtc -I dts -O dtb -o "${DTB}" "${DTS}"
 
@@ -68,6 +86,7 @@ dtc -I dts -O dtb -o "${DTB}" "${DTS}"
   echo "fw_payload_address=${RV64_OPENSBI_PAYLOAD_ADDR}"
   echo "fw_payload_fdt_addr=${RV64_OPENSBI_FDT_ADDR}"
   echo "bootargs=${BOOTARGS}"
+  echo "spi_sd=${PAYLOAD_ENABLE_SPI_SD}"
   echo "isa=${PAYLOAD_ISA}"
   echo "abi=${PAYLOAD_ABI}"
 } | tee "${EVIDENCE_DIR}/inputs.txt"
@@ -115,6 +134,7 @@ sha256sum "${FW_ELF}" "${FW_BIN}" "${DTB}" "${LINUX_IMAGE}" | tee "${EVIDENCE_DI
   echo "next_mode=S-mode"
   echo "fdt_addr=${RV64_OPENSBI_FDT_ADDR}"
   echo "bootargs=${BOOTARGS}"
+  echo "spi_sd=${PAYLOAD_ENABLE_SPI_SD}"
   echo "isa=${PAYLOAD_ISA}"
   echo "abi=${PAYLOAD_ABI}"
   echo "firmware_bytes=${firmware_bytes}"

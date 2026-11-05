@@ -33,6 +33,13 @@ case "$settle_mode" in reference|adaptive) ;; *) echo "unknown settle mode: $set
 case "$verilator_version" in 5.024|5.054) ;; *) echo "unsupported Verilator: $verilator_version" >&2; exit 3 ;; esac
 
 input_identity() {
+  # The SDHC host model is included in the fingerprint ONLY for the explicit
+  # SD1 physical-card top. Existing RAM-only G4/G5 binaries neither compile
+  # nor depend upon this header and must not recompile when it is edited.
+  local model_specific_sources=()
+  if [[ "$sim_cxxflags" == *-DAETHERCORE_PRODUCT_SPI_SD* ]]; then
+    model_specific_sources+=(sim/l32_sd_spi_card.h)
+  fi
   {
     printf 'top=%s\nelaborate=%s\ncompiler-flags=%s\nsettle=%s\nverilator=%s\nthreads=%s\nmodel-opt=%s\nmake-opt=%s\n' \
       "$top" "$elaborate_main" "$sim_cxxflags" "$settle_mode" \
@@ -51,7 +58,7 @@ input_identity() {
       sim/product_rv64_opensbi_shim \
       Makefile.l32-linux-boot build.mill mill \
       tools/ci/product_sim_cache.sh tools/ensure_verilator_5_024.sh \
-      tools/ensure_verilator_5_054.sh | LC_ALL=C sort -z | \
+      tools/ensure_verilator_5_054.sh "${model_specific_sources[@]}" | LC_ALL=C sort -z | \
       while IFS= read -r -d '' file; do
         [[ -f "$file" ]] || { echo "missing model source: $file" >&2; exit 4; }
         sha256sum "$file"

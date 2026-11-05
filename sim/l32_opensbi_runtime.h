@@ -143,6 +143,30 @@ class Memory {
     clearReservation();
   }
 
+  // A Product SD1 FPGA boot loader places its independent DTB in DDR after
+  // loading the firmware, at the exact FW_PAYLOAD_FDT_ADDR contract. This
+  // bounded secondary transfer mirrors that physical loader while leaving
+  // the historical base-only G4/G5 runner untouched. It is not a checkpoint
+  // and cannot overwrite memory outside the simulated DDR aperture.
+  void loadBoundedRegion(const std::string& path, std::uint64_t address,
+                         std::size_t maxBytes) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) throw std::runtime_error("cannot open DDR region image: " + path);
+    const auto signedLength = static_cast<std::streamoff>(input.tellg());
+    if (signedLength <= 0 ||
+        static_cast<std::uint64_t>(signedLength) > maxBytes)
+      throw std::runtime_error("invalid bounded DDR region image length: " + path);
+    const auto length = static_cast<std::size_t>(signedLength);
+    if (!contains(address, length))
+      throw std::runtime_error("bounded DDR image exceeds simulator memory: " + path);
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char*>(bytes_.data() + (address - kRamBase)),
+               static_cast<std::streamsize>(length));
+    if (input.bad() || input.gcount() != static_cast<std::streamsize>(length))
+      throw std::runtime_error("short bounded DDR image read: " + path);
+    clearReservation();
+  }
+
   bool contains(std::uint64_t address, std::size_t size = 1) const {
     return size <= bytes_.size() && address >= kRamBase &&
            address - kRamBase <= bytes_.size() - size;

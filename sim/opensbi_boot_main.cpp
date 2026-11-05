@@ -6,12 +6,21 @@ using OpenSbiTop = VAetherCoreOpenSbiCSimTop;
 using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 #endif
 #include "l32_opensbi_runtime.h"
+#if defined(AETHERCORE_PRODUCT_SPI_SD) && !defined(AETHERCORE_PRODUCT_DEBIAN)
+#error "Product SD1 requires both AETHERCORE_PRODUCT_SPI_SD and AETHERCORE_PRODUCT_DEBIAN"
+#endif
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+#include "l32_sd_spi_card.h"
+#endif
 #include "verilated.h"
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -106,7 +115,44 @@ int main(int argc, char** argv) {
     OpenSbiTop top{&context};
     Memory memory;
     memory.loadAtBase(image);
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+    // Match the Product FPGA stream loader's separate fw_payload + FDT DDR
+    // transactions, with no dependence on an OpenSBI embedded-DTB shortcut.
+    constexpr std::uint64_t kIndependentDtbAddress = 0x87f00000ULL;
+    constexpr std::size_t kMaxDtbBytes = 1ULL << 20;
+    static_assert(kIndependentDtbAddress > aethercore::l32sim::kRamBase);
+    const char* dtbPath = std::getenv("AETHERCORE_PRODUCT_DTB_IMAGE");
+    if (!dtbPath || *dtbPath == '\0')
+      throw std::runtime_error("Product SD1 needs AETHERCORE_PRODUCT_DTB_IMAGE for independent FPGA-style DDR loading");
+    if (std::filesystem::file_size(image) > kIndependentDtbAddress - aethercore::l32sim::kRamBase)
+      throw std::runtime_error("Product SD1 firmware overlaps fixed independent DTB DDR address");
+    memory.loadBoundedRegion(dtbPath, kIndependentDtbAddress, kMaxDtbBytes);
+    std::cerr << "\nPRODUCT_SD1_INDEPENDENT_DTB_READY address=0x87f00000 bytes="
+              << std::filesystem::file_size(dtbPath) << "\n";
+#else
+    if (std::getenv("AETHERCORE_PRODUCT_DTB_IMAGE"))
+      throw std::runtime_error("independent Product DTB passed to a non-SD runner");
+#endif
     TransportRuntimeState transport;
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+    static_assert(requires(OpenSbiTop& hardware) {
+      hardware.io_spiSclk;
+      hardware.io_spiMosi;
+      hardware.io_spiMiso;
+      hardware.io_spiCsN;
+    }, "Product SD1 must expose actual SPI-SD physical pins");
+    const char* sdPath = std::getenv("AETHERCORE_PRODUCT_SD_IMAGE");
+    if (!sdPath || *sdPath == '\0')
+      throw std::runtime_error("Product SD1 requires AETHERCORE_PRODUCT_SD_IMAGE=raw-MBR-ext4-SD.img");
+    aethercore::l32sim::SdSpiCard sdCard{sdPath};
+    top.io_spiMiso = 1;
+    std::cerr << "\nPRODUCT_SD1_SD_IMAGE_READY sectors=" << sdCard.sourceSectors()
+              << " partition1_lba=" << sdCard.partitionStartLba()
+              << " mode=immutable-image-plus-session-COW" << "\n";
+#else
+    if (std::getenv("AETHERCORE_PRODUCT_SD_IMAGE"))
+      throw std::runtime_error("SD_IMAGE provided to a non-SD Product simulator; select the explicit SD1 top");
+#endif
 
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
@@ -150,6 +196,9 @@ int main(int argc, char** argv) {
 
     for (; cycles < maxCycles; ++cycles) {
       const bool presentInput = inputStarted && inputIndex < uartInput.size();
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+      top.io_spiMiso = sdCard.miso() ? 1 : 0;
+#endif
       const bool rxAccepted = step(
           top,
           context,
@@ -157,6 +206,11 @@ int main(int argc, char** argv) {
           transport,
           presentInput,
           presentInput ? static_cast<std::uint8_t>(uartInput[inputIndex]) : 0);
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+      sdCard.observe(static_cast<bool>(top.io_spiSclk),
+                     static_cast<bool>(top.io_spiMosi),
+                     static_cast<bool>(top.io_spiCsN));
+#endif
 
       if (cycles == 3) top.reset = 0;
       if (top.reset) continue;
@@ -182,7 +236,11 @@ int main(int argc, char** argv) {
                   << " exceptions=" << exceptions
                   << " interrupts=" << interrupts
                   << " stip=" << supervisorTimerInterrupts
-                  << " seip=" << supervisorExternalInterrupts << "\n";
+                  << " seip=" << supervisorExternalInterrupts
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+                  << ' ' << sdCard.progress()
+#endif
+                  << "\n";
         previousProgressCycle = cycles;
         previousProgressCommits = commits;
         nextProgressCycle += progressIntervalCycles;

@@ -148,3 +148,52 @@ object ElaborateProductFpgaColdBootSpiSdPinsRv64gc extends App {
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }
+
+/** Product RV64GC board-neutral G5-SD1 integration shell.
+  *
+  * Unlike ColdBootPins this includes the five-channel DDR owner mux and an
+  * independent accepted-transaction drain ledger. The external board still
+  * supplies the image loader AXI master, DDR PHY, clock/reset crossings and
+  * physical SD pads. Linux rootfs is expected to reside on external SD; only
+  * OpenSBI, the kernel and DTB need initial DDR image loading.
+  */
+object ElaborateProductFpgaColdBootDdrMuxSpiSd1PinsRv64gc extends App {
+  require(args.nonEmpty, "RV64GC G5-SD1 DDR mux FPGA pins need small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC G5-SD1 geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaColdBootDdrFabric(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+/** G5-SD1 Product FPGA image-stream cold boot boundary.
+  *
+  * The board must provide the firmware and standalone DTB as two decoupled
+  * byte streams. A built-in AXI write engine owns external calibrated DDR
+  * until both segments have received their final successful B responses.
+  * The board still owns SD/flash transport, DDR controller/PHY and clocks.
+  */
+object ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc extends App {
+  require(args.nonEmpty, "RV64GC G5-SD1 DDR-stream FPGA pins need small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC G5-SD1 stream geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaColdBootDdrStreamFabric(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}

@@ -11,7 +11,7 @@ EVIDENCE_DIR="${BUILD_DIR}/evidence"
 IMAGE='debian:trixie-20261027-slim'
 STAGE="${RV64_DEBIAN_STAGE:-d1}"
 case "${STAGE}" in
-  d1|d2|d3) ;;
+  d1|d2|d3|sd1) ;;
   *) printf 'ERROR: unknown Debian qualification stage %s\n' "${STAGE}" >&2; exit 1 ;;
 esac
 
@@ -19,22 +19,22 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 for tool in readelf sudo sha256sum; do
   command -v "${tool}" >/dev/null || fail "missing host tool ${tool}"
 done
-if [[ "${STAGE}" != d3 ]]; then
+if [[ "${STAGE}" != d3 && "${STAGE}" != sd1 ]]; then
   command -v docker >/dev/null || fail 'missing host tool docker'
 fi
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${ROOTFS_DIR}" "${EVIDENCE_DIR}"
 
-if [[ "${STAGE}" == d3 ]]; then
+if [[ "${STAGE}" == d3 || "${STAGE}" == sd1 ]]; then
   # An OCI slim image does NOT contain a real distribution init or login
-  # services. D3 must be supplied as an independently constructed full Debian
+  # services. D3/SD1 must be supplied as independently constructed full Debian
   # riscv64 rootfs archive, pinned to an exact SHA256. A file tree from a host
   # architecture or an unpinned download must never enter the expensive RTL.
   archive="${RV64_DEBIAN_FULL_ROOTFS_ARCHIVE:-}"
   archive_sha256="${RV64_DEBIAN_FULL_ROOTFS_SHA256:-}"
   [[ -f "${archive}" && "${archive_sha256}" =~ ^[[:xdigit:]]{64}$ ]] || \
-    fail 'D3 requires RV64_DEBIAN_FULL_ROOTFS_ARCHIVE and its exact SHA256'
+    fail "${STAGE} requires RV64_DEBIAN_FULL_ROOTFS_ARCHIVE and its exact SHA256"
   printf '%s  %s\n' "${archive_sha256}" "${archive}" | sha256sum -c - || \
     fail 'full Debian rootfs archive differs from the pinned SHA256'
   # This archive is external input and is unpacked with root privileges for
@@ -214,16 +214,18 @@ case "${STAGE}" in
       fail 'D2 native workload does not use the genuine LP64D glibc loader'
     install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_d2_init.sh" "${ROOTFS_DIR}/init"
     ;;
-  d3)
-    # D3 does not substitute a handwritten shell for Debian's real PID1.
-    [[ -x "${ROOTFS_DIR}/sbin/init" ]] || fail 'D3 full rootfs has no native /sbin/init'
+  d3|sd1)
+    # D3 executes genuine /sbin/init from its limited initramfs. SD1 puts
+    # the exact same real Debian tree on an SD ext4 partition, without an
+    # /init initramfs wrapper. The two runtime storage contracts are distinct.
+    [[ -x "${ROOTFS_DIR}/sbin/init" ]] || fail "${STAGE} full rootfs has no native /sbin/init"
     [[ -s "${ROOTFS_DIR}/var/lib/dpkg/status" ]] || \
-      fail 'D3 full rootfs has no installed Debian package database'
+      fail "${STAGE} full rootfs has no installed Debian package database"
     [[ -x "${ROOTFS_DIR}/usr/sbin/agetty" || -x "${ROOTFS_DIR}/sbin/agetty" ]] || \
-      fail 'D3 full rootfs has no native serial agetty'
+      fail "${STAGE} full rootfs has no native serial agetty"
     [[ -x "${ROOTFS_DIR}/usr/bin/login" || -x "${ROOTFS_DIR}/bin/login" ]] || \
-      fail 'D3 full rootfs has no native login'
-    [[ -x "${ROOTFS_DIR}/bin/mount" ]] || fail 'D3 full rootfs has no native mount'
+      fail "${STAGE} full rootfs has no native login"
+    [[ -x "${ROOTFS_DIR}/bin/mount" ]] || fail "${STAGE} full rootfs has no native mount"
     # D1's shell/dpkg identity does not establish the full distribution
     # layer. Verify the actual init/getty/login ELF binaries now, before RTL.
     for candidate in sbin/init usr/sbin/agetty usr/bin/login; do
@@ -234,36 +236,67 @@ case "${STAGE}" in
           usr/bin/login) program="${ROOTFS_DIR}/bin/login" ;;
         esac
       fi
-      [[ -x "${program}" ]] || fail "missing D3 program ${candidate}"
+      [[ -x "${program}" ]] || fail "missing ${STAGE} program ${candidate}"
       evidence_name="$(basename "${candidate}")"
-      readelf -h -l -A "${program}" > "${EVIDENCE_DIR}/debian-d3-${evidence_name}-readelf.txt" || \
-        fail "D3 ${candidate} is not a real Debian ELF"
+      readelf -h -l -A "${program}" > "${EVIDENCE_DIR}/debian-${STAGE}-${evidence_name}-readelf.txt" || \
+        fail "${STAGE} ${candidate} is not a real Debian ELF"
       grep -q 'Machine:[[:space:]]*RISC-V' \
-        "${EVIDENCE_DIR}/debian-d3-${evidence_name}-readelf.txt" || \
-        fail "D3 ${candidate} does not contain native RISC-V code"
+        "${EVIDENCE_DIR}/debian-${STAGE}-${evidence_name}-readelf.txt" || \
+        fail "${STAGE} ${candidate} does not contain native RISC-V code"
       grep -q 'double-float ABI' \
-        "${EVIDENCE_DIR}/debian-d3-${evidence_name}-readelf.txt" || \
-        fail "D3 ${candidate} is not LP64D"
+        "${EVIDENCE_DIR}/debian-${STAGE}-${evidence_name}-readelf.txt" || \
+        fail "${STAGE} ${candidate} is not LP64D"
     done
     # Enable a real Debian serial login service without invoking foreign
     # systemctl on the CI host. Never invent a fake getty/login binary.
+    # Full Debian archives are extracted with --numeric-owner by sudo, so
+    # these writes must likewise run as root; the earlier unprivileged D3
+    # service edits silently assumed host-writable /etc inside that archive.
     if [[ -f "${ROOTFS_DIR}/usr/lib/systemd/system/serial-getty@.service" ]]; then
-      mkdir -p "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants"
-      ln -sfn /usr/lib/systemd/system/serial-getty@.service \
+      sudo mkdir -p "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants"
+      sudo ln -sfn /usr/lib/systemd/system/serial-getty@.service \
         "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
     elif [[ -f "${ROOTFS_DIR}/lib/systemd/system/serial-getty@.service" ]]; then
-      mkdir -p "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants"
-      ln -sfn /lib/systemd/system/serial-getty@.service \
+      sudo mkdir -p "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants"
+      sudo ln -sfn /lib/systemd/system/serial-getty@.service \
         "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
     elif [[ -f "${ROOTFS_DIR}/etc/inittab" ]]; then
       if ! grep -q '^T0:.*ttyS0' "${ROOTFS_DIR}/etc/inittab"; then
-        printf 'T0:2345:respawn:/sbin/agetty -L 115200 ttyS0 vt100\n' >> \
-          "${ROOTFS_DIR}/etc/inittab"
+        printf 'T0:2345:respawn:/sbin/agetty -L 115200 ttyS0 vt100\n' | \
+          sudo tee -a "${ROOTFS_DIR}/etc/inittab" >/dev/null
       fi
     else
-      fail 'D3 rootfs has no supported native systemd/SysV serial-login service'
+      fail "${STAGE} rootfs has no supported native systemd/SysV serial-login service"
     fi
-    install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_d3_init.sh" "${ROOTFS_DIR}/init"
+    if [[ "${STAGE}" == d3 ]]; then
+      sudo install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_d3_init.sh" "${ROOTFS_DIR}/init"
+    else
+      # An /init on the disk root would ambiguously shadow a distribution
+      # initramfs and encourages accidentally shipping a D3 wrapper as PID1.
+      # Only the real /sbin/init is a qualified SD1 PID1 entry point.
+      [[ ! -e "${ROOTFS_DIR}/init" ]] || \
+        fail 'SD1 rootfs unexpectedly contains /init; use /sbin/init directly'
+      # An imported cloud/debootstrap tree may contain /dev/vda, an NFS root,
+      # or another guest's /etc/fstab. Those stale dependencies can deadlock
+      # systemd even when Linux successfully mounts mmcblk0p1 as /.
+      # Preserve the supplier file as offline evidence, then own the exact
+      # SD-root mount contract for this derived (not source) Debian image.
+      [[ ! -L "${ROOTFS_DIR}/etc/fstab" ]] || \
+        fail 'SD1 /etc/fstab must be a regular guest file, not a symbolic link'
+      if [[ -e "${ROOTFS_DIR}/etc/fstab" ]]; then
+        sudo cp -a -- "${ROOTFS_DIR}/etc/fstab" "${EVIDENCE_DIR}/supplier-fstab"
+      fi
+      sudo mkdir -p "${ROOTFS_DIR}/etc" "${ROOTFS_DIR}/dev/pts" \
+        "${ROOTFS_DIR}/run" "${ROOTFS_DIR}/tmp"
+      sudo chmod 1777 "${ROOTFS_DIR}/tmp"
+      printf '%s\n' \
+        '# AetherCore G5-SD1: native Debian root on external MMC SPI ext4.' \
+        '/dev/mmcblk0p1 / ext4 defaults 0 1' \
+        'proc /proc proc nosuid,nodev,noexec 0 0' \
+        'sysfs /sys sysfs nosuid,nodev,noexec 0 0' \
+        'devpts /dev/pts devpts defaults 0 0' | \
+        sudo tee "${ROOTFS_DIR}/etc/fstab" >/dev/null
+    fi
     ;;
 esac
 
@@ -290,15 +323,32 @@ for _ in {1..8}; do
 done
 [[ -f "${loader_entry}" ]] || fail 'LP64D loader missing from extracted Debian rootfs'
 
-sha256sum "${ROOTFS_DIR}/bin/sh" "${ROOTFS_DIR}/usr/bin/dpkg" \
-  "${ROOTFS_DIR}/init" "${ROOTFS_DIR}/etc/debian_version" \
+sha256_inputs=("${ROOTFS_DIR}/bin/sh" "${ROOTFS_DIR}/usr/bin/dpkg" "${ROOTFS_DIR}/etc/debian_version")
+if [[ "${STAGE}" == sd1 ]]; then
+  sha256_inputs+=("${ROOTFS_DIR}/sbin/init")
+else
+  sha256_inputs+=("${ROOTFS_DIR}/init")
+fi
+sha256sum "${sha256_inputs[@]}" \
   > "${EVIDENCE_DIR}/sha256.txt"
 if [[ "${STAGE}" == d2 ]]; then
   sha256sum "${ROOTFS_DIR}/usr/local/libexec/aethercore-d2-native-probe" \
     >> "${EVIDENCE_DIR}/sha256.txt"
 fi
 
-rootfs_bytes="$(du -sb "${ROOTFS_DIR}" | awk '{print $1}')"
+if [[ "${STAGE}" == d3 || "${STAGE}" == sd1 ]]; then
+  rootfs_bytes="$(sudo du -sb "${ROOTFS_DIR}" | awk '{print $1}')"
+else
+  rootfs_bytes="$(du -sb "${ROOTFS_DIR}" | awk '{print $1}')"
+fi
+rootfs_tree_sha=''
+if [[ "${STAGE}" == sd1 ]]; then
+  rootfs_tree_sha="$(sudo python3 "${ROOT_DIR}/tools/ci/rv64_debian_sd1_tree_digest.py" "${ROOTFS_DIR}")"
+  [[ "${rootfs_tree_sha}" =~ ^[[:xdigit:]]{64}$ ]] || \
+    fail 'SD1 staged Debian directory tree digest is missing'
+  printf '%s  %s\n' "${rootfs_tree_sha}" "${ROOTFS_DIR}" \
+    > "${EVIDENCE_DIR}/sd1-rootfs-tree.sha256"
+fi
 if [[ "${STAGE}" == d3 ]]; then
   # The current G5 SoC has only 256 MiB RAM; the raw initramfs, kernel,
   # OpenSBI and Debian services are simultaneously resident. A full Debian
@@ -333,5 +383,8 @@ fi
   echo "interpreter=${interpreter}"
   echo "rootfs=${ROOTFS_DIR}"
   echo "rootfs_bytes=${rootfs_bytes}"
+  if [[ "${STAGE}" == sd1 ]]; then
+    echo "rootfs_tree_sha256=${rootfs_tree_sha}"
+  fi
   echo "debian_version=$(head -n 1 "${ROOTFS_DIR}/etc/debian_version")"
 } | tee "${BUILD_DIR}/result.txt"

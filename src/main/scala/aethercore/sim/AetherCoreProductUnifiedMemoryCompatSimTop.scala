@@ -2,7 +2,7 @@ package aethercore.sim
 
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
-import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC}
+import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC, ProductSoCBoardProfiles}
 import _root_.circt.stage.ChiselStage
 import chisel3._
 
@@ -18,7 +18,12 @@ import chisel3._
   * debianTarget elaborates the existing RV64GC hardware; neither configuration
   * alone is evidence that a complete Debian userspace has booted.
   */
-class AetherCoreProductUnifiedMemoryCompatSimTop(val debianTarget: Boolean = false) extends Module {
+class AetherCoreProductUnifiedMemoryCompatSimTop(
+    val debianTarget: Boolean = false,
+    val spiSdTarget: Boolean = false
+) extends Module {
+  require(!spiSdTarget || debianTarget,
+    "Product SPI-SD simulation requires the real RV64GC Debian ISA/ABI target")
   private val Xlen = 64
   private val PA = 56
   private val DataBits = 64
@@ -68,6 +73,13 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(val debianTarget: Boolean = fal
     val dcacheBypassCount = Output(UInt(64.W))
     val commit = Output(new CommitTrace(Xlen, PA, DataBits))
     val halted = Output(Bool())
+
+    // Product SD1 independently enables the same physical card pins as the
+    // FPGA cold-boot SoC. Existing G4/G5 tops retain their frozen host ABI.
+    val spiSclk = if (spiSdTarget) Some(Output(Bool())) else None
+    val spiMosi = if (spiSdTarget) Some(Output(Bool())) else None
+    val spiMiso = if (spiSdTarget) Some(Input(Bool())) else None
+    val spiCsN = if (spiSdTarget) Some(Output(Bool())) else None
   })
 
   // Keep the independently qualified RV64IMAC G4 top unchanged. The Debian
@@ -76,7 +88,9 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(val debianTarget: Boolean = fal
   private val requestedTarget = if (debianTarget)
     Some(AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(PA)) else None
   val soc = Module(new AetherCoreProductUnifiedMemorySoC(
-    productConfigOverride = requestedTarget))
+    productConfigOverride = requestedTarget,
+    boardDevices = if (spiSdTarget) ProductSoCBoardProfiles.persistentSpiSd
+      else ProductSoCBoardProfiles.existingRamOnly))
   val core = soc.core
   val hostMemory = Module(new AetherSoCUnifiedHostMemoryAdapter(
     addrBits = PA,
@@ -132,6 +146,12 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(val debianTarget: Boolean = fal
   io.dcacheBypassCount := soc.io.dcacheBypassCount
   io.commit := soc.io.commit
   io.halted := soc.io.halted
+  if (spiSdTarget) {
+    soc.io.spiMiso.get := io.spiMiso.get
+    io.spiSclk.get := soc.io.spiSclk.get
+    io.spiMosi.get := soc.io.spiMosi.get
+    io.spiCsN.get := soc.io.spiCsN.get
+  }
 }
 
 /** Distinct module identity for the existing OpenSBI host program. */
@@ -141,6 +161,14 @@ class AetherCoreProductOpenSbiRV64SimTop
 /** True Debian RV64GC/LP64D hardware target, not the IMAC G4 bring-up top. */
 class AetherCoreProductDebianRV64SimTop
     extends AetherCoreProductUnifiedMemoryCompatSimTop(debianTarget = true)
+
+/** SD1 Product Debian SPI-SD: no software storage shortcut or synthetic block
+  * MMIO. All SD sectors travel through the Linux mmc_spi driver, OpenCores
+  * SPI, GPIO chip select, S-mode PLIC and the host card's four physical pins.
+  */
+class AetherCoreProductDebianSdRV64SimTop
+    extends AetherCoreProductUnifiedMemoryCompatSimTop(
+      debianTarget = true, spiSdTarget = true)
 
 object ElaborateProductOpenSbiRV64SimTop extends App {
   ChiselStage.emitSystemVerilogFile(
@@ -153,6 +181,14 @@ object ElaborateProductOpenSbiRV64SimTop extends App {
 object ElaborateProductDebianRV64SimTop extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductDebianRV64SimTop,
+    args,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+object ElaborateProductDebianSdRV64SimTop extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductDebianSdRV64SimTop,
     args,
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
