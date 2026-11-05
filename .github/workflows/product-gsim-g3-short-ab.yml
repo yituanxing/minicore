@@ -119,11 +119,17 @@ jobs:
           path: build/product-gsim-bridge
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
 
+      # The pinned provisioner writes CROSS_COMPILE to GITHUB_ENV for the NEXT
+      # step. Invoking the firmware builder in the same shell step would lose
+      # the exported path and fail before any Product simulation begins.
+      - name: Provision pinned RV64 GCC for subsequent firmware step
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
       - name: Reuse/build unchanged real OpenSBI G3 UART firmware
         shell: bash
         run: |
           set -euo pipefail
-          bash tools/ensure_riscv64_linux_gcc_13_3.sh
           bash tools/ci/rv64_opensbi_first_exec.sh
           grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' build/rv64-opensbi-first-exec/result.txt
           sha256sum --check --status build/rv64-opensbi-first-exec/evidence/sha256.txt
