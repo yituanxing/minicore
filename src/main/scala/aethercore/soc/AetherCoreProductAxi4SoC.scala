@@ -15,8 +15,10 @@ class AetherCoreProductAxi4SoC(
     val implementedPaddrBits: Int = 56,
     // Legacy geometry selection is used only when no exact CPU target is given.
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
-    val productConfigOverride: Option[ProductCoreConfig] = None
+    val productConfigOverride: Option[ProductCoreConfig] = None,
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
+  private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = productConfigOverride.getOrElse(
     AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
   AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
@@ -36,6 +38,10 @@ class AetherCoreProductAxi4SoC(
     val uartBaudDivisor = Output(UInt(16.W))
     val uartTxReady = Input(Bool())
     val timebaseTick = Input(Bool())
+    val spiSclk = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMosi = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMiso = if (enableSpiSd) Some(Input(Bool())) else None
+    val spiCsN = if (enableSpiSd) Some(Output(Bool())) else None
 
     val supervisorExternalInterrupt = Output(Bool())
     val uartInterrupt = Output(Bool())
@@ -68,7 +74,8 @@ class AetherCoreProductAxi4SoC(
   val soc = Module(new AetherCoreProductUnifiedMemorySoC(
     externalPhysicalSeams = true,
     implementedPaddrBits = implementedPaddrBits,
-    productConfigOverride = Some(config)
+    productConfigOverride = Some(config),
+    boardDevices = boardDevices
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = implementedPaddrBits,
@@ -105,6 +112,12 @@ class AetherCoreProductAxi4SoC(
   soc.io.rxByte := io.rxByte
   soc.io.uartTxReady.get := io.uartTxReady
   soc.io.timebaseTick.get := io.timebaseTick
+  if (enableSpiSd) {
+    soc.io.spiMiso.get := io.spiMiso.get
+    io.spiSclk.get := soc.io.spiSclk.get
+    io.spiMosi.get := soc.io.spiMosi.get
+    io.spiCsN.get := soc.io.spiCsN.get
+  }
   io.rxReady := soc.io.rxReady
   io.uartValid := soc.io.uartValid
   io.uartByte := soc.io.uartByte

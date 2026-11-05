@@ -1,29 +1,66 @@
 name: AetherCore Product G5 Real Debian RV64GC Dynamic PID1
 
-# This gate is deliberately separate from the frozen RV64IMA/LP64 G4 workload.
-# A real Debian userspace can require billions of slow RTL cycles. Qualify on
-# introduction, then use workflow_dispatch for explicit full distro reruns.
+# A real Debian userspace can require billions of slow RTL cycles. Full Product
+# Debian qualification is manual-only; source edits must never queue it.
 on:
   workflow_dispatch:
+    inputs:
+      verilator_version:
+        description: Pinned simulator version (5.054 requires Product A/B qualification)
+        required: true
+        type: choice
+        options: ['5.024', '5.054']
+        default: '5.024'
+      settle_mode:
+        description: Fixed reference or Product-qualified adaptive memory settle
+        required: true
+        type: choice
+        options: [reference, adaptive]
+        default: reference
+      debian_stage:
+        description: D1 glibc PID1, D2 native processes/filesystems, or D3 full native Debian login prompt
+        required: true
+        type: choice
+        options: [d1, d2, d3]
+        default: d2
+      full_rootfs_archive_url:
+        description: D3 only; explicit HTTPS URL of a complete native Debian riscv64 tar archive
+        required: false
+        type: string
+      full_rootfs_sha256:
+        description: D3 only; exact 64-digit SHA256 of that archive
+        required: false
+        type: string
+  # This workflow exists only on the Product PR branch until merged. GitHub
+  # cannot workflow_dispatch a workflow absent from the default branch; a
+  # specifically named human-added label is the PR-safe manual entry point.
+  # PR labels have no inputs: they select D2 + proven 5.024 + reference settle.
+  # D3 requires URL and SHA inputs and therefore remains unavailable until
+  # this workflow reaches main (or a separately qualified artifact bridge).
   pull_request:
-    paths:
-      - '.github/workflows/product-g5-debian-rv64gc.yml'
+    types: [labeled]
 
 permissions:
   contents: read
 
 concurrency:
   group: aethercore-product-g5-debian-${{ github.event.pull_request.number || github.ref }}
-  # Preserve the active billion-cycle Debian run while the latest PR head queues.
+  # A human chooses whether to stop an already running milestone.
   cancel-in-progress: false
 
 jobs:
   product-debian-rv64gc:
-    name: Product SmallOoO RV64GC runs genuine Debian glibc/dash PID1
+    name: Product SmallOoO RV64GC native Debian D1/D2/D3 milestone
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g5-longrun')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_VERILATOR_VERSION: ${{ inputs.verilator_version || '5.024' }}
+      SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
+      RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
+      RV64_DEBIAN_FULL_ROOTFS_URL: ${{ inputs.full_rootfs_archive_url }}
+      RV64_DEBIAN_FULL_ROOTFS_SHA256: ${{ inputs.full_rootfs_sha256 }}
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_VERILATOR_FAST_VERIFY: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
@@ -35,6 +72,22 @@ jobs:
         with:
           ref: ${{ env.TARGET_SHA }}
           clean: true
+
+      - name: Reject unsupported or underspecified Debian stage before heavy work
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RV64_DEBIAN_STAGE" in d1|d2) ;; d3)
+            [[ "$RV64_DEBIAN_FULL_ROOTFS_URL" == https://* ]] || {
+              echo 'D3 requires a full native Debian riscv64 HTTPS rootfs archive URL' >&2
+              exit 17
+            }
+            [[ "$RV64_DEBIAN_FULL_ROOTFS_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || {
+              echo 'D3 requires an exact 64-digit rootfs SHA256' >&2
+              exit 18
+            }
+            ;; *) echo "unknown Debian stage: $RV64_DEBIAN_STAGE" >&2; exit 19 ;;
+          esac
 
       - name: Install fixed RTL and upstream Linux build dependencies
         shell: bash
@@ -48,16 +101,20 @@ jobs:
             device-tree-compiler dwarves qemu-user
           docker version
 
-      - name: Restore fixed Verilator cache from G4
+      - name: Restore selected pinned Verilator cache
+        id: verilator-cache
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/aethercore/toolchains/verilator-5.024
             ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
             ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-${{ env.AETHERCORE_VERILATOR_VERSION }}-v2-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
           restore-keys: |
-            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-${{ env.AETHERCORE_VERILATOR_VERSION }}-v2-
 
       - name: Restore fixed RV64 GCC cache from G4
         uses: actions/cache/restore@v4
@@ -90,15 +147,28 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
 
-      - name: Provision verified frozen Verilator and GCC
+      - name: Provision selected pinned Verilator and frozen GCC
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          chmod +x ./mill tools/ensure_verilator_5_024.sh \
+          chmod +x ./mill tools/ensure_verilator_5_024.sh tools/ensure_verilator_5_054.sh \
             tools/ensure_riscv64_linux_gcc_13_3.sh
           bash tools/ensure_verilator_5_024.sh
           bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Save selected Verilator toolchain for future Product runs
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: ${{ steps.verilator-cache.outputs.cache-primary-key }}
 
       - name: Build qualified unchanged upstream Linux baseline
         shell: bash
@@ -108,7 +178,26 @@ jobs:
           grep -qx 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' \
             build/rv64-linux-early/result.txt
 
-      - name: Extract official Debian riscv64 rootfs and verify LP64D dynamic ELF
+      - name: Require independently sourced full Debian rootfs for D3
+        if: env.RV64_DEBIAN_STAGE == 'd3'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RV64_DEBIAN_FULL_ROOTFS_URL" == https://* ]] || {
+            echo 'D3 explicitly requires an HTTPS full Debian riscv64 rootfs archive; no slim-rootfs fallback' >&2
+            exit 17
+          }
+          [[ "$RV64_DEBIAN_FULL_ROOTFS_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || {
+            echo 'D3 requires the exact full rootfs archive SHA256' >&2
+            exit 18
+          }
+          archive="$RUNNER_TEMP/aethercore-debian-d3-full-rootfs.tar"
+          curl --fail --location --show-error --silent --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            "$RV64_DEBIAN_FULL_ROOTFS_URL" -o "$archive"
+          printf '%s  %s\n' "$RV64_DEBIAN_FULL_ROOTFS_SHA256" "$archive" | sha256sum -c -
+          echo "RV64_DEBIAN_FULL_ROOTFS_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Provision selected native Debian riscv64 rootfs and verify LP64D dynamic ELF
         shell: bash
         run: |
           set -euo pipefail
@@ -116,7 +205,7 @@ jobs:
           grep -qx 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' \
             build/rv64-debian-rootfs/result.txt
 
-      - name: Differential oracle for the same Debian glibc and dpkg under QEMU
+      - name: Cheap Debian and D2 native-oracle preflight before Product RTL
         shell: bash
         run: |
           set -euo pipefail
@@ -126,6 +215,53 @@ jobs:
           arch="$(qemu-riscv64 -L "$rootfs" "$rootfs/usr/bin/dpkg" --print-architecture)"
           test "$arch" = riscv64
           echo 'DEBIAN_QEMU_LP64D_ORACLE_PASS: unmodified Debian ELF and loader ran under QEMU'
+          if [[ "$RV64_DEBIAN_STAGE" == d2 ]]; then
+            # Product D2 cannot spend ~1.8 billion RTL cycles merely to learn
+            # that a cross-glibc binary, F/D, pthread/futex or mmap probe is
+            # broken. QEMU-user is a host/kernel compatibility oracle ONLY;
+            # it does not qualify the Product RTL implementation.
+            probe="$rootfs/usr/local/libexec/aethercore-d2-native-probe"
+            test -x "$probe"
+            probe_log="$RUNNER_TEMP/aethercore-product-d2-qemu-native.log"
+            qemu-riscv64 -L "$rootfs" "$probe" > "$probe_log" 2>&1 || {
+              cat "$probe_log" >&2
+              echo 'D2 native probe fails in QEMU-user: refusing expensive RTL' >&2
+              exit 31
+            }
+            grep -Fxq 'AETHERCORE_D2_NATIVE_FP_THREADS_FUTEX_VM_OK' "$probe_log" || {
+              cat "$probe_log" >&2
+              echo 'D2 native probe marker missing under QEMU-user' >&2
+              exit 32
+            }
+            echo 'DEBIAN_D2_NATIVE_QEMU_ORACLE_PASS: native LP64D F/D, threads, futex, VM and signals'
+          fi
+          if [[ "$RV64_DEBIAN_STAGE" == d3 ]]; then
+            # Do NOT qemu-user launch a real PID1: boot/service management
+            # belongs to the actual kernel. Just reject invalid native ELF
+            # or missing guest interpreter before the huge RTL run.
+            for path in sbin/init usr/sbin/agetty usr/bin/login; do
+              binary="$rootfs/$path"
+              if [[ ! -x "$binary" ]]; then
+                case "$path" in
+                  usr/sbin/agetty) binary="$rootfs/sbin/agetty" ;;
+                  usr/bin/login) binary="$rootfs/bin/login" ;;
+                esac
+              fi
+              test -x "$binary"
+              metadata="$(readelf -h -l -A "$binary")"
+              grep -q 'Class:[[:space:]]*ELF64' <<< "$metadata"
+              grep -q 'Machine:[[:space:]]*RISC-V' <<< "$metadata"
+              grep -q 'double-float ABI' <<< "$metadata"
+              interpreter="$(sed -n 's/^.*Requesting program interpreter: \([^]]*\)].*$/\1/p' <<< "$metadata")"
+              if [[ -n "$interpreter" ]]; then
+                [[ "$interpreter" == /* && -f "$rootfs$interpreter" ]] || {
+                  echo "D3 native ELF $binary references missing guest interpreter $interpreter" >&2
+                  exit 33
+                }
+              fi
+            done
+            echo 'DEBIAN_D3_NATIVE_ELF_INTERPRETER_PREFLIGHT_PASS: init/getty/login identity only; no init launched'
+          fi
 
       - name: Build real RV64GC FPU/C Linux, DTB and OpenSBI payload
         shell: bash
@@ -135,34 +271,102 @@ jobs:
           bash tools/ci/rv64_debian_payload_build.sh
           grep -qx 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
             build/rv64-debian-boot/result.txt
+          payload=build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          test -s "$payload"
+          bytes="$(stat -c%s "$payload")"
+          if (( bytes > 268435456 )); then
+            echo "Product D${RV64_DEBIAN_STAGE#d} payload is ${bytes} bytes; simulator RAM is limited to 256MiB (268435456 bytes)" >&2
+            echo 'Refuse oversized native initramfs now, before Product RTL model build or long-run' >&2
+            exit 34
+          fi
 
-      - name: Run Debian glibc and dash as real Product RV64GC PID1
+      - name: Fingerprint exact Product Debian RTL and simulator inputs
+        id: model-key
         shell: bash
         run: |
           set -euo pipefail
-          build="$RUNNER_TEMP/aethercore-product-g5-debian/$TARGET_SHA"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          key="$(bash tools/ci/product_sim_cache.sh fingerprint "$RUNNER_TEMP/aethercore-product-g5-debian/model" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore identical compiled Product Debian RTL model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-${{ steps.model-key.outputs.key }}
+
+      - name: Prepare or verify exact Product Debian RTL simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
           mkdir -p "$build"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          cache_args=("$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")
+          if [[ '${{ steps.model-cache.outputs.cache-hit }}' == 'true' ]]; then
+            bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"
+          else
+            make -f Makefile.l32-linux-boot BUILD_DIR="$build" \
+              TOP=AetherCoreProductDebianRV64SimTop \
+              ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+              VERILATOR='verilator -LDFLAGS -ldl' JOBS=4 \
+              SIM_CXXFLAGS="$flags" sim
+            bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
+          fi
+
+      - name: Save qualified compiled Product Debian model before slow execution
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
+
+      - name: Run selected real Debian D1/D2/D3 userspace milestone on Product RV64GC
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
+          case "$RV64_DEBIAN_STAGE" in
+            d1) milestone='DEBIAN_RISCV64_GLIBC_PID1_OK' ;;
+            d2) milestone='DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK' ;;
+            d3) milestone='login:' ;;
+            *) echo "unknown Debian stage $RV64_DEBIAN_STAGE" >&2; exit 19 ;;
+          esac
           make -f Makefile.l32-linux-boot \
-            BUILD_DIR="$build" \
-            TOP=AetherCoreProductDebianRV64SimTop \
+            BUILD_DIR="$build" TOP=AetherCoreProductDebianRV64SimTop \
             ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
             FW_BIN=build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin \
-            JOBS=4 \
-            MAX_CYCLES=1800000000 \
-            MILESTONE='DEBIAN_RISCV64_GLIBC_PID1_OK' \
+            JOBS=4 MAX_CYCLES=1800000000 \
+            MILESTONE="$milestone" \
             MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
-            REQUIRE_LAYERED_COMPRESSED=1 \
-            PROGRESS_INTERVAL_CYCLES=10000000 \
-            VERILATOR='verilator -LDFLAGS -ldl' \
-            SIM_CXXFLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim" \
-            run-local
+            REQUIRE_LAYERED_COMPRESSED=1 PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR='verilator -LDFLAGS -ldl' SIM_CXXFLAGS="$flags" \
+            run-existing
           log="$build/logs/boot-probe.log"
           grep -Fq 'Linux version 6.6.143' "$log"
-          grep -Fq 'AETHERCORE_DEBIAN_DYNAMIC_INIT_START' "$log"
-          grep -Fq 'DEBIAN_RISCV64_GLIBC_PID1_OK' "$log"
           grep -q '^L32_LAYERED_COMPRESSED_PASS ' "$log"
           grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$log"
-          echo 'PRODUCT_G5_DEBIAN_DYNAMIC_PID1_PASS: official Debian riscv64 LP64D ELF and glibc executed on Product SmallOoO RV64GC'
+          case "$RV64_DEBIAN_STAGE" in
+            d1)
+              grep -Fq 'AETHERCORE_DEBIAN_DYNAMIC_INIT_START' "$log"
+              grep -Fq 'DEBIAN_RISCV64_GLIBC_PID1_OK' "$log"
+              echo 'PRODUCT_G5_DEBIAN_D1_DYNAMIC_PID1_PASS'
+              ;;
+            d2)
+              grep -Fq 'AETHERCORE_DEBIAN_D2_START' "$log"
+              grep -Fq 'AETHERCORE_D2_NATIVE_FP_THREADS_FUTEX_VM_OK' "$log"
+              grep -Fq 'DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK' "$log"
+              echo 'PRODUCT_G5_DEBIAN_D2_NATIVE_PROCESSES_FS_SIGNALS_PASS'
+              ;;
+            d3)
+              grep -Fq 'AETHERCORE_DEBIAN_D3_NATIVE_INIT_HANDOFF' "$log"
+              grep -Eq '(^|[[:space:]])login:' "$log"
+              echo 'PRODUCT_G5_DEBIAN_D3_NATIVE_LOGIN_PROMPT_PASS: native /sbin/init and serial-getty reached prompt; login authentication remains separate'
+              ;;
+          esac
 
       - name: Preserve artifact identity, resolved kernel config and boot trace
         if: always()
@@ -178,4 +382,4 @@ jobs:
             build/rv64-debian-linux/evidence/*
             build/rv64-debian-boot/result.txt
             build/rv64-debian-boot/evidence/*
-            ${{ runner.temp }}/aethercore-product-g5-debian/${{ env.TARGET_SHA }}/logs/*.log
+            ${{ runner.temp }}/aethercore-product-g5-debian/model/logs/*.log

@@ -20,8 +20,10 @@ import chisel3._
 class AetherCoreProductFpgaColdBootPins(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
-    val productConfigOverride: Option[ProductCoreConfig] = None
+    val productConfigOverride: Option[ProductCoreConfig] = None,
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
+  private val enableSpiSd = boardDevices.spiSdEnabled
   private val config = productConfigOverride.getOrElse(
     AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
       implementedPaddrBits, productGeometry))
@@ -35,6 +37,10 @@ class AetherCoreProductFpgaColdBootPins(
     val timebaseTick = Input(Bool())
     val serialRx = Input(Bool())
     val serialTx = Output(Bool())
+    val spiSclk = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMosi = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMiso = if (enableSpiSd) Some(Input(Bool())) else None
+    val spiCsN = if (enableSpiSd) Some(Output(Bool())) else None
 
     val clockLocked = Input(Bool())
     val ddrCalibrated = Input(Bool())
@@ -66,7 +72,8 @@ class AetherCoreProductFpgaColdBootPins(
   private val machine = withReset(reset.asBool || !handoff.io.cpuReleased) {
     Module(new AetherCoreProductFpgaPins(
       implementedPaddrBits = implementedPaddrBits,
-      productConfigOverride = Some(config)))
+      productConfigOverride = Some(config),
+      boardDevices = boardDevices))
   }
 
   private val cpuRun = handoff.io.cpuReleased
@@ -114,4 +121,10 @@ class AetherCoreProductFpgaColdBootPins(
   machine.io.timebaseTick := io.timebaseTick
   machine.io.serialRx := io.serialRx
   io.serialTx := Mux(cpuRun, machine.io.serialTx, true.B)
+  if (enableSpiSd) {
+    machine.io.spiMiso.get := io.spiMiso.get
+    io.spiSclk.get := Mux(cpuRun, machine.io.spiSclk.get, false.B)
+    io.spiMosi.get := Mux(cpuRun, machine.io.spiMosi.get, true.B)
+    io.spiCsN.get := Mux(cpuRun, machine.io.spiCsN.get, true.B)
+  }
 }

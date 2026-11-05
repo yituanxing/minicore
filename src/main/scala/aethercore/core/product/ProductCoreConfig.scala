@@ -40,6 +40,13 @@ final case class ProductCoreGeometry(
   // particular, FMA has three FP operands even on a one-wide issue path.
   require(floatingPhysicalRegisters > 32,
     "floating PRF requires the architectural FPR mapping plus a spare destination")
+  // ProductIssue/Completion currently encode both destination banks with
+  // log2Ceil(integerPhysicalRegisters) bits. The banks are independent, but
+  // permitting a larger FPR bank would truncate upper FP physical tags and
+  // could silently retire a result into the wrong register after rename.
+  // Widen that shared tag type before proposing an FPR bank larger than XPR.
+  require(floatingPhysicalRegisters <= integerPhysicalRegisters,
+    "FP PRF exceeds the currently implemented shared physical-tag width")
   require(floatingReadPorts >= 3,
     "one FP fused multiply-add needs three physical source operands")
   require(floatingWritePorts >= 1, "a floating destination requires a write port")
@@ -53,10 +60,13 @@ final case class ProductCoreGeometry(
     floatingPhysicalRegisters < 32 + robEntries
 }
 
-/** A target ISA/ABI can exist before the RTL implementing it.
+/** Three independent Product choices: RTL geometry, software ISA/ABI, board.
   *
-  * IsaConfig is an architectural request. Do not wrap a requested F/D ISA
-  * in the existing CoreConfig, which correctly rejects unsupported legacy RTL.
+  * An elaboratable combination does not imply that its instruction semantics
+  * have passed differentials, that Debian PID1 reached a milestone, or that a
+  * physical FPGA board has passed its DDR/SD timing and boot qualification.
+  * Keep those statements independent: a target ISA/ABI can be requested
+  * before it is software-qualified, without pretending the RTL is absent.
   */
 final case class ProductCoreConfig(
     name: String,
@@ -72,7 +82,29 @@ final case class ProductCoreConfig(
   require(!software.isa.extensions.contains('D') || software.isa.extensions.contains('F'),
     "D requires F")
 
-  /** Product RTL has not yet been implemented; never treat a preset as proof. */
+  /** Actual Chisel implementation is currently one-wide. Capacity scales
+    * through ROB/IQ/LSQ/PRF without pretending Medium/Large's multi-lane
+    * frontend and retirement hardware already exists. This is a static RTL
+    * implementation gate, not a statement about simulator or FPGA results.
+    */
+  val rtlElaboratable: Boolean = geometry.decodeWidth == 1 &&
+    geometry.dispatchWidth == 1 && geometry.issueWidth == 1 &&
+    geometry.retireWidth == 1
+
+  /** Hardware bring-up and distro qualification are separate, explicit axes.
+    * All remain false until an exact image/board/run ID is recorded; the
+    * Product SmallOoO RTL existing is not evidence of D1/D2/D3/D4 success.
+    */
+  val qualifiedDebianD1: Boolean = false
+  val qualifiedDebianD2: Boolean = false
+  val qualifiedDebianD3: Boolean = false
+  val qualifiedFpgaDistributionD4: Boolean = false
+
+  // Deprecated compatibility flag from the G1 proposal. Its historical
+  // meaning was "fully verified Product RTL", not "does Chisel RTL exist".
+  // Keep strict-false to avoid silently upgrading old qualified test gates;
+  // new code must use rtlElaboratable and explicit milestone qualification.
+  @deprecated("Use rtlElaboratable or the explicit Debian/FPGA qualification flags", "Product G5")
   val rtlImplemented: Boolean = false
   def march: String = software.march
   def mabi: String = software.mabi

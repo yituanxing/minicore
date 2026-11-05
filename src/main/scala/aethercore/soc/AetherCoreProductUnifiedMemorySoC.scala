@@ -113,8 +113,10 @@ class AetherCoreProductUnifiedMemorySoC(
     val implementedPaddrBits: Int = 56,
     // Legacy geometry selection is used only when no exact CPU target is given.
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
-    val productConfigOverride: Option[ProductCoreConfig] = None
+    val productConfigOverride: Option[ProductCoreConfig] = None,
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
+  private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = productConfigOverride.getOrElse(
     AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
   AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
@@ -127,7 +129,12 @@ class AetherCoreProductUnifiedMemorySoC(
   val externalTxnIdBits: Int = ClientTxnBits + SourceBits
 
   private val board = AetherSoCBoardSpec.qualifiedLinux(config.platform).copy(
-    plicSourceCount = AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
+    plicSourceCount = AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount,
+    // One board-profile clock contract feeds both physical SPI divider
+    // expectations and the DTS `clock-frequency` emitted for the Linux driver.
+    // The FPGA integrator must actually supply this clock to the Product top.
+    spiBusClockFrequencyHz = boardDevices.spiBusClockFrequencyHz,
+    spiMaxFrequencyHz = boardDevices.spiMaxFrequencyHz
   )
   private val map = board.addressMap
   require(log2Ceil(geometry.loadQueueEntries + geometry.storeQueueEntries) == ClientTxnBits,
@@ -147,6 +154,10 @@ class AetherCoreProductUnifiedMemorySoC(
     val uartBaudDivisor = Output(UInt(16.W))
     val uartTxReady = if (externalPhysicalSeams) Some(Input(Bool())) else None
     val timebaseTick = if (externalPhysicalSeams) Some(Input(Bool())) else None
+    val spiSclk = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMosi = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMiso = if (enableSpiSd) Some(Input(Bool())) else None
+    val spiCsN = if (enableSpiSd) Some(Output(Bool())) else None
 
     val supervisorExternalInterrupt = Output(Bool())
     val uartInterrupt = Output(Bool())
@@ -192,7 +203,10 @@ class AetherCoreProductUnifiedMemorySoC(
     plicSourceCount = board.plicSourceCount,
     uartPlicSourceId = board.uartPlicSourceId,
     uartResetDivisor = board.uartDefaultDivisor,
-    externalSemanticMemory = true
+    externalSemanticMemory = true,
+    enableSpiSd = enableSpiSd,
+    spiPlicSourceId = board.spiPlicSourceId,
+    spiBusClockFrequencyHz = board.spiBusClockFrequencyHz
   ))
   val dcache = Module(new AetherDirectMappedReadCache(
     addrBits = implementedPaddrBits,
@@ -315,6 +329,12 @@ class AetherCoreProductUnifiedMemorySoC(
     (if (externalPhysicalSeams) io.uartTxReady.get else true.B)
   fabric.io.timebaseTick :=
     (if (externalPhysicalSeams) io.timebaseTick.get else true.B)
+  if (enableSpiSd) {
+    fabric.io.spiMiso.get := io.spiMiso.get
+    io.spiSclk.get := fabric.io.spiSclk.get
+    io.spiMosi.get := fabric.io.spiMosi.get
+    io.spiCsN.get := fabric.io.spiCsN.get
+  }
   io.rxReady := fabric.io.rxReady
   io.uartValid := fabric.io.uartValid
   io.uartByte := fabric.io.uartByte

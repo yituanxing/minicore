@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="5.024"
-revision="522bead374d6b7b2adb316304126e5361b18bcf1"
+version="${AETHERCORE_VERILATOR_VERSION:-5.024}"
+case "$version" in
+  5.024) revision="522bead374d6b7b2adb316304126e5361b18bcf1" ;;
+  # Exact upstream v5.054 annotated release tag points to this commit.
+  5.054) revision="bbb60a403932a9f695cb6ff001ceb73de6ad9234" ;;
+  *)
+    printf 'ERROR: unsupported pinned Verilator version: %s\n' "$version" >&2
+    exit 45
+    ;;
+esac
 cache_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
 prefix="$cache_root/verilator-$version"
 source_dir="$cache_root/src/verilator-$revision"
@@ -33,10 +41,8 @@ ensure_runtime_assets() {
     exit 43
   fi
 
-  # The 5.024 CMake installation is experimental and omits generated/runtime
-  # files consumed by `verilator --build`. Generate the configured makefile
-  # through the release's standard Autoconf path and copy the missing helper
-  # script from the exact pinned source tree into the persistent prefix.
+  # Ensure every pinned CMake installation carries the runtime files consumed
+  # by `verilator --build`. Some supported releases do not install all of them.
   (
     cd "$source_dir"
     autoconf
@@ -127,8 +133,9 @@ if [[ -x "$prefix/bin/verilator" && -x "$prefix/bin/verilator_bin" && \
 fi
 
 # Ubuntu 24.04 ships Verilator 5.020, which has an intermittent thread-pool
-# destructor failure fixed in 5.024. Build the exact upstream fix release once
-# into the persistent WSL cache; subsequent jobs verify and reuse it.
+# destructor failure fixed in 5.024. Preserve that qualified default while
+# allowing a separately pinned 5.054 Product performance candidate. Build the
+# selected exact upstream commit once; subsequent jobs verify and reuse it.
 missing=()
 command -v cmake >/dev/null 2>&1 || missing+=(cmake)
 command -v ninja >/dev/null 2>&1 || missing+=(ninja-build)

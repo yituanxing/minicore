@@ -30,7 +30,8 @@ object AetherSoCDts {
       board: AetherSoCBoardSpec,
       isa: String = "rv64ima_zicsr_zifencei",
       mmu: String = "sv39",
-      bootargs: Option[String] = None
+      bootargs: Option[String] = None,
+      enableSpiSd: Boolean = false
   ): String = {
     require(isa.startsWith("rv64i"), s"AetherSoC v0 DTS requires RV64I-derived ISA, got $isa")
     require(mmu == "sv39", s"AetherSoC v0 DTS currently supports Sv39, got $mmu")
@@ -41,6 +42,43 @@ object AetherSoCDts {
       .map(value => s"""        bootargs = "${escape(value)}";
 """)
       .getOrElse("")
+
+    // This opt-in physical path uses drivers already present in upstream
+    // Linux: spi-oc-tiny + gpio-altera for active-low chip select, with the
+    // MMC-over-SPI child bound by mmc_spi. No fake block-device register set
+    // or simulated DMA is advertised to the kernel.
+    val spiSdNodes = if (enableSpiSd) s"""
+        sd_cs_gpio: gpio@${nodeAddress(map.spiCsGpioBase)} {
+            compatible = "altr,pio-1.0";
+            reg = ${reg64(map.spiCsGpioBase, map.spiCsGpioBytes)};
+            gpio-controller;
+            #gpio-cells = <2>;
+            altr,ngpio = <1>;
+            status = "okay";
+        };
+
+        spi@${nodeAddress(map.spiBase)} {
+            compatible = "opencores,tiny-spi-rtlsvn2";
+            reg = ${reg64(map.spiBase, map.spiBytes)};
+            clock-frequency = <${board.spiBusClockFrequencyHz}>;
+            baud-width = <8>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+            num-cs = <1>;
+            cs-gpios = <&sd_cs_gpio 0 1>;
+            interrupt-parent = <&plic>;
+            interrupts = <${board.spiPlicSourceId}>;
+            status = "okay";
+
+            mmc@0 {
+                compatible = "mmc-spi-slot";
+                reg = <0>;
+                spi-max-frequency = <${board.spiMaxFrequencyHz}>;
+                voltage-ranges = <3300 3300>;
+                broken-cd;
+            };
+        };
+""" else ""
 
     s"""/dts-v1/;
 
@@ -120,6 +158,7 @@ ${chosenBootargs}    };
             reg-names = "mtime", "mtimecmp";
             interrupts-extended = <&cpu_intc ${board.machineTimerInterruptId}>;
         };
+${spiSdNodes}
     };
 };
 """

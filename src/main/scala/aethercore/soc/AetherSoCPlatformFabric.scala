@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import aethercore.common.{AtomicOp, MemSize}
 import aethercore.memory.{AetherMemOp, AetherMemRequest, AetherMemResponse, MemoryAttributes}
-import aethercore.soc.peripheral.{AetherAclintMtimer, AetherPlic, AetherPlicMap, AetherUart16550}
+import aethercore.soc.peripheral.{AetherAclintMtimer, AetherAlteraPioGpio, AetherOcTinySpi, AetherPlic, AetherPlicMap, AetherUart16550}
 
 /**
   * Data-side AetherSoC platform fabric for the qualified RV64 board contract.
@@ -28,11 +28,20 @@ class AetherSoCPlatformFabric(
     val plicSourceCount: Int = 52,
     val uartPlicSourceId: Int = 10,
     val uartResetDivisor: Int = 1,
-    val externalSemanticMemory: Boolean = false
+    val externalSemanticMemory: Boolean = false,
+    val enableSpiSd: Boolean = false,
+    val spiPlicSourceId: Int = 11,
+    val spiBusClockFrequencyHz: Long = 50_000_000L
 ) extends Module {
   require(dataBits == 64, "AetherSoC v0 platform fabric currently targets RV64")
   require(txnIdBits > 0)
   require(uartPlicSourceId > 0 && uartPlicSourceId <= plicSourceCount)
+  if (enableSpiSd) {
+    require(spiPlicSourceId > 0 && spiPlicSourceId <= plicSourceCount)
+    require(spiPlicSourceId != uartPlicSourceId)
+    require(spiBusClockFrequencyHz > 0,
+      "SPI-SD controller clock must match the physical Product SoC module clock")
+  }
 
   private val busBytes = dataBits / 8
 
@@ -82,6 +91,13 @@ class AetherSoCPlatformFabric(
     val uartTxReady = Input(Bool())
     val uartBaudDivisor = Output(UInt(16.W))
 
+    // Real pin-level SPI/SD port, opt-in so historical V0/engineering profiles
+    // keep their original hardware footprint and qualified address behavior.
+    val spiSclk = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMosi = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMiso = if (enableSpiSd) Some(Input(Bool())) else None
+    val spiCsN = if (enableSpiSd) Some(Output(Bool())) else None
+
     // Board-owned architectural timebase pulse. The simulator may assert this
     // every cycle; an FPGA clock/reset shell must generate the declared rate.
     val timebaseTick = Input(Bool())
@@ -109,6 +125,10 @@ class AetherSoCPlatformFabric(
   private val mtimecmpAddress = addressMap.mtimecmpAddress.U(paddrBits.W)
   private val plicBase = addressMap.plicBase.U(paddrBits.W)
   private val plicLimit = addressMap.plicLimit.U(paddrBits.W)
+  private val spiBase = addressMap.spiBase.U(paddrBits.W)
+  private val spiLimit = addressMap.spiLimit.U(paddrBits.W)
+  private val spiCsGpioBase = addressMap.spiCsGpioBase.U(paddrBits.W)
+  private val spiCsGpioLimit = addressMap.spiCsGpioLimit.U(paddrBits.W)
 
   // PMA policy is now fabric-owned. RAM is the only first-stage region that is
   // cacheable/idempotent/executable and advertises atomic support.
@@ -143,8 +163,19 @@ class AetherSoCPlatformFabric(
     pendingValid && (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
   private val pendingPlic =
     pendingValid && pending.paddr >= plicBase && pending.paddr < plicLimit
+  private val pendingSpi =
+    pendingValid && enableSpiSd.B &&
+      pending.paddr >= spiBase && pending.paddr < spiLimit
+  private val pendingSpiCsGpio =
+    pendingValid && enableSpiSd.B &&
+      pending.paddr >= spiCsGpioBase && pending.paddr < spiCsGpioLimit
+  private val pendingUnimplementedSpi =
+    pendingValid && !enableSpiSd.B &&
+      ((pending.paddr >= spiBase && pending.paddr < spiLimit) ||
+        (pending.paddr >= spiCsGpioBase && pending.paddr < spiCsGpioLimit))
   private val pendingMmio =
-    pendingUart || pendingExit || pendingTimer || pendingPlic
+    pendingUart || pendingExit || pendingTimer || pendingPlic ||
+      pendingSpi || pendingSpiCsGpio || pendingUnimplementedSpi
   private val pendingExternal =
     pendingValid && !pendingMmio
 
@@ -164,6 +195,33 @@ class AetherSoCPlatformFabric(
   uart.io.rxByte := io.rxByte
   uart.io.txReady := io.uartTxReady
 
+  // The upstream Linux `spi-oc-tiny` master uses the original OpenCores
+  // TXR/TXE double-buffer semantics and `cs-gpios`. `gpio-altera` drives the
+  // active-low SD card select. All transfers are PIO: this controller does
+  // not introduce a second RAM writer or violate AXI LR/SC/AMO ownership.
+  private val spi = if (enableSpiSd) Some(Module(new AetherOcTinySpi(
+    clockFrequencyHz = spiBusClockFrequencyHz))) else None
+  private val spiCsGpio =
+    if (enableSpiSd) Some(Module(new AetherAlteraPioGpio)) else None
+  spi.foreach { device =>
+    device.io.request := pendingSpi
+    device.io.write := pendingWrite
+    device.io.offset := (pending.paddr - spiBase)(4, 0)
+    device.io.wdata := pending.wdata
+    device.io.complete := false.B // Assigned to the terminal response below.
+    device.io.miso := io.spiMiso.get
+    io.spiSclk.get := device.io.sclk
+    io.spiMosi.get := device.io.mosi
+  }
+  spiCsGpio.foreach { device =>
+    device.io.request := pendingSpiCsGpio
+    device.io.write := pendingWrite
+    device.io.offset := (pending.paddr - spiCsGpioBase)(3, 0)
+    device.io.wdata := pending.wdata(31, 0)
+    device.io.complete := false.B // Assigned to the terminal response below.
+    io.spiCsN.get := device.io.pin
+  }
+
   private val plic = Module(new AetherPlic(
     sourceCount = plicSourceCount,
     addressBits = 22,
@@ -172,8 +230,12 @@ class AetherSoCPlatformFabric(
     claimCompleteOffset = AetherPlicMap.SupervisorClaimComplete
   ))
   private val plicComplete = WireDefault(false.B)
-  plic.io.sources :=
+  val uartSources =
     (uart.io.interrupt.asUInt << (uartPlicSourceId - 1)).pad(plicSourceCount)
+  val spiSources = spi.map { device =>
+    (device.io.interrupt.asUInt << (spiPlicSourceId - 1)).pad(plicSourceCount)
+  }.getOrElse(0.U(plicSourceCount.W))
+  plic.io.sources := uartSources | spiSources
   plic.io.request := pendingPlic
   plic.io.write := pendingWrite
   plic.io.address := (pending.paddr - plicBase)(21, 0)
@@ -197,19 +259,26 @@ class AetherSoCPlatformFabric(
     pendingPlic,
     plic.io.ready,
     Mux(pendingTimer, timer.io.ready,
-      Mux(pendingUart, uart.io.ready, true.B))
+      Mux(pendingUart, uart.io.ready,
+        Mux(pendingSpi, spi.map(_.io.ready).getOrElse(true.B),
+          Mux(pendingSpiCsGpio, spiCsGpio.map(_.io.ready).getOrElse(true.B), true.B))))
   )
   private val mmioData = Mux(
     pendingPlic,
     plic.io.rdata.pad(dataBits),
     Mux(pendingTimer, timer.io.rdata,
-      Mux(pendingUart, uart.io.rdata, 0.U))
+      Mux(pendingUart, uart.io.rdata,
+        Mux(pendingSpi, spi.map(_.io.rdata).getOrElse(0.U(dataBits.W)),
+          Mux(pendingSpiCsGpio, spiCsGpio.map(_.io.rdata.pad(dataBits)).getOrElse(0.U(dataBits.W)), 0.U))))
   )
   private val mmioFault = Mux(
     pendingPlic,
     plic.io.fault,
     Mux(pendingTimer, timer.io.fault,
-      Mux(pendingUart, uart.io.fault, false.B))
+      Mux(pendingUart, uart.io.fault,
+        Mux(pendingSpi, spi.map(_.io.fault).getOrElse(false.B),
+          Mux(pendingSpiCsGpio, spiCsGpio.map(_.io.fault).getOrElse(false.B),
+            pendingUnimplementedSpi))))
   )
 
   // Keep compatibility outputs deterministic in both compositions.
@@ -336,6 +405,8 @@ class AetherSoCPlatformFabric(
     uartComplete := mmioResponseFire
     timerComplete := mmioResponseFire
     plicComplete := mmioResponseFire
+    spi.foreach(_.io.complete := mmioResponseFire)
+    spiCsGpio.foreach(_.io.complete := mmioResponseFire)
 
     io.exitValid := mmioResponseFire && pendingExit && pendingWrite
     io.exitCode := pending.wdata
@@ -379,6 +450,8 @@ class AetherSoCPlatformFabric(
     uartComplete := responseFire
     timerComplete := responseFire
     plicComplete := responseFire
+    spi.foreach(_.io.complete := responseFire)
+    spiCsGpio.foreach(_.io.complete := responseFire)
 
     io.memValid := pendingExternal
 

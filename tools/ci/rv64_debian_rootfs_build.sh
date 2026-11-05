@@ -9,33 +9,151 @@ EVIDENCE_DIR="${BUILD_DIR}/evidence"
 # Official Debian riscv64 OCI release, published via docker-library's
 # debuerreotype pipeline. Never run an amd64 rootfs under the DUT.
 IMAGE='debian:trixie-20261027-slim'
+STAGE="${RV64_DEBIAN_STAGE:-d1}"
+case "${STAGE}" in
+  d1|d2|d3) ;;
+  *) printf 'ERROR: unknown Debian qualification stage %s\n' "${STAGE}" >&2; exit 1 ;;
+esac
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-for tool in docker readelf sudo sha256sum; do
+for tool in readelf sudo sha256sum; do
   command -v "${tool}" >/dev/null || fail "missing host tool ${tool}"
 done
+if [[ "${STAGE}" != d3 ]]; then
+  command -v docker >/dev/null || fail 'missing host tool docker'
+fi
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${ROOTFS_DIR}" "${EVIDENCE_DIR}"
 
-# docker create/export extracts the official riscv64 image WITHOUT executing
-# foreign binaries, installing host binfmt handlers or rebuilding Debian.
-docker pull --platform linux/riscv64 "${IMAGE}"
-actual_arch="$(docker image inspect --format '{{.Architecture}}' "${IMAGE}")"
-[[ "${actual_arch}" == riscv64 ]] || fail "image architecture is ${actual_arch}, not riscv64"
-image_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${IMAGE}")"
-[[ "${image_digest}" == *@sha256:* ]] || fail 'missing OCI repository digest'
-if [[ -n "${RV64_DEBIAN_EXPECTED_IMAGE_DIGEST:-}" ]]; then
-  [[ "${image_digest}" == "${RV64_DEBIAN_EXPECTED_IMAGE_DIGEST}" ]] || \
-    fail "official Debian image digest changed: ${image_digest}"
-fi
+if [[ "${STAGE}" == d3 ]]; then
+  # An OCI slim image does NOT contain a real distribution init or login
+  # services. D3 must be supplied as an independently constructed full Debian
+  # riscv64 rootfs archive, pinned to an exact SHA256. A file tree from a host
+  # architecture or an unpinned download must never enter the expensive RTL.
+  archive="${RV64_DEBIAN_FULL_ROOTFS_ARCHIVE:-}"
+  archive_sha256="${RV64_DEBIAN_FULL_ROOTFS_SHA256:-}"
+  [[ -f "${archive}" && "${archive_sha256}" =~ ^[[:xdigit:]]{64}$ ]] || \
+    fail 'D3 requires RV64_DEBIAN_FULL_ROOTFS_ARCHIVE and its exact SHA256'
+  printf '%s  %s\n' "${archive_sha256}" "${archive}" | sha256sum -c - || \
+    fail 'full Debian rootfs archive differs from the pinned SHA256'
+  # This archive is external input and is unpacked with root privileges for
+  # device nodes/ownership. Native Debian often has ABSOLUTE guest symlinks
+  # (e.g. alternatives); extracting those raw on the host is unsafe. Validate
+  # every path/alias first, then rewrite only these absolute guest links to
+  # equivalent in-rootfs relative links in a derived, auditably hashed tar.
+  # Never execute a foreign binary or dereference a guest link on the host.
+  rebased_archive="${BUILD_DIR}/safe-full-rootfs.tar"
+  python3 - "${archive}" "${rebased_archive}" <<'PY'
+import posixpath
+import sys
+import tarfile
 
-container_id="$(docker create --platform linux/riscv64 "${IMAGE}" /bin/true)"
-[[ -n "${container_id}" ]] || fail 'docker create returned no container ID'
-trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
-docker export "${container_id}" | tar -xf - --no-same-owner -C "${ROOTFS_DIR}"
-docker rm "${container_id}" >/dev/null
-trap - EXIT
+archive = sys.argv[1]
+rebased_archive = sys.argv[2]
+nodes = {}
+
+def inside(path):
+    return bool(path) and path != '..' and not path.startswith('../') and not path.startswith('/')
+
+try:
+    with tarfile.open(archive, mode='r:*') as reader:
+        for member in reader:
+            path = member.name.removeprefix('./').rstrip('/')
+            if path in ('', '.'):
+                continue
+            if not inside(path) or any(part == '..' for part in path.split('/')):
+                raise ValueError(f'archive member escapes rootfs: {member.name!r}')
+            if member.issym():
+                dest = posixpath.normpath(
+                    member.linkname.lstrip('/') if member.linkname.startswith('/')
+                    else posixpath.join(posixpath.dirname(path), member.linkname))
+                if not inside(dest):
+                    raise ValueError(f'symlink escapes rootfs: {path!r} -> {member.linkname!r}')
+                nodes[path] = dest
+            elif member.islnk():
+                dest = posixpath.normpath(member.linkname.lstrip('/').removeprefix('./'))
+                if not inside(dest):
+                    raise ValueError(f'hardlink escapes rootfs: {path!r} -> {member.linkname!r}')
+                nodes[path] = dest
+            elif not (member.isdir() or member.isfile() or member.ischr() or
+                      member.isblk() or member.isfifo()):
+                raise ValueError(f'unsupported archive member type: {path!r}')
+
+        # Resolving each path component catches multi-level alias chains,
+        # including a child subsequently created under a symlink prefix.
+        for member in reader.getmembers():
+            path = member.name.removeprefix('./').rstrip('/')
+            if path in ('', '.'):
+                continue
+            parts = path.split('/')
+            resolved = []
+            budget = len(nodes) + len(parts) + 1
+            while parts:
+                part = parts.pop(0)
+                if part in ('', '.'):
+                    continue
+                if part == '..':
+                    if not resolved:
+                        raise ValueError(f'archive path leaves rootfs: {path!r}')
+                    resolved.pop()
+                    continue
+                resolved.append(part)
+                candidate = '/'.join(resolved)
+                if candidate in nodes:
+                    budget -= 1
+                    if budget <= 0:
+                        raise ValueError(f'archive link cycle: {path!r}')
+                    # nodes already denotes a normalized in-rootfs target.
+                    parts = nodes[candidate].split('/') + parts
+                    resolved = []
+
+        # Re-emit the original file bytes and device/owner metadata without
+        # extracting anything. Only guest-root absolute symlinks are rebased;
+        # this also ensures GNU tar will never create a host-absolute link.
+        with tarfile.open(rebased_archive, mode='w', format=tarfile.PAX_FORMAT) as writer:
+            for member in reader.getmembers():
+                path = member.name.removeprefix('./').rstrip('/')
+                if path in ('', '.'):
+                    continue
+                member.name = path
+                if member.issym() and member.linkname.startswith('/'):
+                    member.linkname = posixpath.relpath(
+                        member.linkname.lstrip('/'), posixpath.dirname(path) or '.')
+                elif member.islnk() and member.linkname.startswith('/'):
+                    member.linkname = member.linkname.lstrip('/')
+                member.pax_headers = {k: v for k, v in member.pax_headers.items()
+                                      if k not in ('path', 'linkpath')}
+                writer.addfile(member, reader.extractfile(member) if member.isfile() else None)
+except (OSError, tarfile.TarError, ValueError) as exc:
+    sys.exit(f'ERROR: unsafe D3 Debian archive: {exc}')
+PY
+  sha256sum "${rebased_archive}" > "${EVIDENCE_DIR}/safe-full-rootfs-tar.sha256"
+  sudo tar -xf "${rebased_archive}" -C "${ROOTFS_DIR}" --numeric-owner
+  actual_arch=riscv64
+  image_digest="sha256:${archive_sha256}"
+  source_description="full-debian-rootfs-archive:${archive}"
+else
+  # docker create/export extracts the official riscv64 image WITHOUT executing
+  # foreign binaries, installing host binfmt handlers or rebuilding Debian.
+  docker pull --platform linux/riscv64 "${IMAGE}"
+  actual_arch="$(docker image inspect --format '{{.Architecture}}' "${IMAGE}")"
+  [[ "${actual_arch}" == riscv64 ]] || fail "image architecture is ${actual_arch}, not riscv64"
+  image_digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "${IMAGE}")"
+  [[ "${image_digest}" == *@sha256:* ]] || fail 'missing OCI repository digest'
+  if [[ -n "${RV64_DEBIAN_EXPECTED_IMAGE_DIGEST:-}" ]]; then
+    [[ "${image_digest}" == "${RV64_DEBIAN_EXPECTED_IMAGE_DIGEST}" ]] || \
+      fail "official Debian image digest changed: ${image_digest}"
+  fi
+
+  container_id="$(docker create --platform linux/riscv64 "${IMAGE}" /bin/true)"
+  [[ -n "${container_id}" ]] || fail 'docker create returned no container ID'
+  trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
+  docker export "${container_id}" | tar -xf - --no-same-owner -C "${ROOTFS_DIR}"
+  docker rm "${container_id}" >/dev/null
+  trap - EXIT
+  source_description="official-oci:${IMAGE}"
+fi
 
 [[ -x "${ROOTFS_DIR}/bin/sh" ]] || fail 'Debian shell missing'
 [[ -x "${ROOTFS_DIR}/usr/bin/dpkg" ]] || fail 'Debian dpkg missing'
@@ -57,7 +175,97 @@ if [[ ! -c "${ROOTFS_DIR}/dev/null" ]]; then
 fi
 [[ -c "${ROOTFS_DIR}/dev/console" && -c "${ROOTFS_DIR}/dev/null" ]] || \
   fail 'Debian initramfs must contain real console/null device nodes'
-install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_dynamic_init.sh" "${ROOTFS_DIR}/init"
+case "${STAGE}" in
+  d1)
+    install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_dynamic_init.sh" "${ROOTFS_DIR}/init"
+    ;;
+  d2)
+    # Check required *distribution binaries* before spending hours in RTL.
+    for program in mount mkdir echo cat uname sleep; do
+      [[ -x "${ROOTFS_DIR}/bin/${program}" ]] || \
+        fail "D2 requires native Debian /bin/${program}"
+    done
+    # Also exercise independently observable RV64GC instructions and Linux
+    # facilities not necessarily selected by a short dash/coreutils path:
+    # F/D arithmetic and fcsr exceptions, glibc NPTL clone/join, A-extension
+    # atomic RMW, native futex and per-page memory protection. This probe is
+    # linked against the fixed RV64 Linux *glibc* toolchain and remains a real
+    # LP64D dynamic ELF running alongside unchanged Debian distro binaries.
+    [[ -n "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}" ]] || \
+      fail 'D2 requires the pinned RV64 Linux glibc cross compiler'
+    cross_gcc="${AETHERCORE_RV64_LINUX_CROSS_COMPILE}gcc"
+    [[ -x "${cross_gcc}" ]] || command -v "${cross_gcc}" >/dev/null || \
+      fail "missing pinned D2 cross compiler ${cross_gcc}"
+    mkdir -p "${ROOTFS_DIR}/usr/local/libexec"
+    native_probe="${ROOTFS_DIR}/usr/local/libexec/aethercore-d2-native-probe"
+    "${cross_gcc}" -O2 -std=gnu11 -march=rv64gc_zicsr_zifencei -mabi=lp64d \
+      -frounding-math -fno-fast-math -pthread \
+      "${ROOT_DIR}/software/rv64_userspace/debian_d2_native_probe.c" \
+      -o "${native_probe}" -lm
+    readelf -h -l -A "${native_probe}" > "${EVIDENCE_DIR}/debian-d2-native-readelf.txt"
+    grep -q 'Class:[[:space:]]*ELF64' "${EVIDENCE_DIR}/debian-d2-native-readelf.txt" || \
+      fail 'D2 native workload is not ELF64'
+    grep -q 'Machine:[[:space:]]*RISC-V' "${EVIDENCE_DIR}/debian-d2-native-readelf.txt" || \
+      fail 'D2 native workload is not RISC-V'
+    grep -q 'double-float ABI' "${EVIDENCE_DIR}/debian-d2-native-readelf.txt" || \
+      fail 'D2 native workload is not LP64D'
+    grep -q 'Requesting program interpreter: /lib/ld-linux-riscv64-lp64d.so.1' \
+      "${EVIDENCE_DIR}/debian-d2-native-readelf.txt" || \
+      fail 'D2 native workload does not use the genuine LP64D glibc loader'
+    install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_d2_init.sh" "${ROOTFS_DIR}/init"
+    ;;
+  d3)
+    # D3 does not substitute a handwritten shell for Debian's real PID1.
+    [[ -x "${ROOTFS_DIR}/sbin/init" ]] || fail 'D3 full rootfs has no native /sbin/init'
+    [[ -s "${ROOTFS_DIR}/var/lib/dpkg/status" ]] || \
+      fail 'D3 full rootfs has no installed Debian package database'
+    [[ -x "${ROOTFS_DIR}/usr/sbin/agetty" || -x "${ROOTFS_DIR}/sbin/agetty" ]] || \
+      fail 'D3 full rootfs has no native serial agetty'
+    [[ -x "${ROOTFS_DIR}/usr/bin/login" || -x "${ROOTFS_DIR}/bin/login" ]] || \
+      fail 'D3 full rootfs has no native login'
+    [[ -x "${ROOTFS_DIR}/bin/mount" ]] || fail 'D3 full rootfs has no native mount'
+    # D1's shell/dpkg identity does not establish the full distribution
+    # layer. Verify the actual init/getty/login ELF binaries now, before RTL.
+    for candidate in sbin/init usr/sbin/agetty usr/bin/login; do
+      program="${ROOTFS_DIR}/${candidate}"
+      if [[ ! -x "${program}" ]]; then
+        case "${candidate}" in
+          usr/sbin/agetty) program="${ROOTFS_DIR}/sbin/agetty" ;;
+          usr/bin/login) program="${ROOTFS_DIR}/bin/login" ;;
+        esac
+      fi
+      [[ -x "${program}" ]] || fail "missing D3 program ${candidate}"
+      evidence_name="$(basename "${candidate}")"
+      readelf -h -l -A "${program}" > "${EVIDENCE_DIR}/debian-d3-${evidence_name}-readelf.txt" || \
+        fail "D3 ${candidate} is not a real Debian ELF"
+      grep -q 'Machine:[[:space:]]*RISC-V' \
+        "${EVIDENCE_DIR}/debian-d3-${evidence_name}-readelf.txt" || \
+        fail "D3 ${candidate} does not contain native RISC-V code"
+      grep -q 'double-float ABI' \
+        "${EVIDENCE_DIR}/debian-d3-${evidence_name}-readelf.txt" || \
+        fail "D3 ${candidate} is not LP64D"
+    done
+    # Enable a real Debian serial login service without invoking foreign
+    # systemctl on the CI host. Never invent a fake getty/login binary.
+    if [[ -f "${ROOTFS_DIR}/usr/lib/systemd/system/serial-getty@.service" ]]; then
+      mkdir -p "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants"
+      ln -sfn /usr/lib/systemd/system/serial-getty@.service \
+        "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
+    elif [[ -f "${ROOTFS_DIR}/lib/systemd/system/serial-getty@.service" ]]; then
+      mkdir -p "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants"
+      ln -sfn /lib/systemd/system/serial-getty@.service \
+        "${ROOTFS_DIR}/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
+    elif [[ -f "${ROOTFS_DIR}/etc/inittab" ]]; then
+      if ! grep -q '^T0:.*ttyS0' "${ROOTFS_DIR}/etc/inittab"; then
+        printf 'T0:2345:respawn:/sbin/agetty -L 115200 ttyS0 vt100\n' >> \
+          "${ROOTFS_DIR}/etc/inittab"
+      fi
+    else
+      fail 'D3 rootfs has no supported native systemd/SysV serial-login service'
+    fi
+    install -m 0755 "${ROOT_DIR}/software/rv64_userspace/debian_d3_init.sh" "${ROOTFS_DIR}/init"
+    ;;
+esac
 
 readelf -h -l -A "${ROOTFS_DIR}/bin/sh" > "${EVIDENCE_DIR}/debian-sh-readelf.txt"
 readelf -h -l -A "${ROOTFS_DIR}/usr/bin/dpkg" > "${EVIDENCE_DIR}/debian-dpkg-readelf.txt"
@@ -85,14 +293,45 @@ done
 sha256sum "${ROOTFS_DIR}/bin/sh" "${ROOTFS_DIR}/usr/bin/dpkg" \
   "${ROOTFS_DIR}/init" "${ROOTFS_DIR}/etc/debian_version" \
   > "${EVIDENCE_DIR}/sha256.txt"
+if [[ "${STAGE}" == d2 ]]; then
+  sha256sum "${ROOTFS_DIR}/usr/local/libexec/aethercore-d2-native-probe" \
+    >> "${EVIDENCE_DIR}/sha256.txt"
+fi
+
+rootfs_bytes="$(du -sb "${ROOTFS_DIR}" | awk '{print $1}')"
+if [[ "${STAGE}" == d3 ]]; then
+  # The current G5 SoC has only 256 MiB RAM; the raw initramfs, kernel,
+  # OpenSBI and Debian services are simultaneously resident. A full Debian
+  # tree bigger than this conservative 96 MiB allowance is a different
+  # architectural workload: requires an enlarged RAM/DTB arrangement or an
+  # early block-root pivot. Abort before even compiling Linux, let alone
+  # running multi-billion-cycle RTL, instead of silently exhausting memory.
+  reserved_kernel_bytes=$((64 * 1024 * 1024))
+  reserved_services_bytes=$((64 * 1024 * 1024))
+  reserved_boot_staging_bytes=$((32 * 1024 * 1024))
+  physical_ram_bytes=$((256 * 1024 * 1024))
+  max_embedded_rootfs_bytes=$((physical_ram_bytes - reserved_kernel_bytes - reserved_services_bytes - reserved_boot_staging_bytes))
+  {
+    echo "physical_ram_bytes=${physical_ram_bytes}"
+    echo "reserved_kernel_bytes=${reserved_kernel_bytes}"
+    echo "reserved_services_bytes=${reserved_services_bytes}"
+    echo "reserved_boot_staging_bytes=${reserved_boot_staging_bytes}"
+    echo "max_embedded_rootfs_bytes=${max_embedded_rootfs_bytes}"
+    echo "rootfs_bytes=${rootfs_bytes}"
+  } > "${EVIDENCE_DIR}/d3-memory-budget.txt"
+  [[ "${rootfs_bytes}" -le "${max_embedded_rootfs_bytes}" ]] || \
+    fail "full Debian rootfs ${rootfs_bytes} B exceeds 256MiB SoC's D3 embedded-root allowance ${max_embedded_rootfs_bytes} B; enlarge RAM/DTB or switch to block-root boot before RTL"
+fi
 {
   echo 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS'
+  echo "stage=${STAGE}"
+  echo "source=${source_description}"
   echo "image=${IMAGE}"
   echo "image_digest=${image_digest}"
   echo "architecture=${actual_arch}"
   echo 'abi=lp64d'
   echo "interpreter=${interpreter}"
   echo "rootfs=${ROOTFS_DIR}"
-  echo "rootfs_bytes=$(du -sb "${ROOTFS_DIR}" | awk '{print $1}')"
+  echo "rootfs_bytes=${rootfs_bytes}"
   echo "debian_version=$(head -n 1 "${ROOTFS_DIR}/etc/debian_version")"
 } | tee "${BUILD_DIR}/result.txt"

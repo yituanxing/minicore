@@ -126,3 +126,25 @@ object ElaborateProductFpgaColdBootPinsRv64gc extends App {
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }
+
+/** Opt-in Product RV64GC FPGA with a real SPI/MMC PIO pin and MMIO path.
+  * The same SPI-SD target must be selected when emitting the corresponding
+  * device tree (`EmitAetherSoCDts --spi-sd`). The physical board must still
+  * provide DDR, PLL, firmware loader, 3.3V SD wiring and timing constraints.
+  */
+object ElaborateProductFpgaColdBootSpiSdPinsRv64gc extends App {
+  require(args.nonEmpty, "RV64GC SPI-SD FPGA pins need small or expanded capacity")
+  val geometry = args.head match {
+    case "small" => ProductCoreProfiles.smallGeometry
+    case "expanded" => ProductCoreProfiles.expandedSingleLaneGeometry
+    case other => throw new IllegalArgumentException(s"unknown RV64GC SPI-SD geometry: $other")
+  }
+  val target = AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaColdBootPins(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
+    args.tail,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}

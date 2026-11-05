@@ -30,6 +30,7 @@ constexpr std::uint64_t kLinuxPayloadBase = 0x80400000ULL;
 #endif
 
 using aethercore::l32sim::Memory;
+using aethercore::l32sim::TransportRuntimeState;
 using aethercore::l32sim::initialize;
 using aethercore::l32sim::step;
 
@@ -105,6 +106,7 @@ int main(int argc, char** argv) {
     OpenSbiTop top{&context};
     Memory memory;
     memory.loadAtBase(image);
+    TransportRuntimeState transport;
 
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
@@ -139,7 +141,7 @@ int main(int argc, char** argv) {
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
 
-    initialize(top, memory);
+    initialize(top, memory, transport);
 
     if (inputStarted) {
       std::cerr << "\nL32_UART_INPUT_START cycles=0 commits=0 bytes=" << uartInput.size()
@@ -152,6 +154,7 @@ int main(int argc, char** argv) {
           top,
           context,
           memory,
+          transport,
           presentInput,
           presentInput ? static_cast<std::uint8_t>(uartInput[inputIndex]) : 0);
 
@@ -388,7 +391,9 @@ int main(int argc, char** argv) {
                   << " input-bytes=" << inputIndex << '/' << uartInput.size()
                   << " rx-irq=" << (sawRxInterrupt ? 1 : 0)
                   << " post-input-seip=" << (sawPostInputSeip ? 1 : 0)
-                  << " marker=" << milestone << "\n";
+                  << " marker=" << milestone
+                  << " ram-fingerprint=0x" << std::hex << memory.fingerprint()
+                  << std::dec << "\n";
         return sawOpenSbiBanner ? 0 : 5;
       }
 
@@ -438,6 +443,7 @@ int main(int argc, char** argv) {
               << " last-exception-pc=0x" << lastExceptionPc
               << " last-exception-cause=0x" << lastExceptionCause
               << " last-exception-value=0x" << lastExceptionValue
+              << " ram-fingerprint=0x" << memory.fingerprint()
               << " recent-pcs=";
     for (std::size_t i = 0; i < recentCount; ++i) {
       const auto slot = (recentIndex + kRecentCommitCount - recentCount + i) % kRecentCommitCount;

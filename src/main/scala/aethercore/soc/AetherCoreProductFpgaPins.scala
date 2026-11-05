@@ -16,8 +16,10 @@ import chisel3._
 class AetherCoreProductFpgaPins(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
-    val productConfigOverride: Option[ProductCoreConfig] = None
+    val productConfigOverride: Option[ProductCoreConfig] = None,
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
+  private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = productConfigOverride.getOrElse(
     AetherCoreProductSoCProfiles.smallOpenSbiEngineering(
       implementedPaddrBits, productGeometry))
@@ -30,11 +32,16 @@ class AetherCoreProductFpgaPins(
     val timebaseTick = Input(Bool())
     val serialRx = Input(Bool())
     val serialTx = Output(Bool())
+    val spiSclk = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMosi = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMiso = if (enableSpiSd) Some(Input(Bool())) else None
+    val spiCsN = if (enableSpiSd) Some(Output(Bool())) else None
   })
 
   private val machine = Module(new AetherCoreProductFpgaSoC(
     implementedPaddrBits = implementedPaddrBits,
-    productConfigOverride = Some(config)))
+    productConfigOverride = Some(config),
+    boardDevices = boardDevices))
 
   io.axi.aw.valid := machine.io.axi.aw.valid
   io.axi.aw.bits := machine.io.axi.aw.bits
@@ -56,4 +63,10 @@ class AetherCoreProductFpgaPins(
   machine.io.timebaseTick := io.timebaseTick
   machine.io.serialRx := io.serialRx
   io.serialTx := machine.io.serialTx
+  if (enableSpiSd) {
+    machine.io.spiMiso.get := io.spiMiso.get
+    io.spiSclk.get := machine.io.spiSclk.get
+    io.spiMosi.get := machine.io.spiMosi.get
+    io.spiCsN.get := machine.io.spiCsN.get
+  }
 }

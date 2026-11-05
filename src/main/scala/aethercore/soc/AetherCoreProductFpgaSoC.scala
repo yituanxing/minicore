@@ -18,8 +18,10 @@ class AetherCoreProductFpgaSoC(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     // Legacy geometry selection is used only when no exact CPU target is given.
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
-    val productConfigOverride: Option[ProductCoreConfig] = None
+    val productConfigOverride: Option[ProductCoreConfig] = None,
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
 ) extends Module {
+  private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = productConfigOverride.getOrElse(
     AetherCoreProductSoCProfiles.smallOpenSbiEngineering(implementedPaddrBits, productGeometry))
   AetherCoreProductSoCProfiles.requireBoardCompatible(config, implementedPaddrBits)
@@ -34,6 +36,10 @@ class AetherCoreProductFpgaSoC(
     val timebaseTick = Input(Bool())
     val serialRx = Input(Bool())
     val serialTx = Output(Bool())
+    val spiSclk = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMosi = if (enableSpiSd) Some(Output(Bool())) else None
+    val spiMiso = if (enableSpiSd) Some(Input(Bool())) else None
+    val spiCsN = if (enableSpiSd) Some(Output(Bool())) else None
     val uartBaudDivisor = Output(UInt(16.W))
 
     val supervisorExternalInterrupt = Output(Bool())
@@ -66,7 +72,8 @@ class AetherCoreProductFpgaSoC(
 
   val soc = Module(new AetherCoreProductAxi4SoC(
     implementedPaddrBits = implementedPaddrBits,
-    productConfigOverride = Some(config)))
+    productConfigOverride = Some(config),
+    boardDevices = boardDevices))
   val uartPhy = Module(new AetherUart8N1Phy)
 
   io.axi.aw.valid := soc.io.axi.aw.valid
@@ -103,6 +110,12 @@ class AetherCoreProductFpgaSoC(
   io.uartBaudDivisor := soc.io.uartBaudDivisor
 
   soc.io.timebaseTick := io.timebaseTick
+  if (enableSpiSd) {
+    soc.io.spiMiso.get := io.spiMiso.get
+    io.spiSclk.get := soc.io.spiSclk.get
+    io.spiMosi.get := soc.io.spiMosi.get
+    io.spiCsN.get := soc.io.spiCsN.get
+  }
   io.supervisorExternalInterrupt := soc.io.supervisorExternalInterrupt
   io.uartInterrupt := soc.io.uartInterrupt
   io.uartRxInterrupt := soc.io.uartRxInterrupt
