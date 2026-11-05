@@ -45,6 +45,9 @@ final case class AetherSoCAddressMap(
     ("bootrom", bootRomBase, bootRomLimit),
     ("ram", ramBase, ramLimit),
     ("uart", uartBase, uartLimit),
+    ("exit", exitAddress, exitAddress + 8),
+    ("mtime", mtimeAddress, mtimeAddress + 8),
+    ("mtimecmp", mtimecmpAddress, mtimecmpAddress + 8),
     ("plic", plicBase, plicLimit),
     ("spi", spiBase, spiLimit),
     ("spi-cs-gpio", spiCsGpioBase, spiCsGpioLimit)

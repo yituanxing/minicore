@@ -118,6 +118,8 @@ class AetherSoCPlatformFabric(
 
   private val ramBase = addressMap.ramBase.U(paddrBits.W)
   private val ramLimit = addressMap.ramLimit.U(paddrBits.W)
+  private val bootRomBase = addressMap.bootRomBase.U(paddrBits.W)
+  private val bootRomLimit = addressMap.bootRomLimit.U(paddrBits.W)
   private val uartBase = addressMap.uartBase.U(paddrBits.W)
   private val uartLimit = addressMap.uartLimit.U(paddrBits.W)
   private val exitAddress = addressMap.exitAddress.U(paddrBits.W)
@@ -155,27 +157,51 @@ class AetherSoCPlatformFabric(
   private val pendingWrite = pending.op === AetherMemOp.Write
   private val pendingAtomic = pending.op === AetherMemOp.Atomic
 
+  // Check the entire architectural access, not just its starting byte.
+  // Data-side RAM/ROM requests share the external AetherMem hub, but only RAM
+  // may reach the DDR/AXI bridge. A missing physical address must terminate
+  // with its original txnId and an access fault, never escape as a DDR request
+  // that a physical board cannot complete.
+  private val pendingAccessBytes = WireDefault(1.U(4.W))
+  switch(pending.size) {
+    is(MemSize.Byte) { pendingAccessBytes := 1.U }
+    is(MemSize.Half) { pendingAccessBytes := 2.U }
+    is(MemSize.Word) { pendingAccessBytes := 4.U }
+    is(MemSize.DWord) { pendingAccessBytes := 8.U }
+  }
+  private val pendingEnd = pending.paddr +& pendingAccessBytes
+  private def accessWithin(base: UInt, limit: UInt): Bool =
+    pending.paddr >= base && pendingEnd <= Cat(0.U(1.W), limit)
+
+  private val pendingRam = pendingValid && accessWithin(ramBase, ramLimit)
+  private val pendingBootRom = pendingValid && accessWithin(bootRomBase, bootRomLimit)
+
   private val pendingUart =
-    pendingValid && pending.paddr >= uartBase && pending.paddr < uartLimit
+    pendingValid && accessWithin(uartBase, uartLimit)
   private val pendingExit =
     pendingValid && pending.paddr === exitAddress
   private val pendingTimer =
     pendingValid && (pending.paddr === mtimeAddress || pending.paddr === mtimecmpAddress)
   private val pendingPlic =
-    pendingValid && pending.paddr >= plicBase && pending.paddr < plicLimit
+    pendingValid && accessWithin(plicBase, plicLimit)
   private val pendingSpi =
     pendingValid && enableSpiSd.B &&
-      pending.paddr >= spiBase && pending.paddr < spiLimit
+      accessWithin(spiBase, spiLimit)
   private val pendingSpiCsGpio =
     pendingValid && enableSpiSd.B &&
-      pending.paddr >= spiCsGpioBase && pending.paddr < spiCsGpioLimit
+      accessWithin(spiCsGpioBase, spiCsGpioLimit)
   private val pendingUnimplementedSpi =
     pendingValid && !enableSpiSd.B &&
       ((pending.paddr >= spiBase && pending.paddr < spiLimit) ||
         (pending.paddr >= spiCsGpioBase && pending.paddr < spiCsGpioLimit))
-  private val pendingMmio =
+  private val pendingDeviceMmio =
     pendingUart || pendingExit || pendingTimer || pendingPlic ||
       pendingSpi || pendingSpiCsGpio || pendingUnimplementedSpi
+  private val pendingUnmapped =
+    pendingValid && !pendingRam && !pendingBootRom && !pendingDeviceMmio
+  // Unmapped requests are local, single-response faults: they obey the same
+  // ordering barrier as MMIO, including LoadQ2's concurrent RAM-read drain.
+  private val pendingMmio = pendingDeviceMmio || pendingUnmapped
   private val pendingExternal =
     pendingValid && !pendingMmio
 
@@ -278,7 +304,7 @@ class AetherSoCPlatformFabric(
       Mux(pendingUart, uart.io.fault,
         Mux(pendingSpi, spi.map(_.io.fault).getOrElse(false.B),
           Mux(pendingSpiCsGpio, spiCsGpio.map(_.io.fault).getOrElse(false.B),
-            pendingUnimplementedSpi))))
+            pendingUnimplementedSpi || pendingUnmapped))))
   )
 
   // Keep compatibility outputs deterministic in both compositions.
@@ -303,6 +329,7 @@ class AetherSoCPlatformFabric(
       RegInit(VecInit(Seq.fill(TxnCount)(false.B)))
     val normalReadCount = RegInit(0.U(ReadCountBits.W))
     val serializedExternalActive = RegInit(false.B)
+    val serializedExternalTxnId = Reg(UInt(txnIdBits.W))
 
     val pendingNormalExternalRead =
       pendingExternal &&
@@ -342,11 +369,14 @@ class AetherSoCPlatformFabric(
     }
     when(serializedExternalIssue) {
       serializedExternalActive := true.B
+      serializedExternalTxnId := pending.txnId
     }
 
     val externalResponseKnown =
-      serializedExternalActive ||
-        normalReadOutstanding(io.externalResponse.get.bits.txnId)
+      (serializedExternalActive &&
+        io.externalResponse.get.bits.txnId === serializedExternalTxnId) ||
+        (!serializedExternalActive &&
+          normalReadOutstanding(io.externalResponse.get.bits.txnId))
 
     val responseArbiter = Module(new RRArbiter(
       new AetherMemResponse(dataBits, txnIdBits),
@@ -411,7 +441,7 @@ class AetherSoCPlatformFabric(
     io.exitValid := mmioResponseFire && pendingExit && pendingWrite
     io.exitCode := pending.wdata
 
-    assert(!(pendingMmio && pendingAtomic),
+    assert(!(pendingDeviceMmio && pendingAtomic),
       "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
     when(serializedExternalActive) {
       assert(normalReadCount === 0.U,
@@ -458,7 +488,7 @@ class AetherSoCPlatformFabric(
     io.exitValid := responseFire && pendingExit && pendingWrite
     io.exitCode := pending.wdata
 
-    assert(!(pendingMmio && pendingAtomic),
+    assert(!(pendingDeviceMmio && pendingAtomic),
       "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
   }
 
@@ -478,6 +508,6 @@ class AetherSoCPlatformFabric(
   io.exitValid := responseFire && pendingExit && pendingWrite
   io.exitCode := pending.wdata
 
-  assert(!(pendingMmio && pendingAtomic),
+  assert(!(pendingDeviceMmio && pendingAtomic),
     "AetherSoC PMA must reject atomic MMIO before it reaches the platform fabric")
 }

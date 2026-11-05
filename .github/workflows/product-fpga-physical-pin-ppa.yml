@@ -1,15 +1,11 @@
 name: AetherCore Product Physical FPGA Pin and RV64GC Cost
 
+# Four complete 100-minute synthesis jobs are explicit evidence collection,
+# not the fast PR development loop. Human PR label is the opt-in bridge until
+# workflow_dispatch is present on the default branch.
 on:
   pull_request:
-    paths:
-      - '.github/workflows/product-fpga-physical-pin-ppa.yml'
-      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaPins.scala'
-      - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
-      - 'tools/compare_product_fpga_pin_cost.sh'
-      - 'tools/report_product_fpga_pin_cost.py'
-      - 'tools/ci/collect_product_physical_ppa.py'
-      - 'tests_py/test_product_fpga_ppa_artifact_collection.py'
+    types: [labeled]
   workflow_dispatch:
     inputs:
       capacity:
@@ -36,6 +32,7 @@ concurrency:
 jobs:
   validate-product-rtl:
     name: Validate the single shared Product CPU/SoC topology
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-physical-ppa')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -178,7 +175,7 @@ jobs:
     needs: [validate-product-rtl, fpga-physical-synthesis]
     # A failed or interrupted matrix lane must still leave an explicit report
     # failure and preserve all artifacts from the lanes that did finish.
-    if: always()
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-physical-ppa'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

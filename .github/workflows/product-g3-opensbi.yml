@@ -1,27 +1,25 @@
 name: AetherCore Product G3 Real OpenSBI First Execution
 
+# Full OpenSBI/RTL runtime is a costly evidence gate, not a source-iteration
+# prerequisite. Only explicit workflow_dispatch or a human-added PR label
+# requests it; ordinary PR synchronize events retain the short G0/G1/G2 gates.
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/product/**'
-      - 'src/main/scala/aethercore/soc/AetherCoreProduct*.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreProductUnifiedMemoryCompatSimTop.scala'
-      - 'sim/product_rv64_opensbi_shim/**'
-      - '.github/workflows/product-g3-opensbi.yml'
-      - 'tools/ci/rv64_opensbi_first_exec.sh'
-      - 'software/rv64/opensbi_first_exec.env'
+    types: [labeled]
 
 permissions:
   contents: read
 
 concurrency:
   group: aethercore-product-g3-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A deliberate 55-minute evidence run must not be replaced by a source edit.
+  cancel-in-progress: false
 
 jobs:
   first-firmware:
     name: Real Product SmallOoO OpenSBI plus S-mode UART milestone
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g3-longrun')
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     env:

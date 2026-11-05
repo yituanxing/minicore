@@ -15,6 +15,8 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
 class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   private val g = config.geometry
   private val enableFloating = config.software.isa.extensions.contains('F')
+  require(config.rtlElaboratable,
+    "Product memory core requires an ISA, platform and port geometry supported by its RTL")
   require(g.decodeWidth == 1 && g.dispatchWidth == 1 && g.issueWidth == 1 &&
     g.retireWidth == 1, "physical SmallOoO frontend is one-wide")
   private val I = log2Ceil(g.robEntries)

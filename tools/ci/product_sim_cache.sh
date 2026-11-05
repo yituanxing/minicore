@@ -51,14 +51,21 @@ input_identity() {
     if [[ -r /proc/cpuinfo ]]; then
       awk -F: '/^(vendor_id|cpu family|model|model name|flags)[[:space:]]*:/ {if (!seen[$1]++) print $1 ":" $2}' /proc/cpuinfo
     fi
-    git ls-files -z -- \
+    # Product architecture edits are intentionally batched before the next
+    # expensive model build. `git ls-files` alone silently *omits* a newly
+    # created Scala/header source until someone stages it, allowing a stale
+    # cached simulator to be accepted even though Mill/Verilator would build
+    # different RTL. Include untracked, non-ignored source inputs as well as
+    # committed/staged ones; paths are sorted uniquely and their live file
+    # bytes are hashed. Unrelated build/ output remains outside this list.
+    git ls-files -z --cached --others --exclude-standard -- \
       src/main/scala/aethercore \
       sim/opensbi_boot_main.cpp \
       sim/l32_opensbi_runtime.h \
       sim/product_rv64_opensbi_shim \
       Makefile.l32-linux-boot build.mill mill \
       tools/ci/product_sim_cache.sh tools/ensure_verilator_5_024.sh \
-      tools/ensure_verilator_5_054.sh "${model_specific_sources[@]}" | LC_ALL=C sort -z | \
+      tools/ensure_verilator_5_054.sh "${model_specific_sources[@]}" | LC_ALL=C sort -zu | \
       while IFS= read -r -d '' file; do
         [[ -f "$file" ]] || { echo "missing model source: $file" >&2; exit 4; }
         sha256sum "$file"

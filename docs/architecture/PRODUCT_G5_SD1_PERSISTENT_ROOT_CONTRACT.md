@@ -30,7 +30,7 @@ login has passed. No long test belongs to this patch series.
 | Lower-level debugging boundaries | `ElaborateProductFpgaColdBootDdrStreamSpiSd1PinsRv64gc` and `ElaborateProductFpgaColdBootDdrMuxSpiSd1PinsRv64gc` remain isolated ABI-compatible RTL entrypoints |
 | DDR | Product physical `0x80000000..0x8fffffff` remapped to DDR controller local `0..0x0fffffff`; board supplies 50 MHz clock-compatible DDR controller/PHY, PLL and wiring |
 | SPI/SD | `ProductSoCBoardProfiles.persistentSpiSd`, OpenCores tiny SPI + Altera PIO GPIO CS, PLIC11 |
-| DTB | `EmitAetherSoCDts --spi-sd --isa rv64imafdc_zicsr_zifencei` with the same SPI clock as actual Product RTL |
+| DTB | `EmitAetherSoCDts --product --spi-sd --isa rv64imafdc_zicsr_zifencei` with the same SPI clock and 52 PLIC sources as actual Product RTL |
 | SD image | Raw SDHC-compatible file, DOS/MBR, one Linux `0x83` partition starting at LBA2048 |
 | Root filesystem | Real Debian riscv64 ext4 on `/dev/mmcblk0p1`, writable and persistent |
 | SD simulator input | `AETHERCORE_PRODUCT_SD_IMAGE` points to the complete raw `.img`, not a partition-only `.ext4` |

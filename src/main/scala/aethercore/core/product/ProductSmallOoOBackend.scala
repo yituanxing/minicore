@@ -245,6 +245,9 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   require(geometry.decodeWidth == 1 && geometry.dispatchWidth == 1 &&
     geometry.issueWidth == 1 && geometry.retireWidth == 1,
     "this first hardware slice implements the Small one-wide backend only")
+  require(geometry.integerReadPorts == 2 && geometry.integerWritePorts == 1 &&
+    geometry.floatingReadPorts == 3 && geometry.floatingWritePorts == 1,
+    "Product SmallOoO must not silently ignore requested physical register ports")
   private val Xlen = 64
   private val N = geometry.robEntries
   private val Q = geometry.iqEntries

@@ -80,6 +80,12 @@ check_artifacts() {
   done
   grep -Fxq 'stage=sd1' "$ROOTFS_RESULT"
   grep -Fxq 'spi_sd=1' "$FW_RESULT"
+  # Older Product payloads inherited the V2 DTS's 16-source PLIC despite
+  # Product RTL implementing 52 sources. Do not spend another longrun on a
+  # stale image without the explicitly selected Product board profile.
+  grep -Fxq 'product_board=1' "$FW_RESULT" || {
+    echo 'SD1 payload was not emitted for the 52-source Product board' >&2; exit 5;
+  }
   grep -Fq 'root=/dev/mmcblk0p1 rootfstype=ext4 rootwait rw init=/sbin/init' "$FW_RESULT"
   [[ "$(result_field SD_IMAGE "$SD_RESULT")" == "$SD_IMAGE" && -s "$SD_IMAGE" ]] || {
     echo 'SD1 SD_IMAGE must be the exact staged raw MBR/ext4 disk' >&2; exit 6;
@@ -135,10 +141,42 @@ check_artifacts() {
 
 probe_card() {
   local probe_dir="$ROOT/build/product-g5-sd1-preflight"
+  local probe_bin="$probe_dir/card-probe"
+  local probe_identity_file="$probe_dir/card-probe.identity"
+  local probe_identity actual_bin_sha
   mkdir -p "$probe_dir"
-  c++ -std=c++20 -O2 -Wall -Wextra -Werror -I"$ROOT/sim" \
-    "$ROOT/tools/ci/product_sim_sd1_card_probe.cpp" -o "$probe_dir/card-probe"
-  "$probe_dir/card-probe" "$SD_IMAGE"
+  # Every preflight/prepare-model/longrun used to recompile this unchanged host
+  # probe. Its two local sources and compiler flags determine the executable;
+  # reuse is allowed only if both that exact identity and the executable hash
+  # match the previously recorded pair. The *SD media itself* is never cached:
+  # check_artifacts above always re-hashes the staged disk on every action.
+  probe_identity="$({
+    printf '%s\n' 'compiler=c++' 'flags=-std=c++20 -O2 -Wall -Wextra -Werror -I<root>/sim'
+    command -v c++
+    c++ --version | sed -n '1p'
+    sha256sum "$ROOT/sim/l32_sd_spi_card.h" \
+      "$ROOT/tools/ci/product_sim_sd1_card_probe.cpp"
+  } | sha256sum | awk '{print $1}')"
+  if [[ ! -x "$probe_bin" || ! -f "$probe_identity_file" ]] ||
+      ! grep -Fxq "source=$probe_identity" "$probe_identity_file" ||
+      ! grep -Fxq "binary=$(sha256sum "$probe_bin" | awk '{print $1}')" "$probe_identity_file"; then
+    local probe_tmp="$probe_dir/card-probe.$$.tmp"
+    if ! c++ -std=c++20 -O2 -Wall -Wextra -Werror -I"$ROOT/sim" \
+        "$ROOT/tools/ci/product_sim_sd1_card_probe.cpp" -o "$probe_tmp"; then
+      rm -f "$probe_tmp"
+      return 1
+    fi
+    mv -f "$probe_tmp" "$probe_bin"
+    actual_bin_sha="$(sha256sum "$probe_bin" | awk '{print $1}')"
+    {
+      printf 'source=%s\n' "$probe_identity"
+      printf 'binary=%s\n' "$actual_bin_sha"
+    } > "$probe_identity_file.$$.tmp"
+    mv -f "$probe_identity_file.$$.tmp" "$probe_identity_file"
+  else
+    echo 'PRODUCT_G5_SD1_HOST_CARD_PROBE_REUSED: source and executable hashes match'
+  fi
+  "$probe_bin" "$SD_IMAGE"
 }
 
 check_artifacts

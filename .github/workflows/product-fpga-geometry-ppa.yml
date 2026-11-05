@@ -1,15 +1,11 @@
 name: AetherCore Product FPGA Geometry PPA A-B
 
+# Two complete FPGA geometry syntheses can take 100 minutes. A source edit
+# must not queue them as incidental PR feedback; opt in with the exact label
+# while workflow_dispatch is unavailable on a non-default PR branch.
 on:
   pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/product/ProductPhysicalLsq.scala'
-      - 'src/main/scala/aethercore/core/product/ProductDataResolver.scala'
-      - 'src/main/scala/aethercore/core/product/ProductSmallOoOBackend.scala'
-      - 'src/main/scala/aethercore/core/product/ProductCoreConfig.scala'
-      - 'src/main/scala/aethercore/soc/AetherCoreProductFpgaSoC.scala'
-      - 'src/main/scala/aethercore/soc/ElaborateProductSoC.scala'
-      - '.github/workflows/product-fpga-geometry-ppa.yml'
+    types: [labeled]
   workflow_dispatch:
 
 permissions:
@@ -17,11 +13,12 @@ permissions:
 
 concurrency:
   group: aethercore-product-fpga-ppa-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   product-fpga-ppa:
     name: Compare actual Product Small and Expanded FPGA netlists
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-geometry-ppa')
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:

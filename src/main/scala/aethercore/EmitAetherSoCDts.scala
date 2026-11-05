@@ -3,7 +3,7 @@ package aethercore
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Paths}
 import aethercore.config.CoreProfiles
-import aethercore.soc.{AetherSoCBoardSpec, AetherSoCDts, ProductSoCBoardProfiles}
+import aethercore.soc.{AetherCoreProductSoCProfiles, AetherSoCBoardSpec, AetherSoCDts, ProductSoCBoardProfiles}
 
 /**
   * Emit the qualified RV64 AetherSoC device tree from the same Scala board
@@ -14,6 +14,7 @@ import aethercore.soc.{AetherSoCBoardSpec, AetherSoCDts, ProductSoCBoardProfiles
   *                    [--isa rv64ima_zicsr_zifencei]
   *                    [--mmu sv39]
   *                    [--bootargs "..."]
+  *                    [--product] (Product SmallOoO PLIC topology)
   *                    [--spi-sd] [--spi-clock-hz 50000000]
   *                    [--spi-max-hz 12500000]
   */
@@ -33,6 +34,7 @@ object EmitAetherSoCDts extends App {
   private val isa = option("--isa").getOrElse("rv64ima_zicsr_zifencei")
   private val mmu = option("--mmu").getOrElse("sv39")
   private val bootargs = option("--bootargs")
+  private val productBoard = args.contains("--product")
   private val spiSd = args.contains("--spi-sd")
   private val spiClockHz = option("--spi-clock-hz").map(_.toLong)
   private val spiMaxHz = option("--spi-max-hz").map(_.toLong)
@@ -46,6 +48,12 @@ object EmitAetherSoCDts extends App {
   )
   private val originalBoard = AetherSoCBoardSpec.qualifiedLinux(platform)
   private val board = originalBoard.copy(
+    // The legacy V2 Linux board exposes 16 interrupt sources. Product RTL
+    // implements all 52 QEMU-virt/OpenSBI-visible sources; its DTB must not
+    // accidentally inherit the older 16-source board preset.
+    plicSourceCount = if (productBoard)
+      AetherCoreProductSoCProfiles.OpenSbiPlicSourceCount
+    else originalBoard.plicSourceCount,
     spiBusClockFrequencyHz = boardDevices.spiBusClockFrequencyHz,
     spiMaxFrequencyHz = boardDevices.spiMaxFrequencyHz
   )
@@ -62,6 +70,8 @@ object EmitAetherSoCDts extends App {
   println(s"reset=0x${board.addressMap.bootRomBase.toString(16)}")
   println(s"ram=0x${board.addressMap.ramBase.toString(16)}+0x${board.addressMap.ramBytes.toString(16)}")
   println(s"plic=0x${board.addressMap.plicBase.toString(16)}+0x${board.addressMap.plicBytes.toString(16)}")
+  println(s"plic-sources=${board.plicSourceCount}")
+  println(s"board-profile=${if (productBoard) "product" else "legacy"}")
   println(s"uart=0x${board.addressMap.uartBase.toString(16)}")
   println(s"mtime=0x${board.addressMap.mtimeAddress.toString(16)}")
   println(s"mtimecmp=0x${board.addressMap.mtimecmpAddress.toString(16)}")

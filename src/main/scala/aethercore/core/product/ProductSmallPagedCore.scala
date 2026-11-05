@@ -40,6 +40,8 @@ class ProductSmallPagedCore(
   private val T = g.loadQueueEntries + g.storeQueueEntries
   private val Tx = log2Ceil(T)
 
+  require(config.rtlElaboratable,
+    "Product paged core requires an ISA, platform and port geometry supported by its RTL")
   require(isa.xlen == Xlen && isa.hasSv39 && isa.hasPagedVirtualMemory,
     "ProductSmallPagedCore requires the real RV64 Sv39 hardware profile")
   require(isa.hasS && isa.hasU,

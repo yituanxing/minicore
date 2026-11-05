@@ -44,26 +44,43 @@ if [[ "${STAGE}" == d3 || "${STAGE}" == sd1 ]]; then
   # equivalent in-rootfs relative links in a derived, auditably hashed tar.
   # Never execute a foreign binary or dereference a guest link on the host.
   rebased_archive="${BUILD_DIR}/safe-full-rootfs.tar"
-  python3 - "${archive}" "${rebased_archive}" <<'PY'
+  python3 - "${archive}" "${rebased_archive}" "${STAGE}" <<'PY'
 import posixpath
 import sys
 import tarfile
 
 archive = sys.argv[1]
 rebased_archive = sys.argv[2]
+stage = sys.argv[3]
 nodes = {}
+seen_paths = set()
 
 def inside(path):
     return bool(path) and path != '..' and not path.startswith('../') and not path.startswith('/')
 
+def member_path(member):
+    raw = member.name.removeprefix('./').rstrip('/')
+    if raw in ('', '.'):
+        return ''
+    if not inside(raw) or any(part == '..' for part in raw.split('/')):
+        raise ValueError(f'archive member escapes rootfs: {member.name!r}')
+    # GNU tar extracts redundant separators and dot components to the same
+    # filesystem entry. Reject duplicate canonical destinations *before*
+    # privileged extraction so later entries cannot shadow validated links.
+    path = posixpath.normpath(raw)
+    if not inside(path):
+        raise ValueError(f'archive member resolves outside rootfs: {member.name!r}')
+    return path
+
 try:
     with tarfile.open(archive, mode='r:*') as reader:
         for member in reader:
-            path = member.name.removeprefix('./').rstrip('/')
-            if path in ('', '.'):
+            path = member_path(member)
+            if not path:
                 continue
-            if not inside(path) or any(part == '..' for part in path.split('/')):
-                raise ValueError(f'archive member escapes rootfs: {member.name!r}')
+            if path in seen_paths:
+                raise ValueError(f'duplicate normalized archive destination: {path!r}')
+            seen_paths.add(path)
             if member.issym():
                 dest = posixpath.normpath(
                     member.linkname.lstrip('/') if member.linkname.startswith('/')
@@ -83,8 +100,8 @@ try:
         # Resolving each path component catches multi-level alias chains,
         # including a child subsequently created under a symlink prefix.
         for member in reader.getmembers():
-            path = member.name.removeprefix('./').rstrip('/')
-            if path in ('', '.'):
+            path = member_path(member)
+            if not path:
                 continue
             parts = path.split('/')
             resolved = []
@@ -113,8 +130,8 @@ try:
         # this also ensures GNU tar will never create a host-absolute link.
         with tarfile.open(rebased_archive, mode='w', format=tarfile.PAX_FORMAT) as writer:
             for member in reader.getmembers():
-                path = member.name.removeprefix('./').rstrip('/')
-                if path in ('', '.'):
+                path = member_path(member)
+                if not path:
                     continue
                 member.name = path
                 if member.issym() and member.linkname.startswith('/'):
@@ -126,7 +143,7 @@ try:
                                       if k not in ('path', 'linkpath')}
                 writer.addfile(member, reader.extractfile(member) if member.isfile() else None)
 except (OSError, tarfile.TarError, ValueError) as exc:
-    sys.exit(f'ERROR: unsafe D3 Debian archive: {exc}')
+    sys.exit(f'ERROR: unsafe {stage.upper()} Debian archive: {exc}')
 PY
   sha256sum "${rebased_archive}" > "${EVIDENCE_DIR}/safe-full-rootfs-tar.sha256"
   sudo tar -xf "${rebased_archive}" -C "${ROOTFS_DIR}" --numeric-owner

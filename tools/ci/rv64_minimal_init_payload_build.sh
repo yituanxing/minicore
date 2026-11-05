@@ -26,6 +26,7 @@ LINUX_QUALIFIER="${RV64_PAYLOAD_LINUX_QUALIFIER:-RV64_MINIMAL_INITRAMFS_BUILD_RE
 PAYLOAD_RESULT_TAG="${RV64_PAYLOAD_RESULT_TAG:-RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT}"
 PAYLOAD_INPUT_TAG="${RV64_PAYLOAD_INPUT_TAG:-RV64_MINIMAL_INIT_PAYLOAD_INPUT}"
 PAYLOAD_ENABLE_SPI_SD="${RV64_PAYLOAD_ENABLE_SPI_SD:-0}"
+PAYLOAD_PRODUCT_BOARD="${RV64_PAYLOAD_PRODUCT_BOARD:-0}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -51,6 +52,11 @@ mkdir -p "${OPENSBI_BUILD_DIR}" "${EVIDENCE_DIR}"
 command -v dtc >/dev/null 2>&1 || fail "device-tree-compiler (dtc) is required for RV64 AetherSoC DTS"
 chmod +x "${ROOT_DIR}/mill"
 spi_dts_args=()
+case "${PAYLOAD_PRODUCT_BOARD}" in
+  0) ;;
+  1) spi_dts_args+=(--product) ;;
+  *) fail "invalid RV64_PAYLOAD_PRODUCT_BOARD=${PAYLOAD_PRODUCT_BOARD}" ;;
+esac
 case "${PAYLOAD_ENABLE_SPI_SD}" in
   0) ;;
   1)
@@ -87,6 +93,7 @@ dtc -I dts -O dtb -o "${DTB}" "${DTS}"
   echo "fw_payload_fdt_addr=${RV64_OPENSBI_FDT_ADDR}"
   echo "bootargs=${BOOTARGS}"
   echo "spi_sd=${PAYLOAD_ENABLE_SPI_SD}"
+  echo "product_board=${PAYLOAD_PRODUCT_BOARD}"
   echo "isa=${PAYLOAD_ISA}"
   echo "abi=${PAYLOAD_ABI}"
 } | tee "${EVIDENCE_DIR}/inputs.txt"
@@ -135,6 +142,7 @@ sha256sum "${FW_ELF}" "${FW_BIN}" "${DTB}" "${LINUX_IMAGE}" | tee "${EVIDENCE_DI
   echo "fdt_addr=${RV64_OPENSBI_FDT_ADDR}"
   echo "bootargs=${BOOTARGS}"
   echo "spi_sd=${PAYLOAD_ENABLE_SPI_SD}"
+  echo "product_board=${PAYLOAD_PRODUCT_BOARD}"
   echo "isa=${PAYLOAD_ISA}"
   echo "abi=${PAYLOAD_ABI}"
   echo "firmware_bytes=${firmware_bytes}"

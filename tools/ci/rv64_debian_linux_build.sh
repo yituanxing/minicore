@@ -26,9 +26,18 @@ case "${ROOTFS_STAGE}" in
   d1|d2|d3|sd1) ;;
   *) fail "Debian rootfs stage is missing or invalid: ${ROOTFS_STAGE}" ;;
 esac
+[[ "${ROOTFS_DIR}" == "${ROOT_DIR}/build/rv64-debian-rootfs/rootfs" ]] || \
+  fail 'the qualified Debian rootfs must reside in its fixed staging directory'
+# Bind every resulting Linux Image to the exact qualified rootfs manifest.
+# In particular, a D3 initramfs Image must never be silently reused at SD1.
+rootfs_result_sha="$(sha256sum "${ROOTFS_RESULT}" | awk '{print $1}')"
+rootfs_tree_sha=''
 if [[ "${ROOTFS_STAGE}" == sd1 ]]; then
   [[ -x "${ROOTFS_DIR}/sbin/init" ]] || fail 'the real SD-root Debian /sbin/init is missing'
   [[ ! -e "${ROOTFS_DIR}/init" ]] || fail 'SD1 disk root must not contain the D3 initramfs /init wrapper'
+  rootfs_tree_sha="$(sed -n 's/^rootfs_tree_sha256=//p' "${ROOTFS_RESULT}" | head -n 1)"
+  [[ "${rootfs_tree_sha}" =~ ^[[:xdigit:]]{64}$ ]] || \
+    fail 'SD1 full Debian rootfs manifest is missing its tree identity'
 else
   [[ -x "${ROOTFS_DIR}/init" ]] || fail 'the Debian initramfs PID1 is missing'
   [[ -c "${ROOTFS_DIR}/dev/console" ]] || fail 'the Debian console device node is missing'
@@ -152,6 +161,8 @@ IMAGE="${OBJ_DIR}/arch/riscv/boot/Image"
 cp "${OBJ_DIR}/.config" "${EVIDENCE_DIR}/resolved.config"
 sha256sum "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
+[[ "$(sha256sum "${ROOTFS_RESULT}" | awk '{print $1}')" == "${rootfs_result_sha}" ]] || \
+  fail 'qualified Debian rootfs manifest changed while building the Linux Image'
 
 {
   echo 'RV64_DEBIAN_LINUX_BUILD_RESULT: status=PASS'
@@ -160,7 +171,12 @@ sha256sum "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   echo 'isa=rv64gc_zicsr_zifencei'
   echo 'abi=lp64d'
   echo "rootfs=${ROOTFS_DIR}"
+  echo "rootfs_result_sha256=${rootfs_result_sha}"
+  if [[ "${ROOTFS_STAGE}" == sd1 ]]; then
+    echo "rootfs_tree_sha256=${rootfs_tree_sha}"
+  fi
   echo "vmlinux=${VMLINUX}"
   echo "image=${IMAGE}"
   echo "image_sha256=$(sha256sum "${IMAGE}" | awk '{print $1}')"
+  echo "config_sha256=$(sha256sum "${EVIDENCE_DIR}/resolved.config" | awk '{print $1}')"
 } | tee "${BUILD_DIR}/result.txt"

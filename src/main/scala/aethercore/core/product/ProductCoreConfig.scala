@@ -82,14 +82,35 @@ final case class ProductCoreConfig(
   require(!software.isa.extensions.contains('D') || software.isa.extensions.contains('F'),
     "D requires F")
 
-  /** Actual Chisel implementation is currently one-wide. Capacity scales
-    * through ROB/IQ/LSQ/PRF without pretending Medium/Large's multi-lane
-    * frontend and retirement hardware already exists. This is a static RTL
-    * implementation gate, not a statement about simulator or FPGA results.
+  /** The instantiated Product datapath currently has one integer issue lane,
+    * two XPR read ports, one XPR write port, three FPR read ports and one FPR
+    * write port. These geometry fields describe *physical* ports, so a caller
+    * must not obtain a true RTL implementation gate merely by requesting a
+    * larger port count that the actual backend silently ignores.
+    *
+    * Likewise, IsaConfig permits future extensions and VM modes for software
+    * planning, but this Product implementation decodes only IMAFDC, Zicsr,
+    * Zifencei, M/S/U and Sv39. Its CSR/PMP bank implements at most PMP16;
+    * the data resolver narrows Sv39 physical addresses to at most 56 bits;
+    * the board's external memory seam is fixed at 64 data bits. Keep the
+    * software target legal to describe, yet distinguish it from RTL that can
+    * faithfully implement the requested features.
+    *
+    * This is a static compatibility predicate, never evidence of Debian,
+    * simulation, timing or physical-board qualification.
     */
   val rtlElaboratable: Boolean = geometry.decodeWidth == 1 &&
     geometry.dispatchWidth == 1 && geometry.issueWidth == 1 &&
-    geometry.retireWidth == 1
+    geometry.retireWidth == 1 &&
+    geometry.integerReadPorts == 2 && geometry.integerWritePorts == 1 &&
+    geometry.floatingReadPorts == 3 && geometry.floatingWritePorts == 1 &&
+    software.isa.extensions.subsetOf(Set('I', 'M', 'A', 'F', 'D', 'C')) &&
+    software.isa.zExtensions.subsetOf(Set("Zicsr", "Zifencei")) &&
+    software.isa.privilegeModes == Set('M', 'S', 'U') &&
+    software.isa.virtualMemoryModes == Set("Sv39") &&
+    software.isa.pmpEntries <= 16 &&
+    platform.paddrBits >= 32 && platform.paddrBits <= 56 &&
+    platform.busDataBits == 64
 
   /** Hardware bring-up and distro qualification are separate, explicit axes.
     * All remain false until an exact image/board/run ID is recorded; the

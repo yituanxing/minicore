@@ -17,6 +17,8 @@ import chisel3.util._
 class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: Int = 8)
     extends Module {
   private val g = config.geometry
+  require(config.rtlElaboratable,
+    "Product translated core requires an ISA, platform and port geometry supported by its RTL")
   private val enableFloating = config.software.isa.extensions.contains('F')
   private val geom = PageTableGeometry.Sv39
   private val I = log2Ceil(g.robEntries)

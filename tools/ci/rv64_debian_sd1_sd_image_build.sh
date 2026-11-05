@@ -109,6 +109,21 @@ with open(image, 'r+b') as disk:
     disk.write(entry)
     disk.seek(510)
     disk.write(b'\x55\xaa')
+    # Read back the exact *on-media* structures, not just the metadata we
+    # intend to publish. Linux's MSDOS partition scanner must discover p1,
+    # and its ext4 probe must find the superblock at the partition offset.
+    disk.seek(0)
+    sector0 = disk.read(512)
+    if (sector0[510:512] != b'\x55\xaa' or
+            sector0[446:462] != entry or
+            any(sector0[462:510])):
+        raise ValueError('written MBR does not contain exactly the expected p1')
+    disk.seek(start * 512 + 1024 + 56)
+    if disk.read(2) != b'\x53\xef':
+        raise ValueError('ext4 superblock magic absent at SD MBR p1 offset')
+    disk.seek(0, 2)
+    if disk.tell() != (start + sectors) * 512:
+        raise ValueError('SD media byte extent differs from partition geometry')
 PY
 
 [[ "$(stat -c %s "${SD_IMAGE}")" == "${disk_bytes}" ]] || \
