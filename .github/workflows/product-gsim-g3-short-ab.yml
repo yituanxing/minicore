@@ -256,13 +256,48 @@ jobs:
           grep -Fq 'PRODUCT_FORKCOW_G3_SHORT_PASS' build/product-gsim-g3-ab/forkcow-g3.log
           echo 'Real Product OpenSBI fork-COW twice PASS from one already built Verilator model (NOT PID1 or Debian).' >> "$GITHUB_STEP_SUMMARY"
 
+      # Linux's unchanged source/object cache avoids the baseline compile, but
+      # minimal_initramfs_build.sh normally copies and rebuilds an entire
+      # second kernel on every fresh runner. Cache only the final qualified
+      # Image/ELF/config/PID1 bytes, never a potentially stale Kbuild object
+      # tree. Exact input recipe changes deliberately miss this cache.
+      - name: Restore immutable G4 minimal-initramfs Image and proof files
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        id: initramfs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-linux-initramfs/obj/arch/riscv/boot/Image
+            build/rv64-linux-initramfs/obj/vmlinux
+            build/rv64-linux-initramfs/obj/.config
+            build/rv64-linux-initramfs/minimal-init/init
+            build/rv64-linux-initramfs/minimal-init/initramfs.list
+            build/rv64-linux-initramfs/evidence
+            build/rv64-linux-initramfs/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-minimal-initramfs-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
       - name: Stage unchanged Linux 6.6.143 RAM-initramfs firmware only when requested
         if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
         shell: bash
         run: |
           set -euo pipefail
           bash tools/ci/rv64_linux_early_build.sh
-          bash tools/ci/rv64_minimal_initramfs_build.sh
+          initramfs_dir=build/rv64-linux-initramfs
+          baseline_image="$(sed -n 's/^kernel_image=//p' build/rv64-linux-early/result.txt | head -1)"
+          if [[ '${{ steps.initramfs-cache.outputs.cache-hit }}' == 'true' ]] &&
+             [[ -n "$baseline_image" ]] &&
+             grep -Fxq 'RV64_MINIMAL_INITRAMFS_BUILD_RESULT: status=PASS' "$initramfs_dir/result.txt" &&
+             grep -Fxq 'linux_version=6.6.143' "$initramfs_dir/result.txt" &&
+             grep -Fxq "baseline_image=$baseline_image" "$initramfs_dir/result.txt" &&
+             grep -Fxq "file /init $PWD/$initramfs_dir/minimal-init/init 0755 0 0" "$initramfs_dir/minimal-init/initramfs.list" &&
+             sha256sum --check --status "$initramfs_dir/evidence/sha256.txt" &&
+             grep -Fxq "image_sha256=$(sha256sum "$initramfs_dir/obj/arch/riscv/boot/Image" | awk '{print $1}')" "$initramfs_dir/result.txt" &&
+             "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}readelf" -h "$initramfs_dir/obj/vmlinux" | grep -q 'Machine:[[:space:]]*RISC-V'; then
+            echo 'RV64_G4_MINIMAL_INITRAMFS_CACHE_HIT: byte-verified Image, vmlinux, PID1, config and baseline path'
+          else
+            echo 'RV64_G4_MINIMAL_INITRAMFS_CACHE_MISS: build the exact Linux Image and reproducible PID1'
+            bash tools/ci/rv64_minimal_initramfs_build.sh
+          fi
           timeout --signal=TERM --kill-after=5s 180s \
             bash tools/ci/rv64_minimal_init_payload_build.sh
           grep -Fxq 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' \
@@ -279,6 +314,21 @@ jobs:
             ~/.cache/aethercore/rv64/linux-build
             ~/.cache/aethercore/l32/opensbi
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Save qualified G4 minimal-initramfs Image after hashing its bytes
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early' && success() && steps.initramfs-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-linux-initramfs/obj/arch/riscv/boot/Image
+            build/rv64-linux-initramfs/obj/vmlinux
+            build/rv64-linux-initramfs/obj/.config
+            build/rv64-linux-initramfs/minimal-init/init
+            build/rv64-linux-initramfs/minimal-init/initramfs.list
+            build/rv64-linux-initramfs/evidence
+            build/rv64-linux-initramfs/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-minimal-initramfs-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
       - name: Run at most 200M real Product GSIM early Linux cycles in 285 seconds
         if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
