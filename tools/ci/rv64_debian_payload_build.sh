@@ -123,6 +123,9 @@ fi
 case "${RV64_DEBIAN_INITCALL_TRACE:-0}" in
   0) ;;
   1)
+    # D1/D2 never enter the SD1-only source above. The debug bootargs must
+    # still use the same frozen Linux command line, not an unset shell var.
+    source "${ROOT_DIR}/software/rv64/linux_early.env"
     if [[ "${STAGE}" == sd1 ]]; then
       export RV64_PAYLOAD_BOOTARGS="${RV64_PAYLOAD_BOOTARGS} initcall_debug loglevel=8"
     else
