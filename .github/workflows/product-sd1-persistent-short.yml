@@ -108,15 +108,64 @@ jobs:
             ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
 
-      - name: Install pinned RTL host dependencies after trusted seed gate
+      - name: Reuse Java 17 and install only missing RTL host dependencies after trusted seed gate
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y openjdk-17-jdk-headless python3 bison flex \
-            libfl-dev libgmp-dev git curl make zlib1g-dev autoconf cmake \
-            ninja-build libssl-dev libelf-dev libreadline-dev pkg-config \
-            build-essential bc device-tree-compiler dwarves xz-utils
+          # Ubuntu 24.04 GitHub-hosted runners already provide Java 17,
+          # CMake/Ninja and the native compiler. Reinstalling the full JDK
+          # fetched ~120 MB on a prior SD1 seed and timed out before RTL.
+          # Never silently substitute a moving Java version for Mill/Scala.
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/java" && -x "$java17_home/bin/javac" ]]; then
+            export JAVA_HOME="$java17_home"
+            export PATH="$JAVA_HOME/bin:$PATH"
+            echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+            echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+          fi
+          command -v java >/dev/null
+          command -v javac >/dev/null
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+
+          missing_packages=()
+          need_command() {
+            command -v "$1" >/dev/null 2>&1 || missing_packages+=("$2")
+          }
+          need_package() {
+            dpkg-query -W -f='${Status}' "$1" 2>/dev/null | \
+              grep -Fxq 'install ok installed' || missing_packages+=("$1")
+          }
+          need_command python3 python3
+          need_command gcc build-essential
+          need_command g++ build-essential
+          need_command make build-essential
+          need_command git git
+          need_command curl curl
+          need_command bc bc
+          need_command bison bison
+          need_command flex flex
+          need_command autoconf autoconf
+          need_command cmake cmake
+          need_command ninja ninja-build
+          need_command pkg-config pkg-config
+          need_command dtc device-tree-compiler
+          need_command pahole dwarves
+          need_command xz xz-utils
+          need_package libfl-dev
+          need_package libgmp-dev
+          need_package zlib1g-dev
+          need_package libssl-dev
+          need_package libelf-dev
+          if (( ${#missing_packages[@]} )); then
+            mapfile -t missing_packages < <(printf '%s\n' "${missing_packages[@]}" | sort -u)
+            printf 'SD1_SHORT_RUNNER_MISSING_TOOLS packages=%s\n' "${missing_packages[*]}"
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 15m \
+              sudo apt-get install -y --no-install-recommends "${missing_packages[@]}"
+          else
+            echo 'SD1_SHORT_RUNNER_TOOLS_ALREADY_PRESENT'
+          fi
           AETHERCORE_VERILATOR_VERSION=5.054 bash tools/ensure_verilator_5_024.sh
 
       - name: Validate official full Debian SD media firmware Linux and DTB hashes
