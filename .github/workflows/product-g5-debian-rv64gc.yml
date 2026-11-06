@@ -12,11 +12,11 @@ on:
         options: [short-ab, full]
         default: short-ab
       verilator_version:
-        description: Full runs select 5.024 or 5.054 (the latter self-qualifies by bounded Debian Top A/B)
+        description: Full runs default to 5.054 (bounded Debian Top A/B required); 5.024 is an explicit fallback
         required: true
         type: choice
-        options: ['5.024', '5.054']
-        default: '5.024'
+        options: ['5.054', '5.024']
+        default: '5.054'
       settle_mode:
         description: Fixed reference or Product-qualified adaptive memory settle
         required: true
@@ -81,7 +81,7 @@ jobs:
       AETHERCORE_G5_RESUME_ONLY: ${{ github.event.label.name == 'product-g5-resume-artifact' && '1' || '0' }}
       AETHERCORE_G5_FORENSIC: ${{ github.event_name == 'pull_request' && (github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact') && '1' || '0' }}
       AETHERCORE_G5_RUN_MODE: ${{ github.event.label.name == 'product-g5-short-ab' && 'short-ab' || inputs.run_mode || 'full' }}
-      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.024' }}
+      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.054' }}
       SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
       RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
       # Keep short same-cycle A/B concise; a consciously selected full boot
