@@ -33,6 +33,10 @@ sd="$ROOT/build/rv64-debian-sd1-sd/sd-rootfs.img"
 [[ "$(field stage "$official_linux_result")" == sd1 &&
    "$(field stage "$official_rootfs_result")" == sd1 ]] ||
   fail 'official source must be SD1 block-root (not D1/D2/D3 initramfs)'
+if grep -Eq '^(kernel_patch_applied=1|diagnostic_patch_sha256=|qualification=.*DIAGNOSTIC)' \
+    "$official_linux_result"; then
+  fail 'official frozen SD1 kernel manifest unexpectedly identifies a diagnostic patch'
+fi
 [[ "$(sha "$official_linux_image")" == "$(field image_sha256 "$official_linux_result")" &&
    "$(sha "$sd")" == "$(field sd_image_sha256 "$official_sd_result")" ]] ||
   fail 'official SD1 bytes changed after signed source verification'
@@ -56,6 +60,24 @@ git -C "$diagnostic_source" apply --check "$patch" ||
   fail 'patch does not apply to exact upstream Linux source'
 git -C "$diagnostic_source" apply "$patch"
 
+probe="$out/object-probe"
+mkdir -p "$probe"
+sha "$source_dir/drivers/mmc/host/mmc_spi.c" > "$probe/upstream-source.sha256"
+sha "$diagnostic_source/drivers/mmc/host/mmc_spi.c" > "$probe/patched-source.sha256"
+[[ "$(< "$probe/upstream-source.sha256")" != "$(< "$probe/patched-source.sha256")" ]] ||
+  fail 'source patch did not change mmc_spi.c'
+git diff --no-index -- "$source_dir/drivers/mmc/host/mmc_spi.c" \
+  "$diagnostic_source/drivers/mmc/host/mmc_spi.c" > "$probe/applied-source.diff" ||
+  [[ $? == 1 ]] || fail 'cannot capture actual source difference'
+{
+  echo "official_image_sha256=$(sha "$official_linux_image")"
+  echo "official_config_sha256=$(sha "$official_config")"
+  echo "official_linux_manifest_sha256=$(sha "$official_linux_result")"
+  echo "official_kernel_patch_applied=$(field kernel_patch_applied "$official_linux_result")"
+  echo "upstream_source_sha256=$(< "$probe/upstream-source.sha256")"
+  echo "patched_source_sha256=$(< "$probe/patched-source.sha256")"
+} > "$probe/identity.txt"
+
 linux="$out/linux"
 obj="$linux/obj"
 mkdir -p "$obj" "$linux/evidence"
@@ -70,6 +92,49 @@ make -C "$diagnostic_source" O="$obj" ARCH=riscv \
   2>&1 | tee "$out/linux-config.log"
 cmp -s "$official_config" "$obj/.config" ||
   fail 'kernel configuration changed; only reviewed mmc_spi source patch permitted'
+
+# A cheap independent object-level differential *before* recompiling/linking
+# the complete kernel. Both sides use the identical frozen SD1 configuration.
+if [[ "${AETHERCORE_SD1_GPIO_CS_OBJECT_PROBE:-0}" == 1 ]]; then
+  for required in CONFIG_MMC_SPI=y CONFIG_SPI=y CONFIG_GPIOLIB=y; do
+    grep -Fxq "$required" "$obj/.config" || fail "missing $required in SD1 config"
+  done
+  baseline_obj="$probe/baseline-obj"
+  mkdir -p "$baseline_obj"
+  cp "$official_config" "$baseline_obj/.config"
+  make -C "$source_dir" O="$baseline_obj" ARCH=riscv \
+    CROSS_COMPILE="$AETHERCORE_RV64_LINUX_CROSS_COMPILE" olddefconfig \
+    2>&1 | tee "$probe/baseline-config.log"
+  cmp -s "$official_config" "$baseline_obj/.config" ||
+    fail 'unpatched baseline object configuration differs from signed SD1 config'
+  make -C "$source_dir" O="$baseline_obj" ARCH=riscv \
+    CROSS_COMPILE="$AETHERCORE_RV64_LINUX_CROSS_COMPILE" \
+    -j"${RV64_LINUX_JOBS:-4}" drivers/mmc/host/mmc_spi.o \
+    2>&1 | tee "$probe/baseline-object.log"
+  make -C "$diagnostic_source" O="$obj" ARCH=riscv \
+    CROSS_COMPILE="$AETHERCORE_RV64_LINUX_CROSS_COMPILE" \
+    -j"${RV64_LINUX_JOBS:-4}" drivers/mmc/host/mmc_spi.o \
+    2>&1 | tee "$probe/patched-object.log"
+  baseline_driver="$baseline_obj/drivers/mmc/host/mmc_spi.o"
+  patched_driver="$obj/drivers/mmc/host/mmc_spi.o"
+  [[ -s "$baseline_driver" && -s "$patched_driver" ]] ||
+    fail 'mmc_spi.o missing from baseline or patched object-only build'
+  {
+    echo "unpatched_mmc_spi_object_sha256=$(sha "$baseline_driver")"
+    echo "patched_mmc_spi_object_sha256=$(sha "$patched_driver")"
+  } | tee -a "$probe/identity.txt"
+  "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}objdump" -dr "$baseline_driver" \
+    > "$probe/baseline-object.disasm"
+  "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}objdump" -dr "$patched_driver" \
+    > "$probe/patched-object.disasm"
+  if cmp -s "$baseline_driver" "$patched_driver"; then
+    echo 'SD1_GPIO_CS_OBJECT_PROBE: status=IDENTICAL_UNEXPECTED' | tee -a "$probe/identity.txt"
+    fail 'patched and unpatched mmc_spi.o identical; stop before full Image build'
+  fi
+  echo 'SD1_GPIO_CS_OBJECT_PROBE: status=DIFFERENT' | tee -a "$probe/identity.txt"
+  echo 'Object differential qualified; full kernel build intentionally deferred.'
+  exit 0
+fi
 make -C "$diagnostic_source" O="$obj" ARCH=riscv \
   CROSS_COMPILE="$AETHERCORE_RV64_LINUX_CROSS_COMPILE" \
   -j"${RV64_LINUX_JOBS:-4}" Image 2>&1 | tee "$out/linux-build.log"

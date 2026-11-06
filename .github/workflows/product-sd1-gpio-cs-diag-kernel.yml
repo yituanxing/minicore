@@ -17,7 +17,8 @@ concurrency:
 jobs:
   kernel-firmware-only:
     if: >-
-      github.event.label.name == 'product-sd1-gpio-cs-diag-kernel' &&
+      (github.event.label.name == 'product-sd1-gpio-cs-diag-kernel' ||
+       github.event.label.name == 'product-sd1-gpio-cs-obj-probe') &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
@@ -29,6 +30,7 @@ jobs:
       AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_BUILD: '1'
       AETHERCORE_MILL_NO_DAEMON: '1'
       RV64_LINUX_JOBS: '4'
+      AETHERCORE_SD1_GPIO_CS_OBJECT_PROBE: ${{ github.event.label.name == 'product-sd1-gpio-cs-obj-probe' && '1' || '0' }}
 
     steps:
       - name: Checkout exact reviewed branch and reject unqualified source
@@ -152,12 +154,18 @@ jobs:
           set -euo pipefail
           timeout --signal=TERM --kill-after=30s 65m \
             bash tools/ci/product_sd1_gpio_cs_diag_build.sh
-          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
-            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
-          cat build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$AETHERCORE_SD1_GPIO_CS_OBJECT_PROBE" == 1 ]]; then
+            grep -Fxq 'SD1_GPIO_CS_OBJECT_PROBE: status=DIFFERENT' \
+              build/product-sd1-gpio-cs-diagnostic/object-probe/identity.txt
+            cat build/product-sd1-gpio-cs-diagnostic/object-probe/identity.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+              build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+            cat build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Preserve distinct diagnostic firmware/Image cache only after verified build
-        if: success()
+        if: success() && env.AETHERCORE_SD1_GPIO_CS_OBJECT_PROBE != '1'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -177,6 +185,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
+            build/product-sd1-gpio-cs-diagnostic/object-probe/identity.txt
+            build/product-sd1-gpio-cs-diagnostic/object-probe/*.log
+            build/product-sd1-gpio-cs-diagnostic/object-probe/applied-source.diff
+            build/product-sd1-gpio-cs-diagnostic/object-probe/*.disasm
             build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
             build/product-sd1-gpio-cs-diagnostic/linux/result.txt
             build/product-sd1-gpio-cs-diagnostic/linux/evidence

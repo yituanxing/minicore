@@ -46,6 +46,16 @@ class DiagnosticSD1BuildIsolation(unittest.TestCase):
         self.assertNotIn("product_checkpoint_sd1_short.sh advance-only", workflow)
         self.assertNotIn("AETHERCORE_SD1_LONGRUN_CONFIRM", workflow)
 
+    def test_object_probe_precedes_full_kernel_and_cannot_save_fake_image(self):
+        body = self.build
+        workflow = self.workflow
+        self.assertIn("product-sd1-gpio-cs-obj-probe", workflow)
+        self.assertIn("AETHERCORE_SD1_GPIO_CS_OBJECT_PROBE", body)
+        self.assertLess(body.index("drivers/mmc/host/mmc_spi.o"),
+                        body.index('Image 2>&1 | tee "$out/linux-build.log"'))
+        self.assertIn("object-probe/identity.txt", workflow)
+        self.assertIn("kernel_patch_applied=1", body)
+
 
 if __name__ == "__main__":
     unittest.main()
