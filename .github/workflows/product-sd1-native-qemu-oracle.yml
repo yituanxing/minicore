@@ -95,8 +95,7 @@ jobs:
           # the following signed-media/whole-image SHA verifier is mandatory.
           [[ '${{ steps.media_cache.outputs.cache-hit }}' == true ||
              ( '${{ steps.media_cache.outputs.cache-hit }}' == false &&
-               '${{ steps.media_cache.outputs.cache-matched-key }}' ==
-                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+               '${{ steps.media_cache.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
             echo 'SD1_QEMU_ORACLE_OFFICIAL_MEDIA_REQUIRED: run exact offline seed first' >&2
             exit 16
           }

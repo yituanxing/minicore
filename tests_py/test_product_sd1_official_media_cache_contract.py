@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import re
+import subprocess
+import textwrap
 import unittest
 
 
@@ -84,6 +86,35 @@ class Sd1OfficialMediaCacheContract(unittest.TestCase):
         producer = (DIR / SEED).read_text()
         self.assertIn("actions/cache/save@v4", producer)
         self.assertNotIn("Re-key individually", producer)
+
+    def test_every_consumer_run_block_is_valid_bash_not_just_valid_yaml(self):
+        # YAML accepts multiline [[ expressions whose Bash comparison RHS
+        # starts on the next line; Bash rejects those during the actual job.
+        # Parse all run: | blocks to catch this before another CI attempt.
+        for name in CONSUMERS:
+            lines = (DIR / name).read_text().splitlines()
+            script_count = 0
+            for i, line in enumerate(lines):
+                match = re.match(r"^(\s*)run: \|\s*$", line)
+                if not match:
+                    continue
+                indent = len(match.group(1))
+                body = []
+                for source_line in lines[i + 1:]:
+                    if source_line.strip() and len(source_line) - len(source_line.lstrip()) <= indent:
+                        break
+                    body.append(source_line)
+                script = textwrap.dedent("\n".join(body)) + "\n"
+                run = subprocess.run(
+                    ["bash", "-n"], input=script, text=True,
+                    capture_output=True, check=False,
+                )
+                self.assertEqual(
+                    run.returncode, 0,
+                    f"{name}, run block after line {i+1}: {run.stderr}",
+                )
+                script_count += 1
+            self.assertGreater(script_count, 2, name)
 
 
 if __name__ == "__main__":

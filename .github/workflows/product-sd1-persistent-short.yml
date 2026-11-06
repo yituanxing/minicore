@@ -85,8 +85,7 @@ jobs:
           # the following signed-media/whole-image SHA verifier is mandatory.
           [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ||
              ( '${{ steps.seed-cache.outputs.cache-hit }}' == false &&
-               '${{ steps.seed-cache.outputs.cache-matched-key }}' ==
-                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+               '${{ steps.seed-cache.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
             echo 'PRODUCT_SD1_PERSISTENT_OFFICIAL_SEED_REQUIRED: run the independently opted-in zero-cycle trusted seed workflow first' >&2
             exit 16
           }

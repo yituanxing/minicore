@@ -99,8 +99,7 @@ jobs:
           # the following signed-media/whole-image SHA verifier is mandatory.
           [[ '${{ steps.sealed_media.outputs.cache-hit }}' == true ||
              ( '${{ steps.sealed_media.outputs.cache-hit }}' == false &&
-               '${{ steps.sealed_media.outputs.cache-matched-key }}' ==
-                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+               '${{ steps.sealed_media.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
             echo 'SD1_C1_QEMU_EXACT_OFFICIAL_MEDIA_REQUIRED: run signed offline SD1 source seed first' >&2
             exit 16
           }
