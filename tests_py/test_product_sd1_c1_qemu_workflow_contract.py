@@ -23,7 +23,7 @@ class ProductSd1C1QemuWorkflowContract(unittest.TestCase):
         self.assertIn("github.event.pull_request.base.ref == github.event.repository.default_branch", workflow)
         self.assertIn("github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'", workflow)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("timeout-minutes: 95", workflow)
+        self.assertIn("timeout-minutes: 120", workflow)
         self.assertNotIn("product_sd1_checkpoint_relay.sh", workflow)
         self.assertNotIn("product_sim_sd1_manual.sh longrun", workflow)
 
@@ -61,6 +61,19 @@ class ProductSd1C1QemuWorkflowContract(unittest.TestCase):
         self.assertIn("QEMU_VIRTIO_C1_ONLY_NOT_PRODUCT_SPI_RTL", oracle)
         self.assertNotIn("actions/cache/save@", workflow)
         self.assertIn("retention-days: 7", workflow)
+
+    def test_host_install_reuses_native_oracle_apt_cache_without_gui_recommendations(self):
+        workflow = WORKFLOW.read_text()
+        native = (ROOT / ".github/workflows/product-sd1-native-qemu-oracle.yml").read_text()
+        key = "aethercore-${{ runner.os }}-${{ runner.arch }}-noble-sd1-qemu-apt-v1"
+        self.assertIn(key, workflow)
+        self.assertIn(key, native)
+        self.assertIn("command -v qemu-system-riscv64 >/dev/null || missing+=(qemu-system-misc)", workflow)
+        self.assertIn("--no-install-recommends", workflow)
+        self.assertIn("APT::Keep-Downloaded-Packages=true", workflow)
+        self.assertIn("Dir::Cache::archives=$apt_archives", workflow)
+        self.assertIn("sudo chown -R", workflow)
+        self.assertNotIn("sudo apt-get install -y ", workflow)
 
 
 if __name__ == "__main__":

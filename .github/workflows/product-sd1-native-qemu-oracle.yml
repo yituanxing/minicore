@@ -115,14 +115,41 @@ jobs:
             ~/.cache/aethercore/l32/opensbi
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
 
+      - name: Reuse exact Ubuntu Noble QEMU prerequisite .deb downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-sd1-qemu-apt-archives
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-noble-sd1-qemu-apt-v1
+
       - name: Install QEMU virt and native host build prerequisites
         shell: bash
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=20s 10m sudo apt-get update
-          timeout --signal=TERM --kill-after=20s 10m sudo apt-get install -y \
-            qemu-system-misc bc libssl-dev libelf-dev make \
-            build-essential bison flex device-tree-compiler dwarves
+          # Ubuntu 24.04 ships RISC-V with qemu-system-misc. Do not pull its
+          # recommended GUI/SPICE/audio/GStreamer packages for a -nographic
+          # serial-only oracle: those alone exhausted the prior 10m budget.
+          missing=()
+          command -v qemu-system-riscv64 >/dev/null || missing+=(qemu-system-misc)
+          for binary_package in \
+            'bc:bc' 'make:make' 'gcc:build-essential' 'g++:build-essential' \
+            'bison:bison' 'flex:flex' 'dtc:device-tree-compiler' 'pahole:dwarves'; do
+            command -v "${binary_package%%:*}" >/dev/null || missing+=("${binary_package#*:}")
+          done
+          for package in libssl-dev libelf-dev; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | \
+              grep -Fxq 'install ok installed' || missing+=("$package")
+          done
+          if (( ${#missing[@]} )); then
+            mapfile -t missing < <(printf '%s\n' "${missing[@]}" | sort -u)
+            apt_archives="$RUNNER_TEMP/aethercore-sd1-qemu-apt-archives"
+            mkdir -p "$apt_archives/partial"
+            timeout --signal=TERM --kill-after=20s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=20s 20m sudo apt-get install \
+              -y --no-install-recommends \
+              -o "Dir::Cache::archives=$apt_archives" \
+              -o 'APT::Keep-Downloaded-Packages=true' "${missing[@]}"
+            sudo chown -R "$(id -u):$(id -g)" "$apt_archives"
+          fi
           command -v qemu-system-riscv64
 
       - name: Validate exact GCC and pinned upstream source (no Product RTL)

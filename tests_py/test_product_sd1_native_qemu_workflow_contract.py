@@ -74,6 +74,17 @@ class Sd1NativeQemuWorkflowContract(unittest.TestCase):
         self.assertNotIn('test -n "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"', bootstrap)
         self.assertIn('[[ "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}" == /* ]]', prepare)
 
+    def test_qemu_prerequisites_never_pull_unneeded_gui_or_discard_deb_cache(self):
+        workflow = WORKFLOW.read_text()
+        install = workflow.split("- name: Install QEMU virt and native host build prerequisites", 1)[1]
+        install = install.split("      - name:", 1)[0]
+        self.assertIn("--no-install-recommends", install)
+        self.assertIn('command -v qemu-system-riscv64', install)
+        self.assertIn('"Dir::Cache::archives=$apt_archives"', install)
+        self.assertIn("APT::Keep-Downloaded-Packages=true", install)
+        self.assertIn("Reuse exact Ubuntu Noble QEMU prerequisite .deb downloads", workflow)
+        self.assertIn("actions/cache@v4", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
