@@ -514,7 +514,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 1
-          retention-days: 14
+          retention-days: 90
 
       - name: Publish strict stage result; login only when UART and guest init prove it
         if: success() && steps.stage.outputs.ready == '1'
@@ -577,7 +577,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 1
-          retention-days: 14
+          retention-days: 90
 
       - name: Retain per-window Linux boot analysis
         if: always() && (steps.stage.outcome == 'success' || steps.stage.outcome == 'failure')
