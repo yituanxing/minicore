@@ -245,19 +245,25 @@ jobs:
           mapfile -t matching_runs < <(gh api \
             "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-official-artifact-relay.yml/runs" -X GET \
             -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
-            --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
+            --jq '.workflow_runs[] | select((.conclusion == "success" or .conclusion == "failure") and .head_repository.full_name == .repository.full_name) | [.id,.head_sha,.conclusion] | @tsv')
           for entry in "${matching_runs[@]}"; do
-            IFS=$'\t' read -r candidate_id candidate_sha <<< "$entry"
+            IFS=$'\t' read -r candidate_id candidate_sha candidate_result <<< "$entry"
             [[ "$candidate_sha" =~ ^[a-f0-9]{40}$ && "$candidate_id" =~ ^[0-9]+$ ]] || continue
             # Exact compatibility key survives unrelated FPGA and document
             # commits. An RTL/firmware/host/seed-input change creates a new
             # name and never triggers unsafe reuse of a stale full snapshot.
-            expected="product-sd1-official-public-stage-$compat-$candidate_id"
+            if [[ "$candidate_result" == success ]]; then
+              expected="product-sd1-official-public-stage-$compat-$candidate_id"
+            elif [[ "$candidate_result" == failure ]]; then
+              expected="product-sd1-official-public-recovery-$compat-$candidate_id"
+            else
+              continue
+            fi
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate_id/artifacts?per_page=100" \
               --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$expected"; then
               echo "source_run_id=$candidate_id" >> "$GITHUB_OUTPUT"
               echo "source_artifact=$expected" >> "$GITHUB_OUTPUT"
-              echo "PUBLIC_SD1_RELAY_SOURCE_RUN=$candidate_id"
+              echo "PUBLIC_SD1_RELAY_SOURCE_RUN=$candidate_id kind=$candidate_result exact_compat=$compat"
               exit 0
             fi
           done
@@ -346,12 +352,26 @@ jobs:
           mkdir -p "$root/work" "$root/publish" "$root/analysis"
           # Analysis is diagnostic only. Verify its independent SHA manifest
           # before inheriting it; do not mix it into the savable model ABI.
-          if [[ -f "$root/source/analysis/SHA256SUMS" ]]; then
+          if [[ -d "$root/source/analysis" ]]; then
+            test -f "$root/source/analysis/SHA256SUMS" || {
+              echo 'PUBLIC_SD1_ANALYSIS_MANIFEST_MISSING: refuse unverified inherited evidence' >&2
+              exit 21
+            }
             [[ -z "$(find "$root/source/analysis" -type l -print -quit)" ]] || exit 21
             (cd "$root/source/analysis" && sha256sum --check --status SHA256SUMS)
             cp -a -- "$root/source/analysis/." "$root/analysis/"
             rm -f -- "$root/analysis/SHA256SUMS"
           fi
+          # Record runner identity and CPU to separate Linux-phase and
+          # host-capacity effects in later timing analysis.
+          {
+            printf 'run_id=%s\nrunner_name=%s\nrunner_os=%s\nrunner_arch=%s\n' \
+              "$GITHUB_RUN_ID" "${RUNNER_NAME:-unknown}" "$RUNNER_OS" "$RUNNER_ARCH"
+            printf 'sim_settle_mode=%s\nverilator_threads=%s\n' \
+              "$SIM_SETTLE_MODE" "$VERILATOR_THREADS"
+            uname -a
+            lscpu
+          } > "$root/analysis/runner-$GITHUB_RUN_ID.txt"
           if [[ -n '${{ steps.source.outputs.source_run_id }}' ]]; then
             current="$root/source"
           else
@@ -381,28 +401,67 @@ jobs:
             target="$root/work/step-$step"
             previous="$current"
             started_seconds="$SECONDS"
+            started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             bash tools/ci/product_sd1_artifact_relay.sh advance "$previous" "$target" "$next" \
               | tee "$root/work/step-$step.log"
             elapsed_seconds=$((SECONDS - started_seconds))
+            finished_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             # Each completed 20M window gets independent, source-attributed
             # performance evidence even when a later window fails.
             cp -- "$target/save.log" "$root/analysis/run-$GITHUB_RUN_ID-step-$step-save.log"
             cp -- "$root/work/step-$step.log" "$root/analysis/run-$GITHUB_RUN_ID-step-$step-relay.log"
             python3 - "$previous" "$target" "$root/analysis/segments.jsonl" \
-              "$GITHUB_RUN_ID" "$step" "$elapsed_seconds" <<'PY'
+              "$GITHUB_RUN_ID" "$step" "$elapsed_seconds" "$started_utc" "$finished_utc" <<'PY'
           import hashlib
           import json
+          import os
           from pathlib import Path
+          import re
           import sys
           sys.path.insert(0, str(Path.cwd() / "tools/ci"))
-          from product_sd1_relay_state import decode
-          old = decode(Path(sys.argv[1]) / "persistent.pre.host")
-          new = decode(Path(sys.argv[2]) / "persistent.pre.host")
+          from product_sd1_relay_state import (
+              decode, sha256, MAGIC, VERSION, MAX_UART, read_exact, read_u64, read_string
+          )
+          before_host = Path(sys.argv[1]) / "persistent.pre.host"
+          after_host = Path(sys.argv[2]) / "persistent.pre.host"
+          old = decode(before_host)
+          new = decode(after_host)
+          # Read only the bounded UART preamble; never allocate the 256 MiB DDR
+          # payload or change the original savable checkpoint representation.
+          def extract_uart(host):
+              with host.open("rb") as stream:
+                  if read_exact(stream, 8) != MAGIC or read_u64(stream) != VERSION:
+                      raise ValueError("wrong SD1 UART host checkpoint schema")
+                  for _ in range(6):
+                      read_string(stream, 128)
+                  read_string(stream, 128)
+                  read_string(stream, 4096)
+                  for _ in range(18):
+                      read_u64(stream)
+                  return read_string(stream, MAX_UART)
+          prior_uart = extract_uart(before_host)
+          current_uart = extract_uart(after_host)
+          if len(prior_uart) != old["uart_bytes"] or len(current_uart) != new["uart_bytes"]:
+              raise ValueError("SD1 UART byte count differs from verified observer")
+          if not current_uart.startswith(prior_uart):
+              raise ValueError("SD1 UART is not append-only across relay stage")
+          analysis = Path(sys.argv[3]).parent
+          uart_delta = current_uart[len(prior_uart):]
+          (analysis / f"uart-delta-run-{sys.argv[4]}-step-{sys.argv[5]}.bin").write_bytes(uart_delta)
+          (analysis / "uart-cumulative-latest.log").write_bytes(current_uart)
+          # Missing SPI counters remain null, never inferred as zero.
+          saved = (Path(sys.argv[2]) / "save.log").read_text(errors="replace")
+          sd_observed = {}
+          for key in ("sd-cmds", "sd-reads", "sd-writes", "sd-init", "sd-cow-sectors"):
+              values = re.findall(r"(?<![A-Za-z0-9-])" + re.escape(key) + r"=(\d+)", saved)
+              sd_observed[key.replace("-", "_")] = int(values[-1]) if values else None
           duration = int(sys.argv[6])
           cycles = int(new["cycles"]) - int(old["cycles"])
           retired = int(new["commits"]) - int(old["commits"])
           record = {
               "run_id": int(sys.argv[4]), "window": int(sys.argv[5]),
+              "started_utc": sys.argv[7], "finished_utc": sys.argv[8],
+              "runner_name": os.environ.get("RUNNER_NAME", "unknown"),
               "from_cycle": old["cycles"], "to_cycle": new["cycles"],
               "from_commits": old["commits"], "to_commits": new["commits"],
               "retired_delta": retired,
@@ -410,14 +469,15 @@ jobs:
               "wall_seconds": duration,
               "cycles_per_wall_second": round(cycles / duration, 1) if duration else None,
               "uart_bytes_before": old["uart_bytes"], "uart_bytes_after": new["uart_bytes"],
-              "uart_delta_bytes": int(new["uart_bytes"]) - int(old["uart_bytes"]),
+              "uart_delta_bytes": len(uart_delta),
               "uart_hash": new["uart_hash"],
+              "uart_cumulative_sha256": hashlib.sha256(current_uart).hexdigest(),
+              "uart_delta_sha256": hashlib.sha256(uart_delta).hexdigest(),
+              "sd_observed": sd_observed,
               "opensbi": new["opensbi"], "ext4": new["ext4_root_mounted"],
               "native_init": new["native_init_started"], "login": new["login"],
               "failure": new["failure"],
-              "host_snapshot_sha256": hashlib.sha256(
-                  (Path(sys.argv[2]) / "persistent.pre.host").read_bytes()
-              ).hexdigest(),
+              "host_snapshot_sha256": sha256(after_host),
           }
           with Path(sys.argv[3]).open("a", encoding="utf-8") as out:
               out.write(json.dumps(record, sort_keys=True) + "\n")
