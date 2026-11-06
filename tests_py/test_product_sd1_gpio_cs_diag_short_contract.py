@@ -58,6 +58,23 @@ class DiagnosticShortGateContract(unittest.TestCase):
         self.assertNotIn('steps.native-abi.outputs.signature', workflow)
         self.assertIn('steps.model-cache.outputs.cache-hit', workflow)
 
+    def test_immutable_cross_ci_12m_to_32m_relay(self):
+        workflow = self.workflow
+        self.assertIn('product-sd1-gpio-cs-diag-advance-32m', workflow)
+        self.assertIn('run-id: 42242315003', workflow)
+        self.assertIn('product-sd1-gpio-cs-diagnostic-12m-42242315003', workflow)
+        self.assertIn('github-token: ${{ github.token }}', workflow)
+        self.assertIn('actions: read', workflow)
+        self.assertIn('steps.model-cache.outputs.cache-hit', workflow)
+        self.assertIn('expected exactly one imported 12M manifest', workflow)
+        self.assertIn('product_sd1_gpio_cs_diag_short.sh advance', workflow)
+        self.assertIn('32000000', workflow)
+        self.assertIn('product_sd1_gpio_cs_boot_profile.py', workflow)
+        script = self.script
+        self.assertIn('source_model_key', script)
+        self.assertIn('duplicate source checkpoint manifest fields', script)
+        self.assertIn('source contains symlinks', script)
+
 
 if __name__ == '__main__':
     unittest.main()

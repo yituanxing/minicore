@@ -119,6 +119,16 @@ else
   old="$(realpath "$2")"
   [[ -d "$old" && -s "$old/.diag-ready" ]] || fail 'source diagnostic checkpoint missing'
   [[ "$old" == "$out/"* ]] || fail 'source must belong to isolated diagnostic chain'
+  [[ ! -L "$old/.diag-ready" && ! -L "$old/persistent.pre.rtl" &&
+     ! -L "$old/persistent.pre.host" ]] || fail 'source contains symlinks'
+  [[ "$(field qualification "$old/.diag-ready")" == SD1_GPIO_CS_DIAGNOSTIC_CHECKPOINT_NOT_DEBIAN_PASS &&
+     "$(field top "$old/.diag-ready")" == AetherCoreProductDebianSdRV64SimTop &&
+     "$(field schema "$old/.diag-ready")" == AETSDCP1 &&
+     "$(field patch_sha256 "$old/.diag-ready")" == "$patch_sha" &&
+     "$(field source_model_key "$old/.diag-ready")" == "$(< "$sim_source_key")" ]] ||
+    fail 'source diagnostic qualification/patch/model build key incompatible'
+  duplicate_fields="$(cut -d = -f 1 "$old/.diag-ready" | sort | uniq -d)"
+  [[ -z "$duplicate_fields" ]] || fail 'duplicate source checkpoint manifest fields'
   for key in model firmware dtb sd_image linux_image rootfs_result; do
     case "$key" in
       model) expected="$model_sha";; firmware) expected="$fw_sha";;
