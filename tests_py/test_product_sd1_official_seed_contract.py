@@ -34,6 +34,27 @@ class ProductSd1OfficialSeedContracts(unittest.TestCase):
         self.assertIn('Acquire::https::CaInfo=', text)
         self.assertNotIn('Acquire::https::Verify-Peer=false', text)
 
+    def test_debian_download_cache_is_snapshot_bound_and_saved_even_on_failure(self):
+        text = SUPPLIER.read_text()
+        workflow = WORKFLOW.read_text()
+        self.assertIn('APT_PIN_SHA=', text)
+        self.assertIn('cache_validate', text)
+        self.assertIn('cache_export', text)
+        self.assertIn('cache_seal', text)
+        self.assertIn('sha256sum -- "$deb"', text)
+        self.assertIn('download_ok=0', text)
+        self.assertIn('for attempt in 1 2 3; do', text)
+        self.assertIn('--download-only --no-install-recommends', text)
+        self.assertIn('--no-download --no-install-recommends', text)
+        self.assertIn('Acquire::Queue-Mode=access', text)
+        self.assertIn('Dir::Cache::archives=', text)
+        self.assertIn('id: offline_rootfs', workflow)
+        self.assertIn('id: apt_cache', workflow)
+        self.assertIn('steps.offline_rootfs.outcome == \'failure\'', workflow)
+        self.assertIn('steps.apt_cache.outputs.cache-hit', workflow)
+        self.assertIn('sd1-debs-v1-${{ hashFiles(\'software/rv64/product_sd1_official_seed.lock\') }}-', workflow)
+        self.assertNotIn('actions/upload-artifact@', workflow)
+
     def test_unreviewed_lock_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             lock = Path(temporary) / "seed.lock"

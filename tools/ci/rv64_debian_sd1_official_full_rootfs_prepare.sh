@@ -17,6 +17,8 @@ MAIN_RELEASE_SHA="${RV64_SD1_DEBIAN_INRELEASE_SHA256:-}"
 SECURITY_RELEASE_SHA="${RV64_SD1_DEBIAN_SECURITY_INRELEASE_SHA256:-}"
 LOGIN_USER="${RV64_SD1_LOGIN_USER:-}"
 LOGIN_HASH_FILE="${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}"
+APT_CACHE_DIR="${RV64_SD1_APT_CACHE_DIR:-${ROOT_DIR}/build/product-sd1-official-apt-cache}"
+APT_GUEST_ARCHIVES=/tmp/aethercore-sd1-apt-archives
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 for tool in docker sha256sum; do
@@ -32,6 +34,62 @@ done
   fail 'set RV64_SD1_DEBIAN_INRELEASE_SHA256=<64 hex>; pin the official signed trixie InRelease bytes'
 [[ "$SECURITY_RELEASE_SHA" =~ ^[[:xdigit:]]{64}$ ]] || \
   fail 'set RV64_SD1_DEBIAN_SECURITY_INRELEASE_SHA256=<64 hex>; pin the signed trixie-security InRelease bytes'
+# A partial cache contains public .deb downloads ONLY, never an installed
+# rootfs, guest credentials, or unverified configuration. Its binding includes
+# the exact OCI and BOTH GPG-verified, SHA-pinned archive generations.
+APT_PIN_SHA="$({
+  printf '%s\n' "$SOURCE_DIGEST" "$MAIN_SNAPSHOT" "$SECURITY_SNAPSHOT" \
+    "$MAIN_RELEASE_SHA" "$SECURITY_RELEASE_SHA"
+} | sha256sum | cut -d' ' -f1)"
+[[ ! -L "$APT_CACHE_DIR" ]] || fail 'apt package cache must not be a symlink'
+mkdir -p "$APT_CACHE_DIR"
+cache_manifest() {
+  (
+    cd "$APT_CACHE_DIR"
+    for deb in ./*.deb; do
+      [[ -e "$deb" || -L "$deb" ]] || continue
+      [[ -f "$deb" && ! -L "$deb" ]] || fail "untrusted cached package: $deb"
+      sha256sum -- "$deb"
+    done
+  )
+}
+cache_validate() {
+  if [[ ! -e "$APT_CACHE_DIR/pins.txt" && ! -e "$APT_CACHE_DIR/debs.sha256" ]]; then
+    [[ -z "$(cache_manifest)" ]] || fail 'cached Debian packages have no locked provenance'
+    return
+  fi
+  [[ -f "$APT_CACHE_DIR/pins.txt" && -f "$APT_CACHE_DIR/debs.sha256" &&
+     ! -L "$APT_CACHE_DIR/pins.txt" && ! -L "$APT_CACHE_DIR/debs.sha256" ]] ||
+    fail 'incomplete or symlinked apt cache manifest'
+  [[ "$(< "$APT_CACHE_DIR/pins.txt")" == "$APT_PIN_SHA" ]] ||
+    fail 'refusing to reuse .deb cache from a different signed Debian snapshot'
+  cmp -s <(cache_manifest) "$APT_CACHE_DIR/debs.sha256" ||
+    fail 'cached Debian package SHA manifest differs from actual bytes'
+}
+cache_seal() {
+  cache_manifest > "$APT_CACHE_DIR/debs.sha256.tmp"
+  printf '%s\n' "$APT_PIN_SHA" > "$APT_CACHE_DIR/pins.txt.tmp"
+  mv -f -- "$APT_CACHE_DIR/debs.sha256.tmp" "$APT_CACHE_DIR/debs.sha256"
+  mv -f -- "$APT_CACHE_DIR/pins.txt.tmp" "$APT_CACHE_DIR/pins.txt"
+}
+cache_export() {
+  local names name
+  names="$(docker exec "$CONTAINER" /bin/sh -ec \
+    'for deb in /tmp/aethercore-sd1-apt-archives/*.deb; do
+       if [ -f "$deb" ]; then printf "%s\n" "${deb##*/}"; fi
+     done')" ||
+    fail 'cannot list complete apt download archives'
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" =~ ^[a-zA-Z0-9._+~%:-]+\.deb$ ]] || fail 'unexpected guest package filename'
+    docker cp "$CONTAINER:$APT_GUEST_ARCHIVES/$name" "$APT_CACHE_DIR/$name" >/dev/null ||
+      fail 'cannot preserve a completed Debian package download'
+  done <<< "$names"
+  cache_seal
+  printf 'SD1_APT_PACKAGE_CACHE_SAVED packages=%s pins=%s\n' \
+    "$(find "$APT_CACHE_DIR" -maxdepth 1 -type f -name '*.deb' | wc -l)" "$APT_PIN_SHA"
+}
+cache_validate
 if [[ -n "$LOGIN_USER" || -n "$LOGIN_HASH_FILE" ]]; then
   [[ "$LOGIN_USER" =~ ^[a-z_][a-z0-9_-]{0,30}$ && "$LOGIN_USER" != root ]] || \
     fail 'RV64_SD1_LOGIN_USER must name a new ordinary Debian account (not root)'
@@ -163,29 +221,67 @@ docker exec -e SD1_MAIN_SHA="$MAIN_RELEASE_SHA" \
     fail "signed snapshot index changed or hash is wrong; inspect ${OUTPUT_DIR}/signed-release-check.log"
   }
 
+# Stage only fully downloaded .debs AFTER the signed repository indexes have
+# been verified. The Docker base's docker-clean hook empties the default apt
+# cache, so use our own guest /tmp archive directory. APT itself validates
+# reused packages against the GPG-verified Packages indexes before install.
+docker exec "$CONTAINER" mkdir -p "$APT_GUEST_ARCHIVES/partial"
+for deb in "$APT_CACHE_DIR"/*.deb; do
+  [[ -f "$deb" ]] || continue
+  docker cp "$deb" "$CONTAINER:$APT_GUEST_ARCHIVES/$(basename "$deb")" >/dev/null ||
+    fail 'cannot stage a manifest-verified Debian download'
+done
+
 # Explicit, bounded package request.  Apt may pull their REQUIRED
 # dependencies from the same pinned snapshot; --no-install-recommends avoids
 # accidental large desktop/firmware inclusion.  Do NOT install distro kernel,
 # GRUB or OpenSBI: Product owns its kernel/FW payload independently.
-printf 'Installing signed Debian guest packages under riscv64 user emulation (bounded by the CI job timeout).\n'
+packages=(systemd systemd-sysv libpam-systemd udev dbus
+  login passwd util-linux mount procps kmod e2fsprogs
+  apt dpkg ca-certificates bash coreutils dash findutils grep sed less
+  iproute2 iputils-ping netbase)
+apt_options=(-o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem
+  -o Acquire::Queue-Mode=access -o Acquire::Retries=3
+  -o Acquire::https::Timeout=30
+  -o APT::Keep-Downloaded-Packages=true
+  -o "Dir::Cache::archives=$APT_GUEST_ARCHIVES" -o Dpkg::Use-Pty=0)
+
+# APT fetches ALL packages into its temporary immutable store first.  A
+# transient snapshot.debian.org 503/504 cannot partially configure systemd.
+# Three bounded backoff attempts reuse downloaded .debs inside one container,
+# and the dedicated cross-run cache persists full files even when all fail.
+download_ok=0
+for attempt in 1 2 3; do
+  printf 'SD1_APT_DOWNLOAD_ATTEMPT attempt=%s/3 package_cache=%s\n' "$attempt" "$APT_CACHE_DIR"
+  if docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
+    apt-get "${apt_options[@]}" --yes --download-only --no-install-recommends \
+      install "${packages[@]}" > "${OUTPUT_DIR}/apt-download.log" 2>&1; then
+    download_ok=1
+    cache_export
+    break
+  else
+    download_rc=$?
+  fi
+  cache_export
+  printf 'SD1 APT download attempt %s failed (exit=%s), last 45 log lines:\n' \
+    "$attempt" "$download_rc" >&2
+  tail -n 45 "${OUTPUT_DIR}/apt-download.log" >&2
+  if (( attempt < 3 )); then
+    delay=$((attempt * 20))
+    printf 'SD1_APT_TRANSIENT_BACKOFF seconds=%s\n' "$delay"
+    sleep "$delay"
+  fi
+done
+(( download_ok )) || fail 'signed Debian package downloads failed after three bounded attempts; full .deb cache sealed for future exact-pin retry'
+
+printf 'Configuring completely downloaded signed Debian guest packages OFFLINE under riscv64 user emulation.\n'
 if docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
-  apt-get -o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem \
-    -o Dpkg::Use-Pty=0 install --yes --no-install-recommends \
-    systemd systemd-sysv libpam-systemd udev dbus \
-    login passwd util-linux mount procps kmod e2fsprogs \
-    apt dpkg ca-certificates \
-    bash coreutils dash findutils grep sed less \
-    iproute2 iputils-ping netbase \
-  > "${OUTPUT_DIR}/apt-install.log" 2>&1; then
+  apt-get "${apt_options[@]}" --yes --no-download --no-install-recommends \
+    install "${packages[@]}" > "${OUTPUT_DIR}/apt-install.log" 2>&1; then
   printf 'Signed Debian package installation and configuration completed.\n'
 else
   install_rc=$?
-  # GitHub-hosted runners discard this private, ephemeral build directory
-  # after a failed step. Emit the last package-manager lines while the
-  # container is still available. The CI workflow explicitly unsets ALL
-  # login credentials before this step; Debian package names, GPG errors,
-  # and dpkg diagnostics are public. Never print container environment.
-  printf 'Official Debian package install failed (exit=%s); last 120 public APT/dpkg log lines:\n' "$install_rc" >&2
+  printf 'Official Debian offline package configuration failed (exit=%s); last 120 public APT/dpkg log lines:\n' "$install_rc" >&2
   tail -n 120 "${OUTPUT_DIR}/apt-install.log" >&2
   printf 'Guest dpkg --audit after failed install:\n' >&2
   docker exec "$CONTAINER" dpkg --audit >&2 || true
@@ -232,6 +328,10 @@ docker exec "$CONTAINER" dpkg-query -W -f='${binary:Package}\t${Version}\n' \
   > "${OUTPUT_DIR}/installed-packages.tsv"
 docker exec "$CONTAINER" apt-get clean
 docker exec "$CONTAINER" rm -f /tmp/aethercore-sd1-bootstrap-ca.pem
+# Keep public Debian archive files only in the separately sealed download
+# cache; never bloat the bootable distro rootfs with installer .deb files.
+docker exec "$CONTAINER" /bin/sh -ec \
+  'rm -rf -- /tmp/aethercore-sd1-apt-archives'
 # Prevent an image-build-only service-start policy from disabling ordinary
 # Debian package maintenance on the eventual physical FPGA system.
 docker exec "$CONTAINER" rm -f /usr/sbin/policy-rc.d

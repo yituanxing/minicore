@@ -140,7 +140,22 @@ jobs:
           timeout --signal=TERM --kill-after=30s 35m bash tools/ci/rv64_linux_early_build.sh
           grep -Fxq 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' build/rv64-linux-early/result.txt
 
+      # The immutable complete-media cache cannot exist until the ENTIRE SD1
+      # rootfs succeeds. Keep already downloaded public .debs separately even
+      # on a 503/504 failure; never mistake this for a qualified rootfs.
+      # The lock hash binds OCI + both signed snapshot releases. Each attempt
+      # saves a unique cache, and the next attempt restores the newest prefix.
+      - name: Restore partial official Debian apt package downloads
+        id: apt_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-official-apt-cache
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-
+
       - name: Supply official Debian riscv64 snapshot-pinned configured rootfs
+        id: offline_rootfs
         shell: bash
         run: |
           set -euo pipefail
@@ -156,6 +171,18 @@ jobs:
           grep -Fxq 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' build/rv64-debian-rootfs/result.txt
           grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
             build/rv64-debian-sd1-official-rootfs/console-provisioning.txt
+
+      # Save the verified full-.deb cache even when the source stage stops
+      # early. This action never saves a partial /sbin/init or guest DDR.
+      - name: Preserve partial Debian package cache on success or failure
+        if: >-
+          always() &&
+          (steps.offline_rootfs.outcome == 'success' || steps.offline_rootfs.outcome == 'failure') &&
+          steps.apt_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-official-apt-cache
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Build native MBR ext4 media, then matching RV64GC Linux and independent DTB
         shell: bash
