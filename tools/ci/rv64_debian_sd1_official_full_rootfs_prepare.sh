@@ -104,8 +104,20 @@ EOF
     chmod 0755 /usr/sbin/policy-rc.d
   '
 
+# The official minimal Debian OCI base may not ship a CA bundle yet. Apt
+# must still use HTTPS (and must independently verify Debian GPG signatures
+# and exact InRelease hashes). Supply the Actions runner's system trust
+# anchors only for this isolated apt bootstrap, never disable TLS verification.
+HOST_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+[[ -s "$HOST_CA_BUNDLE" ]] || fail 'runner has no usable trusted CA bundle for HTTPS apt bootstrap'
+docker cp "$HOST_CA_BUNDLE" "$CONTAINER:/tmp/aethercore-sd1-bootstrap-ca.pem" || \
+  fail 'cannot stage trusted HTTPS CA bundle in the isolated riscv64 container'
+docker exec "$CONTAINER" /bin/sh -ec \
+  'test -s /tmp/aethercore-sd1-bootstrap-ca.pem && chmod 0644 /tmp/aethercore-sd1-bootstrap-ca.pem'
+
 docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
   apt-get -o Acquire::Check-Valid-Until=false \
+    -o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem \
     -o APT::Update::Error-Mode=any update \
   > "${OUTPUT_DIR}/apt-update.log" 2>&1 || \
   {
@@ -156,7 +168,8 @@ docker exec -e SD1_MAIN_SHA="$MAIN_RELEASE_SHA" \
 # accidental large desktop/firmware inclusion.  Do NOT install distro kernel,
 # GRUB or OpenSBI: Product owns its kernel/FW payload independently.
 docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
-  apt-get install --yes --no-install-recommends \
+  apt-get -o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem \
+    install --yes --no-install-recommends \
     systemd systemd-sysv libpam-systemd udev dbus \
     login passwd util-linux mount procps kmod e2fsprogs \
     apt dpkg ca-certificates \
@@ -204,6 +217,7 @@ fi
 docker exec "$CONTAINER" dpkg-query -W -f='${binary:Package}\t${Version}\n' \
   > "${OUTPUT_DIR}/installed-packages.tsv"
 docker exec "$CONTAINER" apt-get clean
+docker exec "$CONTAINER" rm -f /tmp/aethercore-sd1-bootstrap-ca.pem
 # Prevent an image-build-only service-start policy from disabling ordinary
 # Debian package maintenance on the eventual physical FPGA system.
 docker exec "$CONTAINER" rm -f /usr/sbin/policy-rc.d
