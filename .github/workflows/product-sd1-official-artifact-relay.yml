@@ -343,7 +343,15 @@ jobs:
         run: |
           set -euo pipefail
           root=build/product-sd1-public-artifact-relay
-          mkdir -p "$root/work" "$root/publish"
+          mkdir -p "$root/work" "$root/publish" "$root/analysis"
+          # Analysis is diagnostic only. Verify its independent SHA manifest
+          # before inheriting it; do not mix it into the savable model ABI.
+          if [[ -f "$root/source/analysis/SHA256SUMS" ]]; then
+            [[ -z "$(find "$root/source/analysis" -type l -print -quit)" ]] || exit 21
+            (cd "$root/source/analysis" && sha256sum --check --status SHA256SUMS)
+            cp -a -- "$root/source/analysis/." "$root/analysis/"
+            rm -f -- "$root/analysis/SHA256SUMS"
+          fi
           if [[ -n '${{ steps.source.outputs.source_run_id }}' ]]; then
             current="$root/source"
           else
@@ -359,6 +367,7 @@ jobs:
           observed="$(python3 tools/ci/product_sd1_relay_state.py --snapshot "$current")"
           terminal="$(python3 -c 'import json,sys; x=json.loads(sys.argv[1].partition(" ")[2]); print(int(x["login"] and x["ext4_root_mounted"] and x["native_init_started"]))' "$observed")"
           [[ "$terminal" == 0 || "$terminal" == 1 ]]
+          printf '%s\n' "$observed" > "$root/analysis/start-state-$GITHUB_RUN_ID.txt"
           if [[ "$terminal" == 1 ]]; then
             echo 'native_login=1' >> "$GITHUB_OUTPUT"
             echo "PUBLIC_SD1_RELAY_NATIVE_LOGIN_ALREADY_PASS: cycle=$initial; reuse verified terminal state"
@@ -370,8 +379,49 @@ jobs:
             next=$((old + 20000000))
             (( next <= maximum )) || next="$maximum"
             target="$root/work/step-$step"
-            bash tools/ci/product_sd1_artifact_relay.sh advance "$current" "$target" "$next" \
+            previous="$current"
+            started_seconds="$SECONDS"
+            bash tools/ci/product_sd1_artifact_relay.sh advance "$previous" "$target" "$next" \
               | tee "$root/work/step-$step.log"
+            elapsed_seconds=$((SECONDS - started_seconds))
+            # Each completed 20M window gets independent, source-attributed
+            # performance evidence even when a later window fails.
+            cp -- "$target/save.log" "$root/analysis/run-$GITHUB_RUN_ID-step-$step-save.log"
+            cp -- "$root/work/step-$step.log" "$root/analysis/run-$GITHUB_RUN_ID-step-$step-relay.log"
+            python3 - "$previous" "$target" "$root/analysis/segments.jsonl" \
+              "$GITHUB_RUN_ID" "$step" "$elapsed_seconds" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, str(Path.cwd() / "tools/ci"))
+          from product_sd1_relay_state import decode
+          old = decode(Path(sys.argv[1]) / "persistent.pre.host")
+          new = decode(Path(sys.argv[2]) / "persistent.pre.host")
+          duration = int(sys.argv[6])
+          cycles = int(new["cycles"]) - int(old["cycles"])
+          retired = int(new["commits"]) - int(old["commits"])
+          record = {
+              "run_id": int(sys.argv[4]), "window": int(sys.argv[5]),
+              "from_cycle": old["cycles"], "to_cycle": new["cycles"],
+              "from_commits": old["commits"], "to_commits": new["commits"],
+              "retired_delta": retired,
+              "cpi": round(cycles / retired, 5) if retired else None,
+              "wall_seconds": duration,
+              "cycles_per_wall_second": round(cycles / duration, 1) if duration else None,
+              "uart_bytes_before": old["uart_bytes"], "uart_bytes_after": new["uart_bytes"],
+              "uart_delta_bytes": int(new["uart_bytes"]) - int(old["uart_bytes"]),
+              "uart_hash": new["uart_hash"],
+              "opensbi": new["opensbi"], "ext4": new["ext4_root_mounted"],
+              "native_init": new["native_init_started"], "login": new["login"],
+              "failure": new["failure"],
+              "host_snapshot_sha256": hashlib.sha256(
+                  (Path(sys.argv[2]) / "persistent.pre.host").read_bytes()
+              ).hexdigest(),
+          }
+          with Path(sys.argv[3]).open("a", encoding="utf-8") as out:
+              out.write(json.dumps(record, sort_keys=True) + "\n")
+          PY
             current="$target"
             if grep -Fq 'PRODUCT_SD1_PUBLIC_ARTIFACT_NATIVE_GETTY_PROMPT_PASS ' \
               "$root/work/step-$step.log"; then
@@ -383,6 +433,12 @@ jobs:
           # Publish an artifact only after its final stage has been verified.
           cp -a -- "$current/." "$root/publish/"
           bash tools/ci/product_sd1_artifact_relay.sh verify "$root/publish"
+          # Auxiliary analysis has its own digest; no change to AETSDCP1.
+          (cd "$root/analysis" &&
+            find . -type f ! -name SHA256SUMS -print0 | sort -z |
+            xargs -0 sha256sum > SHA256SUMS)
+          mkdir -p "$root/publish/analysis"
+          cp -a -- "$root/analysis/." "$root/publish/analysis/"
           echo "cycles=$(sed -n 's/^cycles=//p' "$root/publish/artifact-manifest.txt")" >> "$GITHUB_OUTPUT"
           echo "commits=$(sed -n 's/^commits=//p' "$root/publish/artifact-manifest.txt")" >> "$GITHUB_OUTPUT"
           echo 'ready=1' >> "$GITHUB_OUTPUT"
@@ -420,3 +476,54 @@ jobs:
             fi
             echo '- Public test snapshots contain NO provisioned guest credentials; do not use this path with private images'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # A later window can fail after an earlier one has been fully sealed.
+      # Preserve ONLY the most recent verified good window; keep the run red.
+      - name: Recover last individually verified window on later failure
+        if: failure() && steps.stage.outcome == 'failure'
+        id: salvage
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=build/product-sd1-public-artifact-relay
+          mkdir -p "$root/analysis"
+          for log in "$root"/work/step-*.log; do
+            [[ -f "$log" ]] || continue
+            cp -- "$log" "$root/analysis/run-$GITHUB_RUN_ID-failure-$(basename "$log")"
+          done
+          for n in 5 4 3 2 1; do
+            candidate="$root/work/step-$n"
+            [[ -f "$candidate/ARTIFACT_COMPLETE" ]] || continue
+            if bash tools/ci/product_sd1_artifact_relay.sh verify "$candidate"; then
+              mkdir -p "$root/recovery"
+              cp -a -- "$candidate/." "$root/recovery/"
+              (cd "$root/analysis" &&
+                find . -type f ! -name SHA256SUMS -print0 | sort -z |
+                xargs -0 sha256sum > SHA256SUMS)
+              cp -a -- "$root/analysis" "$root/recovery/analysis"
+              echo "ready=1" >> "$GITHUB_OUTPUT"
+              echo "PUBLIC_SD1_VERIFIED_PARTIAL_SALVAGED window=$n"
+              exit 0
+            fi
+          done
+          echo 'PUBLIC_SD1_NO_VERIFIED_PARTIAL: source artifact remains intact'
+
+      - name: Upload only independently verified partial on failure
+        if: failure() && steps.salvage.outputs.ready == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-official-public-recovery-${{ steps.compat.outputs.sha256 }}-${{ github.run_id }}
+          path: build/product-sd1-public-artifact-relay/recovery/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 1
+          retention-days: 14
+
+      - name: Retain per-window Linux boot analysis
+        if: always() && (steps.stage.outcome == 'success' || steps.stage.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-public-boot-analysis-${{ github.run_id }}
+          path: build/product-sd1-public-artifact-relay/analysis/
+          if-no-files-found: warn
+          retention-days: 90
