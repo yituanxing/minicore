@@ -26,6 +26,14 @@ counter, verifies retirement progress, saves both host/RTL checkpoint files,
 and hashes each completed checkpoint. It can be rerun on the last verified
 checkpoint after an interrupted run; it never mutates its starting state.
 
+The source archive identifies the tested RTL model lineage as commit
+`99a5c86e99f52ed12f95b304635d77613c9505c4`, archived model SHA256
+`aa35c80024238420bea3976db677db2e0ef028aad9800482926b926e50155b71`,
+rebuilt exact-model SHA256
+`5ed1e31ea3c1a5dc8761e4ffb33a35a48db412e359521efa3e3eb408cfbae43d`;
+the golden replay had identical RTL/host hashes. These observations verify
+the **archived model**, not arbitrary newer RTL changes at branch HEAD.
+
 Example (relative paths from the scratch workspace containing the archive):
 
 ```bash
@@ -80,6 +88,90 @@ that interval**, not a universal CPU CPI or a QEMU conversion factor. At
 1.05B, 14,910,916 CPIO input bytes and ~2,336 per-file entries remain;
 there was still no observed Debian PID1 serial marker. A subsequent 1.05B→1.10B
 continuation was initiated from the new exact state.
+
+### Third and fourth resumed runs: 1.05B to 1.15B
+
+| RTL cycles | Retired instructions | CPIO cursor percent | Approx. completed entries |
+| ---: | ---: | ---: | ---: |
+| 1,055,000,000 | 272,701,636 | 78.36% | 945 |
+| 1,060,000,000 | 274,061,517 | 78.68% | 956 |
+| 1,065,000,000 | 275,523,772 | 79.52% | 960 |
+| 1,070,000,000 | 276,793,268 | 79.65% | 977 |
+| 1,075,000,000 | 278,107,500 | 79.90% | 990 |
+| 1,080,000,000 | 279,372,406 | 80.58% | 998 |
+| 1,085,000,000 | 280,676,664 | 80.92% | 1,010 |
+| 1,090,000,000 | 281,953,400 | 81.04% | 1,026 |
+| 1,095,000,000 | 283,221,640 | 81.09% | 1,044 |
+| 1,100,000,000 | 284,488,643 | 81.12% | 1,061 |
+| 1,105,000,000 | 285,778,298 | 81.19% | 1,078 |
+| 1,110,000,000 | 287,042,780 | 81.22% | 1,096 |
+| 1,115,000,000 | 288,318,411 | 81.25% | 1,113 |
+| 1,120,000,000 | 289,596,730 | 81.28% | 1,130 |
+| 1,125,000,000 | 290,876,358 | 81.35% | 1,147 |
+| 1,130,000,000 | 292,150,072 | 81.43% | 1,164 |
+| 1,135,000,000 | 293,424,755 | 81.48% | 1,181 |
+| 1,140,000,000 | 294,704,043 | 81.53% | 1,198 |
+| 1,145,000,000 | 295,982,220 | 81.65% | 1,214 |
+| 1,150,000,000 | 297,258,096 | 81.77% | 1,229 |
+
+All twenty further 5M slices completed and saved checkpoints, with no
+retirement stalls. The most recent 1.10B→1.15B interval retired 12,769,453
+instructions in 50,000,000 RTL cycles (3.9156 observed cycles per retired
+instruction), but remained in `unpack_to_rootfs` among many small Perl files.
+At 1.15B, 12,478,952 input bytes and ~2,035 entries remained; **the Debian
+PID1 marker has not appeared**. The next 1.15B→1.20B archived-RTL
+continuation was launched separately, not as a cold CI rebuild.
+
+### Fifth resumed run: 1.15B to 1.20B
+
+| RTL cycles | Retired instructions | CPIO cursor percent | Approx. completed entries |
+| ---: | ---: | ---: | ---: |
+| 1,155,000,000 | 298,532,127 | 81.83% | 1,246 |
+| 1,160,000,000 | 299,799,947 | 81.86% | 1,263 |
+| 1,165,000,000 | 301,066,177 | 81.89% | 1,280 |
+| 1,170,000,000 | 302,329,886 | 81.90% | 1,298 |
+| 1,175,000,000 | 303,600,937 | 81.96% | 1,315 |
+| 1,180,000,000 | 304,882,784 | 82.01% | 1,332 |
+| 1,185,000,000 | 306,164,069 | 82.06% | 1,349 |
+| 1,190,000,000 | 307,426,799 | 82.08% | 1,366 |
+| 1,195,000,000 | 308,685,653 | 82.11% | 1,384 |
+| 1,200,000,000 | 309,949,753 | 82.13% | 1,401 |
+
+Ten more 5M slices completed, with full snapshots and nonzero instruction
+retirement at every step. The 1.15B→1.20B interval retired 12,691,657
+instructions in 50,000,000 RTL cycles, or about 3.94 observed cycles per
+retired instruction. At 1.20B, the parser still has 12,233,944 CPIO bytes
+and ~1,863 entries to process; **no Debian PID1 marker appeared**. The 965M→
+1.20B exact-model continuation accumulated 235M additional RTL cycles. The
+model is not stalled; the observed workload is now numerous tiny Perl files
+with significant per-entry overhead.
+
+### Speed audit and safe alternative-host gate
+
+The exact 99a5c86e archive was generated with Verilator 5.054 `--savable`,
+host `-O3`/`-march=native`, but its G5 CI explicitly fixed
+`SIM_SETTLE_MODE=reference` and rejected the historical
+`AETHERCORE_SIM_ADAPTIVE_SETTLE` option. It is therefore **incorrect** to say
+the archived 965M→1.20B continuation enabled every discovered optimization.
+The host state hash and progress report each consume substantially less than
+one second per slice; each 5M RTL-cycle slice typically consumes ~45–80s.
+Most time is real simulated execution, not rebuilding or hashing.
+
+`tools/ci/product_g5_checkpoint_host_ab.sh` is now an explicit, strict A/B
+qualification gate for a *candidate* alternate C++ host binary that shares
+the same Verilator RTL save format. It validates source identity and all input
+file SHA256 values, starts both binaries from the same archived host+RTL state,
+runs at most 1,000,000 cycles, and requires byte-identical resulting host and
+RTL snapshots and identical cycle/commit/UART/trace summaries. It **never**
+switches the active continuation binary automatically. A 500,000-cycle A/A
+smoke with the **same baseline binary on both sides** passed at 1.15B:
+9,170ms versus 7,965ms (a 1.151× difference from scheduling/noise, **not**
+evidence of adaptive speedup). The compiled adaptive candidate and a real A/B
+speed/equivalence measurement **do not yet exist**. The likely low-cost route
+is recompiling only the C++ host against cached Verilator generated model
+objects after making those objects available; the scratch archive has no
+generated `obj_dir` or `__ALL.a`. Until A/B is proven, resume only the pinned
+reference model from the 1.20B checkpoint.
 
 `product_g5_initramfs_progress.py` now also examines `wfile_pos` only if Linux
 is in its `CopyFile` state **and** CPIO record bounds, `next_header`,
