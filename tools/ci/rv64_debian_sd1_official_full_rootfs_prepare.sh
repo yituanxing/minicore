@@ -105,9 +105,13 @@ EOF
   '
 
 docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
-  apt-get -o Acquire::Check-Valid-Until=false update \
+  apt-get -o Acquire::Check-Valid-Until=false \
+    -o APT::Update::Error-Mode=any update \
   > "${OUTPUT_DIR}/apt-update.log" 2>&1 || \
-  fail "signed Debian snapshot apt update failed; inspect ${OUTPUT_DIR}/apt-update.log"
+  {
+    sed -n '1,65p' "${OUTPUT_DIR}/apt-update.log" >&2
+    fail "signed Debian snapshot apt update failed; inspect ${OUTPUT_DIR}/apt-update.log"
+  }
 
 # An InRelease is both GPG-signature-verified by apt and byte-pinned by the
 # caller.  Timestamps that do not exist, expired/rotated signing keys, or a
@@ -132,6 +136,11 @@ docker exec -e SD1_MAIN_SHA="$MAIN_RELEASE_SHA" \
     # opaque retry (and never print package credentials or private data).
     printf 'Pinned Debian signed index expected: trixie=%s trixie-security=%s\n' \
       "$MAIN_RELEASE_SHA" "$SECURITY_RELEASE_SHA" >&2
+    printf 'APT update output (public sources only):\n' >&2
+    sed -n '1,65p' "${OUTPUT_DIR}/apt-update.log" >&2
+    printf 'APT index filenames:\n' >&2
+    docker exec "$CONTAINER" /bin/sh -c \
+      'find /var/lib/apt/lists -maxdepth 1 -type f -printf "%f\\n"' >&2 || true
     docker exec "$CONTAINER" /bin/sh -c '
       for index in /var/lib/apt/lists/*_dists_trixie_InRelease \
                    /var/lib/apt/lists/*_dists_trixie-security_InRelease; do
