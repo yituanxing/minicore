@@ -2,8 +2,11 @@
 
 import importlib.util
 from pathlib import Path
+import socket
 import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +18,40 @@ spec.loader.exec_module(module)
 
 
 class C1QemuOracleContract(unittest.TestCase):
+    def test_serial_connection_contract_without_host_socket_permission(self):
+        serial = mock.Mock()
+        qemu = mock.Mock()
+        qemu.poll.return_value = None
+        path = Path("/tmp/aethercore-c1-qemu-test.sock")
+        with mock.patch.object(module.socket, "socket", return_value=serial) as create:
+            self.assertIs(module.connect_serial(path, qemu, timeout=1), serial)
+        create.assert_called_once_with(socket.AF_UNIX, socket.SOCK_STREAM)
+        serial.connect.assert_called_once_with(str(path))
+        serial.setblocking.assert_called_once_with(False)
+
+    def test_reliable_bidirectional_qemu_serial_transport(self):
+        source = WATCH.read_text()
+        self.assertIn('f"unix:{serial_path},server=on,wait=on"', source)
+        self.assertIn("serial.sendall(RELEASE)", source)
+        self.assertNotIn("stdin=subprocess.PIPE", source)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "serial.sock"
+            try:
+                server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            except PermissionError as error:
+                # Restricted local runners can prohibit AF_UNIX entirely;
+                # GitHub Actions still exercises the actual guest handoff.
+                self.skipTest(f"AF_UNIX blocked by environment: {error}")
+            with server_socket as server:
+                server.bind(str(path))
+                server.listen(1)
+                fake_qemu = mock.Mock()
+                fake_qemu.poll.return_value = None
+                with module.connect_serial(path, fake_qemu, timeout=2) as host:
+                    with server.accept()[0] as guest:
+                        host.sendall(module.RELEASE)
+                        self.assertEqual(guest.recv(64), module.RELEASE)
+
     def test_gated_native_init_sequence_accepts_split_uart(self):
         proof = module.C1Proof()
         proof.observe(b"OpenSBI\r\nAETHERCORE_C1_REA")

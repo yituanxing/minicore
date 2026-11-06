@@ -8,12 +8,13 @@ unaltered native /sbin/init/login. A Product SPI C1 proof is still required.
 """
 
 import argparse
-import os
 from pathlib import Path
 import re
 import selectors
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -78,6 +79,26 @@ class C1Proof:
             self.login = True
 
 
+def connect_serial(socket_path: Path, process: subprocess.Popen, timeout: float = 20.0) -> socket.socket:
+    """Connect to QEMU's bidirectional UART without stdio/pipe input ambiguity."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise ValueError(f"C1 QEMU exited before serial connection: {process.returncode}")
+        serial = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            serial.connect(str(socket_path))
+            serial.setblocking(False)
+            return serial
+        except (FileNotFoundError, ConnectionRefusedError):
+            serial.close()
+            time.sleep(0.05)
+        except BaseException:
+            serial.close()
+            raise
+    raise TimeoutError("C1 QEMU serial socket not available within 20s")
+
+
 def run(args: argparse.Namespace) -> None:
     for path in (args.kernel, args.media):
         if not path.is_file() or path.stat().st_size == 0:
@@ -89,68 +110,67 @@ def run(args: argparse.Namespace) -> None:
     if not (10 <= args.timeout <= 900):
         raise ValueError("C1 QEMU guest timeout must be 10..900s")
 
-    command = [
-        "qemu-system-riscv64", "-machine", "virt", "-m", "256M", "-smp", "1",
-        "-nographic", "-monitor", "none", "-serial", "stdio",
-        "-bios", "default", "-kernel", str(args.kernel),
-        "-append", (
-            "earlycon=sbi console=ttyS0,115200 root=/dev/vda1 rootfstype=ext4 "
-            "rootwait rw rdinit=/init systemd.unit=multi-user.target"
-        ),
-        "-drive", f"file={args.media},format=raw,if=none,id=c1sd,snapshot=on",
-        "-device", "virtio-blk-device,drive=c1sd", "-no-reboot",
-    ]
     proof = C1Proof()
     started = last_uart = time.monotonic()
     total = 0
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    with args.log.open("xb") as evidence, subprocess.Popen(
-        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, bufsize=0,
-    ) as process:
-        assert process.stdin is not None and process.stdout is not None
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        try:
-            while not proof.login:
-                now = time.monotonic()
-                if now - started >= args.timeout:
-                    raise TimeoutError("C1 QEMU READY/GO/ext4/native login timed out")
-                if now - last_uart >= min(90, args.timeout):
-                    raise TimeoutError("C1 QEMU UART produced no bytes for 90s")
-                events = selector.select(timeout=0.5)
-                if events:
-                    data = os.read(process.stdout.fileno(), 65536)
-                    if not data:
-                        if process.poll() is not None:
+    with tempfile.TemporaryDirectory(prefix="aethercore-c1-uart-") as serial_dir:
+        serial_path = Path(serial_dir) / "uart.sock"
+        command = [
+            "qemu-system-riscv64", "-machine", "virt", "-m", "256M", "-smp", "1",
+            "-nographic", "-monitor", "none", "-serial",
+            f"unix:{serial_path},server=on,wait=on",
+            "-bios", "default", "-kernel", str(args.kernel),
+            "-append", (
+                "earlycon=sbi console=ttyS0,115200 root=/dev/vda1 rootfstype=ext4 "
+                "rootwait rw rdinit=/init systemd.unit=multi-user.target"
+            ),
+            "-drive", f"file={args.media},format=raw,if=none,id=c1sd,snapshot=on",
+            "-device", "virtio-blk-device,drive=c1sd", "-no-reboot",
+        ]
+        with args.log.open("xb") as evidence, subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, bufsize=0,
+        ) as process:
+            selector = selectors.DefaultSelector()
+            try:
+                with connect_serial(serial_path, process) as serial:
+                    selector.register(serial, selectors.EVENT_READ)
+                    while not proof.login:
+                        now = time.monotonic()
+                        if now - started >= args.timeout:
+                            raise TimeoutError("C1 QEMU READY/GO/ext4/native login timed out")
+                        if now - last_uart >= min(90, args.timeout):
+                            raise TimeoutError("C1 QEMU UART produced no bytes for 90s")
+                        events = selector.select(timeout=0.5)
+                        if events:
+                            data = serial.recv(65536)
+                            if not data:
+                                raise ValueError("C1 QEMU serial socket disconnected")
+                            total += len(data)
+                            if total > 64 * 1024 * 1024:
+                                raise ValueError("C1 QEMU UART exceeded bounded 64MiB budget")
+                            evidence.write(data)
+                            evidence.flush()
+                            last_uart = time.monotonic()
+                            proof.observe(data)
+                            if proof.failure:
+                                raise ValueError(proof.failure)
+                            if proof.ready and not proof.go_sent:
+                                # No distribution root mounted: release over bidirectional UART.
+                                serial.sendall(RELEASE)
+                                proof.go_sent = True
+                        elif process.poll() is not None:
                             raise ValueError(f"C1 QEMU exited early: {process.returncode}")
-                        continue
-                    total += len(data)
-                    if total > 64 * 1024 * 1024:
-                        raise ValueError("C1 QEMU UART exceeded bounded 64MiB budget")
-                    evidence.write(data)
-                    evidence.flush()
-                    last_uart = time.monotonic()
-                    proof.observe(data)
-                    if proof.failure:
-                        raise ValueError(proof.failure)
-                    if proof.ready and not proof.go_sent:
-                        # No distribution root is mounted at this point.
-                        # QEMU's serial input resumes exactly the gated /init.
-                        process.stdin.write(RELEASE)
-                        process.stdin.flush()
-                        proof.go_sent = True
-                elif process.poll() is not None:
-                    raise ValueError(f"C1 QEMU exited early: {process.returncode}")
-        finally:
-            selector.close()
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+            finally:
+                selector.close()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
 
     if not all((proof.ready, proof.go_sent, proof.mount_started,
                 proof.mount_done, proof.native_exec, proof.login)):

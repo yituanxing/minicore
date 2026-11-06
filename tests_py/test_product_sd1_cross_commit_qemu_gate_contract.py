@@ -80,6 +80,16 @@ class ProductSd1QemuCrossCommitContract(unittest.TestCase):
             self.check(expression, ["docs/architecture/renamed.md"], False, renamed=True)
             self.check(expression, ["tools/ci/product_fpga_xc7_unplaced.sh"], False, status="behind")
 
+    def test_c1_only_uart_oracle_fix_preserves_independent_native_qemu_proof(self):
+        # A C1-only QEMU host UART watcher does not alter native Debian QEMU
+        # kernel/media inputs. C1's own READY->GO oracle must be re-run.
+        files = [
+            "tools/ci/product_sd1_c1_qemu_watch.py",
+            "tests_py/test_product_sd1_c1_qemu_oracle_contract.py",
+        ]
+        self.check(comparator(SD1.read_text()), files, True)
+        self.check(comparator(C1.read_text()), files, False)
+
 
 if __name__ == "__main__":
     unittest.main()
