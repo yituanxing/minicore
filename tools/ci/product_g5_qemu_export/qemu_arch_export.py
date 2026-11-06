@@ -80,34 +80,88 @@ def decode_riscv_le(raw):
     return int.from_bytes(bytes.fromhex(raw), "little")
 
 
+XI_NAMESPACE = "http://www.w3.org/2001/XInclude"
+SAFE_XML_ANNEX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.xml")
+
+
 def registers_from_annexes(read_annex):
-    """Follow QEMU's XML feature includes and assign implicit gdb regnums."""
+    """Follow QEMU XML feature includes, preserving explicit GDB regnums.
+
+    A QEMU gdbstub may use xi:include in target.xml without declaring xi.
+    Accommodate this single known stub defect, but reject external annexes,
+    cyclic/nested runaway includes, malformed XML, and duplicate regnums.
+    """
     seen = set()
+    active = set()
+    assigned_numbers = {}
     out = {}
     next_num = 0
 
-    def visit(annex):
+    def visit(annex, depth=0):
         nonlocal next_num
+        if not SAFE_XML_ANNEX.fullmatch(annex) or ".." in annex:
+            raise ProtocolError(f"unsafe GDB XML annex: {annex!r}")
+        if annex in active:
+            raise ProtocolError(f"cyclic GDB XML include: {annex}")
         if annex in seen:
             return
-        seen.add(annex)
-        xml = read_annex(annex)
-        root = ET.fromstring(xml)
-        for node in root.iter():
-            kind = node.tag.rsplit("}", 1)[-1]
-            if kind == "include":
-                visit(node.attrib["href"])
-            elif kind == "reg":
-                if "regnum" in node.attrib:
-                    next_num = int(node.attrib["regnum"], 0)
-                name = node.attrib.get("name")
-                if name:
-                    out[name] = next_num
-                    if name in X_ABI_NAMES:
-                        out[f"x{X_ABI_NAMES.index(name)}"] = next_num
-                    if name in F_ABI_NAMES:
-                        out[f"f{F_ABI_NAMES.index(name)}"] = next_num
-                next_num += 1
+        if depth > 16 or len(seen) >= 64:
+            raise ProtocolError("GDB XML include depth/count exceeded")
+        active.add(annex)
+        try:
+            xml = read_annex(annex)
+            if not isinstance(xml, str) or len(xml) > 2_000_000:
+                raise ProtocolError(f"invalid GDB XML annex size: {annex}")
+            if annex == "target.xml" and "xi:include" in xml:
+                # Historical Product QEMU gdbstub omitted xmlns:xi from
+                # the opening <target> tag; ET.fromstring otherwise raises
+                # 'unbound prefix'. Never rewrite child feature XML.
+                opening = re.search(r"<target(?:\s[^<>]*)?>", xml)
+                if opening is None:
+                    raise ProtocolError("target.xml lacks a target root")
+                root_tag = opening.group()
+                if "xmlns:xi" not in root_tag:
+                    fixed = root_tag[:-1] + f' xmlns:xi="{XI_NAMESPACE}">'
+                    xml = xml[:opening.start()] + fixed + xml[opening.end():]
+            try:
+                root = ET.fromstring(xml)
+            except ET.ParseError as exc:
+                raise ProtocolError(f"invalid GDB XML annex {annex}: {exc}") from exc
+            for node in root.iter():
+                kind = node.tag.rsplit("}", 1)[-1]
+                if kind == "include":
+                    if node.tag != f"{{{XI_NAMESPACE}}}include":
+                        raise ProtocolError(f"unsupported GDB XML include namespace in {annex}")
+                    href = node.attrib.get("href", "")
+                    if not SAFE_XML_ANNEX.fullmatch(href) or ".." in href:
+                        raise ProtocolError(f"unsafe GDB XML include href: {href!r}")
+                    visit(href, depth + 1)
+                elif kind == "reg":
+                    if "regnum" in node.attrib:
+                        try:
+                            next_num = int(node.attrib["regnum"], 0)
+                        except ValueError as exc:
+                            raise ProtocolError(f"bad GDB register number in {annex}") from exc
+                    if next_num < 0 or next_num > 0xFFFF:
+                        raise ProtocolError(f"GDB register number out of range: {next_num}")
+                    name = node.attrib.get("name")
+                    if next_num in assigned_numbers:
+                        raise ProtocolError(
+                            f"duplicate GDB register number {next_num}: "
+                            f"{assigned_numbers[next_num]} and {name}")
+                    if name in out:
+                        raise ProtocolError(f"duplicate GDB register name: {name}")
+                    if name:
+                        assigned_numbers[next_num] = name
+                        out[name] = next_num
+                        if name in X_ABI_NAMES:
+                            out[f"x{X_ABI_NAMES.index(name)}"] = next_num
+                        if name in F_ABI_NAMES:
+                            out[f"f{F_ABI_NAMES.index(name)}"] = next_num
+                    next_num += 1
+            seen.add(annex)
+        finally:
+            active.remove(annex)
 
     visit("target.xml")
     return out

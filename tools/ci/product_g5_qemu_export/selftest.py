@@ -80,6 +80,65 @@ class ArchExporterContractTest(unittest.TestCase):
         self.assertEqual(exp.registers_from_annexes(xml.__getitem__),
                          {"x0": 0, "pc": 1, "mstatus": 256, "satp": 257})
 
+    def test_undeclared_xi_namespace_from_historic_qemu_stub(self):
+        xml = {
+            "target.xml": '<target version="1.0"><xi:include href="core.xml"/>'
+                          '<xi:include href="csrs.xml"/></target>',
+            "core.xml": '<feature><reg name="x0" regnum="0"/>'
+                        '<reg name="pc"/></feature>',
+            "csrs.xml": '<feature><reg name="mstatus" regnum="0x100"/>'
+                        '<reg name="satp"/></feature>',
+        }
+        self.assertEqual(exp.registers_from_annexes(xml.__getitem__),
+                         {"x0": 0, "pc": 1, "mstatus": 256, "satp": 257})
+
+    def test_safe_nested_xml_include(self):
+        xml = {
+            "target.xml": '<target><xi:include href="first.xml"/></target>',
+            "first.xml": '<feature xmlns:xi="http://www.w3.org/2001/XInclude">'
+                         '<reg name="zero" regnum="0"/>'
+                         '<xi:include href="second.xml"/></feature>',
+            "second.xml": '<feature><reg name="ra"/><reg name="sp"/></feature>',
+        }
+        self.assertEqual(exp.registers_from_annexes(xml.__getitem__),
+                         {"zero": 0, "x0": 0, "ra": 1, "x1": 1, "sp": 2, "x2": 2})
+
+    def test_xml_rejects_unsafe_href_and_cycles(self):
+        for href in ("../secret.xml", "a..b.xml", "/tmp/foo.xml",
+                     "https://host/file.xml", "subdir/foo.xml", ".hidden.xml"):
+            with self.subTest(href=href):
+                xml = '<target><xi:include href="' + href + '"/></target>'
+                with self.assertRaisesRegex(exp.ProtocolError, "unsafe.*href"):
+                    exp.registers_from_annexes(lambda _: xml)
+        cyclic = {
+            "target.xml": '<target><xi:include href="one.xml"/></target>',
+            "one.xml": '<feature xmlns:xi="http://www.w3.org/2001/XInclude">'
+                       '<xi:include href="target.xml"/></feature>',
+        }
+        with self.assertRaisesRegex(exp.ProtocolError, "cyclic"):
+            exp.registers_from_annexes(cyclic.__getitem__)
+
+    def test_xml_rejects_duplicate_regnums_and_bad_namespaces(self):
+        duplicate = '<target><reg name="x0" regnum="0"/>' \
+                    '<reg name="x1" regnum="0"/></target>'
+        with self.assertRaisesRegex(exp.ProtocolError, "duplicate.*number"):
+            exp.registers_from_annexes(lambda _: duplicate)
+        wrong = '<target xmlns:xi="http://example.invalid">'
+        wrong += '<xi:include href="core.xml"/></target>'
+        with self.assertRaisesRegex(exp.ProtocolError, "unsupported.*namespace"):
+            exp.registers_from_annexes(lambda _: wrong)
+        with self.assertRaisesRegex(exp.ProtocolError, "invalid GDB XML"):
+            exp.registers_from_annexes(lambda _: '<target><reg')
+
+    def test_xml_rejects_unbounded_includes(self):
+        xml = {"target.xml": '<target><xi:include href="f0.xml"/></target>'}
+        for i in range(18):
+            xml[f"f{i}.xml"] = (
+                '<feature xmlns:xi="http://www.w3.org/2001/XInclude">'
+                f'<xi:include href="f{i + 1}.xml"/></feature>')
+        with self.assertRaisesRegex(exp.ProtocolError, "depth/count exceeded"):
+            exp.registers_from_annexes(xml.__getitem__)
+
     def test_abi_register_names_normalize_to_architecture_numbers(self):
         xml = '<target><feature><reg name="zero" regnum="0"/>' \
               '<reg name="ra"/><reg name="sp"/>' \

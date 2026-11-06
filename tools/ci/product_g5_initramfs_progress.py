@@ -2,9 +2,10 @@
 """Read Debian D2 initramfs cursor from *existing* G5 host checkpoints.
 
 No RTL simulation, Linux boot, firmware/toolchain rebuild, or 256 MiB RAM copy.
-The percentage is a CPIO *input cursor*, not proof that the current file is
-fully written or that PID1 has started. The estimate is an observed-rate
-extrapolation, not a cycle deadline.
+The archive percentage is a CPIO *input cursor*, not proof that PID1 has
+started. During CopyFile, the additional per-file percentage is the kernel's
+acknowledged write position; it may lag bytes in an in-flight kernel_write().
+The estimate is an observed-rate extrapolation, not a cycle deadline.
 
 Example:
     python3 tools/ci/product_g5_initramfs_progress.py \
@@ -49,13 +50,14 @@ class Sample:
     body_len: int
     remains: int
     inptr: int
+    wfile_pos: int
     pid1: bool
 
 
 def symbols(path):
     wanted = {"__initramfs_start", "__initramfs_size", "this_header",
               "byte_count", "next_header", "state", "body_len",
-              "remains", "my_inptr"}
+              "remains", "my_inptr", "wfile_pos"}
     found = {}
     with path.open(encoding="utf-8", errors="replace") as source:
         for line in source:
@@ -190,7 +192,7 @@ def snapshot(path, expected, boot_prefix, archive_prefix, total):
             raise ValueError(f"{path}: embedded CPIO mismatches vmlinux")
         if PID1_MARKER in uart:
             return Sample(path.name, counters[0], counters[1], 0, 0, 0,
-                          0, 0, 0, 0, True)
+                          0, 0, 0, 0, 0, True)
 
         def u64(name):
             return struct.unpack("<Q", guest_read(expected[name], 8))[0]
@@ -202,7 +204,31 @@ def snapshot(path, expected, boot_prefix, archive_prefix, total):
         return Sample(path.name, counters[0], counters[1], cursor, remaining,
                       u64("next_header"),
                       struct.unpack("<I", guest_read(expected["state"], 4))[0],
-                      u64("body_len"), u64("remains"), u64("my_inptr"), False)
+                      u64("body_len"), u64("remains"), u64("my_inptr"),
+                      u64("wfile_pos"), False)
+
+
+def current_file_write(sample, entry):
+    """Return the kernel's accounted file offset only for active CopyFile.
+
+    Linux init/initramfs.c keeps wfile_pos from the *previous* regular file
+    while do_name() is in SkipIt, and resets it after filp_open(). Thus a
+    matching pathname alone cannot justify treating the value as progress.
+    During CopyFile (state 5), do_copy() writes at &wfile_pos and advances
+    this_header/body_len only after each xwrite() returns. This offset can
+    lag an in-progress write. Validate record identity and arithmetic
+    invariants before exposing the offset as percentage progress.
+    """
+    COPY_FILE = 5
+    if entry is None or sample.state != COPY_FILE or entry.size == 0:
+        return None
+    aligned_end = (entry.end + 3) & ~3
+    if not (entry.payload <= sample.cursor <= entry.end
+            and sample.next_header == aligned_end
+            and sample.cursor + sample.body_len == entry.end
+            and sample.cursor - entry.payload <= sample.wfile_pos <= entry.size):
+        return None
+    return sample.wfile_pos
 
 
 def main():
@@ -247,12 +273,19 @@ def main():
         completed = max(0, idx)
         current_file = current.name if current else "[before-first-file]"
         boundary = "payload_start" if current and s.cursor == current.payload else "between_boundaries"
+        write_bytes = current_file_write(s, current)
+        file_write_progress = (
+            f"wfile_pos={write_bytes} in_file_percent={100*write_bytes/current.size:.2f}"
+            if write_bytes is not None else
+            "wfile_pos=NA in_file_percent=NA"
+        )
         print(f"G5_INITRAMFS_PROGRESS file={s.name} cycles={s.cycles} "
               f"commits={s.commits} cursor_bytes={s.cursor} total_bytes={total} "
               f"cursor_percent={100*s.cursor/total:.2f} "
               f"remaining_bytes={s.remaining} state={s.state} "
               f"kernel_remains={s.remains} kernel_inptr={s.inptr} "
               f"next_header={s.next_header} body_len={s.body_len} "
+              f"{file_write_progress} "
               f"completed_records_approx={completed}/{len(entries)} "
               f"current_record={current_file!r} boundary={boundary}")
         if i and not samples[i - 1].pid1:
