@@ -119,7 +119,18 @@ class PmpRangeDecoder(
       }
     }
 
-    io.ranges(entry).active := mode =/= PmpAddressMode.Off.U && upper > lower
+    // TOR is empty exactly when its encoded upper bound is <= the previous
+    // encoded PMP address (or zero for entry 0). NA4 and NAPOT always
+    // describe nonempty ranges: the extra upper-bound bit prevents NA4
+    // overflow, and the NAPOT all-ones encoding is handled explicitly above.
+    // Avoid comparing the wide 57-bit upper/lower mux for every PMP mode.
+    val torActive =
+      if (entry == 0) encodedAddress.orR
+      else encodedAddress > io.pmpAddress(entry - 1)
+    io.ranges(entry).active :=
+      (mode === PmpAddressMode.Tor.U && torActive) ||
+      (mode === PmpAddressMode.Na4.U) ||
+      (mode === PmpAddressMode.Napot.U)
     io.ranges(entry).lower := lower
     io.ranges(entry).upper := upper
     io.ranges(entry).read := config(PmpConstants.ConfigRead)

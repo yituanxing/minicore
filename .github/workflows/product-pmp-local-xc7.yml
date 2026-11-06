@@ -1,0 +1,112 @@
+name: Product PMP local XC7 equivalence and area
+
+# Explicitly opt-in: do not elaborate or synthesize the entire Product SoC.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-pmp-local-xc7-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pmp-local:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-pmp-local-xc7')
+    name: PMP geometry, captured snapshot and standalone mapping
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact selected Product commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator 5.024 cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build requirements only on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Initialize focused output and pinned simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          mkdir -p "$RUNNER_TEMP/product-pmp-local-xc7/rtl" "$RUNNER_TEMP/product-pmp-local-xc7/mill-out"
+          echo "MILL_OUTPUT_DIR=$RUNNER_TEMP/product-pmp-local-xc7/mill-out" >> "$GITHUB_ENV"
+          bash tools/ensure_verilator_5_024.sh
+
+      - name: Test PMP reference, upper address, CSR and in-flight snapshots
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.PmpRangeDecoderActiveSpec \
+            aethercore.PmpCheckerSpec \
+            aethercore.ProductDataResolverSpec \
+            aethercore.RV64PmpCsrSpec \
+            2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/pmp-tests.log"
+
+      - name: Elaborate standalone RV64 PA56 PMP range decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.runMain aethercore.ElaboratePmpRangeDecoderRV64 \
+            --target-dir "$RUNNER_TEMP/product-pmp-local-xc7/rtl" \
+            2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/elaboration.log"
+          test -s "$RUNNER_TEMP/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv"
+
+      - name: Install local-only XC7 mapping tool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq yosys
+          yosys -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
+
+      - name: Map PMP decoder only to Xilinx 7-series cells
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          yosys -Q -T -l "$root/yosys.log" -p \
+            "read_verilog -sv -DSYNTHESIS $root/rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx"
+          grep -q 'PmpRangeDecoder' "$root/yosys.log"
+          echo 'Local PA56 PMP XC7 logic map finished. This is not full-SoC device fit or timing signoff.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve real tests and local area evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-pmp-local-xc7-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/product-pmp-local-xc7/
