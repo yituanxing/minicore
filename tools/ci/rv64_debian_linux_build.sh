@@ -61,6 +61,8 @@ case "${AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_PATCH:-0}" in
     diagnostic_patch="${ROOT_DIR}/tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch"
     [[ -s "${diagnostic_patch}" ]] || fail 'pinned GPIO-CS diagnostic patch missing'
     diagnostic_patch_sha="$(sha256sum "${diagnostic_patch}" | awk '{print $1}')"
+    [[ "${diagnostic_patch_sha}" == ff408c203b461d504f48152840698b077f8ea948a07ad5235f4afb8436282638 ]] ||
+      fail 'diagnostic Linux patch SHA changed without review'
     mkdir -p "${ROOT_DIR}/build"
     diagnostic_source="$(mktemp -d "${ROOT_DIR}/build/rv64-sd1-gpio-source.XXXXXXXX")"
     cp -a --reflink=auto "${SOURCE_DIR}/." "${diagnostic_source}/"
@@ -225,8 +227,15 @@ IMAGE="${OBJ_DIR}/arch/riscv/boot/Image"
 "${CROSS}readelf" -h "${VMLINUX}" | grep -q 'Machine:[[:space:]]*RISC-V' || \
   fail 'Linux vmlinux is not RISC-V ELF'
 cp "${OBJ_DIR}/.config" "${EVIDENCE_DIR}/resolved.config"
+if [[ -n "${diagnostic_patch_sha}" ]]; then
+  cp "${ROOT_DIR}/tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch" \
+    "${EVIDENCE_DIR}/linux-6.6.143-mmc-spi-gpio-cs-off.patch"
+fi
 sha256sum "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   | tee "${EVIDENCE_DIR}/sha256.txt"
+if [[ -n "${diagnostic_patch_sha}" ]]; then
+  sha256sum "${EVIDENCE_DIR}/linux-6.6.143-mmc-spi-gpio-cs-off.patch" >> "${EVIDENCE_DIR}/sha256.txt"
+fi
 [[ "$(sha256sum "${ROOTFS_RESULT}" | awk '{print $1}')" == "${rootfs_result_sha}" ]] || \
   fail 'qualified Debian rootfs manifest changed while building the Linux Image'
 
@@ -247,6 +256,8 @@ sha256sum "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   echo "config_sha256=$(sha256sum "${EVIDENCE_DIR}/resolved.config" | awk '{print $1}')"
   if [[ -n "${diagnostic_patch_sha}" ]]; then
     echo 'qualification=SD1_GPIO_CS_DIAGNOSTIC_ONLY_NOT_FROZEN_PRODUCT'
+    echo "upstream_linux_source_sha256=${RV64_LINUX_SHA256}"
+    echo "kernel_patch_applied=1"
     echo "diagnostic_patch_sha256=${diagnostic_patch_sha}"
   fi
 } | tee "${BUILD_DIR}/result.txt"
