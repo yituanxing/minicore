@@ -1,0 +1,188 @@
+name: AetherCore G5 frozen savable model + 500k historical A/B
+
+# Narrow one-off producer for the immutable 99a5c86e D2 checkpoint model.
+# No Debian Linux, native rootfs, OpenSBI, full CI or guest cold boot is built.
+# A push changing ONLY this lane's source may launch it on the development branch;
+# the shared main-only full gate never runs from this branch push.
+on:
+  push:
+    branches:
+      - design/rv64gc-product-architecture-20261103
+    paths:
+      - .github/workflows/product-g5-frozen-model-artifact.yml
+      - tools/ci/product_g5_frozen_model_artifact.sh
+  workflow_dispatch:
+    inputs:
+      historical_ab:
+        description: 'Compare rebuilt reference and adaptive 500k snapshots with archived 900M golden'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-g5-frozen-savable-model-v1
+  cancel-in-progress: false
+
+jobs:
+  frozen-model-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ORIGIN_SHA: 99a5c86e99f52ed12f95b304635d77613c9505c4
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout only this targeted workflow helper
+        uses: actions/checkout@v4
+        with:
+          path: control
+          clean: true
+          persist-credentials: false
+
+      - name: Checkout exact immutable 99a5c86e Product G5 source
+        uses: actions/checkout@v4
+        with:
+          path: frozen-source
+          ref: 99a5c86e99f52ed12f95b304635d77613c9505c4
+          clean: true
+          persist-credentials: false
+
+      - name: Reject source drift and ensure this is model-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C frozen-source rev-parse HEAD)" = "$ORIGIN_SHA"
+          bash -n control/tools/ci/product_g5_frozen_model_artifact.sh
+          test ! -e frozen-source/build/rv64-debian-boot
+          test ! -e frozen-source/build/product-g5-persistent-checkpoint
+          echo 'G5 frozen model only: Chisel elaboration + Verilator savable objects; no Debian Linux/rootfs/OpenSBI builds and no cold RTL boot' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore pinned Verilator 5.054 toolchain
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-g5-persistent-tools-v1-${{ hashFiles('frozen-source/tools/ensure_verilator_5_054.sh', 'frozen-source/tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-g5-persistent-tools-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-
+
+      - name: Restore isolated Scala/Mill dependencies
+        id: scala-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-g5-frozen-scala-v1-${{ hashFiles('frozen-source/build.mill', 'frozen-source/mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-g5-frozen-scala-v1-
+
+      - name: Install Scala + Verilator build prerequisites only
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex build-essential git curl xz-utils python3 openjdk-17-jdk-headless
+          java -version
+          g++ --version | head -1
+
+      - name: Provision exact historical Verilator 5.054
+        shell: bash
+        working-directory: frozen-source
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          bash tools/ensure_verilator_5_024.sh
+          ~/.cache/aethercore/toolchains/verilator-5.054/bin/verilator --version
+
+      - name: Build savable model once and preserve full object ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_frozen_model_artifact.sh \
+            build frozen-source model-artifact
+          cat model-artifact/manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save pinned Verilator for future targeted model builds
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: ${{ steps.verilator-cache.outputs.cache-primary-key }}
+
+      - name: Save isolated Scala/Mill cache
+        if: success() && steps.scala-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: ${{ steps.scala-cache.outputs.cache-primary-key }}
+
+      - name: Download historical 900M G5 checkpoint plus 900.5M golden state
+        if: github.event_name == 'push' || inputs.historical_ab
+        uses: actions/download-artifact@v4
+        with:
+          name: aethercore-product-g5-debian-42028338206
+          run-id: 42028338206
+          github-token: ${{ github.token }}
+          path: historical-g5-proof
+
+      - name: Test exact historical 500k state equality and adaptive speed
+        if: github.event_name == 'push' || inputs.historical_ab
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_frozen_model_artifact.sh \
+            benchmark frozen-source model-artifact historical-g5-proof g5-host-ab
+          cat g5-host-ab/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload immutable model objects and runtime headers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-frozen-savable-99a5-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            model-artifact/manifest.txt
+            model-artifact/SHA256SUMS
+            model-artifact/qualification.txt
+            model-artifact/obj/
+            model-artifact/verilator-include/
+
+      - name: Upload short A/B evidence only, not giant DDR snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-frozen-host-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            g5-host-ab/result.txt
+            g5-host-ab/reference.log
+            g5-host-ab/adaptive.log
+            g5-host-ab/reference.state
+            g5-host-ab/adaptive.state
+            g5-host-ab/reference.wall_ns
+            g5-host-ab/adaptive.wall_ns
