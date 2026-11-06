@@ -55,12 +55,17 @@ jobs:
       SOURCE_RUN_ID: ${{ inputs.source_run_id || '42044232627' }}
       SOURCE_KIND: ${{ inputs.source_kind || 'seed_950m' }}
       SEGMENT_CYCLES: ${{ inputs.segment_cycles || '50000000' }}
-      ARTIFACT_OUT: ${{ runner.temp }}/g5-d2-durable-out
     steps:
       - name: Checkout continuation script only (not a Product build)
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Bind the assigned runner's temporary directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'ARTIFACT_OUT=%s/g5-d2-durable-out\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Validate source run provenance and determine immutable artifact
         id: source
