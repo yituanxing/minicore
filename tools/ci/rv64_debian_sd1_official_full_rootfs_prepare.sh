@@ -167,16 +167,30 @@ docker exec -e SD1_MAIN_SHA="$MAIN_RELEASE_SHA" \
 # dependencies from the same pinned snapshot; --no-install-recommends avoids
 # accidental large desktop/firmware inclusion.  Do NOT install distro kernel,
 # GRUB or OpenSBI: Product owns its kernel/FW payload independently.
-docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
+printf 'Installing signed Debian guest packages under riscv64 user emulation (bounded by the CI job timeout).\n'
+if docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
   apt-get -o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem \
-    install --yes --no-install-recommends \
+    -o Dpkg::Use-Pty=0 install --yes --no-install-recommends \
     systemd systemd-sysv libpam-systemd udev dbus \
     login passwd util-linux mount procps kmod e2fsprogs \
     apt dpkg ca-certificates \
     bash coreutils dash findutils grep sed less \
     iproute2 iputils-ping netbase \
-  > "${OUTPUT_DIR}/apt-install.log" 2>&1 || \
-  fail "signed guest Debian package configuration failed; inspect ${OUTPUT_DIR}/apt-install.log"
+  > "${OUTPUT_DIR}/apt-install.log" 2>&1; then
+  printf 'Signed Debian package installation and configuration completed.\n'
+else
+  install_rc=$?
+  # GitHub-hosted runners discard this private, ephemeral build directory
+  # after a failed step. Emit the last package-manager lines while the
+  # container is still available. The CI workflow explicitly unsets ALL
+  # login credentials before this step; Debian package names, GPG errors,
+  # and dpkg diagnostics are public. Never print container environment.
+  printf 'Official Debian package install failed (exit=%s); last 120 public APT/dpkg log lines:\n' "$install_rc" >&2
+  tail -n 120 "${OUTPUT_DIR}/apt-install.log" >&2
+  printf 'Guest dpkg --audit after failed install:\n' >&2
+  docker exec "$CONTAINER" dpkg --audit >&2 || true
+  fail "signed guest Debian package configuration failed (exit=${install_rc}); inspect ${OUTPUT_DIR}/apt-install.log"
+fi
 
 # The archive must contain installed/configured packages, a real serial
 # getty/login, a distro init, and an unmodified Debian package status DB.

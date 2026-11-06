@@ -13,6 +13,7 @@ SEED = ROOT / "tools/ci/product_sd1_official_seed.py"
 WORKFLOW = ROOT / ".github/workflows/product-sd1-official-media-seed.yml"
 CONSUMER = ROOT / ".github/workflows/product-sd1-persistent-short.yml"
 DISCOVER = ROOT / "tools/ci/product_sd1_official_seed_discover.py"
+SUPPLIER = ROOT / "tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh"
 
 spec = importlib.util.spec_from_file_location("sd1_seed", SEED)
 sd1_seed = importlib.util.module_from_spec(spec)
@@ -23,6 +24,16 @@ discover_spec.loader.exec_module(sd1_discover)
 
 
 class ProductSd1OfficialSeedContracts(unittest.TestCase):
+    def test_failed_apt_configuration_reports_bounded_diagnostics_and_stops(self):
+        text = SUPPLIER.read_text()
+        self.assertIn('install_rc=$?', text)
+        self.assertIn('tail -n 120 "${OUTPUT_DIR}/apt-install.log" >&2', text)
+        self.assertIn('docker exec "$CONTAINER" dpkg --audit >&2 || true', text)
+        self.assertIn('fail "signed guest Debian package configuration failed', text)
+        self.assertIn('APT::Update::Error-Mode=any', text)
+        self.assertIn('Acquire::https::CaInfo=', text)
+        self.assertNotIn('Acquire::https::Verify-Peer=false', text)
+
     def test_unreviewed_lock_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             lock = Path(temporary) / "seed.lock"
