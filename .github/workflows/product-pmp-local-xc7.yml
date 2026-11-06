@@ -11,7 +11,9 @@ permissions:
 
 concurrency:
   group: product-pmp-local-xc7-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Other agents add PR labels too. An unrelated labeled event must never
+  # cancel a valid, already-running PMP A/B measurement.
+  cancel-in-progress: false
 
 jobs:
   pmp-local:
@@ -88,8 +90,16 @@ jobs:
 
       - name: Install local-only XC7 mapping tool
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq yosys
+          set -euo pipefail
+          # GitHub hosted images already ship apt package indexes. An
+          # unbounded apt-get update previously stalled for eight minutes,
+          # after which an unrelated label event cancelled the A/B run.
+          # Limit the installation instead of hiding a mirror outage.
+          if ! command -v yosys >/dev/null 2>&1; then
+            timeout --signal=TERM --kill-after=15s 180s \
+              sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+              -o Acquire::Retries=1 -o Acquire::http::Timeout=20 yosys
+          fi
           yosys -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
 
       - name: Map PMP decoder only to Xilinx 7-series cells
