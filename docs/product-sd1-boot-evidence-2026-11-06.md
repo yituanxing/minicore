@@ -1,0 +1,39 @@
+# Product SD1 RTL Debian 启动留存台账（2026-11-06）
+
+> 本文仅记录已经核查的真实证据。**QEMU 官方完整 Debian 启动通过 ≠ Product RTL 已启动完整 Debian。** 冻结 RTL SHA `a15197f96e5869e69269202a0a9caffdbe1f5255`，兼容性指纹 `90f67471f71c95bc921427afa46cc5f4cf57d164a58a41cf5d46ca96a06be189`；**这些结果不能替代最新 PR HEAD RTL 的验收**。
+
+## 验证边界
+
+- [官方原生 Debian QEMU 预检 #42207139595](https://github.com/yituanxing/minicore/actions/runs/42207139595) PASS：完整签名官方 Debian SD1 镜像、ext4 根文件系统、`/sbin/init`、登录提示（**未认证登录**）。这是 QEMU，不是 RTL。
+- [SD1 RTL #42210893404](https://github.com/yituanxing/minicore/actions/runs/42210893404) → [#42214303482](https://github.com/yituanxing/minicore/actions/runs/42214303482) → [#42219309886](https://github.com/yituanxing/minicore/actions/runs/42219309886) 三次成功继续，最后可恢复完整状态 **312,000,000 cycles / 78,170,492 commits**，仅 OpenSBI 已观察到；**无 ext4 挂载、原生 PID1、登录的 RTL 凭证**。
+- [#42221108211](https://github.com/yituanxing/minicore/actions/runs/42221108211) 在运行内完成 332,000,000 cycles / 83,178,875 commits，但是下一窗口 332→352M 于 2026-11-06 12:56:41 UTC 因 `Product SD1 CMD0 before 74 CS-high/DI-high initialization clocks` 中止。**332M 没有正式发布的可恢复工件**，不能作为新的续跑源。
+- C1（通用内核、rootfs 尚未挂载）QEMU 日志曾出现 `AETHERCORE_C1_READY rootfs_unmounted=1`，但 GO 输入交接未闭环，不能与官方 SD1 完整 Debian 路线或 RTL 原生 PID1 混淆。
+
+## 已保存的远端全状态
+
+| 运行 | 完整状态 | 提交指令 | GitHub artifact ID | 过期时间（UTC） |
+| --- | ---: | ---: | ---: | --- |
+| [#42210893404](https://github.com/yituanxing/minicore/actions/runs/42210893404) | 112M cycles | 27,666,988 | 13499356173 | 11-20 11:41:27 |
+| [#42214303482](https://github.com/yituanxing/minicore/actions/runs/42214303482) | 212M cycles | 53,024,730 | 13501235911 | 11-20 12:08:10 |
+| [#42219309886](https://github.com/yituanxing/minicore/actions/runs/42219309886) | 312M cycles | 78,170,492 | 13503930550 | 11-20 12:50:46 |
+| [#42221108211](https://github.com/yituanxing/minicore/actions/runs/42221108211) | 332M cycles（仅该次日志） | 83,178,875 | **无** | 不可恢复 |
+
+这些工件含冻结原版 simulator、完整 DDR/RTL/SD host checkpoint、manifest 和 SHA256；保存期为 **14 天**。下一轮只从校验通过、兼容性一致的完整快照恢复。中间窗口虽然单轮内经过验证，但未逐窗口发布为独立远端快照。
+
+## 为什么需要分阶段记录
+
+在同一 20M cycles 的近似 Actions 时段（由相邻 `STAGE_READY` 时间戳相减，**包含封存/校验开销，非纯仿真耗时**）：
+
+| 同一运行内区间 | 单个 20M 窗口约耗时 | 粗略周期吞吐 |
+| --- | ---: | ---: |
+| 32→112M | 82–89 秒 | 22–24 万 cycles/s |
+| 132→212M | 93–94 秒 | 21–22 万 cycles/s |
+| 232→312M | 约 133 秒 | 约 15 万 cycles/s |
+
+212M 之后宿主吞吐下降约 30%，但这恰好跨越两个不同的 GitHub Actions job；同一段 guest 的 CPI 仍大约 3.97–3.99。**现阶段不能把慢速直接归因于 Linux 某个驱动或 CPU 设计**，也可能是 runner CPU/共享负载。后续必须同时留存 runner CPU 信息、纯仿真耗时、快照打包耗时，最好同机重放相同窗口，才能判断真正的瓶颈。
+
+## 可继续累积的数据
+
+机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、分窗口 save/relay 日志和 SHA256；失败时努力保留最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
+
+接下来优先处理 **Linux MMC SPI CMD0 之前的 CS-high/DI-high 74 个时钟**，先用短时 SPI/GPIO 引脚级验证确认时序，再决定是否需要 Linux `mmc_spi_initsequence`/CS 控制修复。没有短验证依据前，停止反复触发 312M→后续的长 RTL 接力；绝不禁用协议守卫来制造虚假启动成功。
