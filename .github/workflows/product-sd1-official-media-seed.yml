@@ -172,12 +172,32 @@ jobs:
           grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
             build/rv64-debian-sd1-official-rootfs/console-provisioning.txt
 
+      # If the CDN failed before fetching Packages indexes, there are no
+      # completed .debs worth caching. Do not publish an empty cache that a
+      # future run might mistakenly count as useful downloaded progress.
+      - name: Count fully downloaded public Debian archives
+        id: apt_download_count
+        if: >-
+          always() &&
+          (steps.offline_rootfs.outcome == 'success' || steps.offline_rootfs.outcome == 'failure')
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          if [[ -d build/product-sd1-official-apt-cache ]]; then
+            count="$(find build/product-sd1-official-apt-cache -maxdepth 1 -type f -name '*.deb' | wc -l)"
+          fi
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "SD1_APT_FULL_DEB_CACHE_COUNT=$count"
+
       # Save the verified full-.deb cache even when the source stage stops
       # early. This action never saves a partial /sbin/init or guest DDR.
       - name: Preserve partial Debian package cache on success or failure
         if: >-
           always() &&
           (steps.offline_rootfs.outcome == 'success' || steps.offline_rootfs.outcome == 'failure') &&
+          steps.apt_download_count.outputs.count != '0' &&
+          steps.apt_download_count.outputs.count != '' &&
           steps.apt_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:

@@ -173,15 +173,34 @@ docker cp "$HOST_CA_BUNDLE" "$CONTAINER:/tmp/aethercore-sd1-bootstrap-ca.pem" ||
 docker exec "$CONTAINER" /bin/sh -ec \
   'test -s /tmp/aethercore-sd1-bootstrap-ca.pem && chmod 0644 /tmp/aethercore-sd1-bootstrap-ca.pem'
 
-docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
-  apt-get -o Acquire::Check-Valid-Until=false \
-    -o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem \
-    -o APT::Update::Error-Mode=any update \
-  > "${OUTPUT_DIR}/apt-update.log" 2>&1 || \
-  {
-    sed -n '1,65p' "${OUTPUT_DIR}/apt-update.log" >&2
-    fail "signed Debian snapshot apt update failed; inspect ${OUTPUT_DIR}/apt-update.log"
-  }
+# snapshot.debian.org's CDN can return a transient 503/504 while resolving
+# exactly these immutable snapshot indexes. Retry only the SAME HTTPS source;
+# never silently switch to a moving mirror or accept a stale/partial update.
+update_ok=0
+for attempt in 1 2 3; do
+  printf 'SD1_APT_SIGNED_INDEX_ATTEMPT attempt=%s/3\n' "$attempt"
+  if docker exec -e DEBIAN_FRONTEND=noninteractive "$CONTAINER" \
+    apt-get -o Acquire::Check-Valid-Until=false \
+      -o Acquire::https::CaInfo=/tmp/aethercore-sd1-bootstrap-ca.pem \
+      -o Acquire::Queue-Mode=access -o Acquire::Retries=3 \
+      -o Acquire::https::Timeout=30 \
+      -o APT::Update::Error-Mode=any update \
+    > "${OUTPUT_DIR}/apt-update.log" 2>&1; then
+    update_ok=1
+    break
+  else
+    update_rc=$?
+  fi
+  printf 'Signed Debian apt index attempt %s failed (exit=%s), last 35 lines:\n' \
+    "$attempt" "$update_rc" >&2
+  tail -n 35 "${OUTPUT_DIR}/apt-update.log" >&2
+  if (( attempt < 3 )); then
+    delay=$((attempt * 20))
+    printf 'SD1_APT_INDEX_TRANSIENT_BACKOFF seconds=%s\n' "$delay"
+    sleep "$delay"
+  fi
+done
+(( update_ok )) || fail 'signed Debian snapshot apt update failed after three bounded attempts; no unverified package install permitted'
 
 # An InRelease is both GPG-signature-verified by apt and byte-pinned by the
 # caller.  Timestamps that do not exist, expired/rotated signing keys, or a
