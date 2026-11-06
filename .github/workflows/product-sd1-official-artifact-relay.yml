@@ -291,6 +291,14 @@ jobs:
             echo 'PUBLIC_SD1_RELAY_PRIOR_STATE_UNAVAILABLE: historical run exists but no compatible unexpired verified artifact; refusing silent cold restart' >&2
             exit 22
           fi
+          # The first API page might contain 100 unrelated skipped label
+          # events while an older verified state lives on a later page.
+          # A truncated history is NOT evidence that first boot is safe.
+          history_total="$(jq -er '.total_count | select(type == "number" and . >= 0)' <<< "$run_list")" || exit 22
+          if (( history_total >= 100 )); then
+            echo 'PUBLIC_SD1_RELAY_HISTORY_TRUNCATED: prior state may be on a later page; refuse cold bootstrap' >&2
+            exit 22
+          fi
           echo 'PUBLIC_SD1_RELAY_FIRST_BOOT: no prior completed artifact run exists; bounded 12M-cycle bootstrap permitted'
 
       - name: Download only selected previous full-state public test artifact
