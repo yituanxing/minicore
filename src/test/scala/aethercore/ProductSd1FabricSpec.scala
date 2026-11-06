@@ -142,4 +142,65 @@ class ProductSd1FabricSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.supervisorExternalInterrupt.expect(false.B)
     }
   }
+  it should "give SD 144 physical CS-high and DI-high startup clocks and expose bad CS-low preamble" in {
+    simulate(new AetherSoCPlatformFabric(
+      paddrBits = platform.paddrBits,
+      dataBits = 64,
+      txnIdBits = 4,
+      addressMap = map,
+      plicSourceCount = 52,
+      externalSemanticMemory = true,
+      enableSpiSd = true,
+      spiPlicSourceId = 11
+    )) { dut =>
+      initialize(dut)
+      // A deliberately slow divider keeps every clock edge outside the
+      // short MMIO response handshake, so no pin transitions are skipped.
+      mmio(dut, map.spiBase + 16, AetherMemOp.Write, MemSize.Byte, 8)
+      dut.io.spiSclk.get.expect(false.B)
+      mmio(dut, map.spiCsGpioBase, AetherMemOp.Write, MemSize.Word, 1, 0xf)
+      mmio(dut, map.spiCsGpioBase + 4, AetherMemOp.Write, MemSize.Word, 1, 0xf)
+
+      def chipSelectHigh(value: Boolean): Unit = {
+        mmio(dut, map.spiCsGpioBase, AetherMemOp.Write, MemSize.Word,
+          if (value) 1 else 0, 0xf)
+        dut.io.spiCsN.get.expect(value.B)
+      }
+
+      def eighteenOnes(expectedCsHigh: Boolean): Unit = {
+        var previousSclk = dut.io.spiSclk.get.peek().litToBoolean
+        var risingEdges = 0
+        var validStartupEdges = 0
+        for (_ <- 0 until 18) {
+          // Same TX register and all-ones bytes used by Linux mmc_spi.
+          mmio(dut, map.spiBase + 4, AetherMemOp.Write, MemSize.Byte, 0xff)
+          for (_ <- 0 until 200) {
+            val sclk = dut.io.spiSclk.get.peek().litToBoolean
+            if (!previousSclk && sclk) {
+              risingEdges += 1
+              dut.io.spiMosi.get.expect(true.B)
+              dut.io.spiCsN.get.expect(expectedCsHigh.B)
+              if (expectedCsHigh) validStartupEdges += 1
+            }
+            previousSclk = sclk
+            dut.clock.step()
+          }
+          mmio(dut, map.spiBase + 8, AetherMemOp.Read, MemSize.Byte) shouldBe 3
+        }
+        risingEdges shouldBe 144
+        validStartupEdges shouldBe (if (expectedCsHigh) 144 else 0)
+      }
+
+      // Linux GPIO-CS asserted during preamble would supply no valid SD
+      // startup clocks even though 18 bytes genuinely exit the SPI pins.
+      chipSelectHigh(false)
+      eighteenOnes(expectedCsHigh = false)
+
+      // The correct CS-off preamble must reach the *same* physical SPI pins.
+      chipSelectHigh(true)
+      eighteenOnes(expectedCsHigh = true)
+      chipSelectHigh(false) // Normal CMD0 must reassert active-low CS.
+    }
+  }
+
 }
