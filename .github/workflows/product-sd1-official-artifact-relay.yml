@@ -231,7 +231,7 @@ jobs:
             build/product-sd1-official-seed
           key: ${{ steps.seed-cache.outputs.cache-primary-key }}
 
-      - name: Select only last successful fully compatible public relay stage
+      - name: Select newest verified successful or recovered public relay stage
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -242,10 +242,19 @@ jobs:
           # stage manifests and original simulator SHA have been checked.
           compat='${{ steps.compat.outputs.sha256 }}'
           [[ "$compat" =~ ^[a-f0-9]{64}$ ]] || exit 19
-          mapfile -t matching_runs < <(gh api \
+          # A GitHub API error may NEVER be mistaken for "no prior state".
+          run_list="$(gh api \
             "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-official-artifact-relay.yml/runs" -X GET \
-            -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
-            --jq '.workflow_runs[] | select((.conclusion == "success" or .conclusion == "failure") and .head_repository.full_name == .repository.full_name) | [.id,.head_sha,.conclusion] | @tsv')
+            -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100)" || {
+            echo 'PUBLIC_SD1_RELAY_HISTORY_QUERY_FAILED: refusing unverified cold bootstrap' >&2
+            exit 22
+          }
+          mapfile -t matching_runs < <(jq -r '
+            .workflow_runs[] |
+            select((.conclusion == "success" or .conclusion == "failure") and
+                   .head_repository.full_name == .repository.full_name) |
+            [.id,.head_sha,.conclusion] | @tsv
+          ' <<< "$run_list")
           for entry in "${matching_runs[@]}"; do
             IFS=$'\t' read -r candidate_id candidate_sha candidate_result <<< "$entry"
             [[ "$candidate_sha" =~ ^[a-f0-9]{40}$ && "$candidate_id" =~ ^[0-9]+$ ]] || continue
@@ -267,7 +276,11 @@ jobs:
               exit 0
             fi
           done
-          echo 'PUBLIC_SD1_RELAY_NO_QUALIFIED_SOURCE: first bounded 12M-cycle cold bootstrap required'
+          if (( ${#matching_runs[@]} )); then
+            echo 'PUBLIC_SD1_RELAY_PRIOR_STATE_UNAVAILABLE: historical run exists but no compatible unexpired verified artifact; refusing silent cold restart' >&2
+            exit 22
+          fi
+          echo 'PUBLIC_SD1_RELAY_FIRST_BOOT: no prior completed artifact run exists; bounded 12M-cycle bootstrap permitted'
 
       - name: Download only selected previous full-state public test artifact
         if: steps.source.outputs.source_run_id != ''
@@ -345,6 +358,8 @@ jobs:
 
       - name: Bootstrap once or continue in five verified 20M-cycle windows
         id: stage
+        env:
+          PRODUCT_SD1_RELAY_COMPAT_SHA: ${{ steps.compat.outputs.sha256 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -426,6 +441,8 @@ jobs:
           after_host = Path(sys.argv[2]) / "persistent.pre.host"
           old = decode(before_host)
           new = decode(after_host)
+          if old["identity"] != new["identity"]:
+              raise ValueError("SD1 frozen model/media identities changed within relay")
           # Read only the bounded UART preamble; never allocate the 256 MiB DDR
           # payload or change the original savable checkpoint representation.
           def extract_uart(host):
@@ -455,6 +472,15 @@ jobs:
           for key in ("sd-cmds", "sd-reads", "sd-writes", "sd-init", "sd-cow-sectors"):
               values = re.findall(r"(?<![A-Za-z0-9-])" + re.escape(key) + r"=(\d+)", saved)
               sd_observed[key.replace("-", "_")] = int(values[-1]) if values else None
+          # Guest printk timestamps measure kernel clock time, never
+          # simulator wall time. Keep the largest invisible-print interval
+          # as a diagnostic signal, not a proven stalled initcall.
+          printk_pattern = re.compile(rb"(?m)^\[\s*(\d+\.\d+)\]\s*([^\r\n]*)")
+          prior_printk = list(printk_pattern.finditer(prior_uart))
+          current_printk = list(printk_pattern.finditer(current_uart))
+          printk_times = [float(m.group(1)) for m in current_printk]
+          max_gap = max((b - a for a, b in zip(printk_times, printk_times[1:])), default=None)
+          last_printk = current_printk[-1] if current_printk else None
           duration = int(sys.argv[6])
           cycles = int(new["cycles"]) - int(old["cycles"])
           retired = int(new["commits"]) - int(old["commits"])
@@ -462,6 +488,12 @@ jobs:
               "run_id": int(sys.argv[4]), "window": int(sys.argv[5]),
               "started_utc": sys.argv[7], "finished_utc": sys.argv[8],
               "runner_name": os.environ.get("RUNNER_NAME", "unknown"),
+              "frozen_rtl_sha": os.environ["TARGET_SHA"],
+              "compatibility_sha256": os.environ["PRODUCT_SD1_RELAY_COMPAT_SHA"],
+              "identity_sha256": dict(zip(
+                  ("model", "firmware", "dtb", "sd_image", "linux_image", "rootfs_result"),
+                  new["identity"]
+              )),
               "from_cycle": old["cycles"], "to_cycle": new["cycles"],
               "from_commits": old["commits"], "to_commits": new["commits"],
               "retired_delta": retired,
@@ -473,6 +505,11 @@ jobs:
               "uart_hash": new["uart_hash"],
               "uart_cumulative_sha256": hashlib.sha256(current_uart).hexdigest(),
               "uart_delta_sha256": hashlib.sha256(uart_delta).hexdigest(),
+              "guest_kernel_clock_not_rtl_wall": True,
+              "last_guest_printk_sec": float(last_printk.group(1)) if last_printk else None,
+              "last_printk_line": last_printk.group(2).decode("utf-8", "replace")[:180] if last_printk else None,
+              "new_printk_lines": len(current_printk) - len(prior_printk),
+              "max_inter_printk_gap_sec": round(max_gap, 6) if max_gap is not None else None,
               "sd_observed": sd_observed,
               "opensbi": new["opensbi"], "ext4": new["ext4_root_mounted"],
               "native_init": new["native_init_started"], "login": new["login"],
@@ -527,7 +564,7 @@ jobs:
             echo "- Current PR HEAD: $REVIEWED_PR_HEAD_SHA (NOT qualified by frozen RTL run)"
             echo '- Media: exact signed official SD1 seed cache; SHA cross-checked'
             echo "- Retirement state: ${{ steps.stage.outputs.commits }} instructions / ${{ steps.stage.outputs.cycles }} RTL cycles"
-            echo "- Next-run artifact: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-$GITHUB_RUN_ID (14 days)"
+            echo "- Next-run artifact: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-$GITHUB_RUN_ID (90 days)"
             echo '- Full RTL/DDR/card and original portable savable simulator SHA: checked'
             if [[ '${{ steps.stage.outputs.native_login }}' == 1 ]]; then
               echo '- **NATIVE GETTY PROMPT PASS**: UART login, ext4 root, and /sbin/init seen in same original host checkpoint'
@@ -585,5 +622,5 @@ jobs:
         with:
           name: product-sd1-public-boot-analysis-${{ github.run_id }}
           path: build/product-sd1-public-artifact-relay/analysis/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 90

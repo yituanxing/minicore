@@ -43,6 +43,28 @@
 
 这只能证明该区间**没有可见的 printk**，不能单凭日志认定 CPU 卡死，也无法归因于 BFQ、8250、SPI、某个 initcall 或硬件时序。未来需要同一冻结内核下更细的 initcall/trace 证据，或专门新建不同兼容性指纹的诊断启动；不能偷换现有 312M 快照所绑定的内核和固件。
 
+## 三个已核验的 RTL 周期 ↔ Linux 时间锚点
+
+112M 和 212M 两份原始快照各自提取的 UART，与 [已入 Git 的 312M UART](product-sd1-boot-312m-original-uart.log) 的对应长度前缀逐字节一致、SHA256 一致。无需再重复保存相同串口全文。
+
+| 真实恢复节点 | 退休指令数 | 累计 UART | 最后一条 Linux printk |
+| --- | ---: | ---: | --- |
+| 112M cycles | 27,666,988 | 8,364 字节，SHA256 `5e40134b…` | 0.911643s，切换到 `riscv_clocksource` |
+| 212M cycles | 53,024,730 | 10,243 字节，SHA256 `0ed077d2…` | 1.642012s，BFQ 调度器注册 |
+| 312M cycles | 78,170,492 | 10,726 字节，SHA256 `138d77ee…` | 4.793442s，SuperH SCI 串口驱动初始化 |
+
+112→212M 仍退休 25,357,742 条指令，CPI≈3.94357；212→312M 又退休 25,145,762 条，CPI≈3.97681。**3.002565s 的无 printk 区间不代表 CPU 不提交，更不是 3 秒的仿真宿主墙钟耗时。** 需要单独的 initcall trace 才能把时间归因给某个具体驱动。
+
+## 原生 Debian QEMU 门禁也已留存
+
+原 [#42207139595](https://github.com/yituanxing/minicore/actions/runs/42207139595) 工件 #13496414850 在 **2026-11-13 11:08:40 UTC** 先于 312M RTL 快照过期，故已经额外永久归档完整原版 [QEMU UART](evidence/sd1-native-qemu-42207139595/boot-uart.log)、[boot-result](evidence/sd1-native-qemu-42207139595/boot-result.txt) 和 [SHA/媒体身份结果](evidence/sd1-native-qemu-42207139595/result.txt)。三者原始内容分别为 23,689 / 264 / 633 字节，SHA256 见 JSONL 台账。这不会自动延长 GitHub artifact 本身的有效期；下一次 RTL 接力的现有门禁仍要求可下载的成功 QEMU artifact，过期后必须先做便宜的等价 QEMU 预检或严格审核后的证据更新，**不可因此从零重跑 RTL**。
+
+**两条路径的区别：**这个原生 Debian QEMU oracle 的根设备是 `/dev/vda1`（virtio block），而 Product RTL 使用真实 SPI SD 卡。QEMU 验证了官方 ext4/`/sbin/init`/systemd/登录提示链路，**没有验证 Product 的 Linux MMC SPI GPIO-CS 握手**。
+
+## SD SPI 下一条低成本诊断
+
+332M 之后的 CMD0 错误与 Linux 6.6 `mmc_spi_initsequence()` 通过翻转 `SPI_CS_HIGH` 发出 18×`0xff` 初始化时钟、而 GPIO 描述符 CS 路径依旧物理选中（CS_N低）这一组合高度吻合。候选短修复是仅在这段预备传输临时设置 `spi_transfer.cs_off=1`，并以 **144 个 CS_N 高/MOSI 高的 SCLK 边沿**、**73 时钟拒绝与 74 时钟接受 CMD0**、恢复 CS 低有效后的 CMD0 R1 回应做短验证。当前这仍是**待实证的根因假说**，未修改冻结内核或启动长跑。任何新的 Linux Image 身份都不能继承旧 312M 主存快照；两条验证线必须分别标记。
+
 ## 可继续累积的数据
 
 机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、原始累计 UART、逐窗 UART 增量、runner CPU 信息、分窗口 save/relay 日志和 SHA256；失败时抢救最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。后续只会在新的人工 label 触发后将兼容性匹配、再次完整校验通过的 recovery 工件选为续跑源。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
