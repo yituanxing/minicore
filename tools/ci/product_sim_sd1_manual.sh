@@ -40,13 +40,13 @@ if [[ "$ACTION" == longrun ]]; then
   }
 fi
 
-export AETHERCORE_VERILATOR_VERSION="${AETHERCORE_VERILATOR_VERSION:-5.024}"
+export AETHERCORE_VERILATOR_VERSION="${AETHERCORE_VERILATOR_VERSION:-5.054}"
 export SIM_SETTLE_MODE="${SIM_SETTLE_MODE:-reference}"
 case "$AETHERCORE_VERILATOR_VERSION:$SIM_SETTLE_MODE" in
   5.024:reference) sd1_fast_profile=0 ;;
   5.054:reference|5.054:adaptive) sd1_fast_profile=1 ;;
   *)
-    echo 'G5-SD1 supports 5.024/reference by default; 5.054/reference or 5.054/adaptive require matching SD1 short A/B evidence.' >&2
+    echo 'G5-SD1 defaults to 5.054/reference (requires matching SD1 short A/B evidence); explicit 5.024/reference is the legacy fallback.' >&2
     exit 3
     ;;
 esac
