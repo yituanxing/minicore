@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools/ci/product_fpga_artix7_p0.sh"
 TCL = ROOT / "tools/fpga/artix7_product_synth.tcl"
+XDC = ROOT / "tools/fpga/artix7_product_ooc.xdc"
 EMITTER = ROOT / "src/main/scala/aethercore/soc/ElaborateProductSoC.scala"
 WORKFLOW = ROOT / ".github/workflows/product-fpga-artix7-p0.yml"
 
@@ -33,6 +34,7 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
         self.assertIn('"$emitter" small --target-dir', script)
         self.assertIn('isa:"rv64gc", abi:"lp64d"', script)
         self.assertIn("spi_sd_enabled:true", script)
+        self.assertIn("clock_frequency_hz:50000000", script)
         # GitHub hosted images may not have ripgrep; use the guaranteed grep.
         self.assertIn('command -v grep', script)
         self.assertIn('grep -Eq "module[[:space:]]+', script)
@@ -43,6 +45,7 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
         self.assertIn("xc7a100tfgg676-2|xc7a200tfbg676-2", script)
         self.assertIn("RTL_EXPORT_CACHE_HIT", script)
         self.assertIn("sha256sum --status --check", script)
+        self.assertIn('cmp -s "$hashes" -', script)
         self.assertIn("rtl_file_hashes_sha256", script)
         self.assertIn("git_sha", script)
         with TemporaryDirectory() as temp:
@@ -72,12 +75,19 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
                 "top": "AetherCoreProductFpgaUartDdrBoard",
                 "emitter": "aethercore.soc.ElaborateProductFpgaUartDdrSpiSd1Rv64gc",
                 "geometry": "small", "isa": "rv64gc", "abi": "lp64d",
-                "spi_sd_enabled": True, "vendor_ddr_phy_included": False,
+                "spi_sd_enabled": True, "clock_frequency_hz": 50_000_000,
+                "vendor_ddr_phy_included": False,
                 "rtl_file_hashes_sha256": bundle_sha,
             }))
             hit = self.invoke("prepare", output)
             self.assertEqual(hit.returncode, 0, hit.stderr)
             self.assertIn("RTL_EXPORT_CACHE_HIT", hit.stdout)
+            unlisted = rtl / "Injected.sv"
+            unlisted.write_text("module Injected; endmodule\n")
+            injected = self.invoke("prepare", output)
+            self.assertNotEqual(injected.returncode, 0)
+            self.assertIn("synthesized RTL file set differs", injected.stderr)
+            unlisted.unlink()
             source.write_text("module AetherCoreProductFpgaUartDdrBoard; wire x; endmodule\n")
             stale = self.invoke("prepare", output)
             self.assertNotEqual(stale.returncode, 0)
@@ -86,12 +96,17 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
     def test_only_real_vivado_can_produce_synthesis_evidence(self):
         script = SCRIPT.read_text()
         tcl = TCL.read_text()
+        xdc = XDC.read_text()
         self.assertIn("command -v vivado", script)
         self.assertIn("ARTIX7_SYNTH_NOT_RUN", script)
         self.assertIn("ARTIX7_LOGIC_SYNTH_ONLY", script)
         self.assertIn("vendor_ddr_phy_included:false", script)
         self.assertIn("physical_timing_qualified:false", script)
         self.assertIn("synth_design -mode out_of_context", tcl)
+        self.assertLess(tcl.index("read_xdc $reference_xdc"), tcl.index("synth_design -mode out_of_context"))
+        self.assertIn("-period 20.000 [get_ports clock]", xdc)
+        self.assertIn("get_clocks -quiet p0_product_ui_clock", tcl)
+        self.assertIn('period_ns:20, clock_frequency_hz:50000000', script)
         self.assertIn("report_utilization", tcl)
         self.assertIn("report_timing_summary", tcl)
         self.assertIn("write_checkpoint", tcl)
@@ -105,6 +120,9 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
         self.assertIn("types: [labeled]", workflow)
         self.assertIn("github.event.label.name == 'product-fpga-artix7-p0'", workflow)
         self.assertIn("product_fpga_artix7_p0.sh prepare", workflow)
+        self.assertIn("actions/cache/restore@v4", workflow)
+        self.assertIn("actions/cache/save@v4", workflow)
+        self.assertIn("product-artix7-p0-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}-v2", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
         self.assertNotIn("synth_ecp5", workflow)
         self.assertNotIn("vivado -mode", workflow)

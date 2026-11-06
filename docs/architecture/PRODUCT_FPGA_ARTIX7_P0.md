@@ -16,6 +16,13 @@ still be provided for the exact eventual board. In particular, the top's
 `localDdrAxi` is an **internal memory-controller interface**, not a set of
 off-chip DDR signals. Do not constrain its hundreds of signals as package
 pins or claim the OOC synthesis clock as a physical FPGA Fmax.
+The Product/DDR UI port contract is **one 50 MHz clock (20 ns)**. The OOC
+reference XDC is read **before synthesis** so this is a real mapping target,
+not a late timing-report-only constraint. It still omits board PLL/CDC,
+generated clocks, DDR PHY and physical pin timing.
+The board must eventually provide a usable **256 MiB** DDR aperture for the
+Product physical range `0x80000000..0x8fffffff`, translated onto its
+28-bit zero-based local AXI address port.
 
 ## Run once, reuse the exact RTL for both parts
 
@@ -28,11 +35,14 @@ bash tools/ci/product_fpga_artix7_p0.sh prepare build/product-artix7-p0
 The export saves `rtl/*.sv`, `rtl.sha256` and `manifest.json` with the
 checked-out Git SHA, exact geometry/ISA/ABI/top, and a bundle digest.
 Repeating `prepare` with the same sources reuses and verifies that artifact;
-a changed Git SHA, deleted file or byte mismatch **fails closed** instead of
+a changed Git SHA, extra/unlisted synthesis file, deleted file or byte mismatch
+**fails closed** instead of
 silently regenerating an inconsistent model. Use a new output directory for
-any changed commit.
+any changed commit. Only the root `rtl/*.sv` set is read and hashed as
+synthesis input; nested `rtl/verification/` files are auxiliary verification
+collateral and are **not** read by the Vivado P0 flow.
 
-On an installed/licensed Vivado host with the **same source SHA** and the
+On a Vivado host supporting the selected Artix-7 parts, with the **same source SHA** and the
 exported directory:
 
 ```sh
@@ -47,10 +57,18 @@ Each separate run retains `vivado.log`, hierarchical `utilization.rpt`,
 are emitted. Synthesis failures preserve partial logs for diagnosis.
 
 The manual GitHub workflow `.github/workflows/product-fpga-artix7-p0.yml`
-exports and caches only the RTL; it intentionally does **not** install or
+exports and caches the exact-SHA RTL **across separate Actions runs** using
+`actions/cache/restore` and `actions/cache/save`, followed by mandatory
+SHA and complete input-set verification. Mill/Coursier dependency caching is
+separate and does not itself imply RTL reuse. The workflow does **not** install or
 pretend to run Vivado on the normal 16-GiB hosted runner. Trigger it via
 `workflow_dispatch` when available on the default branch or by adding the
 `product-fpga-artix7-p0` label to PR #379. It is never a per-commit longrun.
+The cache key is intentionally tied to the **entire commit SHA**: it reuses
+exact source revisions and does not yet reuse a previous export across
+rootfs-only or documentation-only commits. That broader reuse needs a
+separately verified RTL-source fingerprint; never relabel a different
+commit's output as current source evidence.
 
 ## Result labels are strictly separate
 

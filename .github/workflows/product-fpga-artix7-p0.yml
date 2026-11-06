@@ -44,6 +44,15 @@ jobs:
           command -v jq
           chmod +x mill
 
+      # Unlike the Mill dependency cache, this stores the validated emitted
+      # RTL itself across separate runs of the SAME exact source commit.
+      - name: Restore pinned Product RTL from prior Actions run
+        id: rtl_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/product-artix7-p0
+          key: product-artix7-p0-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}-v2
+
       - name: Generate exact Product Small RV64GC/LP64D UART-DDR-SPI RTL
         shell: bash
         run: |
@@ -53,7 +62,15 @@ jobs:
           bash tools/ci/product_fpga_artix7_p0.sh prepare "$out"
           jq -e '.status == "RTL_EXPORT_PASS" and .vendor_ddr_phy_included == false' "$out/manifest.json"
           echo "ARTIX7_P0_OUT=$out" >> "$GITHUB_ENV"
+          echo "Cross-run RTL cache restored: ${{ steps.rtl_cache.outputs.cache-hit }}" >> "$GITHUB_STEP_SUMMARY"
           echo 'RTL export only; no Vivado mapping, routed Fmax or DDR board pass.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save verified Product RTL for a later exact-SHA run
+        if: steps.rtl_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/product-artix7-p0
+          key: product-artix7-p0-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}-v2
 
       - name: Preserve export SHA, RTL and preparation evidence
         if: always()

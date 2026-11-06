@@ -27,6 +27,7 @@ esac
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 command -v jq >/dev/null || { echo 'ERROR: jq is required' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'ERROR: sha256sum is required' >&2; exit 2; }
+command -v cmp >/dev/null || { echo 'ERROR: cmp is required' >&2; exit 2; }
 command -v grep >/dev/null || { echo 'ERROR: grep is required' >&2; exit 2; }
 current_sha="$(git -C "$repo_dir" rev-parse HEAD)"
 mkdir -p "$output_dir"
@@ -46,13 +47,20 @@ verify_export() {
     '.status == "RTL_EXPORT_PASS" and .git_sha == $sha and .top == $top and
      .emitter == $emitter and .geometry == "small" and
      .isa == "rv64gc" and .abi == "lp64d" and
-     .spi_sd_enabled == true and .vendor_ddr_phy_included == false' \
+     .spi_sd_enabled == true and .clock_frequency_hz == 50000000 and
+     .vendor_ddr_phy_included == false' \
     "$manifest" >/dev/null || {
       echo 'ERROR: RTL export identity differs from the checked-out Product source' >&2
       exit 1
     }
   (cd "$rtl_dir" && sha256sum --status --check "$hashes") || {
     echo 'ERROR: emitted RTL bytes differ from their pinned SHA256 manifest' >&2
+    exit 1
+  }
+  # Vivado globs all root-level *.sv. Every synthesis input must be pinned,
+  # including the absence of any extra unlisted module files.
+  (cd "$rtl_dir" && sha256sum -- *.sv | sort) | cmp -s "$hashes" - || {
+    echo 'ERROR: synthesized RTL file set differs from the pinned SHA256 manifest' >&2
     exit 1
   }
   local bundle_sha
@@ -87,6 +95,7 @@ if [[ "$mode" == prepare ]]; then
     '{status:"RTL_EXPORT_PASS", git_sha:$sha, top:$top, emitter:$emitter,
       geometry:"small", decode_width:1, issue_width:1, retire_width:1,
       isa:"rv64gc", abi:"lp64d", sv39:true, spi_sd_enabled:true,
+      clock_frequency_hz:50000000,
       paddr_bits:32, rtl_files:$count, rtl_file_hashes_sha256:$bundle,
       vendor_ddr_phy_included:false, pll_included:false, board_xdc_included:false,
       qualification:"RTL export only; not synthesis, routed timing or FPGA boot"}' \
@@ -120,7 +129,7 @@ done
 jq -n --arg sha "$current_sha" --arg part "$part" --arg top "$top" \
   --arg bundle "$(sha256sum "$hashes" | cut -d' ' -f1)" \
   '{status:"ARTIX7_LOGIC_SYNTH_ONLY", git_sha:$sha, part:$part, top:$top,
-    rtl_file_hashes_sha256:$bundle, period_ns:40,
+    rtl_file_hashes_sha256:$bundle, period_ns:20, clock_frequency_hz:50000000,
     routed:false, board_ddr_phy_included:false, physical_timing_qualified:false,
     qualification:"Out-of-context logic synthesis only; not routed Fmax or board DDR"}' \
   > "$run_dir/result.json"
