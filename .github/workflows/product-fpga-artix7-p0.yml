@@ -1,0 +1,65 @@
+name: AetherCore Product Artix-7 P0 RTL export
+
+# PR branches cannot rely on workflow_dispatch being visible on main yet.
+# Label opt-in provides a single explicit export without automatic heavy PPA.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-artix7-p0-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  export-product-rv64gc:
+    name: Export pinned Product Small RV64GC/SD1 RTL (not Vivado PPA)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-artix7-p0')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Chisel/Mill cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Validate fail-closed artifact and synthesis contracts
+        run: |
+          python3 -m unittest tests_py.test_product_fpga_artix7_p0 -v
+          bash -n tools/ci/product_fpga_artix7_p0.sh
+          command -v jq
+          chmod +x mill
+
+      - name: Generate exact Product Small RV64GC/LP64D UART-DDR-SPI RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/product-artix7-p0"
+          bash tools/ci/product_fpga_artix7_p0.sh prepare "$out"
+          bash tools/ci/product_fpga_artix7_p0.sh prepare "$out"
+          jq -e '.status == "RTL_EXPORT_PASS" and .vendor_ddr_phy_included == false' "$out/manifest.json"
+          echo "ARTIX7_P0_OUT=$out" >> "$GITHUB_ENV"
+          echo 'RTL export only; no Vivado mapping, routed Fmax or DDR board pass.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve export SHA, RTL and preparation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-artix7-p0-rtl-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/product-artix7-p0/
