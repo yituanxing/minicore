@@ -62,10 +62,13 @@ class DiagnosticShortGateContract(unittest.TestCase):
         workflow = self.workflow
         self.assertIn('product-sd1-gpio-cs-diag-advance-32m', workflow)
         self.assertIn('product-sd1-gpio-cs-diag-advance-52m', workflow)
+        self.assertIn('product-sd1-gpio-cs-diag-advance-72m', workflow)
         self.assertIn("'42242315003'", workflow)
         self.assertIn("'42245421838'", workflow)
+        self.assertIn("'42246225589'", workflow)
         self.assertIn('product-sd1-gpio-cs-diagnostic-12m-42242315003', workflow)
         self.assertIn('product-sd1-gpio-cs-diagnostic-32m-42245421838', workflow)
+        self.assertIn('product-sd1-gpio-cs-diagnostic-52m-42246225589', workflow)
         self.assertIn('github-token: ${{ github.token }}', workflow)
         self.assertIn('actions: read', workflow)
         self.assertIn('steps.model-cache.outputs.cache-hit', workflow)
@@ -77,6 +80,7 @@ class DiagnosticShortGateContract(unittest.TestCase):
         self.assertIn('product_sd1_gpio_cs_diag_short.sh advance', workflow)
         self.assertIn("'32000000'", workflow)
         self.assertIn("'52000000'", workflow)
+        self.assertIn("'72000000'", workflow)
         self.assertIn('product_sd1_gpio_cs_boot_profile.py', workflow)
         self.assertIn('"$source/phase-timing.txt"', workflow)
         self.assertLess(workflow.index('Retain immutable patched full Product RTL checkpoint'),

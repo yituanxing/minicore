@@ -19,7 +19,8 @@ jobs:
     if: >-
       (github.event.label.name == 'product-sd1-gpio-cs-diag-short' ||
        github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m' ||
-       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m') &&
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m') &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
@@ -41,11 +42,11 @@ jobs:
       IS_ADVANCE: ${{ github.event.label.name != 'product-sd1-gpio-cs-diag-short' }}
       # Immutable, independently qualified source links. Extend only after an
       # actual saved-state artifact and verified boot profile exist.
-      ADVANCE_SOURCE_RUN: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '42245421838' || '42242315003' }}
-      ADVANCE_SOURCE_ARTIFACT: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && 'product-sd1-gpio-cs-diagnostic-32m-42245421838' || 'product-sd1-gpio-cs-diagnostic-12m-42242315003' }}
-      ADVANCE_SOURCE_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '32000000' || '12000000' }}
-      ADVANCE_TARGET_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52000000' || '32000000' }}
-      ADVANCE_TARGET_TAG: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52m' || '32m' }}
+      ADVANCE_SOURCE_RUN: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '42246225589' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '42245421838' || '42242315003' }}
+      ADVANCE_SOURCE_ARTIFACT: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && 'product-sd1-gpio-cs-diagnostic-52m-42246225589' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && 'product-sd1-gpio-cs-diagnostic-32m-42245421838' || 'product-sd1-gpio-cs-diagnostic-12m-42242315003' }}
+      ADVANCE_SOURCE_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '52000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '32000000' || '12000000' }}
+      ADVANCE_TARGET_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '72000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52000000' || '32000000' }}
+      ADVANCE_TARGET_TAG: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '72m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52m' || '32m' }}
 
     steps:
       - name: Checkout exact diagnostic source
