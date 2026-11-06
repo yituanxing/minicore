@@ -169,7 +169,13 @@ jobs:
           path: build/product-sd1-persistent-checkpoint/savable-model
           key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-portable-v1-${{ steps.portable-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
 
-      - name: Build or verify exact portable Product --savable model, zero guest cycles
+      # The 12M model was compiled -march=x86-64/-mtune=generic. Do not invoke
+      # the OLD model builder on a different runner when importing its binary:
+      # product_sim_cache.sh still includes /proc/cpuinfo in its fingerprint,
+      # which forces an unnecessary (and checkpoint-incompatible) rebuild.
+      # The advance step below checks the original binary SHA three ways.
+      - name: Build original portable Product --savable model, zero guest cycles
+        if: github.event.label.name == 'product-sd1-gpio-cs-diag-short'
         shell: bash
         run: |
           set -euo pipefail
@@ -198,10 +204,27 @@ jobs:
           done
           grep -Fxq 'boot_cycles=12000000' "$source/.diag-ready"
           grep -Fxq 'qualification=SD1_GPIO_CS_DIAGNOSTIC_CHECKPOINT_NOT_DEBIAN_PASS' "$source/.diag-ready"
+          model=build/product-sd1-persistent-checkpoint/savable-model
+          executable="$model/obj/VAetherCoreProductDebianSdRV64SimTop"
+          [[ -x "$executable" && -s "$model/.savable-source-key" &&
+             -s "$model/.product-model-identity" ]] || exit 16
+          model_sha="$(sha256sum "$executable" | cut -d ' ' -f 1)"
+          grep -Fxq "simulator_sha256=$model_sha" "$model/.product-model-identity" || {
+            echo 'GPIO_CS_RELAY_REJECTED: cached simulator bytes differ from its own sealed identity' >&2
+            exit 16
+          }
+          grep -Fxq "model_sha256=$model_sha" "$source/.diag-ready" || {
+            echo 'GPIO_CS_RELAY_REJECTED: cached model bytes differ from 12M snapshot model' >&2
+            exit 16
+          }
+          grep -Fxq "source_model_key=$(< "$model/.savable-source-key")" "$source/.diag-ready" || {
+            echo 'GPIO_CS_RELAY_REJECTED: cached model source key differs from 12M checkpoint' >&2
+            exit 16
+          }
           mkdir -p "$out/boot-12m.imported"
           cp -- "$source/.diag-ready" "$source/persistent.pre.rtl" \
             "$source/persistent.pre.host" "$out/boot-12m.imported/"
-          echo 'Product 12M checkpoint imported; SHA/media/model identity is verified again by advance.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Exact portable Product binary and original 12M checkpoint reused without recompilation; source key/three SHA identities checked.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache distinct portable SD1 model if no compatible cache exists
         if: success() && steps.model-cache.outputs.cache-hit != 'true'
