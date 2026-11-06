@@ -15,10 +15,22 @@ using aethercore::l32sim::SdSpiCard;
 namespace {
 class PinSpi {
  public:
-  explicit PinSpi(const std::string& disk) : card_(disk) {
+  explicit PinSpi(const std::string& disk, unsigned startupClocks = 96)
+      : card_(disk) {
     card_.observe(false, true, true);
-    // Initial >=74 clocks while deselected precede CMD0 in SD SPI mode.
-    for (unsigned i = 0; i < 12; ++i) transfer(0xff);
+    // Real card power-up requires >=74 *contiguous* SCLK rising edges
+    // while both physical CS_N and MOSI are high. Byte-oriented Linux
+    // sends 18xFF (144 clocks), but test the exact 73/74 boundary here.
+    idleClocks(startupClocks);
+  }
+
+  void idleClocks(unsigned clocks, bool mosi = true) {
+    if (selected_) throw std::runtime_error("cannot send idle clocks while SD CS is selected");
+    for (unsigned i = 0; i < clocks; ++i) {
+      card_.observe(false, mosi, true);
+      card_.observe(true, mosi, true);
+      card_.observe(false, mosi, true);
+    }
   }
 
   void select() {
@@ -194,6 +206,51 @@ std::uint32_t le32(const std::uint8_t* bytes) {
 int main(int argc, char** argv) {
   try {
     if (argc != 2) throw std::runtime_error("usage: product_sim_sd1_card_probe RAW_SD_IMAGE");
+
+    // Reproduce the exact failure seen after 332M RTL cycles: 18xFF sent
+    // with CS_N still *low* cannot count as SD power-up clocks.
+    auto mustRejectPrematureCmd0 = [](auto&& attempt, const char* scenario) {
+      try {
+        attempt();
+      } catch (const std::runtime_error& error) {
+        if (std::string(error.what()).find(
+            "CMD0 before 74 CS-high/DI-high initialization clocks") != std::string::npos)
+          return;
+        throw std::runtime_error(std::string(scenario) + ": wrong failure: " + error.what());
+      }
+      throw std::runtime_error(std::string(scenario) + ": premature CMD0 was accepted");
+    };
+    {
+      PinSpi selectedPreamble(argv[1], 0);
+      selectedPreamble.select();
+      for (int i = 0; i < 18; ++i) selectedPreamble.transfer(0xff);
+      mustRejectPrematureCmd0(
+          [&] { selectedPreamble.commandSelected(0, 0); },
+          "144 clocks while CS_N low");
+    }
+    {
+      PinSpi oneClockShort(argv[1], 73);
+      mustRejectPrematureCmd0(
+          [&] { oneClockShort.command(0, 0); },
+          "73 valid CS_N-high/MOSI-high clocks");
+    }
+    {
+      PinSpi interrupted(argv[1], 73);
+      interrupted.idleClocks(1, false);  // DI low resets contiguous count.
+      interrupted.idleClocks(73);
+      mustRejectPrematureCmd0(
+          [&] { interrupted.command(0, 0); },
+          "MOSI-low interruption before 74 contiguous clocks");
+    }
+    {
+      PinSpi exactThreshold(argv[1], 74);
+      PinSpi::expect(exactThreshold.command(0, 0), 0x01,
+                     "CMD0 after exactly 74 valid startup clocks");
+    }
+    std::cout << "PRODUCT_SD1_CARD_STARTUP_74_CLOCK_BOUNDARY_PASS "
+                 "selected_144_rejected=1 valid_73_rejected=1 "
+                 "mosi_low_reset_rejected=1 valid_74_accepted=1\n";
+
     PinSpi spi(argv[1]);
     PinSpi::expect(spi.command(0, 0), 0x01, "CMD0 GO_IDLE_STATE");
     spi.deselect();
