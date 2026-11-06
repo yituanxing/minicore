@@ -85,6 +85,13 @@
 
 5.054 是**候选优化**；这次 adaptive 低于普通 5.054，不能宣传为额外提速。原始 A/B artifact **#13508595839**（42,641 字节）将在 **2026-11-20 14:03:35 UTC** 到期；已将速率、状态一致性、run 和 artifact ID 写入长期 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。下一步审查是否能在不改冻结身份的情况下迁移 simulator 二进制并重复短恢复，不拿旧快照冒险。
 
+## Verilator 5.054 默认版本选择（2026-11-06）
+
+- **官方 SD1 冻结 RTL 接力本来已经固定 5.054/reference + 1 thread**，312M 状态绑定的原始 savable 模拟器不会被替换；故 12M A/B 的 +30.79% **不是**旧 312M 长跑未来还能额外收获的一次提速。
+- [SD1 手动入口 e421ed7](https://github.com/yituanxing/minicore/commit/e421ed77757d56db07c8bb049488adc84fa85eda) 把默认从 5.024 调到 **5.054/reference**，仍需要同构、同媒体、同工具指纹的短 A/B 证据才能实际编译；`AETHERCORE_VERILATOR_VERSION=5.024` 可明确回退。
+- [G5 Debian 手动入口 464db62](https://github.com/yituanxing/minicore/commit/464db62f4463580e062cbf17119ebc5b7f9db293) 也以 **5.054/reference** 为首选，原有 30M Debian Top A/B 自检和显式 5.024 回退保留。不会因源码提交自动启动长运行。
+- [默认版本契约测试 2d80555](https://github.com/yituanxing/minicore/commit/2d80555963b1955c203be143233a44a12de42cd9) 3/3 PASS，`bash -n` PASS。旧版安装器和 G3/G4 尚未重新资格验证的路径仍保留 5.024；不启用 adaptive 默认。
+
 ## 可继续累积的数据
 
 机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、原始累计 UART、逐窗 UART 增量、runner CPU 信息、分窗口 save/relay 日志和 SHA256；失败时抢救最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。后续只会在新的人工 label 触发后将兼容性匹配、再次完整校验通过的 recovery 工件选为续跑源。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
