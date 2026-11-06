@@ -50,6 +50,43 @@ subsystem. RAM32M/RAM64M are **distributed-memory primitives**, and
 this summary contains no RAMB18E1/RAMB36E1. Neither these counts nor
 the zero BRAM number qualify physical DDR support.
 
+## Instance-weighted module hotspots (same real log)
+
+These five disjoint functional subtrees account for 52,608 / 73,106 LUTs
+(72.0%). Each subtree includes its descendants, rather than just its local
+module cell count. Do not add these numbers to parent hierarchy rows.
+
+| Distinct hardware area | LUT | FF | DSP48E1 | % of total LUT |
+| --- | ---: | ---: | ---: | ---: |
+| ProductFpUnit / HardFloat | 18,106 | 713 | 14 | 24.8% |
+| ProductSmallOoOBackend | 12,864 | 7,719 | 0 | 17.6% |
+| PMP check and geometry (all instances) | 12,784 | 0 | 0 | 17.5% |
+| ProductPhysicalLsq | 4,905 | 1,638 | 0 | 6.7% |
+| ProductMUnit (integer mul/div) | 3,949 | 496 | 81 | 5.4% |
+| **Five disjoint areas** | **52,608** | — | **95** | **72.0%** |
+
+PMP breaks down into two `PmpRangeDecoder` instances at 3,358 LUT
+each and four `PmpAccessChecker` instances at 1,517 LUT each. This
+looks like duplication but is **not safely removable**: the instruction
+side in `ProductSmallPagedCore` sees current PMP CSRs, whereas the
+data side in `ProductDataResolver` selects a PMP snapshot captured
+when a memory uOp was issued. Combining them would change the permissions
+seen by an in-flight operation after a CSR change and violate existing
+`ProductDataResolverSpec` snapshot tests. Optimize NAPOT/TOR wide
+arithmetic only behind equivalence tests; do **not** combine these two
+state lifetimes merely to reduce the mapped gate count.
+
+For contrast, the instruction and data cache subtrees consume only about
+479 and 877 LUTs respectively. The first area investigation should
+therefore be PMP, then OoO backend and HardFloat, not an arbitrary cache
+redesign. Preserve RV64GC/Sv39/precise protection for Linux correctness.
+
+The reusable `tools/ci/product_fpga_xc7_hierarchy.py` parser checks that
+every module-instance-weighted primitive cell matches Yosys's total.
+On future CI runs it emits `hierarchy.json` and a concise resource line
+even if a *later* Yosys statistics-export step fails. Its
+`XC7_MAPPED_HIERARCHY_PARSED` status **never** means a CI or board PASS.
+
 ## Candidate screening only
 
 AMD [UG474 Artix-7 CLB table](https://docs.amd.com/r/en-US/ug474_7Series_CLB/7-Series-FPGA-CLB-Resources)

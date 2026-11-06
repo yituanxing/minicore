@@ -8,9 +8,12 @@ import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
+from tools.ci.product_fpga_xc7_hierarchy import MappingReportError, parse_yosys_hierarchy
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools/ci/product_fpga_xc7_unplaced.sh"
+HIERARCHY = ROOT / "tools/ci/product_fpga_xc7_hierarchy.py"
 WORKFLOW = ROOT / ".github/workflows/product-fpga-xc7-mapping.yml"
 
 
@@ -38,6 +41,7 @@ class ProductFpgaXc7UnplacedContract(unittest.TestCase):
         self.assertIn("stat -json -tech xilinx", script)
         self.assertIn("tee -o $stats stat -json -tech xilinx", script)
         self.assertNotIn('tee -o \\"$stats\\" stat', script)
+        self.assertIn("product_fpga_xc7_hierarchy.py", script)
         self.assertIn("find \"$rtl_dir\" -maxdepth 1", script)
         self.assertIn("RTL_EXPORT_PASS", script)
         self.assertIn("git_sha", script)
@@ -100,6 +104,51 @@ class ProductFpgaXc7UnplacedContract(unittest.TestCase):
             self.assertFalse(accepted["routed"])
             self.assertFalse(accepted["physical_timing_qualified"])
             self.assertEqual(accepted["rtl_files"], 1)
+
+    def test_hierarchy_parser_weights_instances_and_rejects_false_totals(self):
+        fixture = """124.48. Printing statistics.
+
+=== Child ===
+
+   Number of cells:                 2
+     FDRE                            1
+     LUT6                            1
+
+   Estimated number of LCs:          1
+
+=== AetherCoreProductFpgaUartDdrBoard ===
+
+   Number of cells:                 2
+     Child                           2
+
+   Estimated number of LCs:          0
+
+=== design hierarchy ===
+
+   AetherCoreProductFpgaUartDdrBoard      1
+     Child                         2
+
+   Number of wires:                20
+   Number of cells:                 4
+     FDRE                            2
+     LUT6                            2
+
+   Estimated number of LCs:          2
+"""
+        mapped = parse_yosys_hierarchy(fixture)
+        self.assertEqual(mapped["total_cells"], 4)
+        self.assertEqual(mapped["total_luts"], 2)
+        self.assertEqual(mapped["total_ffs"], 2)
+        self.assertEqual(mapped["hierarchy_nodes"], 2)
+        self.assertEqual(mapped["module_own_hotspots"][0]["instances"], 2)
+        self.assertEqual(mapped["module_subtrees"][0]["subtree_luts"], 2)
+        with self.assertRaisesRegex(MappingReportError, "weighted hierarchy"):
+            parse_yosys_hierarchy(
+                fixture.replace("Number of cells:                 4", "Number of cells:                 3")
+                .replace("FDRE                            2", "FDRE                            1")
+            )
+        with self.assertRaisesRegex(MappingReportError, "missing finished"):
+            parse_yosys_hierarchy("Yosys failed before the mapped stats")
 
 
 if __name__ == "__main__":

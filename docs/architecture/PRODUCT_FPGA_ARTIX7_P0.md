@@ -88,9 +88,11 @@ deadline, a 12 GiB resident-memory cutoff and an 84% cgroup-memory cutoff.
 These safety guards may terminate the run before mapping completes; that
 outcome is a recorded failure, not an inferred area estimate.
 
-The CI artifact contains `yosys.log`, `stats.json` and `result.json` when
-mapping succeeds, or `yosys.log` and a reasoned failure JSON (plus
-`abort_reason.txt` for a resource guard). The **real XC7 technology-mapped
+The CI artifact contains `yosys.log`, `stats.json`, `hierarchy.json` and
+`result.json` when mapping succeeds, or `yosys.log` and a reasoned failure
+JSON (plus `abort_reason.txt` for a resource guard). A separately validated
+`hierarchy.json` is also retained on failures *after* a real hierarchy stat
+has been printed; it is not a PASS assertion. The **real XC7 technology-mapped
 primitive counts** are in `stats.json`; no arbitrary output netlist is
 written because a full 16 GiB runner risks memory exhaustion. This is an
 unplaced **XC7-family estimate**, with `device_part=null`: it does not

@@ -14,6 +14,7 @@ command -v yosys >/dev/null || { echo 'ERROR: yosys is required' >&2; exit 2; }
 command -v jq >/dev/null || { echo 'ERROR: jq is required' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'ERROR: sha256sum is required' >&2; exit 2; }
 command -v cmp >/dev/null || { echo 'ERROR: cmp is required' >&2; exit 2; }
+command -v python3 >/dev/null || { echo 'ERROR: python3 is required for XC7 hierarchy stats' >&2; exit 2; }
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 export_dir="$(cd "$export_dir" && pwd)"
@@ -117,6 +118,13 @@ else
 fi
 kill "$monitor_pid" 2>/dev/null || true
 wait "$monitor_pid" 2>/dev/null || true
+
+# Yosys synth_xilinx prints real hierarchy-wide cell counts before its final
+# report-writing step. Parse and cross-check every mapped primitive against
+# the weighted instances. Keep this diagnostic even if a later tee/stat
+# command fails; it is never a substitute for a successful Yosys exit.
+python3 "$repo_dir/tools/ci/product_fpga_xc7_hierarchy.py" \
+  "$log" "$output_dir/hierarchy.json" || true
 
 if ((rc != 0)) || [[ -s "$guard" ]]; then
   reason="YOSYS_EXIT_$rc"
