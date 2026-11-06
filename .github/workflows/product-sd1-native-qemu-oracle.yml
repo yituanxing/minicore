@@ -130,12 +130,18 @@ jobs:
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=20s 15m bash tools/ensure_riscv64_linux_gcc_13_3.sh
-          test -n "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
+          # The toolchain bootstrap exports its path through GITHUB_ENV;
+          # that value is visible to the NEXT Actions step, not this shell.
+          grep -Eq '^AETHERCORE_RV64_LINUX_CROSS_COMPILE=/[^[:space:]]+$' "$GITHUB_ENV"
 
       - name: Prepare independent QEMU virt kernel from the qualified SD1 config
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}" == /* ]] || {
+            echo 'SD1_QEMU_ORACLE_ABSOLUTE_CROSS_GCC_REQUIRED' >&2
+            exit 14
+          }
           timeout --signal=TERM --kill-after=30s 25m \
             bash tools/ci/product_sd1_qemu_init_oracle.sh prepare
           grep -Fxq 'PRODUCT_SD1_QEMU_ORACLE_KERNEL_RESULT: status=READY_UNVERIFIED' \

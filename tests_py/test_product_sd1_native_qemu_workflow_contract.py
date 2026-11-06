@@ -66,6 +66,14 @@ class Sd1NativeQemuWorkflowContract(unittest.TestCase):
         self.assertNotIn("build/rv64-debian-sd1-sd/sd-rootfs.img\n          retention", workflow)
         self.assertNotIn("actions/cache/save@", workflow)
 
+    def test_gcc_path_is_consumed_only_after_github_env_step_boundary(self):
+        workflow = WORKFLOW.read_text()
+        bootstrap = workflow.split("- name: Validate exact GCC and pinned upstream source", 1)[1]
+        bootstrap, prepare = bootstrap.split("- name: Prepare independent QEMU virt kernel", 1)
+        self.assertIn('grep -Eq \'^AETHERCORE_RV64_LINUX_CROSS_COMPILE=/', bootstrap)
+        self.assertNotIn('test -n "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"', bootstrap)
+        self.assertIn('[[ "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}" == /* ]]', prepare)
+
 
 if __name__ == "__main__":
     unittest.main()
