@@ -25,7 +25,8 @@ class ProductSd1PersistentShortBootstrapContract(unittest.TestCase):
             self.workflow.index(f"- name: {BOOTSTRAP_NAME}"),
         )
         self.assertIn("python3 tools/ci/product_sd1_official_seed.py verify", self.workflow)
-        self.assertIn("product-sd1-official-seed-v1", self.workflow)
+        self.assertIn("product-sd1-official-seed-v2", self.workflow)
+        self.assertIn("outputs.cache-matched-key", self.workflow)
 
     def test_preinstalled_java17_checked_without_jdk_redownload(self):
         for marker in (

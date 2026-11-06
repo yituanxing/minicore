@@ -31,9 +31,9 @@ class ProductSd1C1QemuWorkflowContract(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         seed = SEED.read_text()
         seed_key = next(line.strip() for line in seed.splitlines()
-                        if "product-sd1-official-seed-v1" in line and line.strip().startswith("key:"))
+                        if "product-sd1-official-seed-v2" in line and line.strip().startswith("key:"))
         qemu_key = next(line.strip() for line in workflow.splitlines()
-                        if "product-sd1-official-seed-v1" in line and line.strip().startswith("key:"))
+                        if "product-sd1-official-seed-v2" in line and line.strip().startswith("key:"))
         self.assertEqual(seed_key, qemu_key)
         for required in (
                 "build/rv64-debian-rootfs/result.txt",
@@ -45,7 +45,8 @@ class ProductSd1C1QemuWorkflowContract(unittest.TestCase):
             self.assertIn(required, workflow)
         self.assertIn("steps.sealed_media.outputs.cache-hit", workflow)
         self.assertIn("python3 tools/ci/product_sd1_official_seed.py verify", workflow)
-        self.assertNotIn("restore-keys:", workflow)
+        self.assertIn("outputs.cache-matched-key", workflow)
+        self.assertIn("product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0", workflow)
         self.assertNotIn("build/product-sd1-official-apt-cache", workflow)
 
     def test_explicit_rootfs_agnostic_c1_sequence_and_qualified_bound(self):
@@ -59,7 +60,8 @@ class ProductSd1C1QemuWorkflowContract(unittest.TestCase):
         self.assertIn("rootfs_binding=NONE", workflow)
         self.assertIn("RV64_SD1_C1_QEMU_TIMEOUT_SECONDS: '540'", workflow)
         self.assertIn("QEMU_VIRTIO_C1_ONLY_NOT_PRODUCT_SPI_RTL", oracle)
-        self.assertNotIn("actions/cache/save@", workflow)
+        self.assertIn("Re-key individually SHA-verified official Debian media", workflow)
+        self.assertNotIn("build/product-sd1-c1-qemu-oracle/boot-uart.log\n          key:", workflow)
         self.assertIn("retention-days: 7", workflow)
 
     def test_host_install_reuses_native_oracle_apt_cache_without_gui_recommendations(self):

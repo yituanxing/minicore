@@ -17,7 +17,7 @@ SCRIPT = ROOT / "tools/ci/product_sd1_c1_artifact_relay.sh"
 WORKFLOW = ROOT / ".github/workflows/product-sd1-c1-checkpoint-relay.yml"
 QEMU = ROOT / ".github/workflows/product-sd1-c1-qemu-oracle.yml"
 SOURCE_SEED = ROOT / ".github/workflows/product-sd1-persistent-short.yml"
-SEED_CACHE_KEY = SOURCE_SEED.read_text().split("key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-", 1)[1].split("\n", 1)[0]
+SEED_CACHE_KEY = SOURCE_SEED.read_text().split("key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-", 1)[1].split("\n", 1)[0]
 
 
 class ProductC1PublicArtifactContract(unittest.TestCase):
@@ -60,12 +60,13 @@ class ProductC1PublicArtifactContract(unittest.TestCase):
         self.assertNotIn("  push:", workflow)
         self.assertNotIn("  schedule:", workflow)
         self.assertNotIn("  write", workflow)
-        self.assertNotIn("actions/cache/save", workflow)
+        self.assertIn("Re-key individually SHA-verified official Debian media", workflow)
+        self.assertNotIn("build/product-sd1-c1-checkpoint-relay/publish/\n          key:", workflow)
         self.assertNotIn("product_sim_sd1_manual.sh longrun", workflow)
 
     def test_reuses_identical_official_seed_and_never_rebuilds_on_advance(self):
         workflow = WORKFLOW.read_text()
-        self.assertIn("key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-" + SEED_CACHE_KEY, workflow)
+        self.assertIn("key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-" + SEED_CACHE_KEY, workflow)
         self.assertIn("key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}", workflow)
         self.assertIn("key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}", workflow)
         self.assertIn("steps.sealed_media.outputs.cache-hit", workflow)

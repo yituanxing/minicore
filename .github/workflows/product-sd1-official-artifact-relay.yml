@@ -2,8 +2,11 @@ name: AetherCore Product SD1 official credential-free public artifact relay
 
 # Explicit first-party, public TEST media only. Each label event spends <=100M
 # real SD1 RTL cycles, broken into independently checked <=20M stages. A later
-# *new* label event can resume the exact latest sealed run artifact. Never run
-# on push, synchronize, schedule, workflow_run, forks, or unqualified images.
+# *new* label event can resume the exact latest sealed run artifact. This
+# background evidence lane intentionally runs the exact a15197f9 RTL source
+# which produced the first verified checkpoint; ongoing PR HEAD RTL changes
+# are NOT qualified by that old model and cannot silently reset its progress.
+# Never run on push, synchronize, schedule, workflow_run, forks or other images.
 on:
   pull_request:
     types: [labeled]
@@ -23,11 +26,18 @@ jobs:
       github.event.label.name == 'product-sd1-public-artifact-relay' &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.base.repo.full_name == github.repository
+      github.event.pull_request.base.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     env:
-      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      # Explicit frozen RTL/ABI source for the credential-free Debian longrun.
+      # To qualify NEW RTL, deliberately revise this pin after a new QEMU,
+      # full-media and checkpoint-compatibility preflight. Never infer a new
+      # RTL PASS merely because the development PR head moved forward.
+      TARGET_SHA: a15197f96e5869e69269202a0a9caffdbe1f5255
+      REVIEWED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_SD1_PUBLIC_ARTIFACT_CONFIRM: PUBLIC_CREDENTIAL_FREE_SD1_TEST
       AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY
@@ -50,10 +60,26 @@ jobs:
           persist-credentials: false
 
       - name: Cheap source and permission contract before downloading any large input
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$TARGET_SHA" = a15197f96e5869e69269202a0a9caffdbe1f5255
+          [[ "$REVIEWED_PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 19
+          [[ "$GITHUB_HEAD_REF" == design/rv64gc-product-architecture-20261103 ]] || exit 19
+          # A force-push that drops the reviewed frozen baseline MUST stop the
+          # background relay before any expensive work or artifact lookup.
+          comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$TARGET_SHA...$REVIEWED_PR_HEAD_SHA")"
+          jq -e --arg frozen "$TARGET_SHA" '
+            .merge_base_commit.sha == $frozen and .behind_by == 0 and
+            (.status == "ahead" or .status == "identical")
+          ' <<< "$comparison" >/dev/null || {
+            echo 'PUBLIC_SD1_FROZEN_SOURCE_NOT_ANCESTOR: checked PR no longer carries frozen RTL baseline' >&2
+            exit 19
+          }
+          echo "PUBLIC_SD1_RTL_FROZEN_LANE source_sha=$TARGET_SHA pr_head_sha=$REVIEWED_PR_HEAD_SHA qualification=FROZEN_RTL_ONLY_NOT_CURRENT_HEAD"
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
           [[ -z "${RV64_SD1_LOGIN_USER:-}" && -z "${RV64_SD1_LOGIN_PASSWORD:-}" &&
@@ -149,13 +175,20 @@ jobs:
             build/rv64-debian-boot
             build/rv64-debian-sd1-sd
             build/product-sd1-official-seed
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'src/main/scala/**/*.scala', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
 
       - name: Verify signed official Debian/rootfs/image byte identity before costly work
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ]] || {
+          # Exact v2 cache hits and the single pinned legacy v1 key are admissible;
+          # the following signed-media/whole-image SHA verifier is mandatory.
+          [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ||
+             ( '${{ steps.seed-cache.outputs.cache-hit }}' == false &&
+               '${{ steps.seed-cache.outputs.cache-matched-key }}' ==
+                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
             echo 'PUBLIC_SD1_RELAY_SEED_CACHE_MISS: no speculative cold build or longrun' >&2
             exit 16
           }
@@ -184,6 +217,20 @@ jobs:
             exit 18
           }
           echo 'PUBLIC_SD1_RELAY_OFFICIAL_MEDIA_PASS: fixed signed rootfs/SD/FW/DTB/Linux hash preflight; zero guest cycles'
+
+      - name: Re-key individually SHA-verified official Debian media without RTL source coupling
+        if: steps.seed-cache.outputs.cache-hit == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: ${{ steps.seed-cache.outputs.cache-primary-key }}
 
       - name: Select only last successful fully compatible public relay stage
         id: source
@@ -361,7 +408,8 @@ jobs:
           set -euo pipefail
           {
             echo '## Official Debian SD1 public credential-free RTL relay'
-            echo "- Source: $TARGET_SHA"
+            echo "- Frozen RTL source: $TARGET_SHA"
+            echo "- Current PR HEAD: $REVIEWED_PR_HEAD_SHA (NOT qualified by frozen RTL run)"
             echo '- Media: exact signed official SD1 seed cache; SHA cross-checked'
             echo "- Retirement state: ${{ steps.stage.outputs.commits }} instructions / ${{ steps.stage.outputs.cycles }} RTL cycles"
             echo "- Next-run artifact: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-$GITHUB_RUN_ID (14 days)"

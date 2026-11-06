@@ -44,6 +44,7 @@ class ProductSd1OfficialSeedContracts(unittest.TestCase):
         self.assertIn('SD1_RUNNER_TOOLS_ALREADY_PRESENT', provision)
         self.assertNotIn('openjdk-17-jdk-headless', provision)
         self.assertNotIn('cmake ninja-build', provision)
+        self.assertIn('sudo update-binfmts --enable qemu-riscv64', provision)
         self.assertIn('test -e /proc/sys/fs/binfmt_misc/qemu-riscv64', provision)
 
     def test_failed_apt_configuration_reports_bounded_diagnostics_and_stops(self):
@@ -174,7 +175,8 @@ class ProductSd1OfficialSeedContracts(unittest.TestCase):
             actual = [line.strip() for line in block.splitlines()
                       if line.strip() in paths]
             self.assertEqual(actual, paths)
-            self.assertIn("product-sd1-official-seed-v1-${{ hashFiles(", block)
+            self.assertIn("product-sd1-official-seed-v2-${{ hashFiles(", block)
+            self.assertNotIn("src/main/scala", block)
             self.assertIn("software/rv64/product_sd1_official_seed.lock", block)
         seed_key = next(line.strip() for line in cache_block(seed).splitlines()
                         if line.strip().startswith("key:"))

@@ -73,13 +73,20 @@ jobs:
             build/rv64-debian-boot
             build/rv64-debian-sd1-sd
             build/product-sd1-official-seed
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'src/main/scala/**/*.scala', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
 
       - name: Fail closed before any source or model build on missing seed
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ]] || {
+          # Exact v2 cache hits and the single pinned legacy v1 key are admissible;
+          # the following signed-media/whole-image SHA verifier is mandatory.
+          [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ||
+             ( '${{ steps.seed-cache.outputs.cache-hit }}' == false &&
+               '${{ steps.seed-cache.outputs.cache-matched-key }}' ==
+                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
             echo 'PRODUCT_SD1_PERSISTENT_OFFICIAL_SEED_REQUIRED: run the independently opted-in zero-cycle trusted seed workflow first' >&2
             exit 16
           }
@@ -180,6 +187,20 @@ jobs:
             bash tools/ci/product_sim_sd1_manual.sh preflight
           test -s build/product-sd1-official-seed/seed-manifest.txt
           echo 'PRODUCT_SD1_PERSISTENT_MEDIA_VERIFIED: exact official rootfs/Linux/fw/DTB/raw SD bytes, no cold Debian build'
+
+      - name: Re-key individually SHA-verified official Debian media without RTL source coupling
+        if: steps.seed-cache.outputs.cache-hit == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: ${{ steps.seed-cache.outputs.cache-primary-key }}
 
       - name: Fingerprint exact native CPU and C++ ABI
         id: native-abi

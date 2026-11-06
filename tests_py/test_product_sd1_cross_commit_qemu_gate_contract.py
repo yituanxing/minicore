@@ -90,6 +90,22 @@ class ProductSd1QemuCrossCommitContract(unittest.TestCase):
         self.check(comparator(SD1.read_text()), files, True)
         self.check(comparator(C1.read_text()), files, False)
 
+    def test_longrun_is_pinned_to_first_verified_rtl_and_original_pr(self):
+        source = SD1.read_text()
+        frozen = "a15197f96e5869e69269202a0a9caffdbe1f5255"
+        self.assertIn(f"TARGET_SHA: {frozen}", source)
+        self.assertIn("REVIEWED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}", source)
+        self.assertIn("github.event.pull_request.number == 379", source)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", source)
+        self.assertIn("github.event.pull_request.base.ref == github.event.repository.default_branch", source)
+        self.assertIn("github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'", source)
+        self.assertIn("compare/$TARGET_SHA...$REVIEWED_PR_HEAD_SHA", source)
+        self.assertIn(".merge_base_commit.sha == $frozen", source)
+        self.assertIn("FROZEN_RTL_ONLY_NOT_CURRENT_HEAD", source)
+        self.assertIn("NOT qualified by frozen RTL run", source)
+        self.assertIn('-f branch="$GITHUB_HEAD_REF"', source)
+        self.assertIn('ref: ${{ env.TARGET_SHA }}', source)
+
 
 if __name__ == "__main__":
     unittest.main()

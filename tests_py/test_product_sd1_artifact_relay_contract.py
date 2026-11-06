@@ -48,7 +48,10 @@ class PublicSD1ArtifactRelayContract(unittest.TestCase):
         self.assertIn("product_sim_sd1_manual.sh preflight", self.workflow)
         self.assertLess(self.workflow.index("Verify signed official Debian/rootfs/image"),
                         self.workflow.index("First-run Java 17"))
-        self.assertNotIn("restore-keys:", self.workflow.split("id: seed-cache", 1)[1].split("- name:", 1)[0])
+        seed_restore = self.workflow.split("id: seed-cache", 1)[1].split("- name:", 1)[0]
+        self.assertIn("product-sd1-official-seed-v2-", seed_restore)
+        self.assertIn("product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0", seed_restore)
+        self.assertIn("steps.seed-cache.outputs.cache-matched-key", self.workflow)
 
     def test_explicit_public_test_and_no_credentials(self):
         self.assertIn("PUBLIC_CREDENTIAL_FREE_SD1_TEST", self.helper)

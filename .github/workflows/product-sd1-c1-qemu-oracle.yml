@@ -87,13 +87,20 @@ jobs:
             build/rv64-debian-boot
             build/rv64-debian-sd1-sd
             build/product-sd1-official-seed
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'src/main/scala/**/*.scala', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
 
       - name: Reject absent frozen Debian source before any expensive compiler provisioning
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ steps.sealed_media.outputs.cache-hit }}' == true ]] || {
+          # Exact v2 cache hits and the single pinned legacy v1 key are admissible;
+          # the following signed-media/whole-image SHA verifier is mandatory.
+          [[ '${{ steps.sealed_media.outputs.cache-hit }}' == true ||
+             ( '${{ steps.sealed_media.outputs.cache-hit }}' == false &&
+               '${{ steps.sealed_media.outputs.cache-matched-key }}' ==
+                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
             echo 'SD1_C1_QEMU_EXACT_OFFICIAL_MEDIA_REQUIRED: run signed offline SD1 source seed first' >&2
             exit 16
           }
@@ -101,6 +108,20 @@ jobs:
           test -s build/rv64-debian-sd1-sd/sd-rootfs.img
           test -s build/rv64-debian-linux/obj/.config
           echo 'PRODUCT_SD1_C1_QEMU_EXACT_MEDIA_VERIFIED no_RTL_cycles=1'
+
+      - name: Re-key individually SHA-verified official Debian media without RTL source coupling
+        if: steps.sealed_media.outputs.cache-hit == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: ${{ steps.sealed_media.outputs.cache-primary-key }}
 
       - name: Restore fixed Bootlin GCC 13.3 Linux cross toolchain
         uses: actions/cache/restore@v4
