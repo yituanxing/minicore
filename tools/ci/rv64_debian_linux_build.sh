@@ -58,6 +58,8 @@ case "${AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_PATCH:-0}" in
   0) ;;
   1)
     [[ "${ROOTFS_STAGE}" == sd1 ]] || fail 'GPIO-CS diagnostic patch is SD1-only'
+    [[ ! -e "${BUILD_DIR}" ]] ||
+      fail 'GPIO-CS diagnostic needs a fresh isolated checkout; existing Debian Image staging must not be overwritten'
     diagnostic_patch="${ROOT_DIR}/tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch"
     [[ -s "${diagnostic_patch}" ]] || fail 'pinned GPIO-CS diagnostic patch missing'
     diagnostic_patch_sha="$(sha256sum "${diagnostic_patch}" | awk '{print $1}')"
