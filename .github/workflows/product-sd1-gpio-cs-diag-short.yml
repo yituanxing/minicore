@@ -1,0 +1,191 @@
+name: Product SD1 GPIO-CS patched kernel 12M RTL short
+
+# Second explicit gate, enabled only after the separate patch Image/OpenSBI
+# job successfully published a SHA-verified cache. Never resumes frozen 312M.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-sd1-gpio-cs-diag-short-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  patched-kernel-short:
+    if: >-
+      github.event.label.name == 'product-sd1-gpio-cs-diag-short' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_ALLOW_PRODUCT_SD1_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_SD1_GPIO_CS_RTL_DIAG: '1'
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact diagnostic source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Cheap no-longrun diagnostic contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_gpio_cs_diag_short.sh
+          python3 -m unittest tests_py.test_product_sd1_gpio_cs_diag_short_contract -v
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" ]] || exit 3
+          echo 'SD1_GPIO_CS_DIAG_SHORT_SCOPE: 12M new kernel Product RTL + 500k independent replay, no CMD0/SD root/PID1 PASS claim' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore original authenticated full SD1 media
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Reject unverified original media before any simulator build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == 'true' ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+
+      - name: Restore separate patched Image and OpenSBI cache only
+        id: diagnostic
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+
+      - name: Reject missing or unverifiable patched payload before RTL build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diagnostic.outputs.cache-hit }}' == 'true' ]] || {
+            echo 'DIAGNOSTIC_IMAGE_NOT_READY: do not start expensive RTL; await exact patched Image build' >&2
+            exit 16
+          }
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          sha256sum build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+          echo 'Both original and diagnostic caches passed separate exact key gates.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore proven Scala/Mill and pinned Verilator 5.054 caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Restore pinned Mill and Scala dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Configure Java 17 and native Product host tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/javac" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+            export PATH="$java17_home/bin:$PATH"
+          fi
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          for cmd in cmake ninja make gcc g++ c++ git python3; do command -v "$cmd" >/dev/null; done
+          chmod +x mill
+          AETHERCORE_VERILATOR_VERSION=5.054 bash tools/ensure_verilator_5_024.sh
+
+      - name: Build or verify exact portable Product --savable model, zero guest cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 25m \
+            bash tools/ci/product_checkpoint_sd1_short.sh build
+
+      - name: Real patched-kernel 12M Product RTL and independent same-cycle replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 15m \
+            bash tools/ci/product_sd1_gpio_cs_diag_short.sh run |
+            tee build/product-sd1-gpio-cs-short-run.log
+          grep -Fq 'PRODUCT_SD1_GPIO_CS_DIAG_SHORT_STATE_SAVED cycle=12000000 ' \
+            build/product-sd1-gpio-cs-short-run.log
+          echo 'Patched kernel 12M full RTL+DDR+SD state built and cross-process replay qualified; CMD0 remains for later 332-352M stage.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain immutable separate diagnostic 12M Product RTL checkpoint
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-12m-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: true
+          path: |
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/.diag-ready
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/persistent.pre.rtl
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/persistent.pre.host
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/save.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restore.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/continuous.state
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restored.state
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/phase-timing.txt
+
+      - name: Upload small logs and SHA ledger, even on preflight failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-short-evidence-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 90
+          include-hidden-files: true
+          path: |
+            build/product-sd1-gpio-cs-short-run.log
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/.diag-ready
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/save.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restore.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/phase-timing.txt
