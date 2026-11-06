@@ -23,8 +23,12 @@ ARTIFACT="$3"
 [[ -d "$SOURCE/.git" || -f "$SOURCE/.git" ]] || reject 'source must be a git checkout'
 [[ "$(git -C "$SOURCE" rev-parse HEAD)" == "$ORIGIN" ]] || reject 'source commit does not match immutable G5 checkpoint'
 git -C "$SOURCE" diff --quiet HEAD -- \
-  src/main/scala/aethercore sim build.mill mill Makefile.l32-linux-boot \
+  src/main/scala/aethercore sim build.mill Makefile.l32-linux-boot \
   tools/ci/product_sim_cache.sh tools/ci/product_checkpoint_g5_short.sh || reject 'frozen Product source has edited tracked inputs'
+# The frozen commit tracks mill as 100644; its Makefile intentionally chmod +x
+# before launching it. Preserve immutable launcher bytes while accepting only
+# that execution-bit change (other tracked Product inputs remain strict above).
+git -C "$SOURCE" show HEAD:mill | cmp -s - "$SOURCE/mill" || reject 'frozen Mill launcher bytes differ'
 [[ -z "$(git -C "$SOURCE" ls-files --others --exclude-standard -- src/main/scala/aethercore sim)" ]] || reject 'frozen Product source has untracked RTL/host inputs'
 
 abi_cpu_signature() {

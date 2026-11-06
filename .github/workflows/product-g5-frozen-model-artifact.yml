@@ -110,16 +110,10 @@ jobs:
           bash tools/ensure_verilator_5_024.sh
           ~/.cache/aethercore/toolchains/verilator-5.054/bin/verilator --version
 
-      - name: Build savable model once and preserve full object ABI
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash control/tools/ci/product_g5_frozen_model_artifact.sh \
-            build frozen-source model-artifact
-          cat model-artifact/manifest.txt >> "$GITHUB_STEP_SUMMARY"
-
+      # Keep the expensive toolchain even when later model/A-B checks fail.
+      # Saving only after the model build previously discarded ~40m of work.
       - name: Save pinned Verilator for future targeted model builds
-        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -128,6 +122,14 @@ jobs:
             ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
             ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
           key: ${{ steps.verilator-cache.outputs.cache-primary-key }}
+
+      - name: Build savable model once and preserve full object ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_frozen_model_artifact.sh \
+            build frozen-source model-artifact
+          cat model-artifact/manifest.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save isolated Scala/Mill cache
         if: success() && steps.scala-cache.outputs.cache-hit != 'true'
