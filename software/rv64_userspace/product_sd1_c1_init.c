@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <termios.h>
 #include <unistd.h>
 
 static int console_fd = -1;
@@ -97,11 +98,29 @@ static void wait_for_block_root(void) {
 
 static void wait_for_release(void) {
   static const char expected[] = "AETHERCORE_C1_GO\n";
+  // /dev/console is reliable for output, but not necessarily for receive.
+  // Read the platform's real 16550 TTY, with input enabled and canonical
+  // buffering disabled for this exact host-to-guest checkpoint token.
+  int input_fd = open("/dev/ttyS0", O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
+  if (input_fd < 0) die("uart_input_open");
+  int flags = fcntl(input_fd, F_GETFL);
+  if (flags < 0) die("uart_input_flags");
+  struct termios saved;
+  if (tcgetattr(input_fd, &saved) != 0) die("uart_termios_get");
+  struct termios raw = saved;
+  raw.c_cflag |= CLOCAL | CREAD;
+  raw.c_iflag &= ~(ICRNL | INLCR | IGNCR | IXON | IXOFF);
+  raw.c_lflag &= ~(ICANON | ECHO);
+  raw.c_cc[VMIN] = 1;
+  raw.c_cc[VTIME] = 0;
+  if (tcsetattr(input_fd, TCSANOW, &raw) != 0) die("uart_termios_set");
+  if (fcntl(input_fd, F_SETFL, flags & ~O_NONBLOCK) != 0)
+    die("uart_input_blocking");
   char command[sizeof(expected)] = {0};
   size_t position = 0;
   while (position < sizeof(expected) - 1) {
     char byte;
-    const ssize_t received = read(console_fd, &byte, 1);
+    const ssize_t received = read(input_fd, &byte, 1);
     if (received < 0 && errno == EINTR) continue;
     if (received != 1) die("uart_release_read");
     command[position++] = byte;
@@ -112,6 +131,10 @@ static void wait_for_release(void) {
     errno = EINVAL;
     die("uart_release_token");
   }
+  if (tcsetattr(input_fd, TCSANOW, &saved) != 0)
+    die("uart_termios_restore");
+  close(input_fd);
+  say("AETHERCORE_C1_GO_RECEIVED\n");
 }
 
 int main(void) {
