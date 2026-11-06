@@ -125,7 +125,22 @@ docker exec -e SD1_MAIN_SHA="$MAIN_RELEASE_SHA" \
     }
     echo "${SD1_SECURITY_SHA}  $1" | sha256sum -c -
   ' > "${OUTPUT_DIR}/signed-release-check.log" 2>&1 || \
-  fail "signed snapshot index changed or hash is wrong; inspect ${OUTPUT_DIR}/signed-release-check.log"
+  {
+    # The isolated Actions runner's local build/ directory is ephemeral and
+    # is not uploaded on a failed source gate. Report ONLY public signed
+    # index hash evidence now, so a mismatched snapshot does not cause an
+    # opaque retry (and never print package credentials or private data).
+    printf 'Pinned Debian signed index expected: trixie=%s trixie-security=%s\n' \
+      "$MAIN_RELEASE_SHA" "$SECURITY_RELEASE_SHA" >&2
+    docker exec "$CONTAINER" /bin/sh -c '
+      for index in /var/lib/apt/lists/*_dists_trixie_InRelease \
+                   /var/lib/apt/lists/*_dists_trixie-security_InRelease; do
+        test -f "$index" && sha256sum "$index"
+      done
+    ' >&2 || true
+    sed -n '1,25p' "${OUTPUT_DIR}/signed-release-check.log" >&2
+    fail "signed snapshot index changed or hash is wrong; inspect ${OUTPUT_DIR}/signed-release-check.log"
+  }
 
 # Explicit, bounded package request.  Apt may pull their REQUIRED
 # dependencies from the same pinned snapshot; --no-install-recommends avoids
