@@ -33,6 +33,16 @@
 
 212M 之后宿主吞吐下降约 30%，但这恰好跨越两个不同的 GitHub Actions job；同一段 guest 的 CPI 仍大约 3.97–3.99。**现阶段不能把慢速直接归因于 Linux 某个驱动或 CPU 设计**，也可能是 runner CPU/共享负载。后续必须同时留存 runner CPU 信息、纯仿真耗时、快照打包耗时，最好同机重放相同窗口，才能判断真正的瓶颈。
 
+## 原始 UART 中第一个值得剖析的时间空窗
+
+312M 状态里的原版 Linux 6.6.143 串口日志约 115 条内核时间戳，已经走到 **4.793442 秒**，并非“尚未进入 Linux”。按日志相邻时间戳排序，最大空窗为：
+
+- **[1.642012]** `io scheduler bfq registered`
+- **[4.644577]** `Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled`
+- 二者相差 **3.002565 秒**，期间没有 UART 打印。第二大空窗是 0.911643→1.404195，约 0.492552 秒。
+
+这只能证明该区间**没有可见的 printk**，不能单凭日志认定 CPU 卡死，也无法归因于 BFQ、8250、SPI、某个 initcall 或硬件时序。未来需要同一冻结内核下更细的 initcall/trace 证据，或专门新建不同兼容性指纹的诊断启动；不能偷换现有 312M 快照所绑定的内核和固件。
+
 ## 可继续累积的数据
 
 机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、原始累计 UART、逐窗 UART 增量、runner CPU 信息、分窗口 save/relay 日志和 SHA256；失败时抢救最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。后续只会在新的人工 label 触发后将兼容性匹配、再次完整校验通过的 recovery 工件选为续跑源。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
