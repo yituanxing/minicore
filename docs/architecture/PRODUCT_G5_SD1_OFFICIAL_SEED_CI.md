@@ -9,13 +9,34 @@ Debian. Guest Debian maintainer scripts still run in an ordinary, isolated
 `linux/riscv64` Docker container via QEMU-user binfmt; the zero-cycle claim
 refers specifically to the Product SoC/RTL, not container instructions.
 
-## Mandatory reviewed source lock (initially intentionally UNSET)
+## Mandatory reviewed source lock
 
 `software/rv64/product_sd1_official_seed.lock` is the **only** source of its
 five official input pins. The workflow has no override fields, unpinned
-image tags, floating apt mirrors, or source substitution. The initial file
-is `UNSET`: attempting to dispatch it fails immediately, before network,
-toolchain installation, guest package configuration or media generation.
+image tags, floating apt mirrors, or source substitution. Missing or malformed
+pins still fail immediately, before network, toolchain installation, guest
+package configuration or media generation.
+
+The five source pins were filled on **2026-11-06 UTC** after an independent
+source-only verification:
+
+- The exact official Docker Hub `library/debian` OCI index was fetched by its
+  immutable SHA256 digest. Its raw bytes matched that digest, and the index
+  contained a `linux/riscv64` child. The verified digest is in the lock.
+- The official `snapshot.debian.org` trixie and trixie-security `InRelease`
+  files were fetched using the locked `20261105T000000Z` timestamps. Each
+  signature verified against the installed Debian archive keyring, and each
+  full downloaded file matched the SHA256 recorded in the lock.
+- The main archive's historical signed index was dated 2026-09-12; the
+  security index was dated 2026-11-04 and had a 2026-11-11 `Valid-Until`.
+  This is expected for an immutable snapshot, not evidence that the package
+  build has already succeeded. The seed uses `Check-Valid-Until: no` for the
+  historical snapshots but still requires valid archive signatures/hashes.
+
+This is **source-lock qualification only**: the riscv64 OCI container, apt
+package graph, actual rootfs, kernel, SD image and Product RTL boot remain
+unbuilt/unverified until their independent gates pass. Do not describe this
+pin review as a completed Debian build or as a longrun launch.
 
 An operator must independently select an official `docker.io/library/debian`
 OCI **index** digest with a `linux/riscv64` child, two real official Debian
