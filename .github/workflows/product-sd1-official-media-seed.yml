@@ -165,6 +165,9 @@ jobs:
           fi
           docker version
           command -v gpgv
+          if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-riscv64 ]] && command -v update-binfmts >/dev/null 2>&1; then
+            sudo update-binfmts --enable qemu-riscv64
+          fi
           test -e /proc/sys/fs/binfmt_misc/qemu-riscv64 || {
             echo 'Pinned Debian OCI package configuration requires installed/enabled qemu-riscv64 binfmt on this ephemeral runner; refusing unqualified host execution' >&2
             exit 13
