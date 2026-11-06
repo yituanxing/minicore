@@ -249,12 +249,23 @@ jobs:
             echo 'PUBLIC_SD1_RELAY_HISTORY_QUERY_FAILED: refusing unverified cold bootstrap' >&2
             exit 22
           }
-          mapfile -t matching_runs < <(jq -r '
+          jq -e '.workflow_runs | type == "array"' <<< "$run_list" >/dev/null || {
+            echo 'PUBLIC_SD1_RELAY_HISTORY_SCHEMA_INVALID: refuse unverified cold bootstrap' >&2
+            exit 22
+          }
+          candidate_lines="$(jq -r '
             .workflow_runs[] |
             select((.conclusion == "success" or .conclusion == "failure") and
                    .head_repository.full_name == .repository.full_name) |
             [.id,.head_sha,.conclusion] | @tsv
-          ' <<< "$run_list")
+          ' <<< "$run_list")" || {
+            echo 'PUBLIC_SD1_RELAY_HISTORY_PARSE_FAILED: refuse unverified cold bootstrap' >&2
+            exit 22
+          }
+          matching_runs=()
+          if [[ -n "$candidate_lines" ]]; then
+            mapfile -t matching_runs <<< "$candidate_lines"
+          fi
           for entry in "${matching_runs[@]}"; do
             IFS=$'\t' read -r candidate_id candidate_sha candidate_result <<< "$entry"
             [[ "$candidate_sha" =~ ^[a-f0-9]{40}$ && "$candidate_id" =~ ^[0-9]+$ ]] || continue
