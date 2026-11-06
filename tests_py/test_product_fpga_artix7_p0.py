@@ -33,6 +33,10 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
         self.assertIn('"$emitter" small --target-dir', script)
         self.assertIn('isa:"rv64gc", abi:"lp64d"', script)
         self.assertIn("spi_sd_enabled:true", script)
+        # GitHub hosted images may not have ripgrep; use the guaranteed grep.
+        self.assertIn('command -v grep', script)
+        self.assertIn('grep -Eq "module[[:space:]]+', script)
+        self.assertNotIn('rg -q', script)
 
     def test_same_export_is_reused_for_both_fpga_candidates(self):
         script = SCRIPT.read_text()

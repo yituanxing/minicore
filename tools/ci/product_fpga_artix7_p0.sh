@@ -27,6 +27,7 @@ esac
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 command -v jq >/dev/null || { echo 'ERROR: jq is required' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'ERROR: sha256sum is required' >&2; exit 2; }
+command -v grep >/dev/null || { echo 'ERROR: grep is required' >&2; exit 2; }
 current_sha="$(git -C "$repo_dir" rev-parse HEAD)"
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
@@ -74,7 +75,7 @@ if [[ "$mode" == prepare ]]; then
   (cd "$repo_dir" && sh ./mill aethercore.runMain "$emitter" small --target-dir "$rtl_dir")
   mapfile -t svs < <(find "$rtl_dir" -maxdepth 1 -type f -name '*.sv' -print | sort)
   ((${#svs[@]} > 0)) || { echo 'ERROR: Chisel emitted no SystemVerilog' >&2; exit 1; }
-  rg -q "module[[:space:]]+$top([[:space:]]|\()" "${svs[@]}" || {
+  grep -Eq "module[[:space:]]+$top([[:space:]]|\()" "${svs[@]}" || {
     echo "ERROR: emitted RTL does not contain expected Product top $top" >&2
     exit 1
   }
