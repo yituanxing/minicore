@@ -7,6 +7,7 @@
 - [官方原生 Debian QEMU 预检 #42207139595](https://github.com/yituanxing/minicore/actions/runs/42207139595) PASS：完整签名官方 Debian SD1 镜像、ext4 根文件系统、`/sbin/init`、登录提示（**未认证登录**）。这是 QEMU，不是 RTL。
 - [SD1 RTL #42210893404](https://github.com/yituanxing/minicore/actions/runs/42210893404) → [#42214303482](https://github.com/yituanxing/minicore/actions/runs/42214303482) → [#42219309886](https://github.com/yituanxing/minicore/actions/runs/42219309886) 三次成功继续，最后可恢复完整状态 **312,000,000 cycles / 78,170,492 commits**，仅 OpenSBI 已观察到；**无 ext4 挂载、原生 PID1、登录的 RTL 凭证**。
 - [#42221108211](https://github.com/yituanxing/minicore/actions/runs/42221108211) 在运行内完成 332,000,000 cycles / 83,178,875 commits，但是下一窗口 332→352M 于 2026-11-06 12:56:41 UTC 因 `Product SD1 CMD0 before 74 CS-high/DI-high initialization clocks` 中止。**332M 没有正式发布的可恢复工件**，不能作为新的续跑源。
+- [312M 原始 UART 启动日志](product-sd1-boot-312m-original-uart.log) 已从 **经过校验的完整 host checkpoint** 直接提取并永久入 Git：10,726 字节、SHA256 `138d77ee29042b73de34feb06c77dd57a749b0f17f1b0669df0c5f7d2c1d19ca`。末尾内核打印时间约 `[4.793442]` 秒，在 `SuperH (H)SCI(F) driver initialized` 附近；**仍未见 SD1 ext4 根文件系统挂载**。
 - C1（通用内核、rootfs 尚未挂载）QEMU 日志曾出现 `AETHERCORE_C1_READY rootfs_unmounted=1`，但 GO 输入交接未闭环，不能与官方 SD1 完整 Debian 路线或 RTL 原生 PID1 混淆。
 
 ## 已保存的远端全状态
@@ -34,6 +35,6 @@
 
 ## 可继续累积的数据
 
-机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、分窗口 save/relay 日志和 SHA256；失败时努力保留最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
+机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、原始累计 UART、逐窗 UART 增量、runner CPU 信息、分窗口 save/relay 日志和 SHA256；失败时抢救最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。后续只会在新的人工 label 触发后将兼容性匹配、再次完整校验通过的 recovery 工件选为续跑源。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
 
 接下来优先处理 **Linux MMC SPI CMD0 之前的 CS-high/DI-high 74 个时钟**，先用短时 SPI/GPIO 引脚级验证确认时序，再决定是否需要 Linux `mmc_spi_initsequence`/CS 控制修复。没有短验证依据前，停止反复触发 312M→后续的长 RTL 接力；绝不禁用协议守卫来制造虚假启动成功。
