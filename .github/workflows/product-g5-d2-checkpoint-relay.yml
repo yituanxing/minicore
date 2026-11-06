@@ -1,13 +1,15 @@
 name: AetherCore Product G5 D2 durable checkpoint relay
 
 # Deliberately isolated from the normal Product/SoC/Linux CI. This is a
-# manual, bounded continuation of the immutable historical 99a5 G5 binary.
+# bounded continuation of the immutable historical 99a5 G5 binary.
 # Each run consumes a SHA-qualified prior artifact and uploads the newest
 # complete checkpoint even when a later 5M-cycle window fails.
 on:
-  # A newly added workflow is not yet dispatchable from a non-default branch.
-  # The first GitData/CAS push starts the immutable 950M seed and executes
-  # nine sequential, independently uploaded milestones through 1.8B.
+  # This second, SHA-pinned push leg resumes the 1.8B complete artifact from
+  # the first successful relay run, and executes nine independently uploaded
+  # 100M milestones through 2.7B. It does not rebuild or mutate the model.
+  # The frozen host's bootMax CLI argument remains exactly 1.8B; its restore
+  # path advances a separately bounded 5M from the checkpoint each invocation.
   # A manual dispatch remains a single bounded 50M/100M continuation after
   # default-branch workflow registration.
   push:
@@ -19,22 +21,23 @@ on:
   workflow_dispatch:
     inputs:
       source_kind:
-        description: 'seed_950m uses the approved original 950M artifact; relay uses a previous run of this workflow'
+        description: 'relay uses the pinned 1.8B run; seed_950m is for historical replay only'
         type: choice
         required: true
+        default: relay
         options:
           - seed_950m
           - relay
       source_run_id:
-        description: 'GitHub Actions run ID containing the verified starting checkpoint (seed: 42044232627)'
+        description: 'GitHub Actions run ID containing the verified checkpoint (relay: 42168606753)'
         type: string
         required: true
-        default: '42044232627'
+        default: '42168606753'
       segment_cycles:
         description: 'Guest RTL cycles to execute, checked and saved every 5M'
         type: choice
         required: true
-        default: '50000000'
+        default: '100000000'
         options:
           - '50000000'
           - '100000000'
@@ -52,9 +55,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     env:
-      SOURCE_RUN_ID: ${{ inputs.source_run_id || '42044232627' }}
-      SOURCE_KIND: ${{ inputs.source_kind || 'seed_950m' }}
-      SEGMENT_CYCLES: ${{ inputs.segment_cycles || '50000000' }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id || '42168606753' }}
+      SOURCE_KIND: ${{ inputs.source_kind || 'relay' }}
+      SEGMENT_CYCLES: ${{ inputs.segment_cycles || '100000000' }}
     steps:
       - name: Checkout continuation script only (not a Product build)
         uses: actions/checkout@v4
@@ -88,12 +91,15 @@ jobs:
               <<< "$meta" >/dev/null
             name=aethercore-product-g5-debian-42044232627
           else
-            [[ "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID" ]] || exit 14
-            jq -e '.event == "workflow_dispatch" and
+            [[ "$SOURCE_RUN_ID" == 42168606753 && "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID" ]] || exit 14
+            jq -e '.event == "push" and
+                   .head_sha == "d6626e2b84a32a99e8bce69faba422a104e0c349" and
+                   .head_branch == "design/rv64gc-product-architecture-20261103" and
                    .path == ".github/workflows/product-g5-d2-checkpoint-relay.yml" and
-                   (.status == "completed")' <<< "$meta" >/dev/null
-            # A failed/cancelled run is a valid input only if its always()
-            # artifact contains a COMPLETE checkpoint verified below.
+                   .conclusion == "success" and
+                   .status == "completed"' <<< "$meta" >/dev/null
+            # The pinned, successful first leg's canonical artifact contains
+            # the 1.8B state, checked down to bytes and model provenance below.
             name="g5-d2-checkpoint-${SOURCE_RUN_ID}"
           fi
           echo "artifact_name=$name" >> "$GITHUB_OUTPUT"
@@ -115,7 +121,7 @@ jobs:
           bash tools/ci/product_g5_d2_checkpoint_relay.sh prepare \
             "$RUNNER_TEMP/g5-d2-source" "$ARTIFACT_OUT" "$SOURCE_KIND"
 
-      - name: Qualify 950M initial 5M and run first bounded segment
+      - name: Resume verified 1.8B state and run first bounded 100M segment
         id: stage1
         shell: bash
         run: |

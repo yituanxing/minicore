@@ -30,7 +30,7 @@ concurrency:
 jobs:
   frozen-model-only:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       ORIGIN_SHA: 99a5c86e99f52ed12f95b304635d77613c9505c4
       AETHERCORE_MILL_NO_DAEMON: '1'
@@ -91,13 +91,45 @@ jobs:
           restore-keys: |
             aethercore-${{ runner.os }}-${{ runner.arch }}-g5-frozen-scala-v1-
 
-      - name: Install Scala + Verilator build prerequisites only
+      - name: Validate preinstalled build tools and install only missing small libraries
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
-            bison flex build-essential git curl xz-utils python3 openjdk-17-jdk-headless
+          # ubuntu-24.04 hosted runners already ship Java 17, GCC, CMake,
+          # Ninja, Autoconf, Bison and Flex. Re-downloading OpenJDK via
+          # azure.archive.ubuntu.com consumed the prior 45-minute job limit.
+          for tool in java javac autoconf cmake ninja bison flex g++ make git curl xz python3; do
+            command -v "$tool" >/dev/null || {
+              echo "G5_FROZEN_PREREQUISITE_MISSING executable=$tool" >&2
+              exit 1
+            }
+          done
+          java_version="$(java -version 2>&1 | head -1)"
+          [[ "$java_version" == *'"17.'* ]] || {
+            echo "G5_FROZEN_JAVA_VERSION_MISMATCH actual=$java_version" >&2
+            exit 1
+          }
+          javac -version
+          # Only the small, potentially absent Verilator development headers
+          # may need apt. Skip apt entirely if both packages are installed.
+          missing=()
+          for pkg in libfl-dev zlib1g-dev; do
+            if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null |
+                 grep -qx 'install ok installed'; then
+              missing+=("$pkg")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'G5_FROZEN_APT_MISSING packages=%s\n' "${missing[*]}"
+            sudo timeout --signal=TERM --kill-after=10s 240s \
+              apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=30 update
+            sudo env DEBIAN_FRONTEND=noninteractive \
+              timeout --signal=TERM --kill-after=10s 240s \
+              apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=30 \
+              install -y --no-install-recommends "${missing[@]}"
+          else
+            echo 'G5_FROZEN_APT_SKIPPED all required development libraries preinstalled'
+          fi
           java -version
           g++ --version | head -1
 

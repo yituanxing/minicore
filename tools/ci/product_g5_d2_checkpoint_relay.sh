@@ -17,7 +17,12 @@ readonly SOURCE_COMMIT=99a5c86e99f52ed12f95b304635d77613c9505c4
 readonly MODEL_SHA=aa35c80024238420bea3976db677db2e0ef028aad9800482926b926e50155b71
 readonly BINARY_SHA=5ed1e31ea3c1a5dc8761e4ffb33a35a48db412e359521efa3e3eb408cfbae43d
 readonly FIRMWARE_SHA=d525de6a58422de93da6de5312d38867611153da94c580bca31f90ebf13eff2c
-readonly MAX_CYCLES=1800000000
+# The historical executable rejects a bootMax argument above 1.8B, but its
+# ordinary restore mode advances a bounded 5M cycles independently of bootMax.
+# Keep that immutable host argument within its compiled ABI contract while the
+# relay wrapper independently bounds the accumulated restored RTL horizon.
+readonly HOST_BOOT_MAX_CYCLES=1800000000
+readonly RELAY_MAX_CYCLES=2700000000
 readonly SEED_CYCLES=950000000
 readonly SEED_COMMITS=244648576
 readonly G5_MARKER='Linux version 6.6.143'
@@ -64,7 +69,7 @@ check_complete() {
   require_decimal "$cycle"
   require_decimal "$commits"
   [[ "$dir" == */c"$cycle" && "$cycle" -ge "$SEED_CYCLES" &&
-     "$cycle" -le "$MAX_CYCLES" && "$((cycle % 5000000))" -eq 0 ]] || return 1
+     "$cycle" -le "$RELAY_MAX_CYCLES" && "$((cycle % 5000000))" -eq 0 ]] || return 1
 }
 
 publish_manifest() {
@@ -184,7 +189,7 @@ run() {
     rm -r -- "$old_dir"
   done
   end_cycle="$((current_cycle + increment))"
-  (( end_cycle <= MAX_CYCLES )) || reject 'relay exceeds the frozen G5 1.8B cap'
+  (( end_cycle <= RELAY_MAX_CYCLES )) || reject 'relay exceeds the G5 2.7B external horizon'
 
   while (( current_cycle < end_cycle )); do
     next="$((current_cycle + 5000000))"
@@ -195,7 +200,7 @@ run() {
     ln -s -- "$(realpath -e "$current/checkpoint.rtl")" "$segment.pre.rtl"
     if ! timeout --signal=TERM --kill-after=10s 900s \
       "$binary" restore /dev/null "$segment" "$MODEL_SHA" "$FIRMWARE_SHA" \
-      "$MAX_CYCLES" "$G5_MARKER" 5000000 \
+      "$HOST_BOOT_MAX_CYCLES" "$G5_MARKER" 5000000 \
       > "$out/logs/segment-$next.log" 2>&1; then
       tail -35 "$out/logs/segment-$next.log" >&2 || true
       reject "frozen RTL execution failed in segment $current_cycle->$next"
