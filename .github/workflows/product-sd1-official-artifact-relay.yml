@@ -70,7 +70,17 @@ jobs:
           ! grep -Eqi 'UNSET|PLACEHOLDER|TODO' software/rv64/product_sd1_official_seed.lock
           echo 'PUBLIC_SD1_RELAY_SCOPE: official credential-free test only; at most 100M RTL cycles this run; no unverifiable PID1 claim'
 
-      - name: Require native official Debian QEMU oracle PASS on exact source before long RTL
+      - name: Pin immutable SD1 RTL model and simulator checkpoint compatibility
+        id: compat
+        shell: bash
+        run: |
+          set -euo pipefail
+          compat="$(bash tools/ci/product_sd1_artifact_relay.sh fingerprint)"
+          [[ "$compat" =~ ^PRODUCT_SD1_PUBLIC_ARTIFACT_COMPATIBILITY_SHA256=[a-f0-9]{64}$ ]] || exit 15
+          echo "sha256=${compat#*=}" >> "$GITHUB_OUTPUT"
+          echo "$compat"
+
+      - name: Require native Debian QEMU oracle PASS on unchanged boot and media inputs
         id: qemu-gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,22 +90,43 @@ jobs:
           # The earlier official SD1 rootfs media seed is necessary but not
           # sufficient: an authentic /sbin/init/agetty/login preflight must
           # independently PASS before spending hours in Product RTL.
-          mapfile -t qemu_runs < <(gh api "repos/$GITHUB_REPOSITORY/actions/runs" -X GET \
+          # Query ONLY this workflow. The repository has dozens of skipped
+          # workflows per PR label, so an unfiltered 100-run page drops a
+          # valid previous oracle after unrelated FPGA commits.
+          mapfile -t qemu_runs < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-native-qemu-oracle.yml/runs" -X GET \
             -f event=pull_request -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
-            --jq '.workflow_runs[] | select(.name == "AetherCore Product SD1 native Debian QEMU oracle" and .conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
+            --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
           for entry in "${qemu_runs[@]}"; do
             IFS=$'\t' read -r qemu_id qemu_sha <<< "$entry"
-            [[ "$qemu_sha" == "$TARGET_SHA" && "$qemu_id" =~ ^[0-9]+$ ]] || continue
+            [[ "$qemu_sha" =~ ^[a-f0-9]{40}$ && "$qemu_id" =~ ^[0-9]+$ ]] || continue
+            if [[ "$qemu_sha" != "$TARGET_SHA" ]]; then
+              # Cross-revision reuse is permitted ONLY for an ancestor and
+              # an audited, small diff of non-QEMU/non-media files. No
+              # changes to seed, guest kernel, ABI, RTL, QEMU watcher, or
+              # common build inputs can pass this gate. A later SHA alone
+              # is not evidence that a rootfs boot remains qualified.
+              comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$qemu_sha...$TARGET_SHA" 2>/dev/null)" || continue
+              jq -e --arg old "$qemu_sha" '
+                .merge_base_commit.sha == $old and .behind_by == 0 and
+                (.status == "ahead" or .status == "identical") and
+                (.total_commits | type == "number" and . <= 64) and
+                (.files | type == "array" and length < 300) and
+                all(.files[];
+                  .status != "renamed" and
+                  (.filename | test("^(docs/|tests_py/test_product_fpga_[^/]+[.]py$|tools/ci/product_fpga_[^/]+[.](sh|py)$|[.]github/workflows/product-fpga-[^/]+[.]yml$|[.]github/workflows/product-sd1-(official-artifact-relay|c1-checkpoint-relay)[.]yml$|tools/ci/product_sd1_(artifact_relay|c1_artifact_relay)[.]sh$|tests_py/test_product_sd1_(artifact_relay|c1_artifact_relay)_contract[.]py$|tests_py/test_product_sd1_cross_commit_qemu_gate_contract[.]py$)"))
+                )
+              ' <<< "$comparison" >/dev/null || continue
+            fi
             artifact="product-sd1-qemu-native-init-$qemu_id"
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$qemu_id/artifacts?per_page=100" \
               --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$artifact"; then
               echo "run_id=$qemu_id" >> "$GITHUB_OUTPUT"
               echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-              echo "PUBLIC_SD1_RELAY_NATIVE_QEMU_GATE_SOURCE_READY run=$qemu_id source_sha=$TARGET_SHA"
+              echo "PUBLIC_SD1_RELAY_NATIVE_QEMU_GATE_SOURCE_READY run=$qemu_id oracle_sha=$qemu_sha target_sha=$TARGET_SHA"
               exit 0
             fi
           done
-          echo 'PUBLIC_SD1_RELAY_QEMU_GATE_PENDING: exact-source native Debian oracle PASS plus available SHA/UART evidence required before RTL longrun' >&2
+          echo 'PUBLIC_SD1_RELAY_QEMU_GATE_PENDING: unchanged QEMU/media source, SUCCESS oracle, and available SHA/UART evidence required before RTL longrun' >&2
           exit 17
 
       - name: Download bounded native Debian QEMU SHA and guest UART evidence
@@ -154,7 +185,7 @@ jobs:
           }
           echo 'PUBLIC_SD1_RELAY_OFFICIAL_MEDIA_PASS: fixed signed rootfs/SD/FW/DTB/Linux hash preflight; zero guest cycles'
 
-      - name: Select only last successful exact-source public relay stage
+      - name: Select only last successful fully compatible public relay stage
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -163,14 +194,19 @@ jobs:
           set -euo pipefail
           # A previous run is a *hint*, never trusted until downloaded bytes,
           # stage manifests and original simulator SHA have been checked.
+          compat='${{ steps.compat.outputs.sha256 }}'
+          [[ "$compat" =~ ^[a-f0-9]{64}$ ]] || exit 19
           mapfile -t matching_runs < <(gh api \
-            "repos/$GITHUB_REPOSITORY/actions/runs" -X GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-official-artifact-relay.yml/runs" -X GET \
             -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
-            --jq '.workflow_runs[] | select(.name == "AetherCore Product SD1 official credential-free public artifact relay" and .conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
+            --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
           for entry in "${matching_runs[@]}"; do
             IFS=$'\t' read -r candidate_id candidate_sha <<< "$entry"
-            [[ "$candidate_sha" == "$TARGET_SHA" && "$candidate_id" =~ ^[0-9]+$ ]] || continue
-            expected="product-sd1-official-public-stage-$candidate_id"
+            [[ "$candidate_sha" =~ ^[a-f0-9]{40}$ && "$candidate_id" =~ ^[0-9]+$ ]] || continue
+            # Exact compatibility key survives unrelated FPGA and document
+            # commits. An RTL/firmware/host/seed-input change creates a new
+            # name and never triggers unsafe reuse of a stale full snapshot.
+            expected="product-sd1-official-public-stage-$compat-$candidate_id"
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate_id/artifacts?per_page=100" \
               --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$expected"; then
               echo "source_run_id=$candidate_id" >> "$GITHUB_OUTPUT"
@@ -311,7 +347,7 @@ jobs:
         if: success() && steps.stage.outputs.ready == '1'
         uses: actions/upload-artifact@v4
         with:
-          name: product-sd1-official-public-stage-${{ github.run_id }}
+          name: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-${{ github.run_id }}
           path: build/product-sd1-public-artifact-relay/publish/
           if-no-files-found: error
           include-hidden-files: true
@@ -328,7 +364,7 @@ jobs:
             echo "- Source: $TARGET_SHA"
             echo '- Media: exact signed official SD1 seed cache; SHA cross-checked'
             echo "- Retirement state: ${{ steps.stage.outputs.commits }} instructions / ${{ steps.stage.outputs.cycles }} RTL cycles"
-            echo "- Next-run artifact: product-sd1-official-public-stage-$GITHUB_RUN_ID (14 days)"
+            echo "- Next-run artifact: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-$GITHUB_RUN_ID (14 days)"
             echo '- Full RTL/DDR/card and original portable savable simulator SHA: checked'
             if [[ '${{ steps.stage.outputs.native_login }}' == 1 ]]; then
               echo '- **NATIVE GETTY PROMPT PASS**: UART login, ext4 root, and /sbin/init seen in same original host checkpoint'

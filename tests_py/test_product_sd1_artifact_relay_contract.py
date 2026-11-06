@@ -1,7 +1,10 @@
 """No-RTL public SD1 Actions-artifact relay safety/source contract checks."""
 
 from pathlib import Path
+import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 
@@ -33,7 +36,7 @@ class PublicSD1ArtifactRelayContract(unittest.TestCase):
         self.assertIn("persist-credentials: false", self.workflow)
 
     def test_only_signed_seed_exact_hit_before_expensive_model(self):
-        self.assertIn("AetherCore Product SD1 native Debian QEMU oracle", self.workflow)
+        self.assertIn("product-sd1-native-qemu-oracle.yml", self.workflow)
         self.assertIn("PUBLIC_SD1_RELAY_QEMU_GATE_PENDING", self.workflow)
         self.assertIn("product-sd1-qemu-native-init-", self.workflow)
         self.assertIn("native_pid1=/sbin/init", self.workflow)
@@ -93,6 +96,95 @@ class PublicSD1ArtifactRelayContract(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertIn("explicit public credential-free", result.stderr)
         self.assertFalse((ROOT / "no-such-artifact").exists())
+
+    def test_cross_commit_fingerprint_reuses_fpga_only_but_rejects_rtl_abi_or_seed_change(self):
+        """No production files change: exercise a disposable tiny source tree."""
+        with tempfile.TemporaryDirectory(prefix="sd1-public-compat-") as temp:
+            root = Path(temp)
+            helper = root / "tools/ci/product_sd1_artifact_relay.sh"
+            helper.parent.mkdir(parents=True)
+            shutil.copy2(HELPER, helper)
+            pinned = (
+                "build.mill", "mill",
+                "software/rv64/product_sd1_official_seed.lock",
+                "software/rv64/linux_early.env",
+                "software/rv64/opensbi_first_exec.env",
+                "tools/ensure_riscv64_linux_gcc_13_3.sh",
+                "tools/ensure_verilator_5_024.sh",
+                "tools/ensure_verilator_5_054.sh",
+                "tools/ci/product_sd1_checkpoint_relay.sh",
+                "tools/ci/product_checkpoint_sd1_short.sh",
+                "tools/ci/product_sim_sd1_manual.sh",
+                "tools/ci/product_sim_ab.sh",
+                "tools/ci/product_model_identity.sh",
+                "tools/ci/product_sim_sd1_card_probe.cpp",
+                "tools/ci/product_sim_cache.sh",
+                "tools/ci/product_sd1_relay_state.py",
+                "tools/ci/product_sd1_official_seed.py",
+                "tools/ci/rv64_debian_payload_build.sh",
+                "tools/ci/rv64_debian_sd1_sd_image_build.sh",
+                "tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh",
+                "tools/ci/rv64_debian_linux_build.sh",
+                "tools/ci/rv64_debian_rootfs_build.sh",
+                "tools/ci/rv64_debian_sd1_tree_digest.py",
+                "tools/ci/rv64_linux_early_build.sh",
+                "tools/ci/rv64_minimal_init_payload_build.sh",
+                "sim/l32_sd_spi_card.h",
+                "sim/l32_sd_spi_snapshot_codec.h",
+                "sim/product_rv64_checkpoint_sd1_main.cpp",
+                "src/main/scala/aethercore/AetherCore.scala",
+                "software/rv64_userspace/debian_d3_init.sh",
+            )
+            for relative in pinned:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("frozen compatibility source\n")
+
+            def fingerprint() -> str:
+                result = subprocess.run(
+                    ["bash", str(helper), "fingerprint"], cwd=root,
+                    capture_output=True, text=True, check=True,
+                )
+                match = re.fullmatch(
+                    r"PRODUCT_SD1_PUBLIC_ARTIFACT_COMPATIBILITY_SHA256=([a-f0-9]{64})\n",
+                    result.stdout,
+                )
+                self.assertIsNotNone(match)
+                return match.group(1)
+
+            original = fingerprint()
+            # Real afbb6b89 vs bc37c290 changed only XC7 mapping metadata,
+            # tests and helper; none affected an executed SD1 RTL prefix.
+            for relative in (
+                "docs/architecture/PRODUCT_FPGA_XC7_FIRST_MAPPED_RESULTS.md",
+                "tests_py/test_product_fpga_xc7_unplaced.py",
+                "tools/ci/product_fpga_xc7_unplaced.sh",
+            ):
+                item = root / relative
+                item.parent.mkdir(parents=True, exist_ok=True)
+                item.write_text("different unrelated FPGA mapping commit\n")
+                self.assertEqual(fingerprint(), original, relative)
+            for relative in (
+                "sim/l32_sd_spi_card.h",
+                "sim/product_rv64_checkpoint_sd1_main.cpp",
+                "src/main/scala/aethercore/AetherCore.scala",
+                "tools/ci/product_checkpoint_sd1_short.sh",
+                "tools/ci/rv64_debian_rootfs_build.sh",
+                "software/rv64_userspace/debian_d3_init.sh",
+                "software/rv64/product_sd1_official_seed.lock",
+            ):
+                item = root / relative
+                original_bytes = item.read_text()
+                item.write_text(original_bytes + "unsafe hardware or media modification\n")
+                self.assertNotEqual(fingerprint(), original, relative)
+                item.write_text(original_bytes)
+            self.assertEqual(fingerprint(), original)
+
+    def test_original_commit_is_audit_only_but_compatibility_is_verified(self):
+        self.assertIn('compatibility_sha256', self.helper)
+        self.assertIn('PRODUCT_SD1_PUBLIC_ARTIFACT_COMPATIBILITY_SHA256', self.helper)
+        self.assertIn('"$(field "$manifest" compatibility_sha256)" == "$(compatibility_sha)"', self.helper)
+        self.assertNotIn('"$(field "$manifest" source_commit)" == "$commit"', self.helper)
 
 
 if __name__ == "__main__":

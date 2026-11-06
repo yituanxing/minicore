@@ -119,15 +119,17 @@ jobs:
             # Rootfs-only code/manifest changes may reuse the same immutable
             # C1 RTL/FW/kernel prefix. Any RTL, host, C1 guest or ABI input
             # change produces a distinct fingerprint and forces a new seed.
-            mapfile -t candidates < <(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
-              --jq '.artifacts[] | select(.expired == false and (.name | startswith("product-sd1-c1-state-v1-'"$compatibility"'-"))) | .workflow_run.id' \
-              | awk '!seen[$0]++')
+            # Repository-wide artifacts can exceed one 100-item page after
+            # unrelated FPGA jobs; first query ONLY the C1 relay workflow.
+            mapfile -t candidates < <(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-c1-checkpoint-relay.yml/runs" -X GET \
+              -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
+              --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | .id')
             for candidate in "${candidates[@]}"; do
-              meta="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate")"
-              if jq -e --arg repo "$GITHUB_REPOSITORY" \
-                '.repository.full_name == $repo and .conclusion == "success" and
-                 .path == ".github/workflows/product-sd1-c1-checkpoint-relay.yml" and
-                 (.event == "pull_request" or .event == "workflow_dispatch")' <<< "$meta" >/dev/null; then
+              [[ "$candidate" =~ ^[0-9]+$ ]] || continue
+              expected="product-sd1-c1-state-v1-$compatibility-$candidate"
+              if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$expected"; then
                 source_run="$candidate"
                 break
               fi
@@ -162,19 +164,45 @@ jobs:
           # Neither proves Product RTL C1; both are cheap preconditions before
           # spending hours constructing a new cold RTL prefix. An already
           # proven compatible prestate instead uses the SHA verified artifact.
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" > "$RUNNER_TEMP/c1-qemu-oracle-runs.json"
+          oracle_source_unchanged() {
+            local oracle_sha="$1" comparison
+            [[ "$oracle_sha" =~ ^[a-f0-9]{40}$ ]] || return 1
+            [[ "$oracle_sha" == "$TARGET_SHA" ]] && return 0
+            comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$oracle_sha...$TARGET_SHA" 2>/dev/null)" || return 1
+            # Prior oracle success may be reused across unrelated FPGA docs
+            # and mapping-script commits, but NEVER across changed guest
+            # kernel, RTL, QEMU, C1 handoff or media-building source.
+            jq -e --arg old "$oracle_sha" '
+              .merge_base_commit.sha == $old and .behind_by == 0 and
+              (.status == "ahead" or .status == "identical") and
+              (.total_commits | type == "number" and . <= 64) and
+              (.files | type == "array" and length < 300) and
+              all(.files[];
+                .status != "renamed" and
+                (.filename | test("^(docs/|tests_py/test_product_fpga_[^/]+[.]py$|tools/ci/product_fpga_[^/]+[.](sh|py)$|[.]github/workflows/product-fpga-[^/]+[.]yml$|[.]github/workflows/product-sd1-(official-artifact-relay|c1-checkpoint-relay)[.]yml$|tools/ci/product_sd1_(artifact_relay|c1_artifact_relay)[.]sh$|tests_py/test_product_sd1_(artifact_relay|c1_artifact_relay)_contract[.]py$|tests_py/test_product_sd1_cross_commit_qemu_gate_contract[.]py$)"))
+              )
+            ' <<< "$comparison" >/dev/null
+          }
           for required in product-sd1-native-qemu-oracle.yml product-sd1-c1-qemu-oracle.yml; do
-            jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$TARGET_SHA" --arg path ".github/workflows/$required" '
-              [.workflow_runs[] | select(
-                .path == $path and .conclusion == "success" and
-                .repository.full_name == $repo and
-                (.head_sha == $sha or any(.pull_requests[]?; .head.sha == $sha))
-              )] | length > 0
-            ' "$RUNNER_TEMP/c1-qemu-oracle-runs.json" >/dev/null || {
-              echo "C1_RTL_LONGRUN_PRECHECK_REJECTED: require successful exact-revision $required first" >&2
+            # Workflow-specific query avoids eviction by many unrelated
+            # skipped PR jobs. Each candidate must be an ancestor of HEAD.
+            mapfile -t candidates < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$required/runs" \
+              -X GET -f event=pull_request -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
+              --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
+            matched=''
+            for entry in "${candidates[@]}"; do
+              IFS=$'\t' read -r run_id oracle_sha <<< "$entry"
+              [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+              if oracle_source_unchanged "$oracle_sha"; then
+                matched="$run_id"
+                echo "C1_RTL_LONGRUN_QEMU_ORACLE_VERIFIED workflow=$required run=$run_id oracle_sha=$oracle_sha target_sha=$TARGET_SHA"
+                break
+              fi
+            done
+            [[ -n "$matched" ]] || {
+              echo "C1_RTL_LONGRUN_PRECHECK_REJECTED: require successful unchanged-source $required first" >&2
               exit 18
             }
-            echo "C1_RTL_LONGRUN_QEMU_ORACLE_VERIFIED workflow=$required source_sha=$TARGET_SHA"
           done
 
       - name: Restore exact sealed official Debian SD1 source/media cache, no rebuild
