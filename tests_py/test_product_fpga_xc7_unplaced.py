@@ -36,6 +36,8 @@ class ProductFpgaXc7UnplacedContract(unittest.TestCase):
         self.assertIn("hierarchy -check -top $top", script)
         self.assertIn("synth_xilinx -family xc7 -noiopad -top $top", script)
         self.assertIn("stat -json -tech xilinx", script)
+        self.assertIn("tee -o $stats stat -json -tech xilinx", script)
+        self.assertNotIn('tee -o \\"$stats\\" stat', script)
         self.assertIn("find \"$rtl_dir\" -maxdepth 1", script)
         self.assertIn("RTL_EXPORT_PASS", script)
         self.assertIn("git_sha", script)

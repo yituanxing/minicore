@@ -62,7 +62,14 @@ read_cmd='read_verilog -sv -DSYNTHESIS'
 for sv in "${svs[@]}"; do
   read_cmd+=" \"${sv//\"/\\\"}\""
 done
-flow="$read_cmd; hierarchy -check -top $top; synth_xilinx -family xc7 -noiopad -top $top; tee -o \"$stats\" stat -json -tech xilinx; stat -tech xilinx"
+# Yosys tee opens the raw argument, including literal quote characters.
+# GitHub RUNNER_TEMP has no whitespace; reject spaces and pass an unquoted
+# filename token, or the entire mapping can finish but stats export fail.
+[[ "$stats" != *[[:space:]]* ]] || {
+  echo 'ERROR: XC7 output path must not contain whitespace (Yosys tee)' >&2
+  exit 2
+}
+flow="$read_cmd; hierarchy -check -top $top; synth_xilinx -family xc7 -noiopad -top $top; tee -o $stats stat -json -tech xilinx; stat -tech xilinx"
 
 # The old floating ECP5 SHARE pass exhausted a 16 GiB hosted runner. Observe
 # the exact XC7 process and cgroup live, then stop before the OS kills the job
