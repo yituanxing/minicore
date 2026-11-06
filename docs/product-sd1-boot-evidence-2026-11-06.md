@@ -92,6 +92,16 @@
 - [G5 Debian 手动入口 464db62](https://github.com/yituanxing/minicore/commit/464db62f4463580e062cbf17119ebc5b7f9db293) 也以 **5.054/reference** 为首选，原有 30M Debian Top A/B 自检和显式 5.024 回退保留。不会因源码提交自动启动长运行。
 - [默认版本契约测试 2d80555](https://github.com/yituanxing/minicore/commit/2d80555963b1955c203be143233a44a12de42cd9) 3/3 PASS，`bash -n` PASS。旧版安装器和 G3/G4 尚未重新资格验证的路径仍保留 5.024；不启用 adaptive 默认。
 
+## 旧 PID1 为什么没有 CMD0 错误（2026-11-06 溯源）
+
+这不是近期 Verilator 默认值变更所引入的 RTL 回归：[失败 #42221108211](https://github.com/yituanxing/minicore/actions/runs/42221108211) 明确在**冻结** `a15197f`、**Verilator 5.054/reference**、312M 完整 warm state 校验通过的前提下，先到 332M / 83,178,875 commits，再在 332→352M 遇到第一条不合规 CMD0；此前 `sd-cmds=0`、读写均为 0。
+
+- G4/Tiny PID1 及 D1/D2/D3 都从 **内建 initramfs** 的 `rdinit=/init` 启动，不经 SPI/MMC 块设备；非 SD1 payload 明确关闭 `RV64_PAYLOAD_ENABLE_SPI_SD`。SD1 才从 **SD 卡 MBR/ext4** 的 `/dev/mmcblk0p1` 启动原生 `/sbin/init`，对应 DTS 中 `spi-oc-tiny` + GPIO-CS + `mmc-spi-slot`。
+- 官方 QEMU 原生完整 Debian oracle 走 virtio `/dev/vda1`，也没有验证 Product GPIO-CS。
+- [353a97e](https://github.com/yituanxing/minicore/commit/353a97ee716f4d6e384442c86e87ef515e14735e) 在 11 月 5 日增加了卡模型对 **74 个连续 CS-high/MOSI-high SCLK 上升沿**的严格要求，过早 CMD0 直接拒绝。该检查早于冻结 `a15197f`，属于新增 SD1 真实性门禁**暴露了此前未测路径的缺陷**，不是更新编译器产生的 CPU 指令错误；绝不能删除协议守卫以取得假阳性。
+
+为继续验证，已给 [RV64 Debian Linux 构建脚本](../tools/ci/rv64_debian_linux_build.sh) 增加 **默认关闭**的 `AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_PATCH=1`：只允许 SD1、原版源先校验、固定 SHA `ff408c2…` 补丁先核对，再 `mktemp` 复制独立源码树后应用；已有 `build/rv64-debian-linux` 时直接拒绝，不会覆盖原 Image。构建后写入新 Image/.config SHA、上游源码 SHA、诊断补丁 SHA，并归档原始 patch，明确 `SD1_GPIO_CS_DIAGNOSTIC_ONLY_NOT_FROZEN_PRODUCT`。静态契约测试 3/3 PASS、`bash -n` PASS；**尚未实际编译新 Image，也未执行新诊断版 RTL**。这必须在一次性独立 checkout/runner 中运行，新 Linux/FW 身份禁止复用旧 312M checkpoint。
+
 ## 可继续累积的数据
 
 机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、原始累计 UART、逐窗 UART 增量、runner CPU 信息、分窗口 save/relay 日志和 SHA256；失败时抢救最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。后续只会在新的人工 label 触发后将兼容性匹配、再次完整校验通过的 recovery 工件选为续跑源。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
