@@ -15,6 +15,7 @@ class ProductSd1GpioCsDiagBuildContract(unittest.TestCase):
         s = SCRIPT.read_text()
         self.assertIn('AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_PATCH:-0', s)
         self.assertIn('[[ "${ROOTFS_STAGE}" == sd1 ]]', s)
+        self.assertIn('[[ ! -e "${BUILD_DIR}" ]]', s)
         self.assertIn(PIN, s)
         self.assertIn("diagnostic Linux patch SHA changed without review", s)
         self.assertIn("host->status.cs_off = 1;", PATCH.read_text())
