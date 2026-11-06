@@ -1,0 +1,185 @@
+name: Product SD1 GPIO-CS diagnostic kernel and firmware
+
+# Manual, first-party PR-only build of a distinct Linux Image. Exact official
+# Debian raw SD media are read and verified, NEVER rebuilt, overwritten or
+# relabeled as a passing Product RTL boot. NO guest cycles in this workflow.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-sd1-gpio-cs-diag-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  kernel-firmware-only:
+    if: >-
+      github.event.label.name == 'product-sd1-gpio-cs-diag-kernel' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_BUILD: '1'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact reviewed branch and reject unqualified source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Cheap diagnostic script and pinned patch contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_gpio_cs_diag_build.sh
+          python3 -m unittest tests_py.test_product_sd1_gpio_cs_diag_build_contract -v
+          python3 -m unittest tests_py.test_product_sd1_gpio_cs_diag_build_isolation -v
+          test "$(sha256sum tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch | awk '{print $1}')" = \
+            ff408c203b461d504f48152840698b077f8ea948a07ad5235f4afb8436282638
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          echo 'Only isolated patch build; no RTL, QEMU boot or Product Debian PASS claim.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore existing exact full official SD1 media bytes
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Verify original signed media before any patched build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == 'true' ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || {
+            echo 'SIGNED_SD1_MEDIA_CACHE_MISSING: no expensive diagnostic compile allowed' >&2
+            exit 16
+          }
+          python3 tools/ci/product_sd1_official_seed.py verify
+          [[ ! -e build/product-sd1-gpio-cs-diagnostic ]] || exit 16
+
+      - name: Restore pinned GCC 13.3 and immutable G4 Linux/OpenSBI sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore pinned Linux 6.6.143 and OpenSBI source cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore established Mill/Scala dependencies for Product DTB
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Verify hosted Java 17 and install only missing kernel build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/javac" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+            export PATH="$java17_home/bin:$PATH"
+          fi
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          missing=()
+          for pair in 'bison:bison' 'flex:flex' 'bc:bc' 'dtc:device-tree-compiler' \
+                      'pahole:dwarves' 'make:make' 'gcc:build-essential' \
+                      'g++:build-essential' 'git:git'; do
+            command -v "${pair%%:*}" >/dev/null || missing+=("${pair#*:}")
+          done
+          test -r /usr/include/openssl/ssl.h || missing+=(libssl-dev)
+          test -r /usr/include/libelf.h || missing+=(libelf-dev)
+          if (( ${#missing[@]} )); then
+            mapfile -t missing < <(printf '%s\n' "${missing[@]}" | sort -u)
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 15m \
+              sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          chmod +x mill
+
+      - name: Activate exact cross compiler and source-only preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 20m \
+            bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          source software/rv64/linux_early.env
+          test "$(cat "${HOME}/.cache/aethercore/rv64/linux/linux-${RV64_LINUX_VERSION}/.aethercore-linux-source-sha256")" = \
+            "$RV64_LINUX_SHA256"
+          source software/rv64/opensbi_first_exec.env
+          git -C "${HOME}/.cache/aethercore/l32/opensbi/${RV64_OPENSBI_COMMIT}" \
+            rev-parse HEAD | grep -Fx "$RV64_OPENSBI_COMMIT"
+
+      - name: Compile isolated patched Linux Image and matching OpenSBI Product DTB
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 65m \
+            bash tools/ci/product_sd1_gpio_cs_diag_build.sh
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          cat build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve distinct diagnostic firmware/Image cache only after verified build
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+
+      - name: Upload hashes and build evidence only, no rootfs or raw SD media
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-build-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux-config.log
+            build/product-sd1-gpio-cs-diagnostic/linux-build.log
