@@ -50,6 +50,30 @@ BASELINE_OBJ="${BASELINE_IMAGE%/arch/riscv/boot/Image}"
 [[ "$(cat "${SOURCE_DIR}/.aethercore-linux-source-sha256" 2>/dev/null)" == "${RV64_LINUX_SHA256}" ]] || \
   fail 'kernel source differs from frozen upstream Linux 6.6.143'
 
+# Diagnostic-only fork: preserve the qualified upstream source and old Image.
+# Run only in an isolated checkout. The resulting Image gets a new SHA and
+# cannot be paired with an existing Product RTL/DDR checkpoint.
+diagnostic_patch_sha=''
+case "${AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_PATCH:-0}" in
+  0) ;;
+  1)
+    [[ "${ROOTFS_STAGE}" == sd1 ]] || fail 'GPIO-CS diagnostic patch is SD1-only'
+    diagnostic_patch="${ROOT_DIR}/tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch"
+    [[ -s "${diagnostic_patch}" ]] || fail 'pinned GPIO-CS diagnostic patch missing'
+    diagnostic_patch_sha="$(sha256sum "${diagnostic_patch}" | awk '{print $1}')"
+    mkdir -p "${ROOT_DIR}/build"
+    diagnostic_source="$(mktemp -d "${ROOT_DIR}/build/rv64-sd1-gpio-source.XXXXXXXX")"
+    cp -a --reflink=auto "${SOURCE_DIR}/." "${diagnostic_source}/"
+    git -C "${diagnostic_source}" apply --check "${diagnostic_patch}" ||
+      fail 'diagnostic patch does not apply to frozen upstream Linux'
+    git -C "${diagnostic_source}" apply "${diagnostic_patch}" ||
+      fail 'isolated diagnostic kernel patch application failed'
+    SOURCE_DIR="${diagnostic_source}"
+    echo "RV64_SD1_DIAGNOSTIC_LINUX_PATCH_APPLIED sha256=${diagnostic_patch_sha} source=${SOURCE_DIR}"
+    ;;
+  *) fail 'AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_PATCH must be 0 or 1' ;;
+esac
+
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 # One upstream source; the distro-specific Kbuild objects are isolated from
@@ -221,4 +245,8 @@ sha256sum "${VMLINUX}" "${IMAGE}" "${EVIDENCE_DIR}/resolved.config" \
   echo "image=${IMAGE}"
   echo "image_sha256=$(sha256sum "${IMAGE}" | awk '{print $1}')"
   echo "config_sha256=$(sha256sum "${EVIDENCE_DIR}/resolved.config" | awk '{print $1}')"
+  if [[ -n "${diagnostic_patch_sha}" ]]; then
+    echo 'qualification=SD1_GPIO_CS_DIAGNOSTIC_ONLY_NOT_FROZEN_PRODUCT'
+    echo "diagnostic_patch_sha256=${diagnostic_patch_sha}"
+  fi
 } | tee "${BUILD_DIR}/result.txt"
