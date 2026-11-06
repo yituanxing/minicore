@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "software/rv64_userspace/product_sd1_c1_init.c"
 BUILDER = ROOT / "tools/ci/product_sd1_c1_initramfs_build.sh"
+KERNEL_BUILDER = ROOT / "tools/ci/product_sd1_c1_kernel_build.sh"
 
 
 class ProductSd1C1GuestInitContract(unittest.TestCase):
@@ -38,6 +39,16 @@ class ProductSd1C1GuestInitContract(unittest.TestCase):
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
         self.assertIn("PRODUCT_SD1_C1_GUEST_INIT_SOURCE_PASS", result.stdout)
+
+    def test_c1_kernel_is_a_separate_rootfs_independent_product_profile(self):
+        script = KERNEL_BUILDER.read_text()
+        self.assertIn('cp -a --reflink=auto "$SEED/obj"', script)
+        self.assertIn('--set-str INITRAMFS_SOURCE "$C1_INIT/initramfs.list"', script)
+        self.assertIn('rootfs_binding=NONE', script)
+        self.assertIn('BUILT_UNQUALIFIED', script)
+        self.assertNotIn('RV64_DEBIAN_FULL_ROOTFS_ARCHIVE', script)
+        self.assertNotIn('qemu-system-', script)
+        subprocess.run(["bash", "-n", str(KERNEL_BUILDER)], check=True)
 
 
 if __name__ == "__main__":
