@@ -102,6 +102,52 @@ jobs:
           grep -q 'PmpRangeDecoder' "$root/yosys.log"
           echo 'Local PA56 PMP XC7 logic map finished. This is not full-SoC device fit or timing signoff.' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build and map the exact pre-optimization decoder as A/B baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          baseline=a15197f96e5869e69269202a0a9caffdbe1f5255
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git worktree add --detach "$root/baseline-source" "$baseline"
+          # The baseline changes only the original production decoder. Reuse
+          # this probe entry point to compare identical interfaces and settings.
+          install -m 0644 src/main/scala/aethercore/ElaboratePmpRangeDecoderRV64.scala \
+            "$root/baseline-source/src/main/scala/aethercore/ElaboratePmpRangeDecoderRV64.scala"
+          mkdir -p "$root/baseline-rtl" "$root/baseline-mill-out"
+          (
+            cd "$root/baseline-source"
+            chmod +x mill
+            MILL_OUTPUT_DIR="$root/baseline-mill-out" \
+              ./mill aethercore.runMain aethercore.ElaboratePmpRangeDecoderRV64 \
+              --target-dir "$root/baseline-rtl"
+          ) 2>&1 | tee "$root/baseline-elaboration.log"
+          test -s "$root/baseline-rtl/PmpRangeDecoder.sv"
+          yosys -Q -T -l "$root/yosys-baseline.log" -p \
+            "read_verilog -sv -DSYNTHESIS $root/baseline-rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx"
+
+      - name: Record directly comparable old and new LUT totals
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          lut_count() {
+            awk '/=== PmpRangeDecoder ===/ { in_top=1; sum=0; next }
+                 in_top && $1 ~ /^LUT[2-6]$/ { sum+=$2 }
+                 in_top && /Estimated number of LCs/ { last=sum; in_top=0 }
+                 END { if (last == 0) exit 1; print last }' "$1"
+          }
+          old="$(lut_count "$root/yosys-baseline.log")"
+          new="$(lut_count "$root/yosys.log")"
+          delta="$((new - old))"
+          {
+            printf 'Pre-optimization commit: %s\n' a15197f96e5869e69269202a0a9caffdbe1f5255
+            printf 'Old standalone LUT2..LUT6: %s\n' "$old"
+            printf 'New standalone LUT2..LUT6: %s\n' "$new"
+            printf 'New minus old LUTs: %+d\n' "$delta"
+            printf 'Same RV64 PA56 16-entry elaborator and Yosys XC7 mapping; no P&R or Fmax claim.\n'
+          } | tee "$root/lut-comparison.txt" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Preserve real tests and local area evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -109,4 +155,8 @@ jobs:
           name: product-pmp-local-xc7-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: warn
-          path: ${{ runner.temp }}/product-pmp-local-xc7/
+          path: |
+            ${{ runner.temp }}/product-pmp-local-xc7/*.log
+            ${{ runner.temp }}/product-pmp-local-xc7/lut-comparison.txt
+            ${{ runner.temp }}/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv
+            ${{ runner.temp }}/product-pmp-local-xc7/baseline-rtl/PmpRangeDecoder.sv
