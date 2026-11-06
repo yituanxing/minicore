@@ -51,6 +51,7 @@ prev_commits="$(sed -n 's/.* commits=\([0-9]*\) .*/\1/p' <<< "$initial")"
 mkdir -p -- "$OUT"
 prev_host="$START"
 prev_rtl="$START_RTL"
+last_completed_cycles="$START_CYCLES"
 
 for ((cycle = START_CYCLES + 5000000; cycle <= STOP_CYCLES; cycle += 5000000)); do
   prefix="$OUT/c${cycle}"
@@ -88,9 +89,10 @@ for ((cycle = START_CYCLES + 5000000; cycle <= STOP_CYCLES; cycle += 5000000)); 
   prev_host="$(realpath -- "$prefix.restored.host")"
   prev_rtl="$(realpath -- "$prefix.restored.rtl")"
   prev_commits="$commits"
+  last_completed_cycles="$cycle"
   if [[ "$progress" == *'phase=PID1_MARKER_PRESENT'* ]]; then
     echo "G5_D2_PID1_START_MARKER_REACHED cycle=$cycle"
     break
   fi
 done
-echo "G5_D2_CONTINUE_STOPPED last_cycles=$cycle last_commits=$commits"
+echo "G5_D2_CONTINUE_STOPPED last_cycles=$last_completed_cycles last_commits=$prev_commits"

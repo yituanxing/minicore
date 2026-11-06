@@ -58,6 +58,29 @@ The byte cursor remained at 67.35% at 990M because Linux was operating on
 the 1.28MB SQLite shared library. It advanced after that file was completed;
 **no stall or PID1 PASS is implied**.
 
+### Second resumed run: 1.00B to 1.05B
+
+| RTL cycles | Retired instructions | CPIO cursor percent | Approx. completed entries |
+| ---: | ---: | ---: | ---: |
+| 1,005,000,000 | 259,696,170 | 70.60% | 851 |
+| 1,010,000,000 | 260,894,833 | 70.60% | 851 |
+| 1,015,000,000 | 262,100,224 | 73.72% | 853 |
+| 1,020,000,000 | 263,341,863 | 75.59% | 860 |
+| 1,025,000,000 | 264,658,813 | 76.23% | 869 |
+| 1,030,000,000 | 266,191,787 | 76.23% | 869 |
+| 1,035,000,000 | 267,523,624 | 77.74% | 881 |
+| 1,040,000,000 | 268,830,044 | 77.96% | 895 |
+| 1,045,000,000 | 270,119,701 | 78.10% | 912 |
+| 1,050,000,000 | 271,403,110 | 78.22% | 928 |
+
+All ten 5M slices completed with positive retirement and saved exact-model
+checkpoints. The 1B→1.05B interval retired 12,906,126 instructions in
+50,000,000 RTL cycles, i.e. **3.874 RTL cycles per retired instruction for
+that interval**, not a universal CPU CPI or a QEMU conversion factor. At
+1.05B, 14,910,916 CPIO input bytes and ~2,336 per-file entries remain;
+there was still no observed Debian PID1 serial marker. A subsequent 1.05B→1.10B
+continuation was initiated from the new exact state.
+
 `product_g5_initramfs_progress.py` now also examines `wfile_pos` only if Linux
 is in its `CopyFile` state **and** CPIO record bounds, `next_header`,
 `body_len`, and offset arithmetic agree. For example at 985M the kernel is in
@@ -102,6 +125,38 @@ builds the guest before running it; to make a genuinely quick counter-only
 workflow, first publish SHA-pinned firmware/DTB/Image/System.map as a reusable
 artifact and then run the QEMU-only command from that artifact. Do not start a
 full RTL/Verilator/GSIM CI run just to measure QEMU instructions.
+
+To preserve that cache across workflow invocations, the QEMU-only oracle
+workflow can now upload the four exact binaries, four PASS manifests,
+`ORIGIN.txt` (source run ID/attempt/commit/workflow) and `SHA256SUMS` **after**
+the existing Product-firmware oracle succeeds. The separate
+`.github/workflows/product-g5-qemu-icount-from-artifact.yml` workflow checks
+the source GitHub run is successful, belongs to this repository and the exact
+QEMU oracle workflow, and matches the required source SHA. It downloads the
+named immutable artifact, verifies the complete eight-file whitelist and all
+hashes **before** staging and running QEMU. It has no GCC/Linux/Scala or RTL
+build steps. The new manual-dispatch workflow must first exist on GitHub's
+default branch before GitHub will accept its dispatch; merely adding it to a
+feature branch does **not** enable a run from the Actions UI. No such new
+producer/consumer run has been attempted as of this report.
+
+### Architectural handoff is a separate implementation
+
+The existing G5 checkpoint reader can restore a 256MiB DDR image, but its
+`VerilatedRestore` is for an **identical G5 RTL model state**, not QEMU state.
+Loading QEMU RAM and pointing the PC at `run_init_process` is unsafe. A proper
+warm importer needs a quiescent control point in
+`ProductSmallPagedCore.scala`, privilege/machine CSR/SATP/PMP/FCSR loading in
+`MachineCsrFile.scala` and its submodules, controlled physical register
+population in `ProductSmallOoOBackend.scala` / `ProductPhysicalValueStore.scala`
+with ROB/LSQ/cache/TLB/PTW empty, and reconciliation of PLIC/UART/ACLINT
+state in `AetherSoCPlatformFabric.scala`. A safe first test would hand off a
+tiny program, compare short retired-PC/register/memory traces, and only then
+attempt a kernel boundary. **The DDR importer and these safety checks do not
+exist yet; the QEMU result cannot currently skip D2 RTL initramfs unpack.**
+Even with the byte-identical Product DTB, QEMU runs a `virt` machine rather
+than the G5 SoC's actual fabric; the interrupt controller, timer, and UART
+device state must not be assumed interchangeable from the DTB alone.
 
 ## Completion criteria
 

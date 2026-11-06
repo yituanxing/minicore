@@ -185,6 +185,46 @@ jobs:
             build/product-g5-qemu-product-fw-dtb/result.txt
           cat build/product-g5-qemu-product-fw-dtb/result.txt >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stage exact D2 QEMU inputs and immutable SHA256 for count-only reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/g5-icount-stage"
+          [[ ! -e "$stage" ]] || { echo 'staging directory already exists' >&2; exit 51; }
+          files=(
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-linux/obj/System.map
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/aethercore-rv64-initramfs.dtb
+            build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin
+            build/product-g5-qemu-product-fw-dtb/result.txt
+          )
+          mkdir -p "$stage"
+          for path in "${files[@]}"; do
+            [[ -s "$path" ]] || { echo "missing exact D2 input: $path" >&2; exit 52; }
+            install -D -m 0644 -- "$path" "$stage/$path"
+          done
+          {
+            printf 'source_run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'source_run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_workflow=.github/workflows/product-g5-qemu-d2-oracle.yml\n'
+          } > "$stage/ORIGIN.txt"
+          (cd "$stage" && sha256sum "${files[@]}" > SHA256SUMS)
+          (cd "$stage" && sha256sum --check --strict --status SHA256SUMS)
+          echo "Exact D2 QEMU inputs staged at source commit $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact Product D2 binaries for later count-only QEMU run
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-icount-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          compression-level: 1
+          if-no-files-found: error
+          path: ${{ runner.temp }}/g5-icount-stage/
+
       - name: Validate optional pre-PID1 architectural export helper
         if: github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
         shell: bash

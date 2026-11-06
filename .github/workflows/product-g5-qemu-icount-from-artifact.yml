@@ -1,0 +1,204 @@
+name: AetherCore Product G5 D2 QEMU instruction count from artifact
+
+# Explicit manual, count-only QEMU run. Never rebuild the rootfs, Linux,
+# OpenSBI, Scala DTB, simulator, or execute Product RTL.
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful Product G5 D2 QEMU oracle workflow run ID
+        required: true
+        type: string
+      expected_source_sha:
+        description: Exact 40-character Product commit SHA from the source run
+        required: true
+        type: string
+      icount_shift:
+        description: QEMU virtual-time shift; changes interrupt timing, not RTL cycles
+        required: true
+        type: choice
+        options: ['4', '6', '8']
+        default: '6'
+      wall_seconds:
+        description: Count-only QEMU process wall bound in seconds
+        required: true
+        type: choice
+        options: ['180', '300', '480']
+        default: '300'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-g5-qemu-icount-${{ inputs.source_run_id }}-${{ inputs.icount_shift }}
+  cancel-in-progress: false
+
+jobs:
+  qemu-icount-artifact-only:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      RV64_DEBIAN_STAGE: d2
+
+    steps:
+      - name: Validate exact repository, prior successful workflow, and immutable artifact
+        id: source
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        with:
+          script: |
+            const runIdText = process.env.SOURCE_RUN_ID;
+            const expectedSha = process.env.EXPECTED_SOURCE_SHA;
+            if (!/^[1-9][0-9]{0,15}$/.test(runIdText) ||
+                !Number.isSafeInteger(Number(runIdText))) {
+              throw new Error('source_run_id must be a positive safe GitHub integer');
+            }
+            if (!/^[0-9a-f]{40}$/.test(expectedSha)) {
+              throw new Error('expected_source_sha must be exactly 40 lowercase hex digits');
+            }
+            const {owner, repo} = context.repo;
+            const runId = Number(runIdText);
+            const {data: run} = await github.rest.actions.getWorkflowRun({owner, repo, run_id: runId});
+            if (run.repository?.full_name !== `${owner}/${repo}` ||
+                run.head_repository?.full_name !== `${owner}/${repo}`) {
+              throw new Error('source run must be from this exact repository, not a fork');
+            }
+            if (run.status !== 'completed' || run.conclusion !== 'success') {
+              throw new Error('source QEMU oracle workflow run has not succeeded');
+            }
+            if (run.head_sha !== expectedSha) {
+              throw new Error(`source SHA mismatch: ${run.head_sha} != ${expectedSha}`);
+            }
+            if (!['workflow_dispatch', 'pull_request'].includes(run.event)) {
+              throw new Error(`unsupported source trigger: ${run.event}`);
+            }
+            if (!['main', 'design/rv64gc-product-architecture-20261103'].includes(run.head_branch)) {
+              throw new Error(`source branch not allowlisted: ${run.head_branch}`);
+            }
+            const {data: workflow} = await github.rest.actions.getWorkflow({
+              owner, repo, workflow_id: run.workflow_id
+            });
+            const workflowPath = '.github/workflows/product-g5-qemu-d2-oracle.yml';
+            if (workflow.path !== workflowPath ||
+                !run.path?.startsWith(`${workflowPath}@`)) {
+              throw new Error(`source is not the exact D2 QEMU oracle workflow: ${run.path}`);
+            }
+            const name = `product-g5-qemu-icount-inputs-${run.id}-${run.run_attempt}`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner, repo, run_id: run.id, per_page: 100
+            });
+            const matches = artifacts.filter(a => a.name === name && !a.expired && a.size_in_bytes > 0);
+            if (matches.length !== 1) {
+              throw new Error(`source artifact ${name} absent, expired, or ambiguous`);
+            }
+            core.setOutput('source_sha', expectedSha);
+            core.setOutput('source_run_attempt', String(run.run_attempt));
+            core.setOutput('artifact_name', name);
+            core.setOutput('artifact_id', String(matches[0].id));
+            core.info(`Approved successful D2 QEMU source run ${run.id} attempt ${run.run_attempt}, SHA ${expectedSha}`);
+
+      - name: Checkout the exact source commit without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Download immutable source-run artifact without touching checkout
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.artifact_name }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/g5-icount-inputs
+
+      - name: Verify producer commit, complete file whitelist, and SHA256 before staging
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ steps.source.outputs.source_run_attempt }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]] || exit 31
+          src="$RUNNER_TEMP/g5-icount-inputs"
+          test -s "$src/ORIGIN.txt"
+          test -s "$src/SHA256SUMS"
+          grep -Fxq "source_run_id=$SOURCE_RUN_ID" "$src/ORIGIN.txt"
+          grep -Fxq "source_run_attempt=$SOURCE_RUN_ATTEMPT" "$src/ORIGIN.txt"
+          grep -Fxq "source_sha=$SOURCE_SHA" "$src/ORIGIN.txt"
+          grep -Fxq 'source_workflow=.github/workflows/product-g5-qemu-d2-oracle.yml' "$src/ORIGIN.txt"
+          files=(
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-linux/obj/System.map
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/aethercore-rv64-initramfs.dtb
+            build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin
+            build/product-g5-qemu-product-fw-dtb/result.txt
+          )
+          mapfile -t expected < <(printf '%s\n' ORIGIN.txt SHA256SUMS "${files[@]}" | LC_ALL=C sort)
+          mapfile -t actual < <(cd "$src" && find . -type f -printf '%P\n' | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "${expected[@]}") <(printf '%s\n' "${actual[@]}")
+          [[ -z "$(find "$src" -type l -print -quit)" ]] || exit 32
+          mapfile -t hashed < <(awk '{if ($0 !~ /^[0-9a-f]{64}  /) exit 33; print substr($0,67)}' "$src/SHA256SUMS" | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "${files[@]}" | LC_ALL=C sort) <(printf '%s\n' "${hashed[@]}")
+          (cd "$src" && sha256sum --check --strict --status SHA256SUMS)
+          for path in "${files[@]}"; do
+            test -s "$src/$path"
+            install -D -m 0644 -- "$src/$path" "$GITHUB_WORKSPACE/$path"
+          done
+          grep -Fxq 'qualification=QEMU_SYSTEM_PRODUCT_FW_DTB_D2_ORACLE_NOT_PRODUCT_RTL_PASS' \
+            build/product-g5-qemu-product-fw-dtb/result.txt
+          echo "Source commit $SOURCE_SHA, run $SOURCE_RUN_ID, artifact SHA256 verified" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install QEMU only; no compiler or simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc
+          command -v qemu-system-riscv64
+          qemu-system-riscv64 --version | head -1
+
+      - name: Test and run the bounded count-only QEMU probe
+        shell: bash
+        timeout-minutes: 9
+        env:
+          AETHERCORE_ALLOW_G5_QEMU_ICOUNT: '1'
+          AETHERCORE_G5_QEMU_ICOUNT_SHIFT: ${{ inputs.icount_shift }}
+          AETHERCORE_G5_QEMU_WALL_SECONDS: ${{ inputs.wall_seconds }}
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_g5_qemu_export/run_icount_probe.sh
+          python3 -m py_compile tools/ci/product_g5_qemu_export/qemu_icount_probe.py \
+            tools/ci/product_g5_qemu_export/qemu_icount_selftest.py
+          python3 tools/ci/product_g5_qemu_export/qemu_icount_selftest.py
+          bash tools/ci/product_g5_qemu_export/run_icount_probe.sh run
+          grep -Fxq 'qualification=QEMU_G5_D2_INSN_COUNT_NOT_RTL_CYCLES_NOT_PID1_PASS' \
+            build/product-g5-qemu-icount/result.txt
+          cat build/product-g5-qemu-icount/result.txt >> "$GITHUB_STEP_SUMMARY"
+          echo 'QEMU guest instructions only; NOT Product RTL cycles or Debian PID1 pass.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload count-only evidence and source origin
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-icount-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/g5-icount-inputs/ORIGIN.txt
+            ${{ runner.temp }}/g5-icount-inputs/SHA256SUMS
+            build/product-g5-qemu-icount/result.txt
+            build/product-g5-qemu-icount/icount-manifest.json
+            build/product-g5-qemu-icount/icount-failure.json
+            build/product-g5-qemu-icount/probe.log
+            build/product-g5-qemu-icount/qemu.log
+            build/product-g5-qemu-icount/serial.log
