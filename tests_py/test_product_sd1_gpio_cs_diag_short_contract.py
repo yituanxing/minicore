@@ -53,6 +53,10 @@ class DiagnosticShortGateContract(unittest.TestCase):
         self.assertIn('retention-days: 90', workflow)
         self.assertIn('include-hidden-files: true', workflow)
         self.assertIn('phase-timing.txt', workflow)
+        self.assertIn('product-sd1-savable-portable-v1-', workflow)
+        self.assertIn('steps.portable-abi.outputs.signature', workflow)
+        self.assertNotIn('steps.native-abi.outputs.signature', workflow)
+        self.assertIn('steps.model-cache.outputs.cache-hit', workflow)
 
 
 if __name__ == '__main__':

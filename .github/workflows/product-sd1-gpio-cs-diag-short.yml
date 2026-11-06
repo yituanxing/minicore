@@ -138,12 +138,37 @@ jobs:
           chmod +x mill
           AETHERCORE_VERILATOR_VERSION=5.054 bash tools/ensure_verilator_5_024.sh
 
+      # A relay uses -march=x86-64/-mtune=generic. The older native-CPU cache
+      # was built with -march=native and is NOT a valid portable-model hit.
+      # Keep a dedicated compiler/arch-pinned cache for cross-run restoration.
+      - name: Fingerprint portable compiler ABI for model reuse
+        id: portable-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$(uname -m)-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore portable ABI-qualified SD1 --savable RTL model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-portable-v1-${{ steps.portable-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+
       - name: Build or verify exact portable Product --savable model, zero guest cycles
         shell: bash
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=10s 25m \
             bash tools/ci/product_checkpoint_sd1_short.sh build
+
+      - name: Cache distinct portable SD1 model if no compatible cache exists
+        if: success() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-portable-v1-${{ steps.portable-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
 
       - name: Real patched-kernel 12M Product RTL and independent same-cycle replay
         shell: bash
