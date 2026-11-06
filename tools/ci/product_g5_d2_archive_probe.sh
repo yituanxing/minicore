@@ -126,5 +126,12 @@ python3 "$PY_SCRIPT" --system-map "$OUT/System.map" \
   "$OUT/persistent.bridge-950m.host" \
   "$OUT"/probe-{01..10}.restored.host > "$OUT/pc-report.txt"
 cat "$OUT/pc-report.txt"
+PROGRESS_SCRIPT="$(cd "$(dirname "$0")" && pwd)/product_g5_initramfs_progress.py"
+python3 "$PROGRESS_SCRIPT" --vmlinux "$OUT/vmlinux" \
+  --system-map "$OUT/System.map" \
+  "$OUT/persistent.pre.host" \
+  "$OUT/persistent.bridge-950m.host" \
+  "$OUT/probe-10.restored.host" > "$OUT/initramfs-progress.txt"
+cat "$OUT/initramfs-progress.txt"
 printf 'PRODUCT_G5_ARCHIVE_950M_TO_955M_PROBE_PASS original_gold=1 bounded_cycles=5000000 final_commits=%s final_evidence=%s not_Debian_PID1_qualification=1\n' \
   "$previous_commits" "$OUT/pc-report.txt"
