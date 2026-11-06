@@ -57,11 +57,18 @@ never bypass the read-ledger check to force a warm success.
   bytes are accepted, changed unread bytes become visible after warm resume,
   and changed already-read bytes, partial SPI transactions and forged ledgers
   are rejected. **This is not yet a Linux-level C1 PASS.**
-- `sim/product_rv64_checkpoint_sd1_main.cpp`: currently saves complete RTL,
-  DDR and card state, but its normal identity and normal restore must remain
-  tied to the exact Linux/rootfs/SD SHA. A separate C1 mode is needed to arm
-  read tracking at boot, verify the UART gate, restore the old snapshot, call
-  the rebind API and resume with a new explicitly pinned rootfs.
+- `sim/product_rv64_checkpoint_sd1_main.cpp`: now contains **explicit**
+  `c1-save`, `c1-advance`, `c1-release` CLI modes. The separate C1 cold save
+  arms the v2 read ledger **before the first SPI transaction**. A C1 staged
+  checkpoint is `ready=1` only if the complete guest UART marker exists,
+  rootfs mount/native exec/failure markers are absent, and SPI is quiescent.
+  Release strictly restores the **old** model and media with their pinned SHA,
+  checks the untouched C1 guest gate, then calls transactional sector-by-sector
+  rebind against the pinned **new** image, injects the UART `C1_GO`, and emits a
+  new full checkpoint identified by the **new** SD/rootfs SHA. The ordinary
+  `save/snapshot/restore/advance` protocol and strict v1 card schema are
+  unchanged. The source is syntax-tested without an RTL longrun; **no actual
+  Linux C1 READY or two-root RTL PASS has yet been claimed**.
 - `software/rv64_userspace/product_sd1_c1_init.c` uses the same tiny /init
   for physical Product `/dev/mmcblk0p1` and a separate QEMU-virt `/dev/vda1`
   oracle, accepting only those two explicitly selected kernel `root=` values.
@@ -81,6 +88,45 @@ never bypass the read-ledger check to force a warm success.
   the current exporter lacks direct injection of all RTL microarchitectural,
   interrupt and peripheral state. Reuse the precise same-model Verilator
   snapshot now; study architectural handoff separately.
+
+## C1 host command contract (explicitly opt-in)
+
+Set `AETHERCORE_SD1_C1_CONFIRM=GENERIC_LINUX_ROOTFS_BOUNDARY` for C1 host
+operations. The product checkpoint executable itself and firmware, DTB, old
+SD bytes are **always** checked against their six-component SHA identities.
+`START_CYCLES` is the exact number saved in the input host checkpoint; each
+segment is bounded to 20 million cycles. All SHAs are lowercase SHA256 strings.
+
+```text
+SD1_CHECKPOINT c1-save FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA COLD_CYCLES REPLAY_CYCLES
+
+SD1_CHECKPOINT c1-advance FW DTB OLD_SD OLD_PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES DELTA_CYCLES NEW_PREFIX
+
+SD1_CHECKPOINT c1-release FW DTB OLD_SD READY_PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES GO_CYCLES NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA NEW_PREFIX
+```
+
+The first two commands generate `PREFIX.pre.{rtl,host}` with C1 card snapshot
+schema v2. `c1-save` produces an initial **staged prefix**, not necessarily the
+final handoff; read `PRODUCT_SD1_C1_PREFIX_{SAVED,ADVANCED} ready=...` and
+continue `c1-advance` until `ready=1`. A completed UART READY with pending SPI
+activity is intentionally `ready=0`, not a valid release. A fatal marker,
+premature rootfs mount, or prior UART release rejects the capture/release.
+The source prefix is never overwritten by `c1-advance` or `c1-release`.
+
+`c1-release` rejects anything other than a saved C1 v2 prestate with full
+guest READY and a **quiescent**, unwritten SPI boundary; the card verifies
+old source SHA, new media geometry, and every consumed LBA SHA before opening
+the new continuation. Its new checkpoint uses card schema v1 and is **strictly
+pinned to the new media/rootfs**, so follow-on normal `advance` must supply
+the new SHA identity and the same UART policy (`trigger=""`,
+`input="AETHERCORE_C1_GO"`, budget `0`). Release only claims
+`PRODUCT_SD1_C1_MEDIA_REBOUND_AND_GO_SENT`, not Debian native init. A separate
+UART/native-login oracle must prove mount, `/sbin/init`, and login after this.
+
+This host interface has no workflow dispatch by default: the normal strict
+SD1 runner is intentionally not routed through an experimental rootfs swap.
+Only activate the expensive C1 RTL profile after QEMU C1 guest and short
+Product RTL preflight independently pass.
 
 ## Qualification before expensive Debian longruns
 

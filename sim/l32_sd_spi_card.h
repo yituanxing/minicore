@@ -131,15 +131,23 @@ class SdSpiCard {
   bool c1RootfsBoundaryArmed() const { return c1ReadTracking_; }
   std::size_t c1ConsumedSectorCount() const { return c1ReadLedger_.size(); }
 
+  // Read-only preflight for the guest C1_READY capture gate. A UART marker
+  // alone is insufficient: chip-select must be deasserted and no unfinished
+  // command, buffered response, or guest write may cross the media switch.
+  bool c1RootfsHandoffQuiescent() const {
+    return c1ReadTracking_ && lastCsHigh_ && !lastSclk_ && !rxBits_ &&
+           !commandBytes_ && output_.empty() && !multiRead_ &&
+           !multiWrite_ && !appCommand_ && writeState_ == WriteState::None &&
+           !writes_ && overlay_.empty();
+  }
+
   // Call only on the restored C1 checkpoint, when an independent guest UART
   // gate has proved that rootfs has not been mounted/unpacked. The old source
   // must still be present for strict checkpoint restore; only THEN can this
   // method switch to a second immutable backing image. It never mutates the
   // source disk or discards any previously guest-visible bytes.
   void rebindC1Rootfs(const std::string& newImagePath) {
-    if (!c1ReadTracking_ || !lastCsHigh_ || lastSclk_ || rxBits_ || commandBytes_ ||
-        !output_.empty() || multiRead_ || multiWrite_ || appCommand_ ||
-        writeState_ != WriteState::None || writes_ || !overlay_.empty())
+    if (!c1RootfsHandoffQuiescent())
       throw std::runtime_error("C1 rootfs rebind requires a quiescent, unwritten SD boundary");
     // Check the original source, too: a renamed/modified old image must not
     // bypass the strict immutable-media identity of the loaded checkpoint.

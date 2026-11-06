@@ -41,6 +41,12 @@ constexpr std::size_t kMaxUart = 32ULL << 20;
 constexpr std::uint64_t kMaxCardSnapshot = 512ULL << 20;
 constexpr std::size_t kRecent = 16;
 constexpr std::uint64_t kLinuxBase = 0x80200000ULL;
+constexpr std::string_view kC1Ready = "AETHERCORE_C1_READY rootfs_unmounted=1\n";
+constexpr std::string_view kC1MountBegin = "AETHERCORE_C1_ROOTFS_MOUNT_BEGIN";
+constexpr std::string_view kC1MountOk = "AETHERCORE_C1_ROOTFS_MOUNT_OK";
+constexpr std::string_view kC1NativeExec = "AETHERCORE_C1_NATIVE_INIT_EXEC";
+constexpr std::string_view kC1Fail = "AETHERCORE_C1_FAIL";
+constexpr std::string_view kC1Go = "AETHERCORE_C1_GO\n";
 
 void put64(std::ostream& os, std::uint64_t value) {
   for (unsigned i = 0; i < 8; ++i) os.put(static_cast<char>(value >> (8 * i)));
@@ -142,6 +148,37 @@ struct Observer {
   std::array<std::uint64_t, kRecent> recentPcs{};
   std::uint64_t recentCount=0, recentIndex=0;
 };
+void requireC1Ready(const Observer& o) {
+  if (o.uart.find(kC1Ready) == std::string::npos ||
+      o.uart.find(kC1MountBegin) != std::string::npos ||
+      o.uart.find(kC1MountOk) != std::string::npos ||
+      o.uart.find(kC1NativeExec) != std::string::npos ||
+      o.uart.find(kC1Fail) != std::string::npos ||
+      o.uart.find("Kernel panic - not syncing") != std::string::npos ||
+      o.sawLogin || o.inputStarted || o.inputIndex)
+    throw std::runtime_error("C1 boundary requires READY, untouched rootfs and no pre-release UART input");
+}
+bool c1HostQuiescent(const Top& top, const TransportRuntimeState& transport,
+                     const SdSpiCard& card) {
+  // Full RTL internal state is saved independently. These externally visible
+  // SPI controller pins must also match the host-card's inactive state, and
+  // host DDR transport must not be mid-wait at the media switch.
+  return card.c1RootfsHandoffQuiescent() && top.io_spiCsN &&
+         !top.io_spiSclk && !transport.dataWait.active;
+}
+bool c1CaptureReady(const Observer& o, const Top& top,
+                    const TransportRuntimeState& transport,
+                    const SdSpiCard& card) {
+  if (o.uart.find(kC1Fail) != std::string::npos ||
+      o.uart.find("Kernel panic - not syncing") != std::string::npos)
+    throw std::runtime_error("C1 cannot preserve a failed pre-rootfs Linux boot");
+  if (o.uart.find(kC1Ready) == std::string::npos) return false;
+  requireC1Ready(o);
+  // This is deliberately false for a READY UART line observed mid-SPI. That
+  // snapshot remains an intermediate, unreleasable prefix until a later
+  // c1-advance stops at a genuine media-quiescent clock boundary.
+  return c1HostQuiescent(top,transport,card);
+}
 void writeObserver(std::ostream& os, const Observer& o) {
   for (auto n : {o.cycles,o.commits,o.compressed,o.opensbiCompressed,
                  o.linuxCompressed,o.exceptions,o.interrupts,o.stip,o.seip,
@@ -436,22 +473,49 @@ void result(const Observer& o, const VerilatedContext& ctx, const Memory& mem,
 
 int main(int argc,char** argv) {
   try {
-    if (argc!=14 && argc!=15 && argc!=17 && argc!=18)
-      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance FW DTB SD PREFIX MODEL_SHA FW_SHA DTB_SHA SD_SHA LINUX_SHA ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [UART_TRIGGER UART_COMMAND POST_INPUT_BUDGET] [ADVANCE_DEST_PREFIX]");
+    if (argc<14)
+      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX]");
     const std::string mode=argv[1],fw=argv[2],dtb=argv[3],sd=argv[4],prefix=argv[5];
     const Identity id{argv[6],argv[7],argv[8],argv[9],argv[10],argv[11]};
     id.validate();
-    if (mode!="save" && mode!="snapshot" && mode!="restore" && mode!="advance")
+    const bool c1Save=mode=="c1-save", c1Advance=mode=="c1-advance",
+               c1Release=mode=="c1-release";
+    const bool c1Mode=c1Save || c1Advance || c1Release;
+    if (mode!="save" && mode!="snapshot" && mode!="restore" && mode!="advance" && !c1Mode)
       throw std::runtime_error("invalid SD1 checkpoint mode");
-    const bool advancing=mode=="advance";
-    if (advancing!=(argc==15 || argc==18))
-      throw std::runtime_error("advance needs an independent destination prefix; other modes forbid it");
+    const bool advancing=mode=="advance" || c1Advance;
+    if (c1Mode) {
+      if (argc!=(c1Save?14:(c1Advance?15:18)))
+        throw std::runtime_error("C1 needs exact c1-save / c1-advance DEST / c1-release NEW_SD NEW_SHA NEW_ROOTFS_SHA DEST argument count");
+    } else if ((argc!=14 && argc!=15 && argc!=17 && argc!=18) ||
+               (advancing!=(argc==15 || argc==18))) {
+      throw std::runtime_error("strict SD1 advance needs independent destination; other modes forbid it");
+    }
     const auto bootCycles=std::stoull(argv[12],nullptr,0);
     const auto replayCycles=std::stoull(argv[13],nullptr,0);
-    const bool hasPolicy=argc==17 || argc==18;
+    const bool hasPolicy=!c1Mode && (argc==17 || argc==18);
     Policy policy{hasPolicy?argv[14]:"",hasPolicy?argv[15]:"",
                   hasPolicy?std::stoull(argv[16],nullptr,0):0};
-    const std::string advanceDest=advancing?argv[argc-1]:"";
+    const std::string advanceDest=advancing?argv[argc-1]:(c1Release?argv[17]:"");
+    const std::string newMedia=c1Release?argv[14]:"";
+    const std::string newMediaSha=c1Release?argv[15]:"";
+    const std::string newRootfsSha=c1Release?argv[16]:"";
+    if (c1Release && (!validSha(newMediaSha) || !validSha(newRootfsSha)))
+      throw std::runtime_error("C1 replacement requires exact media and rootfs SHA256 pins");
+    if (c1Mode) {
+      const std::string& outputPrefix=(c1Save?prefix:advanceDest);
+      if ((c1Advance || c1Release) &&
+          std::filesystem::absolute(prefix).lexically_normal()==
+            std::filesystem::absolute(outputPrefix).lexically_normal())
+        throw std::runtime_error("C1 source and new checkpoint prefix must differ");
+      if (std::filesystem::exists(outputPrefix+".pre.rtl") ||
+          std::filesystem::exists(outputPrefix+".pre.host"))
+        throw std::runtime_error("C1 refuses to overwrite an existing checkpoint");
+    }
+    const char* c1Confirm=std::getenv("AETHERCORE_SD1_C1_CONFIRM");
+    if (c1Mode && !(c1Confirm &&
+        std::string_view(c1Confirm)=="GENERIC_LINUX_ROOTFS_BOUNDARY"))
+      throw std::runtime_error("C1 requires explicit generic Linux rootfs boundary confirmation");
     if (!policy.uartInput.empty() && policy.uartInput.back()!='\n')
       policy.uartInput.push_back('\n');
     // The short proof's historic 1.8B ceiling stays the default. Long SD1
@@ -460,11 +524,12 @@ int main(int argc,char** argv) {
     const char* relayConfirm=std::getenv("AETHERCORE_SD1_RELAY_CONFIRM");
     const bool longRelay=relayConfirm &&
         std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY";
-    const std::uint64_t maxCycle=longRelay?4000000000ULL:1800000000ULL;
+    const std::uint64_t defaultMaxCycle=longRelay?4000000000ULL:1800000000ULL;
+    const std::uint64_t maxCycle=c1Mode?4000000000ULL:defaultMaxCycle;
     if (bootCycles<1000000 || bootCycles>maxCycle ||
-        ((mode=="save" || mode=="snapshot") && bootCycles>20000000) ||
+        ((mode=="save" || mode=="snapshot" || c1Save) && bootCycles>20000000) ||
         replayCycles==0 || replayCycles>(advancing?20000000ULL:5000000ULL) ||
-        (advancing && bootCycles>maxCycle-replayCycles) ||
+        ((advancing || c1Release) && bootCycles>maxCycle-replayCycles) ||
         policy.uartTrigger.size()>128 || policy.uartInput.size()>4096 ||
         policy.postInputBudget>5000000)
       throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default ceiling, explicit long relay <=4B only");
@@ -482,6 +547,9 @@ int main(int argc,char** argv) {
         {fw,id.firmware},{dtb,id.dtb},{sd,id.media}})
       if (shaFile(path)!=expected)
         throw std::runtime_error("SD1 real executable/firmware/DTB/SD bytes changed");
+    if (c1Release && (!std::filesystem::is_regular_file(newMedia) ||
+                      shaFile(newMedia)!=newMediaSha))
+      throw std::runtime_error("C1 replacement SD image bytes differ from the explicitly pinned SHA");
     VerilatedContext ctx;
     char program[]="product-sd1-checkpoint";
     char* stableArgs[]={program,nullptr};
@@ -490,8 +558,12 @@ int main(int argc,char** argv) {
     Memory mem;
     TransportRuntimeState transport;
     SdSpiCard card{sd};
+    // Explicit C1 profile only: arm BEFORE initialize/first guest step.
+    // The strict historical save/snapshot/advance never arm read tracking and
+    // continue to emit/require the original schema-v1 SD card state.
+    if (c1Save) card.armC1RootfsBoundary();
     Observer obs;
-    if (mode=="save" || mode=="snapshot") {
+    if (mode=="save" || mode=="snapshot" || c1Save) {
       mem.loadAtBase(fw);
       mem.loadBoundedRegion(dtb,kDtbAddress,kDtbMax);
       top.io_spiMiso=1;
@@ -507,6 +579,9 @@ int main(int argc,char** argv) {
       }
       if (obs.commits==0 || top.reset)
         throw std::runtime_error("SD1 did not retire real Product instructions");
+      if (c1Save && !card.c1RootfsBoundaryArmed())
+        throw std::runtime_error("C1 cold prefix lost the SD read ledger");
+      const bool c1Ready=c1Save && c1CaptureReady(obs,top,transport,card);
       // Completed host clock boundary: savable model + exact DDR/LRSC/CSRs/
       // UART/IRQ/transport/SPI card protocol/SD ext4 COW sector state.
       saveRtl(prefix+".pre.rtl",top);
@@ -515,24 +590,81 @@ int main(int argc,char** argv) {
                <<" commits="<<obs.commits<<" opensbi_banner="<<obs.sawOpenSbiBanner
                <<" login_observed="<<obs.sawLogin<<' '<<card.progress()
                <<" full_rtl_ddr_sd_card=1 no_ext4_mount_claim=1 no_pid1_claim=1\n";
+      if (c1Save) {
+        std::cout<<"PRODUCT_SD1_C1_PREFIX_SAVED cycles="<<obs.cycles
+                 <<" consumed_sectors="<<card.c1ConsumedSectorCount()
+                 <<" ready="<<c1Ready
+                 <<" spi_quiescent="<<c1HostQuiescent(top,transport,card)
+                 <<" no_rootfs_swap_claim=1\n";
+        return 0;
+      }
       if (mode=="snapshot") return 0;
     } else {
       readHost(prefix+".pre.host",id,policy,ctx,mem,transport,card,obs);
       readRtl(prefix+".pre.rtl",top);
       if (top.reset || obs.cycles!=bootCycles || obs.commits==0)
         throw std::runtime_error("SD1 restored snapshot is not the bounded Product checkpoint");
+      if ((c1Advance || c1Release) && !card.c1RootfsBoundaryArmed())
+        throw std::runtime_error("C1 cannot resume a strict schema-v1 SD prefix");
       std::cout<<"PRODUCT_SD1_PERSISTENT_CHECKPOINT_RESTORED cycles="<<obs.cycles
                <<" commits="<<obs.commits<<" opensbi_banner="<<obs.sawOpenSbiBanner
                <<" login_observed="<<obs.sawLogin<<' '<<card.progress()
                <<" full_rtl_ddr_sd_card=1 no_ext4_mount_claim=1 no_pid1_claim=1\n";
     }
+    Identity continuationId=id;
+    Policy continuationPolicy=policy;
+    if (c1Release) {
+      // Read BOTH complete old RTL and old media first. The ordinary host
+      // source/model/firmware/DTB SHA matching above remains immutable, and
+      // SdSpiCard::restore transactionally verifies its v2 read ledger.
+      // Only the intact, rootfs-unmounted C1 UART boundary may swap media.
+      requireC1Ready(obs);
+      if (!c1HostQuiescent(top,transport,card))
+        throw std::runtime_error("C1 release requires RTL SPI pins, card and host DDR idle");
+      const auto validatedPriorReads=card.c1ConsumedSectorCount();
+      card.rebindC1Rootfs(newMedia);  // checks SPI quiescence, COW and every consumed sector
+      continuationId.media=newMediaSha;
+      continuationId.rootfs=newRootfsSha;
+      continuationPolicy.uartTrigger="";
+      continuationPolicy.uartInput=std::string(kC1Go);
+      continuationPolicy.postInputBudget=0;
+      obs.inputStarted=true;
+      obs.inputIndex=0;
+      obs.seipAtInputStart=obs.seip;
+      std::cout<<"PRODUCT_SD1_C1_OLD_PREFIX_VERIFIED_AND_MEDIA_REBOUND"
+               <<" cycles="<<obs.cycles
+               <<" new_sd_sha256="<<newMediaSha
+               <<" new_rootfs_sha256="<<newRootfsSha
+               <<" consumed_sectors="<<validatedPriorReads
+               <<" ready=1 release_token=AETHERCORE_C1_GO\n";
+    }
     obs.traceHash=kFnv;
     for (std::uint64_t i=0;i<replayCycles;++i) {
-      oneCycle(top,ctx,mem,transport,card,obs,policy,true,false);
-      if (advancing && top.io_exitValid)
+      oneCycle(top,ctx,mem,transport,card,obs,continuationPolicy,true,false);
+      if ((advancing || c1Release) && top.io_exitValid)
         throw std::runtime_error("SD1 guest exited during staged warm advancement");
     }
+    if (c1Release) {
+      // No magic success claim: this only establishes the verified media
+      // handoff and actual UART injection. A separate real Linux/guest marker
+      // gate must observe ext4 mount and distro native init in later stages.
+      if (obs.uart.find(kC1Fail)!=std::string::npos ||
+          obs.uart.find("Kernel panic - not syncing")!=std::string::npos)
+        throw std::runtime_error("C1 guest failed immediately after rootfs release");
+      if (obs.inputIndex!=continuationPolicy.uartInput.size())
+        throw std::runtime_error("C1 GO UART release was not fully accepted by the guest");
+      saveRtl(advanceDest+".pre.rtl",top);
+      writeHost(advanceDest+".pre.host",continuationId,continuationPolicy,
+                ctx,mem,transport,card,obs);
+      std::cout<<"PRODUCT_SD1_C1_MEDIA_REBOUND_AND_GO_SENT"
+               <<" cycles="<<obs.cycles<<" commits="<<obs.commits
+               <<" new_sd_sha256="<<newMediaSha
+               <<" new_rootfs_sha256="<<newRootfsSha
+               <<" no_native_init_claim=1\n";
+      return 0;
+    }
     if (advancing) {
+      const bool c1Ready=c1Advance && c1CaptureReady(obs,top,transport,card);
       // Write a NEW immutable prestate; the original source can be reused for
       // deterministic replays and remains untouched across CI runs.
       saveRtl(advanceDest+".pre.rtl",top);
@@ -542,6 +674,12 @@ int main(int argc,char** argv) {
                <<" commits="<<obs.commits<<" trace_hash=0x"<<std::hex<<obs.traceHash
                <<std::dec<<' '<<card.progress()
                <<" no_ext4_mount_claim=1 no_pid1_claim=1\n";
+      if (c1Advance)
+        std::cout<<"PRODUCT_SD1_C1_PREFIX_ADVANCED consumed_sectors="
+                 <<card.c1ConsumedSectorCount()
+                 <<" ready="<<c1Ready
+                 <<" spi_quiescent="<<c1HostQuiescent(top,transport,card)
+                 <<" no_rootfs_swap_claim=1\n";
       return 0;
     }
     result(obs,ctx,mem,transport,card,top);

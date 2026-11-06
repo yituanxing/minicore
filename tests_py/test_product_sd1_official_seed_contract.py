@@ -24,6 +24,28 @@ discover_spec.loader.exec_module(sd1_discover)
 
 
 class ProductSd1OfficialSeedContracts(unittest.TestCase):
+    def test_runner_bootstrap_does_not_redownload_preinstalled_jdk_or_build_tools(self):
+        workflow = WORKFLOW.read_text()
+        provision = workflow.split(
+            '- name: Qualify preinstalled Java 17 and provision only missing native build tools',
+            1,
+        )[1].split('      - name: Validate and activate immutable RV64 Linux GCC', 1)[0]
+        self.assertIn('JAVA_HOME_17_X64', provision)
+        self.assertIn('command -v java', provision)
+        self.assertIn('command -v javac', provision)
+        self.assertIn("java -version 2>&1 | grep -Eq", provision)
+        self.assertIn('javac -version 2>&1 | grep -Eq', provision)
+        self.assertIn('missing_packages=()', provision)
+        self.assertIn('need_command qemu-riscv64-static qemu-user-static', provision)
+        self.assertIn('need_command dtc device-tree-compiler', provision)
+        self.assertIn('need_command mkfs.ext4 e2fsprogs', provision)
+        self.assertIn('if (( ${#missing_packages[@]} )); then', provision)
+        self.assertIn('sudo apt-get install -y --no-install-recommends "${missing_packages[@]}"', provision)
+        self.assertIn('SD1_RUNNER_TOOLS_ALREADY_PRESENT', provision)
+        self.assertNotIn('openjdk-17-jdk-headless', provision)
+        self.assertNotIn('cmake ninja-build', provision)
+        self.assertIn('test -e /proc/sys/fs/binfmt_misc/qemu-riscv64', provision)
+
     def test_failed_apt_configuration_reports_bounded_diagnostics_and_stops(self):
         text = SUPPLIER.read_text()
         self.assertIn('install_rc=$?', text)

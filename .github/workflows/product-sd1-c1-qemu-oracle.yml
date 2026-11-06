@@ -1,0 +1,190 @@
+name: AetherCore Product SD1 C1 generic-rootfs QEMU handoff oracle
+
+# Bounded guest-level proof of the generic C1 pre-rootfs /init gate only:
+# READY -> explicit GO -> ext4 -> native Debian /sbin/init -> login prompt.
+# It reuses exact signed, frozen SD1 media but never runs Product RTL, does
+# NOT prove a cross-process RTL checkpoint or claim rootfs rebind on hardware.
+# First-party PR label is the only development-branch opt-in; no push/schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Deliberately run bounded C1 guest handoff with sealed official SD1 media
+        required: true
+        type: choice
+        options:
+          - 'NO'
+          - RUN_SD1_C1_QEMU_ROOTFS_HANDOFF
+        default: 'NO'
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-sd1-c1-qemu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  product-sd1-c1-qemu:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirmation == 'RUN_SD1_C1_QEMU_ROOTFS_HANDOFF' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'product-sd1-c1-qemu-oracle' &&
+       github.event.pull_request.number == 379 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RV64_DEBIAN_STAGE: sd1
+      RV64_SD1_QEMU_BUILD_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+      RV64_SD1_C1_QEMU_TIMEOUT_SECONDS: '540'
+
+    steps:
+      - name: Checkout exact reviewed Product revision without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Refuse unqualified C1 source or unauthorized full RTL flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$RV64_DEBIAN_STAGE" = sd1
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" &&
+             -z "${AETHERCORE_SD1_RELAY_CONFIRM:-}" &&
+             -z "${RV64_SD1_LOGIN_USER:-}" &&
+             -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" ]] || exit 19
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          bash -n tools/ci/product_sd1_c1_initramfs_build.sh \
+            tools/ci/product_sd1_c1_kernel_build.sh \
+            tools/ci/product_sd1_c1_qemu_oracle.sh
+          python3 -m unittest tests_py.test_product_sd1_c1_guest_init_contract \
+            tests_py.test_product_sd1_c1_qemu_oracle_contract \
+            tests_py.test_product_sd1_c1_qemu_workflow_contract -v
+          echo 'C1 guest handoff QEMU only; no Product RTL, guest DDR, rootfs rebind qualification or login credentials' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore ONLY exact signed official SD1 source/media seed
+        id: sealed_media
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'src/main/scala/**/*.scala', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+
+      - name: Reject absent frozen Debian source before any expensive compiler provisioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.sealed_media.outputs.cache-hit }}' == true ]] || {
+            echo 'SD1_C1_QEMU_EXACT_OFFICIAL_MEDIA_REQUIRED: run signed offline SD1 source seed first' >&2
+            exit 16
+          }
+          python3 tools/ci/product_sd1_official_seed.py verify
+          test -s build/rv64-debian-sd1-sd/sd-rootfs.img
+          test -s build/rv64-debian-linux/obj/.config
+          echo 'PRODUCT_SD1_C1_QEMU_EXACT_MEDIA_VERIFIED no_RTL_cycles=1'
+
+      - name: Restore fixed Bootlin GCC 13.3 Linux cross toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore frozen Linux source for isolated C1 and QEMU kernels
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Install bounded QEMU virt and Linux host build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 10m sudo apt-get update
+          timeout --signal=TERM --kill-after=20s 10m sudo apt-get install -y \
+            qemu-system-misc bc libssl-dev libelf-dev make \
+            build-essential bison flex device-tree-compiler dwarves
+          command -v qemu-system-riscv64
+
+      - name: Validate exact immutable Linux GCC for next C1 guest build step
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 15m bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Compile tiny rootfs-agnostic static C1 guest initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
+          bash tools/ci/product_sd1_c1_initramfs_build.sh check-source
+          timeout --signal=TERM --kill-after=20s 5m \
+            bash tools/ci/product_sd1_c1_initramfs_build.sh prepare
+          grep -Fxq 'PRODUCT_SD1_C1_INITRAMFS_RESULT: status=READY_UNVERIFIED' \
+            build/product-sd1-c1-initramfs/result.txt
+
+      - name: Compile rootfs-independent C1 Image without altering SD1 or Debian
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 35m \
+            bash tools/ci/product_sd1_c1_kernel_build.sh prepare
+          grep -Fxq 'PRODUCT_SD1_C1_KERNEL_BUILD_RESULT: status=BUILT_UNQUALIFIED' \
+            build/product-sd1-c1-kernel/result.txt
+          grep -Fxq 'rootfs_binding=NONE' build/product-sd1-c1-kernel/result.txt
+
+      - name: Build separate QEMU virtio drivers without touching Product SPI RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 25m \
+            bash tools/ci/product_sd1_c1_qemu_oracle.sh prepare
+          grep -Fxq 'PRODUCT_SD1_C1_QEMU_KERNEL_RESULT: status=READY_UNVERIFIED' \
+            build/product-sd1-c1-qemu-oracle/result.txt
+
+      - name: Bounded C1 READY GO ext4 mount native init login test
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 11m \
+            bash tools/ci/product_sd1_c1_qemu_oracle.sh run
+          grep -Fxq 'PRODUCT_SD1_C1_QEMU_ROOTFS_HANDOFF_PASS_NOT_RTL' \
+            build/product-sd1-c1-qemu-oracle/boot-result.txt
+          echo 'C1 QEMU READY->GO->ext4->native Debian PID1/login PASS; Product RTL C1 still UNQUALIFIED' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload only bounded C1 UART and SHA summaries never guest SD or RAM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-c1-qemu-evidence-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            build/product-sd1-c1-initramfs/result.txt
+            build/product-sd1-c1-kernel/result.txt
+            build/product-sd1-c1-qemu-oracle/result.txt
+            build/product-sd1-c1-qemu-oracle/boot-result.txt
+            build/product-sd1-c1-qemu-oracle/boot-uart.log

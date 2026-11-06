@@ -198,6 +198,8 @@ void testC1RootfsRebind(const std::string& original, const std::string& changed)
   SdSpiCard restored(original);
   restored.restore(c1);
   require(restored.snapshot()==c1,"C1 read-set lost across save/restore");
+  require(restored.c1RootfsHandoffQuiescent(),
+          "C1 complete read must expose a quiescent rootfs boundary");
   restored.rebindC1Rootfs(changed);
   require(!restored.c1RootfsBoundaryArmed(),"C1 swap must disable old read tracking");
   Spi resumed(restored);
@@ -225,6 +227,8 @@ void testC1RootfsRebind(const std::string& original, const std::string& changed)
   Spi partial(inflight);
   partial.preamble(); partial.init();
   require(partial.command(17,2100)==0,"C1 pending read");
+  require(!inflight.c1RootfsHandoffQuiescent(),
+          "C1 handoff preflight must reject pending SPI response");
   rejected=false;
   try { inflight.rebindC1Rootfs(changed); }
   catch (const std::runtime_error&) { rejected=true; }
