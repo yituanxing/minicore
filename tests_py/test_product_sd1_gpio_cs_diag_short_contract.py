@@ -74,6 +74,9 @@ class DiagnosticShortGateContract(unittest.TestCase):
         self.assertIn('product_sd1_gpio_cs_diag_short.sh advance', workflow)
         self.assertIn('32000000', workflow)
         self.assertIn('product_sd1_gpio_cs_boot_profile.py', workflow)
+        self.assertIn('"$source/phase-timing.txt"', workflow)
+        self.assertLess(workflow.index('Retain immutable patched 32M full Product RTL checkpoint'),
+                        workflow.index('Analyze persisted 12M to 32M Linux boot profile'))
         script = self.script
         self.assertIn('source_model_key', script)
         self.assertIn('duplicate source checkpoint manifest fields', script)

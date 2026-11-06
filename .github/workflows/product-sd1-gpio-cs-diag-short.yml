@@ -199,7 +199,7 @@ jobs:
             exit 16
           }
           source="$(dirname "${manifests[0]}")"
-          for name in .diag-ready persistent.pre.rtl persistent.pre.host; do
+          for name in .diag-ready persistent.pre.rtl persistent.pre.host phase-timing.txt; do
             [[ -f "$source/$name" && ! -L "$source/$name" ]] || exit 16
           done
           grep -Fxq 'boot_cycles=12000000' "$source/.diag-ready"
@@ -223,7 +223,8 @@ jobs:
           }
           mkdir -p "$out/boot-12m.imported"
           cp -- "$source/.diag-ready" "$source/persistent.pre.rtl" \
-            "$source/persistent.pre.host" "$out/boot-12m.imported/"
+            "$source/persistent.pre.host" "$source/phase-timing.txt" \
+            "$out/boot-12m.imported/"
           echo 'Exact portable Product binary and original 12M checkpoint reused without recompilation; source key/three SHA identities checked.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache distinct portable SD1 model if no compatible cache exists
@@ -256,14 +257,7 @@ jobs:
             tee build/product-sd1-gpio-cs-advance-32m.log
           grep -Fq 'PRODUCT_SD1_GPIO_CS_DIAG_SHORT_STATE_SAVED cycle=32000000 ' \
             build/product-sd1-gpio-cs-advance-32m.log
-          mapfile -d '' stages < <(find build/product-sd1-gpio-cs-rtl-checkpoint \
-            -maxdepth 1 -type d -name 'advance.*' -print0)
-          [[ "${#stages[@]}" == 1 ]] || exit 16
-          python3 tools/ci/product_sd1_gpio_cs_boot_profile.py \
-            --previous build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.imported \
-            --current "${stages[0]}" \
-            --output build/product-sd1-gpio-cs-profile-32m
-          echo 'Patched 12M->32M Product RTL advance completed; boot phase ledger recorded (not CMD0 or Debian PASS).' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Patched 12M->32M full Product RTL checkpoint saved; no CMD0 or Debian claim.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain immutable separate diagnostic 12M Product RTL checkpoint
         if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-short'
@@ -297,6 +291,31 @@ jobs:
             build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/persistent.pre.host
             build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/save.log
             build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/phase-timing.txt
+
+      # Never let a profiler regression discard an already authenticated RTL
+      # checkpoint: upload the complete 32M state in the preceding step first.
+      - name: Analyze persisted 12M to 32M Linux boot profile
+        if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' stages < <(find build/product-sd1-gpio-cs-rtl-checkpoint \
+            -maxdepth 1 -type d -name 'advance.*' -print0)
+          [[ "${#stages[@]}" == 1 ]] || exit 16
+          python3 tools/ci/product_sd1_gpio_cs_boot_profile.py \
+            --previous build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.imported \
+            --current "${stages[0]}" \
+            --output build/product-sd1-gpio-cs-profile-32m
+          echo '12M->32M verified boot phase profile recorded and hashed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain diagnostic boot profile independent of RTL snapshot
+        if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-boot-profile-32m-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
             build/product-sd1-gpio-cs-profile-32m/segments.jsonl
             build/product-sd1-gpio-cs-profile-32m/SHA256SUMS
             build/product-sd1-gpio-cs-profile-32m/uart-cumulative.log
