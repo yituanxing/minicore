@@ -88,9 +88,34 @@ class PublicSD1ArtifactRelayContract(unittest.TestCase):
         self.assertIn("actions/download-artifact@v4", self.workflow)
         self.assertIn("actions/upload-artifact@v4", self.workflow)
         self.assertIn("include-hidden-files: true", self.workflow)
-        self.assertIn("retention-days: 14", self.workflow)
+        # Full state, salvage recovery and independent analysis must survive
+        # long enough for multi-day Linux startup phase comparisons.
+        self.assertEqual(self.workflow.count("retention-days: 90"), 3)
+        self.assertNotIn("retention-days: 14", self.workflow)
+        self.assertIn("product-sd1-official-public-recovery-", self.workflow)
+        self.assertIn("product-sd1-public-boot-analysis-", self.workflow)
         self.assertIn("path: build/product-sd1-public-artifact-relay/publish/", self.workflow)
         self.assertNotIn("path: build/rv64-debian-sd1-sd/", self.workflow)
+
+    def test_inherited_history_is_fail_closed_and_boot_evidence_is_owned(self):
+        # An API/JSON/pagination failure cannot silently restart 12M cold
+        # bootstrap after a previously verified Linux checkpoint expires.
+        for marker in (
+            "PUBLIC_SD1_RELAY_HISTORY_QUERY_FAILED",
+            "PUBLIC_SD1_RELAY_HISTORY_SCHEMA_INVALID",
+            "PUBLIC_SD1_RELAY_HISTORY_PARSE_FAILED",
+            "PUBLIC_SD1_RELAY_HISTORY_TRUNCATED",
+            "PUBLIC_SD1_RELAY_PRIOR_STATE_UNAVAILABLE",
+        ):
+            self.assertIn(marker, self.workflow)
+        for marker in (
+            "analysis/segments.jsonl", "uart-cumulative-latest.log",
+            "uart-delta-run-", "identity_sha256",
+            "guest_kernel_clock_not_rtl_wall",
+            "PUBLIC_SD1_ANALYSIS_MANIFEST_MISSING",
+            "sha256sum --check --status SHA256SUMS",
+        ):
+            self.assertIn(marker, self.workflow)
 
     def test_no_authorization_means_no_guest_cycles(self):
         result = subprocess.run(["bash", str(HELPER), "bootstrap", "no-such-artifact"],
