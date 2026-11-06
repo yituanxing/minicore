@@ -159,17 +159,6 @@ prepare() {
   local obj="$out/model/obj" inc="$art/verilator-include" sim="$source/sim"
   local flags="-std=c++20 -O3 -march=x86-64 -mtune=generic -DAETHERCORE_PRODUCT_DEBIAN -DAETHERCORE_PRODUCT_CHECKPOINT_G5 -DAETHERCORE_PRODUCT_CHECKPOINT_SAVABLE -I$sim/product_rv64_opensbi_shim -I$sim -I$obj -I$inc -I$inc/vltstd"
   [[ -s "$obj/V${TOP}.mk" ]] || reject 'generated model makefile unavailable'
-  # Verilator embeds one *absolute* historical source prerequisite in the
-  # generated makefile (apart from overridable variables). Rewrite exactly
-  # this make rule in our private model copy so Make's dependency scanner
-  # cannot query the no-longer-existent old CI checkout.
-  local makefile="$obj/V${TOP}.mk"
-  local old_source='/home/runner/work/minicore/minicore/frozen-source/sim/opensbi_boot_main.cpp'
-  [[ "$(grep -Fxc "opensbi_boot_main.o: $old_source " "$makefile")" == 1 &&
-     -s "$sim/opensbi_boot_main.cpp" ]] || reject 'pinned historical opensbi make prerequisite unexpected'
-  sed -i "s#opensbi_boot_main.o: $old_source #opensbi_boot_main.o: $sim/opensbi_boot_main.cpp #" "$makefile"
-  [[ "$(grep -Fxc "opensbi_boot_main.o: $sim/opensbi_boot_main.cpp " "$makefile")" == 1 ]] ||
-    reject 'portable opensbi make prerequisite rewrite failed'
   local -a extra=() runtime=(verilated.o verilated_save.o) objectfiles=() generated_cpp=() immutable_args=()
   mapfile -d '' -t generated_cpp < <(find "$obj" -maxdepth 1 -type f -name 'V*.cpp' -print0)
   (( ${#generated_cpp[@]} >= 3 )) || reject 'generated Verilator C++ sources incomplete'
@@ -197,7 +186,6 @@ prepare() {
   # Chisel is invoked. VM_USER_CFLAGS overrides baked -march=native.
   if ! make -C "$obj" -f "V${TOP}.mk" -j4 "${immutable_args[@]}" \
       VERILATOR_ROOT="$(realpath -e "$out/toolchain")" \
-      VM_USER_DIR="$sim" \
       VM_USER_CFLAGS="$flags" OPT_FAST=-O3 OPT_GLOBAL=-O3 \
       "$archive" "${runtime[@]}" > "$log" 2>&1; then
     tail -65 "$log" >&2 || true
@@ -227,7 +215,8 @@ prepare() {
   printf 'qualification=UNPROVEN_PENDING_1795_1800_GOLDEN\nsource_commit=%s\nverilator_version=5.054\nportable_isa=x86-64\nportable_binary_sha256=%s\nfrozen_binary_sha256=%s\nmodel_run=%s\nfrozen_run=%s\n' \
     "$ORIGIN" "$binary_sha" "$FROZEN_SHA" "$MODEL_RUN" "$FROZEN_RUN" > "$out/model/identity.txt"
   # Old golden 1.8B is the immutable source, but portable identity is *new*.
-  local initial="$out/checkpoints/c1800000000" proof_dir="$out/work/golden1795" proof="$proof_dir/replay"
+  local initial="$out/checkpoints/c1800000000" proof_dir="$out/work/golden1795" proof
+  proof="$proof_dir/replay"
   mkdir -p "$initial" "$proof_dir"
   cp --reflink=auto --sparse=always "$old1800/checkpoint.host" "$initial/checkpoint.host"
   cp -- "$old1800/checkpoint.rtl" "$initial/checkpoint.rtl"
