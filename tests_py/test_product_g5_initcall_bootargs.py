@@ -31,10 +31,14 @@ class ProductG5InitcallBootargs(unittest.TestCase):
         )
 
     def test_full_run_records_and_checks_diagnostic_bootargs(self):
-        self.assertIn(
-            "github.event.label.name == 'product-g5-longrun' || inputs.run_mode == 'full'",
-            self.workflow,
-        )
+        # All three deliberate full-run entrypoints must enable detailed
+        # initcall tracing; a short A/B must not imply a full Linux run.
+        trace_line = self.workflow.split(
+            "RV64_DEBIAN_INITCALL_TRACE:", 1
+        )[1].split("\n", 1)[0]
+        self.assertIn("github.event.label.name == 'product-g5-longrun'", trace_line)
+        self.assertIn("github.event.label.name == 'product-g5-resume-artifact'", trace_line)
+        self.assertIn("inputs.run_mode == 'full'", trace_line)
         self.assertIn(
             "grep -Fq 'initcall_debug loglevel=8' build/rv64-debian-boot/result.txt",
             self.workflow,
