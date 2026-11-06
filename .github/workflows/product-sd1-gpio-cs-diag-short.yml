@@ -18,7 +18,8 @@ jobs:
   patched-kernel-short:
     if: >-
       (github.event.label.name == 'product-sd1-gpio-cs-diag-short' ||
-       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m') &&
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m') &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
@@ -37,6 +38,14 @@ jobs:
       VERILATOR_THREADS: '1'
       AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
       JOBS: '4'
+      IS_ADVANCE: ${{ github.event.label.name != 'product-sd1-gpio-cs-diag-short' }}
+      # Immutable, independently qualified source links. Extend only after an
+      # actual saved-state artifact and verified boot profile exist.
+      ADVANCE_SOURCE_RUN: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '42245421838' || '42242315003' }}
+      ADVANCE_SOURCE_ARTIFACT: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && 'product-sd1-gpio-cs-diagnostic-32m-42245421838' || 'product-sd1-gpio-cs-diagnostic-12m-42242315003' }}
+      ADVANCE_SOURCE_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '32000000' || '12000000' }}
+      ADVANCE_TARGET_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52000000' || '32000000' }}
+      ADVANCE_TARGET_TAG: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52m' || '32m' }}
 
     steps:
       - name: Checkout exact diagnostic source
@@ -109,12 +118,12 @@ jobs:
 
       # Read-only import of the previously SHA-verified patched kernel 12M state.
       # The run and artifact name are intentionally immutable; never use latest.
-      - name: Download exact 12M full Product RTL checkpoint
-        if: github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+      - name: Download exact previously published full Product RTL checkpoint
+        if: env.IS_ADVANCE == 'true'
         uses: actions/download-artifact@v4
         with:
-          run-id: 42242315003
-          name: product-sd1-gpio-cs-diagnostic-12m-42242315003
+          run-id: ${{ env.ADVANCE_SOURCE_RUN }}
+          name: ${{ env.ADVANCE_SOURCE_ARTIFACT }}
           github-token: ${{ github.token }}
           path: build/product-sd1-gpio-cs-rtl-import
 
@@ -182,8 +191,8 @@ jobs:
           timeout --signal=TERM --kill-after=10s 25m \
             bash tools/ci/product_checkpoint_sd1_short.sh build
 
-      - name: Reject incompatible 12M state and any model-cache fallback
-        if: github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+      - name: Reject incompatible imported state and any model-cache fallback
+        if: env.IS_ADVANCE == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -195,14 +204,14 @@ jobs:
           out=build/product-sd1-gpio-cs-rtl-checkpoint
           mapfile -d '' manifests < <(find "$import" -type f -name .diag-ready -print0)
           [[ "${#manifests[@]}" == 1 ]] || {
-            echo 'GPIO_CS_RELAY_REJECTED: expected exactly one imported 12M manifest' >&2
+            echo 'GPIO_CS_RELAY_REJECTED: expected exactly one imported checkpoint manifest' >&2
             exit 16
           }
           source="$(dirname "${manifests[0]}")"
           for name in .diag-ready persistent.pre.rtl persistent.pre.host phase-timing.txt; do
             [[ -f "$source/$name" && ! -L "$source/$name" ]] || exit 16
           done
-          grep -Fxq 'boot_cycles=12000000' "$source/.diag-ready"
+          grep -Fxq "boot_cycles=$ADVANCE_SOURCE_CYCLES" "$source/.diag-ready"
           grep -Fxq 'qualification=SD1_GPIO_CS_DIAGNOSTIC_CHECKPOINT_NOT_DEBIAN_PASS' "$source/.diag-ready"
           model=build/product-sd1-persistent-checkpoint/savable-model
           executable="$model/obj/VAetherCoreProductDebianSdRV64SimTop"
@@ -221,11 +230,11 @@ jobs:
             echo 'GPIO_CS_RELAY_REJECTED: cached model source key differs from 12M checkpoint' >&2
             exit 16
           }
-          mkdir -p "$out/boot-12m.imported"
+          mkdir -p "$out/advance-source.imported"
           cp -- "$source/.diag-ready" "$source/persistent.pre.rtl" \
             "$source/persistent.pre.host" "$source/phase-timing.txt" \
-            "$out/boot-12m.imported/"
-          echo 'Exact portable Product binary and original 12M checkpoint reused without recompilation; source key/three SHA identities checked.' >> "$GITHUB_STEP_SUMMARY"
+            "$out/advance-source.imported/"
+          echo "Exact portable Product binary and $ADVANCE_SOURCE_CYCLES checkpoint reused without recompilation; source key/three SHA identities checked." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache distinct portable SD1 model if no compatible cache exists
         if: success() && steps.model-cache.outputs.cache-hit != 'true'
@@ -246,18 +255,19 @@ jobs:
             build/product-sd1-gpio-cs-short-run.log
           echo 'Patched kernel 12M full RTL+DDR+SD state built and cross-process replay qualified; CMD0 remains for later 332-352M stage.' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Real patched-kernel 12M to 32M Product RTL continuation
-        if: github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+      - name: Real patched-kernel Product RTL checkpoint continuation
+        if: env.IS_ADVANCE == 'true'
         shell: bash
         run: |
           set -euo pipefail
           timeout --signal=TERM --kill-after=10s 15m \
             bash tools/ci/product_sd1_gpio_cs_diag_short.sh advance \
-              build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.imported 32000000 |
-            tee build/product-sd1-gpio-cs-advance-32m.log
-          grep -Fq 'PRODUCT_SD1_GPIO_CS_DIAG_SHORT_STATE_SAVED cycle=32000000 ' \
-            build/product-sd1-gpio-cs-advance-32m.log
-          echo 'Patched 12M->32M full Product RTL checkpoint saved; no CMD0 or Debian claim.' >> "$GITHUB_STEP_SUMMARY"
+              build/product-sd1-gpio-cs-rtl-checkpoint/advance-source.imported \
+              "$ADVANCE_TARGET_CYCLES" |
+            tee "build/product-sd1-gpio-cs-advance-$ADVANCE_TARGET_TAG.log"
+          grep -Fq "PRODUCT_SD1_GPIO_CS_DIAG_SHORT_STATE_SAVED cycle=$ADVANCE_TARGET_CYCLES " \
+            "build/product-sd1-gpio-cs-advance-$ADVANCE_TARGET_TAG.log"
+          echo "Patched $ADVANCE_SOURCE_CYCLES->$ADVANCE_TARGET_CYCLES full Product RTL checkpoint saved; no CMD0 or Debian claim." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain immutable separate diagnostic 12M Product RTL checkpoint
         if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-short'
@@ -277,11 +287,11 @@ jobs:
             build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restored.state
             build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/phase-timing.txt
 
-      - name: Retain immutable patched 32M full Product RTL checkpoint
-        if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+      - name: Retain immutable patched full Product RTL checkpoint
+        if: success() && env.IS_ADVANCE == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: product-sd1-gpio-cs-diagnostic-32m-${{ github.run_id }}
+          name: product-sd1-gpio-cs-diagnostic-${{ env.ADVANCE_TARGET_TAG }}-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 90
           include-hidden-files: true
@@ -294,8 +304,8 @@ jobs:
 
       # Never let a profiler regression discard an already authenticated RTL
       # checkpoint: upload the complete 32M state in the preceding step first.
-      - name: Analyze persisted 12M to 32M Linux boot profile
-        if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+      - name: Analyze persisted Linux boot phase profile
+        if: success() && env.IS_ADVANCE == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -303,23 +313,23 @@ jobs:
             -maxdepth 1 -type d -name 'advance.*' -print0)
           [[ "${#stages[@]}" == 1 ]] || exit 16
           python3 tools/ci/product_sd1_gpio_cs_boot_profile.py \
-            --previous build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.imported \
+            --previous build/product-sd1-gpio-cs-rtl-checkpoint/advance-source.imported \
             --current "${stages[0]}" \
-            --output build/product-sd1-gpio-cs-profile-32m
-          echo '12M->32M verified boot phase profile recorded and hashed.' >> "$GITHUB_STEP_SUMMARY"
+            --output "build/product-sd1-gpio-cs-profile-$ADVANCE_TARGET_TAG"
+          echo "$ADVANCE_SOURCE_CYCLES->$ADVANCE_TARGET_CYCLES boot phase profile recorded and hashed." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain diagnostic boot profile independent of RTL snapshot
-        if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+        if: success() && env.IS_ADVANCE == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: product-sd1-gpio-cs-boot-profile-32m-${{ github.run_id }}
+          name: product-sd1-gpio-cs-boot-profile-${{ env.ADVANCE_TARGET_TAG }}-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 90
           path: |
-            build/product-sd1-gpio-cs-profile-32m/segments.jsonl
-            build/product-sd1-gpio-cs-profile-32m/SHA256SUMS
-            build/product-sd1-gpio-cs-profile-32m/uart-cumulative.log
-            build/product-sd1-gpio-cs-profile-32m/uart-delta.bin
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/segments.jsonl
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/SHA256SUMS
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/uart-cumulative.log
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/uart-delta.bin
 
       - name: Upload small logs and SHA ledger, even on preflight failure
         if: always() && github.event.label.name == 'product-sd1-gpio-cs-diag-short'
@@ -337,8 +347,8 @@ jobs:
             build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restore.log
             build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/phase-timing.txt
 
-      - name: Upload advance evidence even if the 32M step failed
-        if: always() && github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m'
+      - name: Upload advance evidence even if a stage failed
+        if: always() && env.IS_ADVANCE == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: product-sd1-gpio-cs-diagnostic-advance-evidence-${{ github.run_id }}
@@ -346,9 +356,9 @@ jobs:
           retention-days: 90
           include-hidden-files: true
           path: |
-            build/product-sd1-gpio-cs-advance-32m.log
+            build/product-sd1-gpio-cs-advance-${{ env.ADVANCE_TARGET_TAG }}.log
             build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/.diag-ready
             build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/save.log
             build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/phase-timing.txt
-            build/product-sd1-gpio-cs-profile-32m/segments.jsonl
-            build/product-sd1-gpio-cs-profile-32m/SHA256SUMS
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/segments.jsonl
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/SHA256SUMS

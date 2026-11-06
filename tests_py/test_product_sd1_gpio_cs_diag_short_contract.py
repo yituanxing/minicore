@@ -61,22 +61,26 @@ class DiagnosticShortGateContract(unittest.TestCase):
     def test_immutable_cross_ci_12m_to_32m_relay(self):
         workflow = self.workflow
         self.assertIn('product-sd1-gpio-cs-diag-advance-32m', workflow)
-        self.assertIn('run-id: 42242315003', workflow)
+        self.assertIn('product-sd1-gpio-cs-diag-advance-52m', workflow)
+        self.assertIn("'42242315003'", workflow)
+        self.assertIn("'42245421838'", workflow)
         self.assertIn('product-sd1-gpio-cs-diagnostic-12m-42242315003', workflow)
+        self.assertIn('product-sd1-gpio-cs-diagnostic-32m-42245421838', workflow)
         self.assertIn('github-token: ${{ github.token }}', workflow)
         self.assertIn('actions: read', workflow)
         self.assertIn('steps.model-cache.outputs.cache-hit', workflow)
-        self.assertIn('expected exactly one imported 12M manifest', workflow)
+        self.assertIn('expected exactly one imported checkpoint manifest', workflow)
         self.assertIn("if: github.event.label.name == 'product-sd1-gpio-cs-diag-short'", workflow)
         self.assertIn('cached simulator bytes differ from its own sealed identity', workflow)
         self.assertIn('cached model bytes differ from 12M snapshot model', workflow)
         self.assertIn('cached model source key differs from 12M checkpoint', workflow)
         self.assertIn('product_sd1_gpio_cs_diag_short.sh advance', workflow)
-        self.assertIn('32000000', workflow)
+        self.assertIn("'32000000'", workflow)
+        self.assertIn("'52000000'", workflow)
         self.assertIn('product_sd1_gpio_cs_boot_profile.py', workflow)
         self.assertIn('"$source/phase-timing.txt"', workflow)
-        self.assertLess(workflow.index('Retain immutable patched 32M full Product RTL checkpoint'),
-                        workflow.index('Analyze persisted 12M to 32M Linux boot profile'))
+        self.assertLess(workflow.index('Retain immutable patched full Product RTL checkpoint'),
+                        workflow.index('Analyze persisted Linux boot phase profile'))
         script = self.script
         self.assertIn('source_model_key', script)
         self.assertIn('duplicate source checkpoint manifest fields', script)
