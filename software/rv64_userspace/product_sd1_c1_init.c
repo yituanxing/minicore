@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 static int console_fd = -1;
+static char root_device[32] = "/dev/mmcblk0p1";
 
 static void say(const char *message) {
   const size_t len = strlen(message);
@@ -40,13 +41,53 @@ static void mount_or_existing(const char *source, const char *target,
     die("common_mount");
 }
 
+static void select_root_from_cmdline(void) {
+  char cmdline[4096];
+  int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) die("cmdline_open");
+  ssize_t size = read(fd, cmdline, sizeof(cmdline) - 1);
+  int saved_errno = errno;
+  close(fd);
+  if (size <= 0) {
+    errno = size == 0 ? EINVAL : saved_errno;
+    die("cmdline_read");
+  }
+  cmdline[size] = '\0';
+  bool found = false;
+  for (char *cursor = cmdline; *cursor;) {
+    while (*cursor == ' ') ++cursor;
+    if (!*cursor) break;
+    char *start = cursor;
+    while (*cursor && *cursor != ' ') ++cursor;
+    const size_t length = (size_t)(cursor - start);
+    if (length < 5 || memcmp(start, "root=", 5) != 0) continue;
+    // The Product physical SPI-SD and QEMU-virt block oracle must use the
+    // same distro-independent /init, but different *built-in* block drivers.
+    // Do not accept paths under an arbitrary guest-controlled mount target.
+    const char *value = start + 5;
+    const size_t value_length = length - 5;
+    if (found ||
+        !((value_length == sizeof("/dev/mmcblk0p1") - 1 &&
+           memcmp(value, "/dev/mmcblk0p1", value_length) == 0) ||
+          (value_length == sizeof("/dev/vda1") - 1 &&
+           memcmp(value, "/dev/vda1", value_length) == 0))) {
+      errno = EINVAL;
+      die("cmdline_root_invalid");
+    }
+    memcpy(root_device, value, value_length);
+    root_device[value_length] = '\0';
+    found = true;
+  }
+  if (!found) { errno = EINVAL; die("cmdline_root_missing"); }
+}
+
 static void wait_for_block_root(void) {
   struct stat st;
   // Linux may already have read MBR sectors while enumerating the block
   // device. The host's C1 consumed-sector ledger enforces byte equivalence
   // for ALL such reads before a replacement media image may be attached.
   for (unsigned attempt = 0; attempt < 60; ++attempt) {
-    if (stat("/dev/mmcblk0p1", &st) == 0 && S_ISBLK(st.st_mode)) return;
+    if (stat(root_device, &st) == 0 && S_ISBLK(st.st_mode)) return;
     say("AETHERCORE_C1_WAIT_SD\n");
     sleep(1);
   }
@@ -85,6 +126,7 @@ int main(void) {
   ensure_dir("/proc"); ensure_dir("/sys"); ensure_dir("/newroot");
   mount_or_existing("proc", "/proc", "proc");
   mount_or_existing("sysfs", "/sys", "sysfs");
+  select_root_from_cmdline();
   wait_for_block_root();
 
   // A full-clock-boundary RTL/DDR/SD checkpoint is taken while PID1 blocks
@@ -92,7 +134,7 @@ int main(void) {
   say("AETHERCORE_C1_READY rootfs_unmounted=1\n");
   wait_for_release();
   say("AETHERCORE_C1_ROOTFS_MOUNT_BEGIN\n");
-  if (mount("/dev/mmcblk0p1", "/newroot", "ext4", 0, NULL) != 0)
+  if (mount(root_device, "/newroot", "ext4", 0, NULL) != 0)
     die("ext4_mount");
   say("AETHERCORE_C1_ROOTFS_MOUNT_OK\n");
 

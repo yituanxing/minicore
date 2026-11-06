@@ -15,13 +15,16 @@ class ProductSd1C1GuestInitContract(unittest.TestCase):
         text = SOURCE.read_text()
         ready = text.index('say("AETHERCORE_C1_READY rootfs_unmounted=1')
         release = text.index("wait_for_release();", ready)
-        mount = text.index('mount("/dev/mmcblk0p1", "/newroot", "ext4"', ready)
+        mount = text.index('mount(root_device, "/newroot", "ext4"', ready)
         exec_native = text.index('execve("/sbin/init"', ready)
         self.assertLess(ready, release)
         self.assertLess(release, mount)
         self.assertLess(mount, exec_native)
         self.assertIn('"AETHERCORE_C1_GO\\n"', text)
         self.assertIn('AETHERCORE_C1_FAIL stage=', text)
+        self.assertIn('select_root_from_cmdline()', text)
+        self.assertIn('"/dev/mmcblk0p1"', text)
+        self.assertIn('"/dev/vda1"', text)
 
     def test_builder_contains_only_generic_static_init_and_refuses_overwrite(self):
         text = BUILDER.read_text()

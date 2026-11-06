@@ -62,6 +62,16 @@ never bypass the read-ledger check to force a warm success.
   tied to the exact Linux/rootfs/SD SHA. A separate C1 mode is needed to arm
   read tracking at boot, verify the UART gate, restore the old snapshot, call
   the rebind API and resume with a new explicitly pinned rootfs.
+- `software/rv64_userspace/product_sd1_c1_init.c` uses the same tiny /init
+  for physical Product `/dev/mmcblk0p1` and a separate QEMU-virt `/dev/vda1`
+  oracle, accepting only those two explicitly selected kernel `root=` values.
+  `tools/ci/product_sd1_c1_qemu_oracle.sh` and
+  `product_sd1_c1_qemu_watch.py` provide a bounded **guest** gate: `/init`
+  prints READY before mounting the ext4 root, the host sends GO, then the
+  guest mounts the new disk root and must reach native getty/login. This
+  QEMU oracle is source/contract tested but has **not yet booted the official
+  SD1 image**. Its virtio bus is different from Product physical SPI-SD, so
+  even a QEMU PASS would not qualify C1 RTL state swapping.
 - `tools/ci/rv64_debian_linux_build.sh` and
   `tools/ci/rv64_debian_payload_build.sh`: today both bind the SD1 kernel and
   firmware manifests to the complete rootfs result. A **separate C1 profile**
