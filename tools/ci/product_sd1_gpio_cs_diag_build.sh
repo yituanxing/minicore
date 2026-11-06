@@ -55,14 +55,28 @@ out="$ROOT/build/product-sd1-gpio-cs-diagnostic"
 [[ ! -e "$out" ]] || fail 'diagnostic output already exists; never overwrite'
 mkdir -p "$out"
 diagnostic_source="$out/linux-source"
+original_source_file="$source_dir/drivers/mmc/host/mmc_spi.c"
+original_source_sha="$(sha "$original_source_file")"
 cp -a --reflink=auto "$source_dir" "$diagnostic_source"
-git -C "$diagnostic_source" apply --check "$patch" ||
-  fail 'patch does not apply to exact upstream Linux source'
-git -C "$diagnostic_source" apply "$patch"
+[[ "$(realpath "$source_dir")" != "$(realpath "$diagnostic_source")" ]] ||
+  fail 'diagnostic Linux source unexpectedly resolves to the immutable upstream tree'
+[[ "$(stat -c '%d:%i' "$original_source_file")" != \
+   "$(stat -c '%d:%i' "$diagnostic_source/drivers/mmc/host/mmc_spi.c")" ]] ||
+  fail 'diagnostic source file shares the upstream source inode'
+# A tar-extracted kernel tree is NOT a git checkout. `git -C ... apply`
+# can discover the outer minicore checkout instead of targeting the cloned
+# kernel. Use patch(1) with an explicit -d root and verify both sides.
+command -v patch >/dev/null || fail 'patch(1) missing on the Linux builder'
+patch --dry-run --batch --forward -p1 -d "$diagnostic_source" < "$patch" ||
+  fail 'patch does not apply to exact upstream Linux clone'
+patch --batch --forward -p1 -d "$diagnostic_source" < "$patch" ||
+  fail 'isolated cloned Linux patch failed'
+[[ "$(sha "$original_source_file")" == "$original_source_sha" ]] ||
+  fail 'immutable upstream Linux source changed during diagnostic patching'
 
 probe="$out/object-probe"
 mkdir -p "$probe"
-sha "$source_dir/drivers/mmc/host/mmc_spi.c" > "$probe/upstream-source.sha256"
+printf '%s\n' "$original_source_sha" > "$probe/upstream-source.sha256"
 sha "$diagnostic_source/drivers/mmc/host/mmc_spi.c" > "$probe/patched-source.sha256"
 [[ "$(< "$probe/upstream-source.sha256")" != "$(< "$probe/patched-source.sha256")" ]] ||
   fail 'source patch did not change mmc_spi.c'

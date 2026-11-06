@@ -55,6 +55,10 @@ class DiagnosticSD1BuildIsolation(unittest.TestCase):
                         body.index('Image 2>&1 | tee "$out/linux-build.log"'))
         self.assertIn("object-probe/identity.txt", workflow)
         self.assertIn("kernel_patch_applied=1", body)
+        self.assertIn('patch --dry-run --batch --forward -p1 -d "$diagnostic_source"', body)
+        self.assertIn('patch --batch --forward -p1 -d "$diagnostic_source"', body)
+        self.assertIn('immutable upstream Linux source changed during diagnostic patching', body)
+        self.assertNotIn('git -C "$diagnostic_source" apply', body)
 
 
 if __name__ == "__main__":
