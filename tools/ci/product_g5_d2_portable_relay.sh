@@ -118,6 +118,12 @@ prepare() {
   local source="$1" input_model="$2" input_ckpt="$3" out="$4"
   [[ -d "$source" && -d "$input_model" && -d "$input_ckpt" &&
      ! -e "$out" && ! -L "$out" ]] || reject 'invalid or non-fresh input/output'
+  # The generated .mk executes with make -C OBJ, so every -I path embedded
+  # into VM_USER_CFLAGS must be absolute, even if actions/checkout used a
+  # relative checkout directory such as frozen-source/.
+  source="$(realpath -e -- "$source")"
+  input_model="$(realpath -e -- "$input_model")"
+  input_ckpt="$(realpath -e -- "$input_ckpt")"
   [[ "$(git -C "$source" rev-parse HEAD)" == "$ORIGIN" ]] || reject 'G5 pinned source commit drift'
   git -C "$source" diff --quiet HEAD -- sim src/main/scala/aethercore || reject 'pinned host/RTL source edits'
   # actions/upload-artifact strips the producer's leading model-artifact/
@@ -153,6 +159,17 @@ prepare() {
   local obj="$out/model/obj" inc="$art/verilator-include" sim="$source/sim"
   local flags="-std=c++20 -O3 -march=x86-64 -mtune=generic -DAETHERCORE_PRODUCT_DEBIAN -DAETHERCORE_PRODUCT_CHECKPOINT_G5 -DAETHERCORE_PRODUCT_CHECKPOINT_SAVABLE -I$sim/product_rv64_opensbi_shim -I$sim -I$obj -I$inc -I$inc/vltstd"
   [[ -s "$obj/V${TOP}.mk" ]] || reject 'generated model makefile unavailable'
+  # Verilator embeds one *absolute* historical source prerequisite in the
+  # generated makefile (apart from overridable variables). Rewrite exactly
+  # this make rule in our private model copy so Make's dependency scanner
+  # cannot query the no-longer-existent old CI checkout.
+  local makefile="$obj/V${TOP}.mk"
+  local old_source='/home/runner/work/minicore/minicore/frozen-source/sim/opensbi_boot_main.cpp'
+  [[ "$(grep -Fxc "opensbi_boot_main.o: $old_source " "$makefile")" == 1 &&
+     -s "$sim/opensbi_boot_main.cpp" ]] || reject 'pinned historical opensbi make prerequisite unexpected'
+  sed -i "s#opensbi_boot_main.o: $old_source #opensbi_boot_main.o: $sim/opensbi_boot_main.cpp #" "$makefile"
+  [[ "$(grep -Fxc "opensbi_boot_main.o: $sim/opensbi_boot_main.cpp " "$makefile")" == 1 ]] ||
+    reject 'portable opensbi make prerequisite rewrite failed'
   local -a extra=() runtime=(verilated.o verilated_save.o) objectfiles=() generated_cpp=() immutable_args=()
   mapfile -d '' -t generated_cpp < <(find "$obj" -maxdepth 1 -type f -name 'V*.cpp' -print0)
   (( ${#generated_cpp[@]} >= 3 )) || reject 'generated Verilator C++ sources incomplete'
@@ -160,17 +177,27 @@ prepare() {
   for n in verilated_threads.o verilated_timing.o verilated_dpi.o; do
     [[ ! -s "$obj/$n" ]] || { extra+=("$n"); runtime+=("$n"); }
   done
-  # Private copy only: eliminate *every* native object/archive, regardless of
-  # whether Make thinks its timestamps are current. Generated source retained.
-  mapfile -d '' -t objectfiles < <(find "$obj" -maxdepth 1 -type f \( -name '*.o' -o -name '*.a' \) -print0)
+  # Private copy only: remove *all* native objects, precompiled headers and
+  # GCC dependency files. Historical *.d refer to the previous runner's
+  # absolute /home/runner/.../verilator-5.054/include paths. Keeping them
+  # makes GNU Make fail BEFORE compiling even with VERILATOR_ROOT overridden:
+  # "No rule to make target .../verilated.h, needed by ...__pch.h.fast.gch".
+  # The fresh build regenerates these dependencies against our pinned 5.054
+  # include tree. All generated .cpp/.h/.mk source bytes remain untouched.
+  mapfile -d '' -t objectfiles < <(find "$obj" -maxdepth 1 -type f \( \
+    -name '*.o' -o -name '*.a' -o -name '*.d' -o -name '*.gch' -o -name '*.pch' \
+    \) -print0)
   (( ${#objectfiles[@]} >= 3 )) || reject 'historical generated object set unexpectedly small'
   rm -- "${objectfiles[@]}"
+  [[ -z "$(find "$obj" -maxdepth 1 -type f \( -name '*.d' -o -name '*.gch' -o -name '*.pch' \) -print -quit)" ]] ||
+    reject 'stale native precompiled header/dependency files survived cleanup'
   local archive="V${TOP}__ALL.a" log="$out/logs/portable-build.log"
   # -o treats all present generated *.cpp as immutable (there is no
   # __ALL.cpp in the 5.054 parallel-build artifact). No Verilator, Perl or
   # Chisel is invoked. VM_USER_CFLAGS overrides baked -march=native.
   if ! make -C "$obj" -f "V${TOP}.mk" -j4 "${immutable_args[@]}" \
       VERILATOR_ROOT="$(realpath -e "$out/toolchain")" \
+      VM_USER_DIR="$sim" \
       VM_USER_CFLAGS="$flags" OPT_FAST=-O3 OPT_GLOBAL=-O3 \
       "$archive" "${runtime[@]}" > "$log" 2>&1; then
     tail -65 "$log" >&2 || true
