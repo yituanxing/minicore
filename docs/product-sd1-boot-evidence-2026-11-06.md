@@ -61,12 +61,32 @@
 
 **两条路径的区别：**这个原生 Debian QEMU oracle 的根设备是 `/dev/vda1`（virtio block），而 Product RTL 使用真实 SPI SD 卡。QEMU 验证了官方 ext4/`/sbin/init`/systemd/登录提示链路，**没有验证 Product 的 Linux MMC SPI GPIO-CS 握手**。
 
-## SD SPI 下一条低成本诊断
+## SD SPI CMD0 定点根因与短门禁（2026-11-06）
 
-332M 之后的 CMD0 错误与 Linux 6.6 `mmc_spi_initsequence()` 通过翻转 `SPI_CS_HIGH` 发出 18×`0xff` 初始化时钟、而 GPIO 描述符 CS 路径依旧物理选中（CS_N低）这一组合高度吻合。候选短修复是仅在这段预备传输临时设置 `spi_transfer.cs_off=1`，并以 **144 个 CS_N 高/MOSI 高的 SCLK 边沿**、**73 时钟拒绝与 74 时钟接受 CMD0**、恢复 CS 低有效后的 CMD0 R1 回应做短验证。当前这仍是**待实证的根因假说**，未修改冻结内核或启动长跑。任何新的 Linux Image 身份都不能继承旧 312M 主存快照；两条验证线必须分别标记。
+**原障碍仍存在，完整 RTL Debian 尚未启动。** [正式接力 #42221108211](https://github.com/yituanxing/minicore/actions/runs/42221108211) 在 332→352M 报错，不能把 332M 当作远端可恢复快照。现存最近已发布的完整快照仍是 312M。
+
+已完成不碰 Linux 长跑的三组针对性验证：
+
+- [SPI/GPIO 短门禁 #42229855857](https://github.com/yituanxing/minicore/actions/runs/42229855857) **SUCCESS**：`ProductSd1SpiGpioSpec` 2/2、`ProductSd1FabricSpec` 2/2。经真实 Product fabric、SPI TXDATA 和 GPIO 寄存器，实测 18×`0xff` 对应 **144 个 CS_N 高且 MOSI 高的 SCLK 上升沿**；同样发时钟但 CS_N 低时不满足初始化要求。
+- [`SdSpiCard` C++ 定向回归 ec81f6d8](https://github.com/yituanxing/minicore/commit/ec81f6d8053f09f5f74e4568d88d39b9fdfe2413) **1/1 PASS**：严格区分 73 个有效 CS-high/MOSI-high 时钟不足和 74 个足够；CS 拉低、MOSI 拉低都不能冒充 74 个有效时钟。协议守卫未关闭。
+- 独立核查上游 [Linux v6.6.143 MMC SPI](https://github.com/gregkh/linux/blob/v6.6.143/drivers/mmc/host/mmc_spi.c)、[SPI core](https://github.com/gregkh/linux/blob/v6.6.143/drivers/spi/spi.c)、[`spi-oc-tiny`](https://github.com/gregkh/linux/blob/v6.6.143/drivers/spi/spi-oc-tiny.c) 和 [`spi-bitbang`](https://github.com/gregkh/linux/blob/v6.6.143/drivers/spi/spi-bitbang.c)：`mmc_spi_initsequence` 尝试翻转 `SPI_CS_HIGH` 并发送 18 字节 `0xff`；但设备树 GPIO-CS 路径在 `spi_set_cs()` 中按 transfer 的 `activate` 调 `gpiod_set_value_cansleep`，不通过翻转模式位改变实际 GPIO 状态；Product 的 `spi-oc-tiny` 由 bitbang 提供 `transfer_one`，最终采用 SPI core 默认消息路径，该路径有 `spi_transfer.cs_off`。这一组合**高度支持**此前的 CS_N 低初始化时钟根因，但仍缺真实 guest 的逐引脚 trace。
+
+已将**仅用于隔离诊断、当前不会自动应用**的 [Linux 6.6.143 GPIO-CS `cs_off` 补丁](../tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch) 固化在仓库：只在检测到 GPIO-CS 时临时对 `host->status` 传输设置 `cs_off=1`，发送 18×`0xff` 后恢复 `cs_off=0`；非 GPIO 路径保留原样。下一步在**独立源码/构建目录**应用、编译新 Image，获得新 firmware/兼容性 SHA，先核实 Linux 真实驱动发出的 CS_N/MOSI/SCLK 与 CMD0 R1；通过短门禁后才能决定是否开展新身份的长跑。**新 Image 绝不能恢复旧 312M 主存状态。**
+
+## 12M 周期三路仿真器 A/B（新留存）
+
+[短 A/B #42229855875](https://github.com/yituanxing/minicore/actions/runs/42229855875) **SUCCESS**，12M 比较点的 Product CPU cycles/commits/traps/IRQs/PC、RAM/LRSC 及 SD1 UART/CPU/RAM/SPI 状态匹配。此处是短测试，**不是 Linux 或 Debian 长跑的等价验收**：
+
+| 方案 | 测得 cycles/s | 相对旧版 |
+| --- | ---: | ---: |
+| Verilator 5.024 | 230,608 | 1.000× |
+| Verilator 5.054 | 301,616 | **1.3079×** |
+| Verilator 5.054 + adaptive | 297,642 | 1.2907× |
+
+5.054 是**候选优化**；这次 adaptive 低于普通 5.054，不能宣传为额外提速。原始 A/B artifact **#13508595839**（42,641 字节）将在 **2026-11-20 14:03:35 UTC** 到期；已将速率、状态一致性、run 和 artifact ID 写入长期 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。下一步审查是否能在不改冻结身份的情况下迁移 simulator 二进制并重复短恢复，不拿旧快照冒险。
 
 ## 可继续累积的数据
 
 机器可读的 17 条历史进度记录和 1 条失败记录见 [JSONL 台账](product-sd1-boot-stage-ledger-2026-11-06.jsonl)。未来 [SD1 relay workflow](../.github/workflows/product-sd1-official-artifact-relay.yml) 每个成功窗口额外生成 `analysis/segments.jsonl`、原始累计 UART、逐窗 UART 增量、runner CPU 信息、分窗口 save/relay 日志和 SHA256；失败时抢救最近经过正式完整校验的独立工件及分析日志，**保留失败状态，不伪装 PASS**。后续只会在新的人工 label 触发后将兼容性匹配、再次完整校验通过的 recovery 工件选为续跑源。分析专用工件预设保留 90 天，而这个小型版本化历史台账存于 Git 仓库，长期可追溯。
 
-接下来优先处理 **Linux MMC SPI CMD0 之前的 CS-high/DI-high 74 个时钟**，先用短时 SPI/GPIO 引脚级验证确认时序，再决定是否需要 Linux `mmc_spi_initsequence`/CS 控制修复。没有短验证依据前，停止反复触发 312M→后续的长 RTL 接力；绝不禁用协议守卫来制造虚假启动成功。
+下一阶段优先对隔离内核补丁建立真实 guest 引脚追踪和 CMD0 R1 短证明，再考虑新 Image 的正式 SD1 长跑；旧冻结 312M 快照继续保留、不得混用。持续保存启动各阶段 UART、CPU 周期、退休数和宿主耗时，用于后续 Linux 启动性能分段分析。
