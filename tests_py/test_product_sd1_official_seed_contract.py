@@ -50,11 +50,23 @@ class ProductSd1OfficialSeedContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 sd1_seed.read_lock(lock)
 
-    def test_seed_is_dispatch_only_hard_budget_and_no_rtl(self):
+    def test_seed_requires_explicit_dispatch_or_first_party_product_pr_label(self):
         text = WORKFLOW.read_text()
         self.assertIn("  workflow_dispatch:", text)
-        self.assertNotIn("  pull_request:", text)
+        self.assertIn("  pull_request:\n    types: [labeled]", text)
         self.assertNotIn("  push:", text)
+        self.assertNotIn("  schedule:", text)
+        self.assertIn("github.event_name == 'workflow_dispatch'", text)
+        self.assertIn("github.event_name == 'pull_request'", text)
+        self.assertIn("github.event.label.name == 'product-sd1-official-seed'", text)
+        self.assertIn("github.event.pull_request.number == 379", text)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
+        self.assertIn("github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'", text)
+        self.assertIn("github.event.pull_request.base.ref == github.event.repository.default_branch", text)
+        self.assertIn("github.event.pull_request.head.sha || github.sha", text)
+        self.assertIn("ref: ${{ env.TARGET_SHA }}", text)
+        self.assertIn("persist-credentials: false", text)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$TARGET_SHA"', text)
         self.assertIn("timeout-minutes: 150", text)
         self.assertIn("github.event.repository.default_branch", text)
         self.assertIn("SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES", text)
@@ -62,6 +74,7 @@ class ProductSd1OfficialSeedContracts(unittest.TestCase):
         self.assertNotIn("tools/ci/product_sim_sd1_manual.sh longrun", text)
         self.assertNotIn("run-existing", text)
         self.assertNotIn("actions/upload-artifact@", text)
+        self.assertIn('[[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" ]]', text)
         self.assertIn("unset RV64_SD1_LOGIN_USER RV64_SD1_LOGIN_PASSWORD_HASH_FILE", text)
 
     def test_oci_candidate_requires_raw_digest_and_riscv64_index(self):

@@ -1,6 +1,7 @@
 name: AetherCore Product SD1 Official Offline Media Seed
 
-# Explicit human opt-in on reviewed default branch only. This job creates the
+# Explicit human opt-in on the reviewed default branch, or by labeling the
+# first-party Product Draft PR. This job creates the
 # real Debian package/rootfs/kernel/OpenSBI/SD artifacts with ZERO Product RTL
 # or QEMU-system guest cycles. Debian package maintainer scripts DO execute in
 # the isolated riscv64 OCI/QEMU-user container; this is not a simulated boot.
@@ -16,23 +17,39 @@ on:
           - 'NO'
           - SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES
         default: 'NO'
+  # The Product Draft cannot workflow_dispatch its own workflow before it
+  # reaches default. An exact, first-party PR label is the explicit operator
+  # gate for preparing offline media without merging an unfinished CPU/SoC.
+  # Synchronize/push, ordinary labels and automatic retries never start it.
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: aethercore-product-sd1-official-seed-${{ github.ref }}
+  group: aethercore-product-sd1-official-seed-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   product-sd1-official-seed:
-    if: inputs.confirmation == 'SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirmation == 'SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'product-sd1-official-seed' &&
+       github.event.pull_request.number == 379 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103')
     runs-on: ubuntu-24.04
     # HARD cold limit, including external OCI/APT, cross compiler, Linux,
     # OpenSBI and cache compression/upload. No automatic retry or fallback.
     timeout-minutes: 150
     env:
-      TARGET_SHA: ${{ github.sha }}
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       RV64_LINUX_JOBS: '4'
       AETHERCORE_MILL_NO_DAEMON: '1'
       AETHERCORE_TOOLCHAIN_JOBS: '4'
@@ -44,6 +61,7 @@ jobs:
         with:
           ref: ${{ env.TARGET_SHA }}
           clean: true
+          persist-credentials: false
 
       - name: Reject missing or unreviewed official supply pins before network
         shell: bash
@@ -51,6 +69,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           test "$RV64_DEBIAN_STAGE" = sd1
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" ]] || {
+            echo 'Official SD1 media seed must never inherit an RTL longrun confirmation' >&2
+            exit 19
+          }
           test ! -e build/rv64-debian-sd1-official-rootfs
           test ! -e build/product-sd1-official-seed
           python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"

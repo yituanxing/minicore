@@ -116,6 +116,53 @@ class SdSpiCard {
   std::uint64_t sourceSectors() const { return sectorCount_; }
   std::uint32_t partitionStartLba() const { return firstPartitionLba_; }
 
+  // C1 is an opt-in, rootfs-independent checkpoint profile. Record exactly
+  // which immutable SD sector bytes were exposed to the guest BEFORE the
+  // kernel reaches the handoff. A warm rootfs swap must not invalidate bytes
+  // already consumed by Linux, even when the MBR and geometry still match.
+  // Ordinary SD1 checkpoint bytes and their strict whole-image SHA binding
+  // remain unchanged unless the caller explicitly arms this profile.
+  void armC1RootfsBoundary() {
+    if (commands_ || reads_ || writes_ || !overlay_.empty())
+      throw std::runtime_error("C1 read tracking must start before the guest accesses SD");
+    c1ReadTracking_ = true;
+  }
+
+  bool c1RootfsBoundaryArmed() const { return c1ReadTracking_; }
+  std::size_t c1ConsumedSectorCount() const { return c1ReadLedger_.size(); }
+
+  // Call only on the restored C1 checkpoint, when an independent guest UART
+  // gate has proved that rootfs has not been mounted/unpacked. The old source
+  // must still be present for strict checkpoint restore; only THEN can this
+  // method switch to a second immutable backing image. It never mutates the
+  // source disk or discards any previously guest-visible bytes.
+  void rebindC1Rootfs(const std::string& newImagePath) {
+    if (!c1ReadTracking_ || !lastCsHigh_ || lastSclk_ || rxBits_ || commandBytes_ ||
+        !output_.empty() || multiRead_ || multiWrite_ || appCommand_ ||
+        writeState_ != WriteState::None || writes_ || !overlay_.empty())
+      throw std::runtime_error("C1 rootfs rebind requires a quiescent, unwritten SD boundary");
+    // Check the original source, too: a renamed/modified old image must not
+    // bypass the strict immutable-media identity of the loaded checkpoint.
+    (void)immutableMediaSha256();
+    SdSpiCard next(newImagePath);
+    if (next.sectorCount_ != sectorCount_ ||
+        next.firstPartitionLba_ != firstPartitionLba_ ||
+        next.partitionSectors_ != partitionSectors_)
+      throw std::runtime_error("C1 replacement SD geometry/partition differs");
+    for (const auto& [lba, bytesSha] : c1ReadLedger_) {
+      const auto sector = next.readSector(lba);
+      if (snapshot_detail::sha256(sector) != bytesSha)
+        throw std::runtime_error("C1 replacement changed a sector already consumed by Linux");
+    }
+    // All verification finished: preserve SPI state and guest-visible card
+    // identity, changing ONLY the immutable backing bytes for future reads.
+    disk_ = std::move(next.disk_);
+    imagePath_ = std::move(next.imagePath_);
+    sourceSha256_ = next.sourceSha256_;
+    c1ReadLedger_.clear();
+    c1ReadTracking_ = false;
+  }
+
   // Versioned, endian-stable host-state bytes. Save only at a complete Product
   // simulated clock boundary (after observe()); all partial SPI bit/command/
   // write data phases are still serialized. The physical image stays strictly
@@ -155,10 +202,25 @@ class SdSpiCard {
       body.u64(lba);
       body.bytes(overlay_.at(lba));
     }
+    // Schema v2 is ONLY for opt-in C1; schema v1 remains byte-for-byte
+    // identical for the already qualified strict SD1 replay path.
+    if (c1ReadTracking_) {
+      if (c1ReadLedger_.size() > kMaxC1ReadSectors)
+        throw std::runtime_error("C1 consumed too many sectors before rootfs handoff");
+      std::vector<std::uint64_t> readLbas;
+      readLbas.reserve(c1ReadLedger_.size());
+      for (const auto& [lba, _] : c1ReadLedger_) readLbas.push_back(lba);
+      std::sort(readLbas.begin(), readLbas.end());
+      body.u32(static_cast<std::uint32_t>(readLbas.size()));
+      for (const auto lba : readLbas) {
+        body.u64(lba);
+        body.bytes(c1ReadLedger_.at(lba));
+      }
+    }
     constexpr std::array<std::uint8_t, 8> Magic{'A','C','S','D','S','P','0','1'};
     Writer envelope;
     envelope.bytes(Magic);
-    envelope.u32(1);  // checkpoint schema version; no silent migrations
+    envelope.u32(c1ReadTracking_ ? 2 : 1);  // strictly versioned opt-in C1
     envelope.u64(body.out.size());
     envelope.bytes(sha256(body.out));  // reject corruption before mutation
     envelope.bytes(body.out);
@@ -170,7 +232,9 @@ class SdSpiCard {
     constexpr std::array<std::uint8_t, 8> Magic{'A','C','S','D','S','P','0','1'};
     Reader input(bytes);
     const auto magic = input.bytes(Magic.size());
-    if (!std::equal(magic.begin(), magic.end(), Magic.begin()) || input.u32() != 1)
+    const auto version = input.u32();
+    if (!std::equal(magic.begin(), magic.end(), Magic.begin()) ||
+        (version != 1 && version != 2))
       throw std::runtime_error("SD checkpoint magic/version mismatch");
     const auto bodyLength = input.u64();
     const auto expectedDigest = input.bytes(32);
@@ -235,6 +299,27 @@ class SdSpiCard {
       std::copy(data.begin(), data.end(), sector.begin());
       staged.overlay_.emplace(lba, std::move(sector));
     }
+    if (version == 2) {
+      staged.c1ReadTracking_ = true;
+      const auto count = body.u32();
+      if (count > kMaxC1ReadSectors || count > staged.reads_)
+        throw std::runtime_error("C1 SD read-set exceeds saved guest read count");
+      std::uint64_t previousLba = 0;
+      for (std::uint32_t i = 0; i < count; ++i) {
+        const auto lba = body.u64();
+        if (lba >= staged.sectorCount_ || (i && lba <= previousLba))
+          throw std::runtime_error("C1 SD read-set has invalid/duplicate LBA");
+        previousLba = lba;
+        const auto hash = body.bytes(32);
+        std::array<std::uint8_t, 32> digest{};
+        std::copy(hash.begin(), hash.end(), digest.begin());
+        staged.c1ReadLedger_.emplace(lba, digest);
+      }
+      // The old source must still match every read exposed to Linux.
+      for (const auto& [lba, bytesSha] : staged.c1ReadLedger_)
+        if (snapshot_detail::sha256(staged.readSector(lba)) != bytesSha)
+          throw std::runtime_error("C1 SD read-set does not match the checkpoint source");
+    }
     if (body.remaining() != 0)
       throw std::runtime_error("SD checkpoint contains unexpected trailing fields");
     *this=std::move(staged);
@@ -242,6 +327,7 @@ class SdSpiCard {
 
  private:
   static constexpr std::size_t SectorSize = 512;
+  static constexpr std::size_t kMaxC1ReadSectors = 65536;
   using Sector = std::array<std::uint8_t, SectorSize>;
   enum class WriteState { None, WaitToken, ReceiveData };
 
@@ -346,6 +432,12 @@ class SdSpiCard {
       return;
     }
     const auto sector = readSector(lba);
+    if (c1ReadTracking_) {
+      if (c1ReadLedger_.size() >= kMaxC1ReadSectors &&
+          c1ReadLedger_.find(lba) == c1ReadLedger_.end())
+        throw std::runtime_error("C1 rootfs boundary was not reached within the SD read budget");
+      c1ReadLedger_.emplace(lba, snapshot_detail::sha256(sector));
+    }
     queueData(sector.data(), sector.size());
     ++reads_;
   }
@@ -612,6 +704,8 @@ class SdSpiCard {
   std::uint32_t firstPartitionLba_ = 0;
   std::uint32_t partitionSectors_ = 0;
   std::unordered_map<std::uint64_t, Sector> overlay_;
+  bool c1ReadTracking_ = false;
+  std::unordered_map<std::uint64_t, std::array<std::uint8_t,32>> c1ReadLedger_;
   std::deque<std::uint8_t> output_;
   std::array<std::uint8_t, 6> command_{};
   std::size_t commandBytes_ = 0;

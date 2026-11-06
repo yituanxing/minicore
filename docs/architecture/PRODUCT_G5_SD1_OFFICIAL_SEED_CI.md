@@ -70,10 +70,15 @@ accepting the result; the checker itself is not a release approval.
 
 ## How the offline cache becomes available
 
-After review and merge to the repository default branch, explicitly select
-the *AetherCore Product SD1 Official Offline Media Seed* `workflow_dispatch`
-and the `SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES` confirmation. There is no push,
-PR-label, schedule or automatic retry trigger. The job has a hard **150
+There are exactly two opt-in entries. After review and merge to the default
+branch, select the *AetherCore Product SD1 Official Offline Media Seed*
+`workflow_dispatch` and the `SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES` confirmation.
+While the full Product branch remains Draft PR #379, its same-repository owner
+may instead explicitly add the `product-sd1-official-seed` PR label. The
+PR-label path rejects other PR numbers, forked repositories, unexpected head
+branches and bases, and checks out the event's exact head SHA. There is no
+push, schedule, other-label or automatic retry trigger. Both paths run the
+same zero-RTL official source/media build. The job has a hard **150
 minute** timeout and individual stage timeouts: host prerequisites/toolchain,
 upstream kernel baseline, official snapshot/OCI Debian rootfs, raw SD image,
 Linux and OpenSBI. It refuses SD images above **2 GiB**, and does not switch

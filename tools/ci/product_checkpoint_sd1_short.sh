@@ -132,7 +132,16 @@ OUT="${PRODUCT_SD1_PERSISTENT_OUT:-$ROOT/build/product-sd1-persistent-checkpoint
 MODEL="$OUT/savable-model"
 OBJ="$MODEL/obj"
 SIM="$OBJ/V$TOP"
-FLAGS="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -DAETHERCORE_PRODUCT_SPI_SD -DAETHERCORE_PRODUCT_CHECKPOINT_SAVABLE -I$ROOT/sim/product_rv64_opensbi_shim -I$ROOT/sim"
+# A long relay may resume on another Ubuntu x86-64 runner. Unlike short
+# same-runner qualification, its compiler profile must never emit the source
+# runner's AVX/other -march=native extensions. The binary SHA still has to
+# match exactly: portable ISA is necessary, not a substitute for identity.
+if [[ "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_FULL_DEBIAN_SIGNED_RELAY ]]; then
+  HOST_ARCH_FLAGS='-march=x86-64 -mtune=generic'
+else
+  HOST_ARCH_FLAGS='-march=native'
+fi
+FLAGS="-std=c++20 -O3 $HOST_ARCH_FLAGS -DAETHERCORE_PRODUCT_DEBIAN -DAETHERCORE_PRODUCT_SPI_SD -DAETHERCORE_PRODUCT_CHECKPOINT_SAVABLE -I$ROOT/sim/product_rv64_opensbi_shim -I$ROOT/sim"
 MODEL_ARGS=("$MODEL" "$TOP" "$ELABORATE" "$FLAGS")
 TOOLCHAIN="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
 VERILATOR_BIN="$TOOLCHAIN/verilator-5.054/bin/verilator"
@@ -328,9 +337,16 @@ if [[ "$ACTION" == advance-only ]]; then
   verify_snapshot_ready "$PREV" >/dev/null || reject 'source checkpoint invalid'
   current_id_matches "$PREV"
   NEXT="$3"
+  # The short/replay qualification remains capped at 1.8B. A real Debian
+  # continuation needs an explicit separate opt-in even if its exact source
+  # checkpoint was produced by a trusted prior stage.
+  MAX_CYCLE=1800000000
+  if [[ "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_FULL_DEBIAN_SIGNED_RELAY ]]; then
+    MAX_CYCLE=4000000000
+  fi
   [[ "$NEXT" =~ ^[1-9][0-9]{0,9}$ ]] &&
-    (( NEXT > BOOT_CYCLES && NEXT <= 1800000000 && NEXT-BOOT_CYCLES <= 20000000 )) ||
-    reject 'stage NEXT_CYCLE must advance by 1..20M, never cold-reboot or overrun 1.8B'
+    (( NEXT > BOOT_CYCLES && NEXT <= MAX_CYCLE && NEXT-BOOT_CYCLES <= 20000000 )) ||
+    reject 'stage NEXT_CYCLE must advance 1..20M, max 1.8B by default or 4B explicitly opted-in'
   DELTA=$(( NEXT-BOOT_CYCLES ))
   STAGE="$(mktemp -d "$OUT/persist-SD1-stage.XXXXXXXX")"
   # Source prestate untouched; destination is distinct and initially empty.

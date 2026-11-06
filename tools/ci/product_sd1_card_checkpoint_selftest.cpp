@@ -185,7 +185,66 @@ void compare(SdSpiCard& a,SdSpiCard& b,const std::string& label) {
   require(a.progress()==b.progress(),"SD counters differ: "+label);
 }
 
+void testC1RootfsRebind(const std::string& original, const std::string& changed) {
+  SdSpiCard guest(original);
+  guest.armC1RootfsBoundary();
+  Spi io(guest);
+  io.preamble(); io.init();
+  require(io.command(17,2100)==0,"C1 first guest read");
+  (void)io.read(); io.deselect();
+  require(guest.c1ConsumedSectorCount()==1,"C1 must record the exact read LBA");
+  const auto c1=guest.snapshot();
+  require(c1[8]==2 && c1[9]==0,"C1 must use an independently versioned schema");
+  SdSpiCard restored(original);
+  restored.restore(c1);
+  require(restored.snapshot()==c1,"C1 read-set lost across save/restore");
+  restored.rebindC1Rootfs(changed);
+  require(!restored.c1RootfsBoundaryArmed(),"C1 swap must disable old read tracking");
+  Spi resumed(restored);
+  require(resumed.command(17,5000)==0,"C1 new rootfs sector read");
+  auto changedSector=resumed.read(); resumed.deselect();
+  require(changedSector[23]==0x5a,"C1 warm resume did not read new rootfs bytes");
+
+  SdSpiCard alreadyRead(original);
+  alreadyRead.armC1RootfsBoundary();
+  Spi consumed(alreadyRead);
+  consumed.preamble(); consumed.init();
+  require(consumed.command(17,5000)==0,"C1 consume the sector later changed");
+  (void)consumed.read(); consumed.deselect();
+  SdSpiCard unsafe(original);
+  unsafe.restore(alreadyRead.snapshot());
+  const auto stable=unsafe.snapshot();
+  bool rejected=false;
+  try { unsafe.rebindC1Rootfs(changed); }
+  catch (const std::runtime_error&) { rejected=true; }
+  require(rejected,"C1 must reject replacing bytes already consumed by Linux");
+  require(unsafe.snapshot()==stable,"C1 rejected swap mutated old card state");
+
+  SdSpiCard inflight(original);
+  inflight.armC1RootfsBoundary();
+  Spi partial(inflight);
+  partial.preamble(); partial.init();
+  require(partial.command(17,2100)==0,"C1 pending read");
+  rejected=false;
+  try { inflight.rebindC1Rootfs(changed); }
+  catch (const std::runtime_error&) { rejected=true; }
+  require(rejected,"C1 must reject a queued, not-yet-consumed SPI response");
+
+  // A forged v2 read ledger with a valid envelope hash must still be checked
+  // against the exact original source, not trusted as a caller assertion.
+  rejectsWithoutMutation(guest,[](auto& data) {
+    data.back()^=0x40;
+    const auto hash=sha256(std::span<const std::uint8_t>(data.data()+52,data.size()-52));
+    std::copy(hash.begin(),hash.end(),data.begin()+20);
+  },"forged C1 previously consumed sector hash");
+  std::cout << "PRODUCT_SD1_C1_MEDIA_REBIND_HOST_PASS schema=2 "
+            << "same_prior_reads=PASS changed_unread_sector=PASS "
+            << "changed_consumed_sector=REJECT inflight=REJECT forged_readset=REJECT "
+            << "rtl_cycles=0 linux_cycles=0\n";
+}
+
 void run(const std::string& path,const std::string& alteredPath) {
+  testC1RootfsRebind(path,alteredPath);
   const std::string empty{};
   const std::string abc="abc";
   const auto toHex=[](const auto& hash) {

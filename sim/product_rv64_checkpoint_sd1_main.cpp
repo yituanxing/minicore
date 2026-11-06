@@ -454,13 +454,20 @@ int main(int argc,char** argv) {
     const std::string advanceDest=advancing?argv[argc-1]:"";
     if (!policy.uartInput.empty() && policy.uartInput.back()!='\n')
       policy.uartInput.push_back('\n');
-    if (bootCycles<1000000 || bootCycles>1800000000 ||
+    // The short proof's historic 1.8B ceiling stays the default. Long SD1
+    // continuation is a separate, explicitly opted-in execution profile:
+    // no implicit cold replay or unbounded cycle count is permitted.
+    const char* relayConfirm=std::getenv("AETHERCORE_SD1_RELAY_CONFIRM");
+    const bool longRelay=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY";
+    const std::uint64_t maxCycle=longRelay?4000000000ULL:1800000000ULL;
+    if (bootCycles<1000000 || bootCycles>maxCycle ||
         ((mode=="save" || mode=="snapshot") && bootCycles>20000000) ||
         replayCycles==0 || replayCycles>(advancing?20000000ULL:5000000ULL) ||
-        (advancing && bootCycles>1800000000ULL-replayCycles) ||
+        (advancing && bootCycles>maxCycle-replayCycles) ||
         policy.uartTrigger.size()>128 || policy.uartInput.size()>4096 ||
         policy.postInputBudget>5000000)
-      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; never implicit 1.8B cold boot");
+      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default ceiling, explicit long relay <=4B only");
     if (!std::filesystem::is_regular_file(fw) ||
         !std::filesystem::is_regular_file(dtb) ||
         !std::filesystem::is_regular_file(sd) ||
