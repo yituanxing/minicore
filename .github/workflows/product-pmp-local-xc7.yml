@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   pmp-local:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-pmp-local-xc7')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.label.name == 'product-pmp-local-xc7' || github.event.label.name == 'product-pmp-area-only'))
     name: PMP geometry, captured snapshot and standalone mapping
     runs-on: ubuntu-24.04
     timeout-minutes: 22
@@ -42,6 +42,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
 
       - name: Restore pinned Verilator 5.024 cache
+        if: github.event.label.name != 'product-pmp-area-only'
         id: verilator-cache
         uses: actions/cache/restore@v4
         with:
@@ -54,7 +55,7 @@ jobs:
             aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
 
       - name: Install Verilator build requirements only on cache miss
-        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        if: github.event.label.name != 'product-pmp-area-only' && steps.verilator-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
@@ -66,9 +67,12 @@ jobs:
           chmod +x mill
           mkdir -p "$RUNNER_TEMP/product-pmp-local-xc7/rtl" "$RUNNER_TEMP/product-pmp-local-xc7/mill-out"
           echo "MILL_OUTPUT_DIR=$RUNNER_TEMP/product-pmp-local-xc7/mill-out" >> "$GITHUB_ENV"
-          bash tools/ensure_verilator_5_024.sh
+          if [[ '${{ github.event.label.name }}' != 'product-pmp-area-only' ]]; then
+            bash tools/ensure_verilator_5_024.sh
+          fi
 
       - name: Test PMP reference, upper address, CSR and in-flight snapshots
+        if: github.event.label.name != 'product-pmp-area-only'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,27 +92,29 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/elaboration.log"
           test -s "$RUNNER_TEMP/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv"
 
-      - name: Install local-only XC7 mapping tool
+      - name: Install pinned standalone XC7 mapper without apt mirrors
         run: |
           set -euo pipefail
-          # GitHub hosted images already ship apt package indexes. An
-          # unbounded apt-get update previously stalled for eight minutes,
-          # after which an unrelated label event cancelled the A/B run.
-          # Limit the installation instead of hiding a mirror outage.
-          if ! command -v yosys >/dev/null 2>&1; then
-            timeout --signal=TERM --kill-after=15s 180s \
-              sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-              -o Acquire::Retries=1 -o Acquire::http::Timeout=20 yosys
-          fi
-          yosys -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          # Both apt paths have already stalled on hosted runners; keep this
+          # pinned, isolated WebAssembly Yosys for a local A/B *only*. The
+          # full Product FPGA mapping still uses native Yosys separately.
+          python3 -m venv "$root/yosys-venv"
+          timeout --signal=TERM --kill-after=10s 120s \
+            "$root/yosys-venv/bin/python" -m pip install \
+            --disable-pip-version-check --timeout 25 --retries 1 \
+            yowasp-yosys==0.70.0.0.post1259
+          "$root/yosys-venv/bin/yowasp-yosys" -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
+          echo "YOSYS_EXEC=$root/yosys-venv/bin/yowasp-yosys" >> "$GITHUB_ENV"
 
       - name: Map PMP decoder only to Xilinx 7-series cells
         shell: bash
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/product-pmp-local-xc7"
-          yosys -Q -T -l "$root/yosys.log" -p \
-            "read_verilog -sv -DSYNTHESIS $root/rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx"
+          cd "$root"
+          "$YOSYS_EXEC" -Q -T -l yosys.log -p \
+            'read_verilog -sv -DSYNTHESIS rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx'
           grep -q 'PmpRangeDecoder' "$root/yosys.log"
           echo 'Local PA56 PMP XC7 logic map finished. This is not full-SoC device fit or timing signoff.' >> "$GITHUB_STEP_SUMMARY"
 
@@ -133,8 +139,9 @@ jobs:
               --target-dir "$root/baseline-rtl"
           ) 2>&1 | tee "$root/baseline-elaboration.log"
           test -s "$root/baseline-rtl/PmpRangeDecoder.sv"
-          yosys -Q -T -l "$root/yosys-baseline.log" -p \
-            "read_verilog -sv -DSYNTHESIS $root/baseline-rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx"
+          cd "$root"
+          "$YOSYS_EXEC" -Q -T -l yosys-baseline.log -p \
+            'read_verilog -sv -DSYNTHESIS baseline-rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx'
 
       - name: Record directly comparable old and new LUT totals
         shell: bash
@@ -144,6 +151,7 @@ jobs:
           lut_count() {
             awk '/=== PmpRangeDecoder ===/ { in_top=1; sum=0; next }
                  in_top && $1 ~ /^LUT[2-6]$/ { sum+=$2 }
+                 in_top && $2 ~ /^LUT[2-6]$/ { sum+=$1 }
                  in_top && /Estimated number of LCs/ { last=sum; in_top=0 }
                  END { if (last == 0) exit 1; print last }' "$1"
           }
@@ -155,7 +163,7 @@ jobs:
             printf 'Old standalone LUT2..LUT6: %s\n' "$old"
             printf 'New standalone LUT2..LUT6: %s\n' "$new"
             printf 'New minus old LUTs: %+d\n' "$delta"
-            printf 'Same RV64 PA56 16-entry elaborator and Yosys XC7 mapping; no P&R or Fmax claim.\n'
+            printf 'Identical RV64 PA56 16-entry elaborator and YoWASP Yosys 0.70.0 XC7 mapping; no P&R or Fmax claim.\n'
           } | tee "$root/lut-comparison.txt" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve real tests and local area evidence
