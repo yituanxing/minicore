@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 prepare OUTPUT_DIR | synth OUTPUT_DIR xc7a100tfgg676-2|xc7a200tfbg676-2" >&2
+  echo "Usage: $0 prepare OUTPUT_DIR | synth OUTPUT_DIR xc7a100tfgg676-2|xc7a200tfbg676-2|xc7a200tsbg484-1" >&2
   exit 2
 }
 
@@ -17,7 +17,7 @@ case "$mode" in
   synth)
     [[ $# -eq 3 ]] || usage
     case "$part" in
-      xc7a100tfgg676-2|xc7a200tfbg676-2) ;;
+      xc7a100tfgg676-2|xc7a200tfbg676-2|xc7a200tsbg484-1) ;;
       *) echo "ERROR: unsupported or unreviewed Artix-7 part: $part" >&2; usage ;;
     esac
     ;;

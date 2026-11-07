@@ -43,6 +43,11 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
     def test_same_export_is_reused_for_both_fpga_candidates(self):
         script = SCRIPT.read_text()
         self.assertIn("xc7a100tfgg676-2|xc7a200tfbg676-2", script)
+        self.assertIn("xc7a200tsbg484-1", script)
+        with TemporaryDirectory() as candidate_temp:
+            target = self.invoke("synth", candidate_temp, "xc7a200tsbg484-1")
+            self.assertIn("incomplete RTL export", target.stderr)
+            self.assertNotIn("unsupported or unreviewed", target.stderr)
         self.assertIn("RTL_EXPORT_CACHE_HIT", script)
         self.assertIn("sha256sum --status --check", script)
         self.assertIn('cmp -s "$hashes" -', script)

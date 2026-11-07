@@ -9,8 +9,12 @@ SPI-SD. It uses the existing Chisel entrypoint
 `AetherCoreProductFpgaUartDdrBoard` unchanged. It does not widen the CPU,
 replace the SoC, or use the old V0 core as the Product qualification target.
 
-The first candidate parts are `xc7a100tfgg676-2` and
-`xc7a200tfbg676-2`. These are **device experiments, not selected boards**.
+The original board-neutral experiment parts are `xc7a100tfgg676-2` and
+`xc7a200tfbg676-2`. The **first concrete board-candidate experiment** additionally
+accepts `xc7a200tsbg484-1`, the exact package/speed of Digilent's Nexys Video
+XC7A200T-1SBG484C. These remain **synthesis targets, not a selected purchase or
+physical-board qualification**. In particular a good OOC result for
+`xc7a200tfbg676-2` is not transferable to the SBG484-1 board package.
 The full DDR controller/PHY, PLL, CDC, board XDC and timing/pin rules must
 still be provided for the exact eventual board. In particular, the top's
 `localDdrAxi` is an **internal memory-controller interface**, not a set of
@@ -48,6 +52,8 @@ exported directory:
 ```sh
 bash tools/ci/product_fpga_artix7_p0.sh synth build/product-artix7-p0 xc7a100tfgg676-2
 bash tools/ci/product_fpga_artix7_p0.sh synth build/product-artix7-p0 xc7a200tfbg676-2
+# Exact Nexys Video device candidate; STILL OOC logic, not board P&R:
+bash tools/ci/product_fpga_artix7_p0.sh synth build/product-artix7-p0 xc7a200tsbg484-1
 ```
 
 Each separate run retains `vivado.log`, hierarchical `utilization.rpt`,
@@ -99,6 +105,15 @@ unplaced **XC7-family estimate**, with `device_part=null`: it does not
 qualify either xc7a100t or xc7a200t capacity or routed timing. Do not
 derive exact device LUT/BRAM/DSP fit from these generic XC7 cell counts
 without a real Vivado device synthesis.
+
+## Nexys Video physical bring-up prerequisites (not yet implemented)
+
+The candidate board's [Digilent Vivado board files](https://github.com/Digilent/vivado-boards/tree/master/new/board_files/nexys_video/A.0/1.2) include a vendor DDR3 MIG preset (`mig.prj`, `preset.xml`) and its [official master XDC](https://github.com/Digilent/digilent-xdc/blob/master/Nexys-Video-Master.xdc) includes clock, UART and microSD pins. These can be used to build the future **separate** board-level implementation; do not substitute the board-neutral `localDdrAxi` for actual DDR pins.
+
+- The oscillator is 100 MHz while Product's existing Linux DTS/SD/UART contract is 50 MHz. Derive or bridge the Product clock using a constrained PLL and, if MIG UI clock differs, a real AXI CDC; do not short unrelated clocks together.
+- The MIG AXI data width, address width, transaction IDs, ready/valid timing and local 256 MiB aperture must match Product's 64-bit/28-bit local interface through explicit, reviewed adapters. Its 512 MiB DDR3 capacity is not proof of such an adapter.
+- The board's microSD interface must be used in SPI mode with correct 3.3V I/O levels. Its `SD_RESET` power-control signal must be driven to enable card power after FPGA configuration; this signal is **not** exported from the Product logical top and belongs in the physical wrapper.
+- Require real board wrapper, vendor DDR PHY/MIG, PLL, complete pin and timing XDC, DRC, `route_design`, post-route WNS >= 0 and independently retained DCP/resources/timing before calling the candidate a purchase-ready fit. No such result is asserted by this change.
 
 ## Result labels are strictly separate
 
