@@ -1,0 +1,62 @@
+name: Product SD1 polling 2952M-to-3952M uninterrupted five-job relay
+
+# Single PR label starts five dependent 10-stage real RTL jobs.
+# No GITHUB_TOKEN recursive labels; each 20M stage has a 90-day full checkpoint.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-spi-polling-autochain-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  stage_01:
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-advance-3952m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: 42370596743
+      source_artifact_name: product-sd1-spi-polling-2952m-42370596743
+      source_boot_m: 2952
+      terminal_boot_m: 3152
+  stage_02:
+    needs: stage_01
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3152m-${{ github.run_id }}
+      source_boot_m: 3152
+      terminal_boot_m: 3352
+  stage_03:
+    needs: stage_02
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3352m-${{ github.run_id }}
+      source_boot_m: 3352
+      terminal_boot_m: 3552
+  stage_04:
+    needs: stage_03
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3552m-${{ github.run_id }}
+      source_boot_m: 3552
+      terminal_boot_m: 3752
+  stage_05:
+    needs: stage_04
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3752m-${{ github.run_id }}
+      source_boot_m: 3752
+      terminal_boot_m: 3952
