@@ -10,10 +10,12 @@
 #include "verilated.h"
 #include "verilated_save.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -33,6 +35,9 @@ using aethercore::l32sim::SdSpiCard;
 using aethercore::l32sim::TransportRuntimeState;
 constexpr std::string_view kMagic = "AETSDCP1";
 constexpr std::uint64_t kVersion = 1;
+// Exactly the frozen signed-Debian polling runner, not an arbitrary older top.
+constexpr std::string_view kFrozenPollingModel =
+    "5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc";
 constexpr std::uint64_t kFnv = 14695981039346656037ULL;
 constexpr std::uint64_t kPrime = 1099511628211ULL;
 constexpr std::uint64_t kDtbAddress = 0x87f00000ULL;
@@ -324,6 +329,73 @@ void readRtl(const std::string& path, Top& top) {
   in.close();
 }
 
+std::string pollingReadyField(const std::filesystem::path& path,
+                              std::string_view key) {
+  std::ifstream in(path);
+  if (!in) throw std::runtime_error("SD1 migration requires sealed polling-ready manifest");
+  const std::string prefix=std::string(key)+"=";
+  std::string value,line;
+  bool found=false;
+  while (std::getline(in,line)) {
+    if (line.rfind(prefix,0)!=0) continue;
+    if (found) throw std::runtime_error("duplicate SD1 migration manifest field");
+    value=line.substr(prefix.size());
+    found=true;
+  }
+  if (!in.eof() || !found || value.empty())
+    throw std::runtime_error("missing or malformed SD1 migration manifest field");
+  return value;
+}
+
+// A migration changes *only* the 64 ASCII bytes of model SHA in AETSDCP1:
+// magic[0..7], version[8..15], length[16..23], model SHA[24..87].
+// Streaming comparison includes every observer byte, 256 MiB DDR, LR/SC,
+// pending transport, SPI SD protocol and COW overlay without a second RAM copy.
+void requireExactMigrationBytes(const std::string& sourceHost,
+                                const std::string& candidateHost,
+                                const std::string& sourceRtl,
+                                const std::string& candidateRtl) {
+  const auto rtlBytes=std::filesystem::file_size(sourceRtl);
+  if (rtlBytes!=std::filesystem::file_size(candidateRtl))
+    throw std::runtime_error("migration changed serialized Product RTL length");
+  std::ifstream oldRtl(sourceRtl,std::ios::binary),newRtl(candidateRtl,std::ios::binary);
+  if (!oldRtl || !newRtl)
+    throw std::runtime_error("migration RTL comparison failed to open");
+  std::array<char,64*1024> rtlLeft{},rtlRight{};
+  for (std::uint64_t offset=0;offset<rtlBytes;) {
+    const auto count=static_cast<std::streamsize>(
+        std::min<std::uint64_t>(rtlLeft.size(),rtlBytes-offset));
+    oldRtl.read(rtlLeft.data(),count);
+    newRtl.read(rtlRight.data(),count);
+    if (!oldRtl || !newRtl || std::memcmp(rtlLeft.data(),rtlRight.data(),
+                                          static_cast<std::size_t>(count))!=0)
+      throw std::runtime_error("migration changed serialized Product RTL state");
+    offset+=static_cast<std::uint64_t>(count);
+  }
+  const auto oldBytes=std::filesystem::file_size(sourceHost);
+  if (oldBytes!=std::filesystem::file_size(candidateHost) || oldBytes<88)
+    throw std::runtime_error("migration changed SD1 Host state length");
+  std::ifstream oldIn(sourceHost,std::ios::binary),newIn(candidateHost,std::ios::binary);
+  if (!oldIn || !newIn) throw std::runtime_error("migration Host comparison failed to open");
+  constexpr std::size_t kChunk=64*1024;
+  std::array<char,kChunk> left{},right{};
+  std::uint64_t offset=0;
+  while (offset<oldBytes) {
+    const auto count=static_cast<std::streamsize>(
+        std::min<std::uint64_t>(kChunk,oldBytes-offset));
+    oldIn.read(left.data(),count);
+    newIn.read(right.data(),count);
+    if (!oldIn || !newIn) throw std::runtime_error("migration Host comparison truncated");
+    for (std::streamsize i=0;i<count;++i) {
+      const auto pos=offset+static_cast<std::uint64_t>(i);
+      if (pos>=24 && pos<88) continue;
+      if (left[static_cast<std::size_t>(i)]!=right[static_cast<std::size_t>(i)])
+        throw std::runtime_error("migration changed Host state beyond model SHA");
+    }
+    offset+=static_cast<std::uint64_t>(count);
+  }
+}
+
 void observe(Top& top, Observer& o, const Policy& policy,
              bool accepted, bool strictTrace, bool emitUart) {
   ++o.cycles;
@@ -474,17 +546,22 @@ void result(const Observer& o, const VerilatedContext& ctx, const Memory& mem,
 int main(int argc,char** argv) {
   try {
     if (argc<14)
-      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX]");
+      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release|migrate-v1 FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migrate-v1 OLD_EXEC DEST_PREFIX]");
     const std::string mode=argv[1],fw=argv[2],dtb=argv[3],sd=argv[4],prefix=argv[5];
     const Identity id{argv[6],argv[7],argv[8],argv[9],argv[10],argv[11]};
     id.validate();
     const bool c1Save=mode=="c1-save", c1Advance=mode=="c1-advance",
                c1Release=mode=="c1-release";
     const bool c1Mode=c1Save || c1Advance || c1Release;
-    if (mode!="save" && mode!="snapshot" && mode!="restore" && mode!="advance" && !c1Mode)
+    const bool migrating=mode=="migrate-v1";
+    if (mode!="save" && mode!="snapshot" && mode!="restore" && mode!="advance" &&
+        !c1Mode && !migrating)
       throw std::runtime_error("invalid SD1 checkpoint mode");
     const bool advancing=mode=="advance" || c1Advance;
-    if (c1Mode) {
+    if (migrating) {
+      if (argc!=16)
+        throw std::runtime_error("migrate-v1 needs exactly OLD_EXEC and distinct DEST_PREFIX");
+    } else if (c1Mode) {
       if (argc!=(c1Save?14:(c1Advance?15:18)))
         throw std::runtime_error("C1 needs exact c1-save / c1-advance DEST / c1-release NEW_SD NEW_SHA NEW_ROOTFS_SHA DEST argument count");
     } else if ((argc!=14 && argc!=15 && argc!=17 && argc!=18) ||
@@ -493,7 +570,7 @@ int main(int argc,char** argv) {
     }
     const auto bootCycles=std::stoull(argv[12],nullptr,0);
     const auto replayCycles=std::stoull(argv[13],nullptr,0);
-    const bool hasPolicy=!c1Mode && (argc==17 || argc==18);
+    const bool hasPolicy=!c1Mode && !migrating && (argc==17 || argc==18);
     Policy policy{hasPolicy?argv[14]:"",hasPolicy?argv[15]:"",
                   hasPolicy?std::stoull(argv[16],nullptr,0):0};
     const std::string advanceDest=advancing?argv[argc-1]:(c1Release?argv[17]:"");
@@ -524,15 +601,19 @@ int main(int argc,char** argv) {
     const char* relayConfirm=std::getenv("AETHERCORE_SD1_RELAY_CONFIRM");
     const bool longRelay=relayConfirm &&
         std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY";
-    const std::uint64_t defaultMaxCycle=longRelay?4000000000ULL:1800000000ULL;
-    const std::uint64_t maxCycle=c1Mode?4000000000ULL:defaultMaxCycle;
+    const bool migratedRelay=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V2_MIGRATED";
+    const std::uint64_t defaultMaxCycle=migratedRelay?8000000000ULL:
+        (longRelay?4000000000ULL:1800000000ULL);
+    const std::uint64_t maxCycle=(c1Mode || migrating)?4000000000ULL:defaultMaxCycle;
     if (bootCycles<1000000 || bootCycles>maxCycle ||
         ((mode=="save" || mode=="snapshot" || c1Save) && bootCycles>20000000) ||
-        replayCycles==0 || replayCycles>(advancing?20000000ULL:5000000ULL) ||
+        (migrating ? replayCycles!=0 :
+          (replayCycles==0 || replayCycles>(advancing?20000000ULL:5000000ULL))) ||
         ((advancing || c1Release) && bootCycles>maxCycle-replayCycles) ||
         policy.uartTrigger.size()>128 || policy.uartInput.size()>4096 ||
         policy.postInputBudget>5000000)
-      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default ceiling, explicit long relay <=4B only");
+      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default, signed relay <=4B, migrated signed relay <=8B, migrate-v1 zero cycles");
     if (!std::filesystem::is_regular_file(fw) ||
         !std::filesystem::is_regular_file(dtb) ||
         !std::filesystem::is_regular_file(sd) ||
@@ -542,11 +623,59 @@ int main(int argc,char** argv) {
     // Not just caller-supplied SHA strings: standalone restore processes
     // independently bind their own executable plus actual firmware, FDT and
     // immutable ext4 image bytes. The shell also binds Linux/rootfs manifests.
+    const std::string currentModelSha=shaFile("/proc/self/exe");
+    if (!migrating && currentModelSha!=id.model)
+      throw std::runtime_error("SD1 real executable SHA differs from supplied identity");
     for (const auto& [path, expected] : {
-        std::pair<std::string,std::string>{"/proc/self/exe",id.model},
-        {fw,id.firmware},{dtb,id.dtb},{sd,id.media}})
+        std::pair<std::string,std::string>{fw,id.firmware},
+        {dtb,id.dtb},{sd,id.media}})
       if (shaFile(path)!=expected)
         throw std::runtime_error("SD1 real executable/firmware/DTB/SD bytes changed");
+    if (migrating) {
+      const char* confirm=std::getenv("AETHERCORE_SD1_MODEL_MIGRATE_CONFIRM");
+      if (!(confirm && std::string_view(confirm)=="FROZEN_SIGNED_SD1_MODEL_MIGRATE_V1"))
+        throw std::runtime_error("migrate-v1 requires explicit frozen-model confirmation");
+      if (id.model!=kFrozenPollingModel || currentModelSha==id.model ||
+          !std::filesystem::is_regular_file(argv[14]) ||
+          std::filesystem::is_symlink(argv[14]) || shaFile(argv[14])!=id.model)
+        throw std::runtime_error("migrate-v1 requires the real frozen polling executable");
+      const std::filesystem::path sourcePrefix(prefix),destPrefix(argv[15]);
+      if (sourcePrefix.filename()!="persistent" || destPrefix.filename()!="persistent" ||
+          std::filesystem::absolute(sourcePrefix).lexically_normal()==
+            std::filesystem::absolute(destPrefix).lexically_normal() ||
+          std::filesystem::exists(destPrefix.parent_path()) ||
+          std::filesystem::exists(std::string(argv[15])+".pre.host") ||
+          std::filesystem::exists(std::string(argv[15])+".pre.rtl"))
+        throw std::runtime_error("migrate-v1 requires distinct, absent destination directory");
+      const auto ready=sourcePrefix.parent_path()/".polling-ready";
+      if (std::filesystem::is_symlink(ready) ||
+          pollingReadyField(ready,"schema")!="AETSDCP1" ||
+          pollingReadyField(ready,"qualification")!=
+            "PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS" ||
+          pollingReadyField(ready,"boot_cycles")!=std::to_string(bootCycles))
+        throw std::runtime_error("migrate-v1 requires authentic bounded polling source");
+      for (const auto& [key,sha] : {
+          std::pair<std::string_view,std::string_view>{"model_sha256",id.model},
+          {"firmware_sha256",id.firmware},{"dtb_sha256",id.dtb},
+          {"sd_image_sha256",id.media},{"linux_image_sha256",id.linuxImage},
+          {"rootfs_result_sha256",id.rootfs}})
+        if (pollingReadyField(ready,key)!=sha)
+          throw std::runtime_error("migrate-v1 polling source identity drift");
+      for (const auto& [key,ext] : {
+          std::pair<std::string_view,std::string_view>{"snapshot_host_sha256",".pre.host"},
+          {"snapshot_rtl_sha256",".pre.rtl"}}) {
+        const auto snapshot=prefix+std::string(ext);
+        if (!std::filesystem::is_regular_file(snapshot) ||
+            std::filesystem::is_symlink(snapshot) ||
+            pollingReadyField(ready,key)!=shaFile(snapshot))
+          throw std::runtime_error("migrate-v1 source Host/RTL SHA does not match manifest");
+      }
+      const auto progress=sourcePrefix.parent_path()/"card-progress.json";
+      if (!std::filesystem::is_regular_file(progress) ||
+          std::filesystem::is_symlink(progress) ||
+          pollingReadyField(ready,"card_progress_sha256")!=shaFile(progress.string()))
+        throw std::runtime_error("migrate-v1 source SD progress SHA does not match manifest");
+    }
     if (c1Release && (!std::filesystem::is_regular_file(newMedia) ||
                       shaFile(newMedia)!=newMediaSha))
       throw std::runtime_error("C1 replacement SD image bytes differ from the explicitly pinned SHA");
@@ -563,6 +692,47 @@ int main(int argc,char** argv) {
     // continue to emit/require the original schema-v1 SD card state.
     if (c1Save) card.armC1RootfsBoundary();
     Observer obs;
+    if (migrating) {
+      // Zero guest clocks. The ordinary restore/advance path continues to
+      // require self-executable SHA equality and cannot accept foreign state.
+      readHost(prefix+".pre.host",id,policy,ctx,mem,transport,card,obs);
+      readRtl(prefix+".pre.rtl",top);
+      if (top.reset || obs.cycles!=bootCycles || obs.commits==0)
+        throw std::runtime_error("migrate-v1 rejected inactive/mismatched Product state");
+      Identity nextId=id;
+      nextId.model=currentModelSha;
+      const std::filesystem::path targetDir=
+          std::filesystem::path(argv[15]).parent_path();
+      // Create a private sibling directory, verify the entire frozen state,
+      // then atomically publish the *directory*. No partial valid destination
+      // becomes visible even if a process is killed between Host/RTL writes.
+      const std::string pattern=targetDir.string()+".migrate-v1.XXXXXX";
+      std::vector<char> pathTemplate(pattern.begin(),pattern.end());
+      pathTemplate.push_back('\0');
+      if (!::mkdtemp(pathTemplate.data()))
+        throw std::runtime_error("migrate-v1 cannot create private staging directory");
+      const std::filesystem::path stagingDir(pathTemplate.data());
+      const auto stagingPrefix=(stagingDir/"persistent").string();
+      try {
+        saveRtl(stagingPrefix+".pre.rtl",top);
+        writeHost(stagingPrefix+".pre.host",nextId,policy,ctx,mem,transport,card,obs);
+        requireExactMigrationBytes(prefix+".pre.host",stagingPrefix+".pre.host",
+                                   prefix+".pre.rtl",stagingPrefix+".pre.rtl");
+        if (std::filesystem::exists(targetDir))
+          throw std::runtime_error("migrate-v1 destination appeared during verification");
+        std::filesystem::rename(stagingDir,targetDir);
+      } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove_all(stagingDir,ignored);
+        throw;
+      }
+      std::cout<<"PRODUCT_SD1_MODEL_MIGRATE_V1_ZERO_STEP_PASS"
+               <<" cycles="<<obs.cycles<<" source_model_sha256="<<id.model
+               <<" destination_model_sha256="<<nextId.model
+               <<" full_host_except_model_sha_identical=1"
+               <<" full_rtl_identical=1 no_guest_cycles=1 not_debian_pass=1\n";
+      return 0;
+    }
     if (mode=="save" || mode=="snapshot" || c1Save) {
       mem.loadAtBase(fw);
       mem.loadBoundedRegion(dtb,kDtbAddress,kDtbMax);
