@@ -47,6 +47,21 @@ Each reciprocal task list closed without broken pointers. In **all four**, PID1 
 PID1 gained **52 user-mapped 4 KiB page equivalents** from 1992M to 2132M, while SD reads increased by **878 sectors**. At user fault VA `0x3f883966c0`, leaf PTE progressed `0x2030a453` at 1992M/2032M (read-only, PA `0x80c29000`) → `0x21fa94d7` at 2072M (writable, new PA `0x87ea5000`) → `0x21fa94d3` at 2132M (same new PA, write-disabled). This is direct evidence of page replacement and subsequent permission changes, **consistent with COW fault handling**; it does not establish the exact syscall or systemd readiness. PID1 task/MM bytes changed across snapshots even though its identity, argv and top-level user PGD pointer stayed the same.
 
 **Revised conclusion:** PID1 is not shown to be permanently blocked or simply looping on an unresolved COW fault. Its user mappings evolved and its sampled task state is runnable. It also has not spawned services or produced a login prompt by 2132M, so complete Debian remains **NOT PASS**.
+## Follow-up: verified 2352M and 2372M Product RTL checkpoints
+
+Both ZIP archives were downloaded again and independently SHA-256 hashed (not merely trusted from artifact metadata). The same exact recovered 6.6.143 `vmlinux`/`System.map` and read-only Sv39 DDR page walk were used:
+
+| Cycles | Authenticated artifact / ZIP SHA-256 | PID1 user page equivalents | Dynamic tasks | SD cumulative reads |
+| --- | --- | ---: | ---: | ---: |
+| 2352M | `#13571003948` / `4c2edbda7dc07713afdd29249c8c6ca78c0e9d38c9a20130f9ca923915854f91` | 936 | 41 | 14,344 |
+| 2372M | `#13571054869` / `1eaea527262304d2790c6f5d218473aae109c2d6cca6faeb386adf48ad979eb4` | 936 | 41 | 14,502 |
+
+Both ZIPs' `.polling-ready` Host/RTL/card-progress hashes match independently calculated bytes. The 2372M `source_host_sha256=6f71c51bc2961c77ad6b5c38806fa7cabfdf4b7f0ca41eb11ed20a256da02ca9` exactly matches the authenticated 2352M `snapshot_host_sha256`. The frozen model/firmware/DTB/Linux Image/SD/rootfs hashes are unchanged.
+
+At both DDR checkpoints the reciprocal task list closes with 41 dynamic tasks. PID1 remains the sole user-`mm` task, `pid=tgid=1`, `comm=init`, argv `/sbin/init`, non-null `mm`, same user PGD and executable file pointer, `__state=0` (`TASK_RUNNING`). **No user service child and no login** were observed. The PID1 user-mapped 4 KiB page-equivalent count stayed at **936** for these two samples, and its `mm`/top-level PGD bytes were unchanged; the PID1 `task_struct` SHA did change. This plateau does not imply no execution or no further guest progress.
+
+The authentic 2352M→2372M 20M-cycle interval retired **4,697,935 instructions**, read **158 SD sectors** (+80,896 bytes), took **117 host seconds** (~0.171 MHz simulation throughput), had 200 interrupts, 100 exceptions and no new UART bytes; `guest_failure=null`, `login_seen=false`. Its 2372M final-16 retired PC sample resolves using the **exact** vmlinux symbols to kernel `crc_itu_t` (`0xffffffff803fed90`), while the earlier 2352M sample resolves to `tiny_spi_txrx_bufs` (`spi-oc-tiny.c`). These one-instant samples are compatible with active SD/SPI/CRC work and suggest an I/O bottleneck to investigate; **they do not prove the whole interval was spent in those functions, systemd completion, or an FPGA Fmax**.
+
 ## Strict remaining acceptance boundary
 
 **Established:** authentic Product RTL, complete DDR+SD snapshot continuity, real ext4 root mount, PID1 kernel task with user `mm`, RISC-V dynamic ELF execution of `/sbin/init`, and `exe_file` pointing to systemd.
