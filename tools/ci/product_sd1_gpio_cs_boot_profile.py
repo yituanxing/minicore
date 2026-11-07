@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 
+from product_sd1_card_snapshot import card_state_from_host
 from product_sd1_relay_state import (
     MAGIC, VERSION, decode, manifest, read_exact, read_string, read_u64, sha256,
 )
@@ -99,6 +100,16 @@ def main():
     delta_commits = new["commits"] - old["commits"]
     if delta_cycles <= 0 or delta_cycles > 20_000_000 or delta_commits <= 0:
         raise ValueError("no monotonic RTL cycle/retirement advance")
+    old_sd = card_state_from_host(args.previous / "persistent.pre.host")
+    new_sd = card_state_from_host(args.current / "persistent.pre.host")
+    for sd in (old_sd, new_sd):
+        if sd["sd_media_sha256"] != new_pins["sd_image_sha256"]:
+            raise ValueError("SD subcheckpoint immutable-media SHA differs from signed image")
+    for field in ("sd_command_count", "sd_reads", "sd_writes"):
+        if new_sd[field] < old_sd[field]:
+            raise ValueError(f"SD counter regressed across authentic RTL checkpoint: {field}")
+    if old_sd["sd_74_clocks_seen"] and not new_sd["sd_74_clocks_seen"]:
+        raise ValueError("SD startup 74-clock qualification regressed")
     old_uart = uart_bytes(args.previous / "persistent.pre.host")
     new_uart = uart_bytes(args.current / "persistent.pre.host")
     if not new_uart.startswith(old_uart):
@@ -127,8 +138,22 @@ def main():
         "native_init_started": new["native_init_started"],
         "login_seen": new["login"],
         "guest_failure": new["failure"],
-        "sd_command_count": None, "sd_reads": None, "sd_writes": None,
-        "sd_init_complete": None, "sd_cow_count": None,
+        "sd_command_count": new_sd["sd_command_count"],
+        "sd_command_delta": new_sd["sd_command_count"] - old_sd["sd_command_count"],
+        "sd_reads": new_sd["sd_reads"],
+        "sd_read_delta": new_sd["sd_reads"] - old_sd["sd_reads"],
+        "sd_writes": new_sd["sd_writes"],
+        "sd_write_delta": new_sd["sd_writes"] - old_sd["sd_writes"],
+        "sd_init_complete": new_sd["sd_init_complete"],
+        "sd_cow_count": new_sd["sd_cow_count"],
+        "sd_last_command": new_sd["sd_last_command"],
+        "sd_74_clocks_seen": new_sd["sd_74_clocks_seen"],
+        "sd_startup_valid_clocks": new_sd["sd_startup_valid_clocks"],
+        "sd_last_cs_high": new_sd["sd_last_cs_high"],
+        "sd_protocol_observation": (
+            "NO_RECOGNIZED_COMMANDS" if not new_sd["sd_command_count"]
+            else "CARD_COMMANDS_RECOGNIZED_CMD0_R1_NOT_SEPARATELY_PROVEN"
+        ),
         "identity_sha256": {name: new_pins[f"{name}_sha256"] for name in IDENTITIES},
         "model_source_key": new_pins["source_model_key"],
         "patch_sha256": new_pins["patch_sha256"],

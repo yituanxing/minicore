@@ -1,0 +1,94 @@
+name: Product SD1 snapshot-only SPI state audit
+
+# Reinspect a published SHA-qualified patched RTL checkpoint with zero
+# guest cycles. This does not certify CMD0 R1 or native Debian PID1.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-snapshot-audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  inspect-512m:
+    if: >-
+      github.event.label.name == 'product-sd1-gpio-cs-snapshot-audit-512m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout audited exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Test original-version SD snapshot decoder with no RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_product_sd1_card_snapshot -v
+          python3 -m py_compile tools/ci/product_sd1_card_snapshot.py tools/ci/product_sd1_gpio_cs_boot_profile.py
+      - name: Download only immutable 512M full RTL/DDR/SD checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42331718087
+          name: product-sd1-gpio-cs-diagnostic-512m-42331718087
+          github-token: ${{ github.token }}
+          path: build/sd1-card-snapshot-audit
+      - name: SHA-verify full original snapshot then decode actual SD card state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' stages < <(find build/sd1-card-snapshot-audit -type f -name .diag-ready -print0)
+          [[ "${#stages[@]}" == 1 ]] || exit 16
+          stage="$(dirname "${stages[0]}")"
+          mkdir -p build/sd1-card-audit-result
+          python3 - "$stage" <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, "tools/ci")
+          from product_sd1_gpio_cs_boot_profile import load_stage
+          from product_sd1_card_snapshot import card_state_from_host
+          stage = Path(sys.argv[1])
+          pins, stats = load_stage(stage)
+          if stats["cycles"] != 512000000:
+              raise SystemExit("SD1_CARD_AUDIT_REJECTED: incorrect cycles")
+          expected_image = "522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393"
+          expected_sd = "6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7"
+          expected_patch = "ff408c203b461d504f48152840698b077f8ea948a07ad5235f4afb8436282638"
+          if (pins["linux_image_sha256"] != expected_image or
+                  pins["sd_image_sha256"] != expected_sd or
+                  pins["patch_sha256"] != expected_patch):
+              raise SystemExit("SD1_CARD_AUDIT_REJECTED: wrong patched media/firmware identity")
+          sd = card_state_from_host(stage / "persistent.pre.host")
+          if sd["sd_media_sha256"] != expected_sd:
+              raise SystemExit("SD1_CARD_AUDIT_REJECTED: card body media mismatch")
+          result = {
+              "checkpoint_cycles": stats["cycles"], "retired": stats["commits"],
+              "checkpoint_host_sha256": pins["snapshot_host_sha256"],
+              "patch_sha256": expected_patch, "kernel_sha256": expected_image,
+              "guest_failure": stats["failure"],
+              "cmd0_r1_proven": False,
+              "native_debian_login_proven": False,
+              **sd,
+          }
+          output = Path("build/sd1-card-audit-result/card-state-512m.json")
+          output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+          print("PRODUCT_SD1_CARD_STATE_AUDIT: " + json.dumps(result, sort_keys=True))
+          PY
+          (cd build/sd1-card-audit-result && sha256sum card-state-512m.json > SHA256SUMS)
+      - name: Preserve independent SD card diagnosis, not guest-pass evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-snapshot-card-audit-512m-${{ github.run_id }}
+          path: build/sd1-card-audit-result/
+          retention-days: 90
+          if-no-files-found: error
