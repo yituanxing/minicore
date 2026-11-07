@@ -50,10 +50,12 @@ cmp -s "$config" "$official_config" || die 'rebuilt config differs from frozen o
 [[ "$(sha "$official_sd")" == "$(field sd_image_sha256 "$manifest")" ]] ||
   die 'official signed SD image differs from source manifest'
 
-# This is the non-negotiable proof that recovered ELF symbols describe the
-# exact Linux machine code used by the unchanged Product RTL polling relay.
-expected_image_sha="$(field linux_image_sha256 "$manifest")"
-[[ "$expected_image_sha" =~ ^[0-9a-f]{64}$ ]] || die 'missing pinned diagnostic Image SHA'
+# Independent original running RTL provenance: the authenticated 1872M
+# full RTL+DDR+SD source checkpoint's .polling-ready contains this Image SHA.
+# Never derive the expected value from THIS rebuild's diagnostic manifest.
+expected_image_sha=522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393
+[[ "$(field linux_image_sha256 "$manifest")" == "$expected_image_sha" ]] ||
+  die 'rebuild manifest claims a different Image from the frozen RTL checkpoint'
 [[ "$(sha "$image")" == "$expected_image_sha" ]] ||
   die 'rebuilt Image SHA differs from frozen RTL Image; symbol recovery disallowed'
 
