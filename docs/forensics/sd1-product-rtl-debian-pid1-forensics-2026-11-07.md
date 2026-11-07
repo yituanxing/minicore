@@ -79,6 +79,25 @@ CPU observer's final-16 retired PCs at 2512M were in low user VAs `0x3f88c8dff0.
 
 At an explicitly **assumed** guest clock of 50 MHz, 2552M represents 51.04 simulated guest seconds, and 15,786 512-byte read sectors correspond to roughly **155 KiB/s cumulative guest-observed SD read throughput**; the final 124-sector/20M-cycle interval gives a similar estimate. This is conditional on the nominal 50 MHz model clock and sector-counter semantics, **not** the wall-clock RTL simulation throughput (~0.16–0.17 MHz simulated cycles per host second), not an observed FPGA Fmax, and not yet proof that SPI accounts for most systemd startup wall time. Profiling should separately quantify SD transfer and CPU wait.
 
+## Follow-up: read-only SD CMD18 continuity and focused no-replay probes (2552M–2612M)
+
+Using the existing `tools/ci/product_sd1_card_snapshot.py` **ACSDSP01 v1** fixed body-prefix layout, the saved, SHA-authenticated `persistent.pre.host` files were decoded offline; no guest cycles were executed and no live model, kernel, or SD image was changed. `sd_last_command=18` is the recorded most recent command at each **snapshot**, not proof that every intermediate command was CMD18.
+
+| Cycles | Cumulative SD commands | Cumulative SD read sectors | Last SD command | Snapshot `sd_next_read_lba` |
+| --- | ---: | ---: | --- | ---: |
+| 2552M | 432 | 15,786 | CMD18 (multi-block read) | 146,113 |
+| 2592M | 437 | 16,094 | CMD18 | 145,635 |
+| 2612M | 439 | 16,251 | CMD18 | 145,791 |
+
+From 2592M to 2612M, command count rose by **2**, read-sector count by **157**, and the next-read LBA by **156**. This is compatible with actual progressing multi-sector streaming, **not** a static no-read stall or proof of repeated retransmission of one sector. The LBA is **not globally monotonic** (2552M→2592M decreased); a new read region/command can change it. Endpoint counters alone cannot certify all intervening read addresses, absence of retries, or which systemd file was read.
+
+Three **zero-guest-cycle** follow-ups with the already saved authenticated snapshots:
+1. `product_sd1_card_snapshot.py`: compare `sd_command_count`, `sd_reads`, `sd_last_command` and `sd_next_read_lba` per 20M checkpoint to quantify sectors per command and flag suspicious LBA patterns. This is an offline endpoint test, not a full I/O trace.
+2. `product_sd1_cpu_observer_audit.py`: compare retired/exception/interrupt counters and final 16 retired PCs, resolving kernel addresses with the exact recovered `vmlinux`. These are **sampled endpoints**, not a CPU-time utilization histogram or PID attribution for all instructions.
+3. `sd1_multi_check.py` with the exact System.map/Sv39 walk: compare PID1 task list and children, user-mapped PTE pages and task/MM bytes; optionally hash the **already-mapped** user pages offline for data changes. A changed hash is memory activity, not a systemd-ready certificate.
+
+The original evidence remains **systemd PID1 installed and executing, zero observed service children and no login**. Do not claim `PRODUCT_DEBIAN_PASS` from SD reads, CPU retirement or 20M-stage success.
+
 ## Strict remaining acceptance boundary
 
 **Established:** authentic Product RTL, complete DDR+SD snapshot continuity, real ext4 root mount, PID1 kernel task with user `mm`, RISC-V dynamic ELF execution of `/sbin/init`, and `exe_file` pointing to systemd.
