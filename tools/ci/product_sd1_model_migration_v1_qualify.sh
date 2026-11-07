@@ -120,12 +120,17 @@ old_compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
 [[ -f "$obj/product_rv64_checkpoint_sd1_main.o" && -x "$new_sim" ]] ||
   die 'copied original Host object/executable missing'
 rm -- "$obj/product_rv64_checkpoint_sd1_main.o" "$new_sim"
-verilator_bin="$HOME/.cache/aethercore/toolchains/verilator-5.054/bin/verilator"
+verilator_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.054"
+verilator_bin="$verilator_root/bin/verilator"
 [[ -x "$verilator_bin" ]] || die 'pinned Verilator compiler was not restored'
 export PATH="$(dirname "$verilator_bin"):$PATH"
-verilator_root="$("$verilator_bin" -V | sed -n 's/^[[:space:]]*VERILATOR_ROOT[[:space:]]*=[[:space:]]*//p' | head -1)"
-[[ -n "$verilator_root" && -d "$verilator_root/include" ]] ||
-  die 'pinned Verilator root include directory missing'
+# The pinned install is created by ensure_verilator_5_024.sh at this exact
+# prefix.  `verilator -V` describes its *build-time* search location, which is
+# not a durable identifier of the restored GitHub runner's install directory.
+[[ -f "$verilator_root/include/verilated.mk" &&
+   -f "$verilator_root/include/verilated.h" &&
+   "$(< "$verilator_root/.aethercore-source-revision")" == bbb60a403932a9f695cb6ff001ceb73de6ad9234 ]] ||
+  die 'pinned Verilator 5.054 source identity/runtime include files missing'
 export VERILATOR_ROOT="$verilator_root"
 timeout --signal=TERM --kill-after=20s 25m \
   make -C "$obj" -f VAetherCoreProductDebianSdRV64SimTop.mk \
