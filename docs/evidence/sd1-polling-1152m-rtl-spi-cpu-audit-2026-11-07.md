@@ -55,3 +55,17 @@ The last 20M window additionally had SD writes +8 (40 to 48), SD commands +12 an
 - A low-risk additional sampling experiment can restore the independently authenticated 1152M snapshot with the exact unchanged Verilator executable and run isolated 1M-cycle warm chunks (1153M through 1157M), collecting snapshots/observer data. It must not alter the active long run or substitute for cycle-level profiling.
 - Modifying the simulator's per-retire observe() to record a histogram would change the executable/model SHA; the current readHost identity check will reject old snapshots. Such profiling requires a separate qualified diagnostic identity and recovery compatibility gate, not a silent rebuild of the production long-run model.
 - Preserve original artifacts, host/RTL SHA, source identity, UART and SD counters; stop and report the first real failure rather than restarting from cold or claiming Debian success based on green CI.
+## 1352M extension: ten-stage throughput baseline
+
+- Official 1152M-to-1352M run: https://github.com/yituanxing/minicore/actions/runs/42347894942, all 10 RTL execution and 10 full-checkpoint uploads SUCCESS.
+- Final 1352M artifact: product-sd1-spi-polling-1352m-42347894942, artifact ID 13563954940; GitHub ZIP SHA-256 c3a5a58c93257145b2ab46dc3cb6050ffebdbbc97a9c5092a266dc31d92c377d, recomputed from downloaded ZIP.
+- .polling-ready boot_cycles=1352000000; qualification remains PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS.
+- Full Host SHA-256 81c750889bbf2b7e8f46deddfb82ba873955d933126a126455c504675bc73cc6, full RTL SHA-256 39a2c0b57432a7855006d5aee5ab4283114fbc69116409af51ef28f81206e742; both recomputed from the artifact and match manifest. The 1332M Host SHA 709a43496f4203c1ed6e86d7eb7d6efbfd0c254d61c56a772331309dd7cd4f8b equals 1352M source_host_sha256.
+- Stable model/firmware/DTB/official SD/Linux Image identities preserved. At 1352M, guest has no newly emitted UART and login_seen=false; last-16-PC sample in tiny_spi_txrx_bufs.
+- Across these 200M RTL cycles, simulation wall time in stage logs is 1,224 seconds, retired instructions increased about 46.99 million, SD reads increased 1,522 512-byte sectors (=779,264 bytes), SD writes 0, and UART bytes 0; every 20M interval has 147-157 SD reads and 100 timer IRQs.
+- Interval-average SD transfer rate is about 194,816 B/s (190.3 KiB/s) at an assumed 50MHz guest clock; host-wall equivalent is about 637 B/s and simulator averages 163,399 RTL cycles/s. These are end-to-end guest/host averages, NOT measured TinySPI bus capacity nor proven polling cycle percentage.
+- New dormant ten7 workflow committed at 404087c37736c2ab2c70d8c587d52378e19abde4, with exact source run 42347894942 / artifact product-sd1-spi-polling-1352m-42347894942. After full source/duplicate gating, a single advance-1552m PR label started run https://github.com/yituanxing/minicore/actions/runs/42349802701. The new run passed source identity step 14 and began authentic 1352M-to-1372M Product RTL execution.
+
+### Profiling decision
+
+Do not spend new RTL cycles on merely five extra endpoint-PC samples: the ten-stage evidence already establishes stable sector throughput. A true per-PC and per-MMIO-cycle histogram requires a separate diagnostic simulator identity and explicit compatibility proof; rebuilding the production savable model would violate the frozen executable SHA used for checkpoint restore. Continue the unchanged Debian long-run while preserving the above ledger.
