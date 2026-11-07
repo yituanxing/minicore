@@ -116,6 +116,7 @@ from pathlib import Path
 sys.path.insert(0,"tools/ci")
 from product_sd1_relay_state import decode
 from product_sd1_card_snapshot import card_state_from_host
+from product_sd1_cpu_observer_audit import inspect as inspect_cpu, compare as compare_cpu
 old,new=Path(sys.argv[1]),Path(sys.argv[2])
 start,end=int(sys.argv[3]),int(sys.argv[4])
 media=sys.argv[5]
@@ -124,6 +125,13 @@ before=decode(old/"persistent.pre.host")
 after=decode(new/"persistent.pre.host")
 cb=card_state_from_host(old/"persistent.pre.host")
 ca=card_state_from_host(new/"persistent.pre.host")
+with (old/"persistent.pre.host").open("rb") as file:
+    cpu_before=inspect_cpu(file)
+with (new/"persistent.pre.host").open("rb") as file:
+    cpu_after=inspect_cpu(file)
+cpu=compare_cpu(cpu_before,cpu_after)
+if cpu["retired_delta"]!=after["commits"]-before["commits"]:
+    raise SystemExit("POLLING_RELAY_REJECTED: CPU observer/retirement mismatch")
 if before["cycles"]!=start or after["cycles"]!=end or after["commits"]<=before["commits"]:
     raise SystemExit("POLLING_RELAY_REJECTED: no valid RTL instruction progression")
 if after["failure"] or before["identity"]!=after["identity"] or ca["sd_media_sha256"]!=media:
@@ -144,7 +152,22 @@ stats={
  "sd_init_complete":ca["sd_init_complete"],
  "ext4_mounted":after["ext4_root_mounted"],
  "native_init":after["native_init_started"],"login_seen":after["login"],
- "guest_failure":after["failure"],"cmd0_r1_proven":False
+ "guest_failure":after["failure"],"cmd0_r1_proven":False,
+ "cpu_observer":{
+     "retired_delta":cpu["retired_delta"],
+     "exceptions_delta":cpu["exceptions_delta"],
+     "interrupts_delta":cpu["interrupts_delta"],
+     "timer_interrupts_delta":cpu["timer_interrupts_delta"],
+     "uart_bytes_delta":cpu["uart_bytes_delta"],
+     "last_exception_cause":cpu["last_exception_cause"],
+     "last_exception_pc":cpu["last_exception_pc"],
+     "last_exception_is_user_ecall":cpu["last_exception_is_user_ecall"],
+     "last_uart_cycle":cpu["last_uart_cycle"],
+     "last_uart_age_cycles":cpu["last_uart_age_cycles"],
+     "last_16_retired_pc":cpu["last_16_retired_pc"],
+     "retirement_during_uart_silence":cpu["retirement_during_uart_silence"],
+     "qualification":"CPU_SNAPSHOT_ONLY_NOT_PID1_OR_LOGIN_PASS",
+ }
 }
 (new/"card-progress.json").write_text(json.dumps(stats,sort_keys=True,indent=2)+"\n")
 print("PRODUCT_SD1_SPI_POLLING_REAL_PHASE: "+json.dumps(stats,sort_keys=True))
