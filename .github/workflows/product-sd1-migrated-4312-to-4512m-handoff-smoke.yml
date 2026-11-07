@@ -1,0 +1,67 @@
+name: Product signed SD1 migrated RTL 4312M to 4512M strict two-job artifact handoff smoke
+
+# One explicit label proves a fully authenticated same-run job handoff.
+# Job 1 authenticates the completed 4312M ZIP; job 2 must authenticate job
+# 1's exact published 4412M Artifact ID/digest and complete Host/RTL SHA.
+# Ten separate 20M checkpoints are archived before subsequent guest cycles.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-migrated-handoff-smoke-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  stage_01:
+    if: >-
+      github.event.label.name == 'product-sd1-migrated-4312m-to-4512m-handoff-smoke' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '4312'
+      stage1: '4332'
+      stage2: '4352'
+      stage3: '4372'
+      stage4: '4392'
+      stage5: '4412'
+      source_run: '42388456331'
+      source_head_sha: '4ddaefc8ef2ffcae7dfef2e8f2bd8c13f04accd5'
+      source_workflow_path: '.github/workflows/product-sd1-migrated-4212-to-4312m-autorelay.yml'
+      source_job: 'authenticated_five_stages / relay_five'
+      source_completed_step: 'Upload complete stage five before completion'
+      source_artifact_id: '13581265128'
+      source_artifact_name: 'product-sd1-migrated-4312m-42388456331'
+      source_artifact_digest: 'e8d2ad7445165e2e72b79a3eef72a3f7e1fb9d7e63d792e3512c919089a4ff8e'
+      source_host_sha: '1f38cff022fceed39c29d672eb721b101878f6177807946555bd093fc835894c'
+      source_rtl_sha: '6faa638bfd82badb394f1a9918282573ec474fa862aac9cd57acabf07647d045'
+
+  stage_02:
+    needs: stage_01
+    if: needs.stage_01.result == 'success'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '4412'
+      stage1: '4432'
+      stage2: '4452'
+      stage3: '4472'
+      stage4: '4492'
+      stage5: '4512'
+      source_mode: intra_run
+      source_run: ${{ format('{0}', github.run_id) }}
+      source_head_sha: ${{ github.event.pull_request.head.sha }}
+      source_workflow_path: '.github/workflows/product-sd1-migrated-4312-to-4512m-handoff-smoke.yml'
+      source_job: 'stage_01 / relay_five'
+      source_completed_step: 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs'
+      source_artifact_id: ${{ needs.stage_01.outputs.terminal_artifact_id }}
+      source_artifact_name: product-sd1-migrated-4412m-${{ github.run_id }}
+      source_artifact_digest: ${{ needs.stage_01.outputs.terminal_artifact_digest }}
+      source_host_sha: ${{ needs.stage_01.outputs.terminal_host_sha }}
+      source_rtl_sha: ${{ needs.stage_01.outputs.terminal_rtl_sha }}

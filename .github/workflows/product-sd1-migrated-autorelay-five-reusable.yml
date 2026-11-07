@@ -54,10 +54,27 @@ on:
       source_rtl_sha:
         required: true
         type: string
+      source_mode:
+        required: false
+        type: string
+        default: cross_run
       require_2pow32_crossing:
         required: false
         type: boolean
         default: false
+    outputs:
+      terminal_artifact_id:
+        description: Immutable uploaded terminal 100M-stage artifact numeric ID
+        value: ${{ jobs.relay_five.outputs.terminal_artifact_id }}
+      terminal_artifact_digest:
+        description: Exact sha256 hex digest of uploaded terminal artifact ZIP
+        value: ${{ jobs.relay_five.outputs.terminal_artifact_digest }}
+      terminal_host_sha:
+        description: Complete final Host DDR and SD checkpoint SHA256
+        value: ${{ jobs.relay_five.outputs.terminal_host_sha }}
+      terminal_rtl_sha:
+        description: Complete final savable RTL checkpoint SHA256
+        value: ${{ jobs.relay_five.outputs.terminal_rtl_sha }}
 
 permissions:
   contents: read
@@ -65,6 +82,18 @@ permissions:
 
 jobs:
   relay_five:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    outputs:
+      terminal_artifact_id: ${{ steps.publish_terminal.outputs.artifact_id }}
+      terminal_artifact_digest: ${{ steps.publish_terminal.outputs.artifact_digest }}
+      terminal_host_sha: ${{ steps.publish_terminal.outputs.host_sha }}
+      terminal_rtl_sha: ${{ steps.publish_terminal.outputs.rtl_sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -96,6 +125,7 @@ jobs:
           SOURCE_ID: ${{ inputs.source_artifact_id }}
           SOURCE_NAME: ${{ inputs.source_artifact_name }}
           SOURCE_DIGEST: ${{ inputs.source_artifact_digest }}
+          SOURCE_MODE: ${{ inputs.source_mode }}
         run: |
           set -euo pipefail
           [[ "$START" =~ ^[0-9]{4}$ && "$START" -ge 4012 &&
@@ -106,6 +136,7 @@ jobs:
              "$SOURCE_RUN" =~ ^[0-9]{8,12}$ && "$SOURCE_ID" =~ ^[0-9]+$ &&
              "$SOURCE_HEAD" =~ ^[a-f0-9]{40}$ &&
              "$SOURCE_DIGEST" =~ ^[a-f0-9]{64}$ &&
+             ( "$SOURCE_MODE" == cross_run || "$SOURCE_MODE" == intra_run ) &&
              "$SOURCE_NAME" == "product-sd1-migrated-${START}m-${SOURCE_RUN}" &&
              "$SOURCE_WORKFLOW" == .github/workflows/product-sd1-migrated-*.yml &&
              -n "$SOURCE_JOB" && -n "$SOURCE_STEP" &&
@@ -113,21 +144,36 @@ jobs:
              "$AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 16
           repo="$GITHUB_REPOSITORY"
           verify() {
-            local run="$1" sha="$2" path="$3" job="$4" step="$5" art_id="$6" name="$7" digest="$8"
+            local run="$1" sha="$2" path="$3" job="$4" step="$5" art_id="$6" name="$7" digest="$8" mode="${9:-cross_run}"
+            if [[ "$mode" == intra_run ]]; then
+              [[ "$run" == "$GITHUB_RUN_ID" && "$sha" == "$TARGET_SHA" ]] || {
+                echo 'MIGRATED_AUTORUN_REJECTED: intra-run ID or branch HEAD mismatch' >&2
+                exit 16
+              }
+            fi
             gh api "repos/$repo/actions/runs/$run" > "$RUNNER_TEMP/run-$run.json"
-            jq -e --arg repo "$repo" --arg sha "$sha" --arg path "$path" \
+            jq -e --arg repo "$repo" --arg sha "$sha" --arg path "$path" --arg mode "$mode" \
               --argjson run "$run" '
               .id == $run and .run_attempt == 1 and .event == "pull_request" and
               .repository.full_name == $repo and .head_repository.full_name == $repo and
               .head_branch == "design/rv64gc-product-architecture-20261103" and
-              .head_sha == $sha and .status == "completed" and .conclusion == "success" and
+              .head_sha == $sha and
+              (if $mode == "intra_run" then
+                .status == "in_progress" and .conclusion == null
+               else .status == "completed" and .conclusion == "success" end) and
               (.path | contains($path))
             ' "$RUNNER_TEMP/run-$run.json" >/dev/null || exit 16
             gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
-            jq -e --arg job "$job" --arg step "$step" '
+            jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
               [.jobs[] | select(.name == $job and .status == "completed" and
                 .conclusion == "success" and
-                ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1))] | length == 1
+                ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1) and
+                (if $mode == "intra_run" then
+                   ([.steps[] | select((.name | startswith("Advance genuine RTL segment ")) and
+                     .status == "completed" and .conclusion == "success")] | length == 5) and
+                   ([.steps[] | select((.name | startswith("Upload complete stage ")) and
+                     .status == "completed" and .conclusion == "success")] | length == 5)
+                 else true end))] | length == 1
             ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
             gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/art-$run.json"
             jq -e --arg sha "$sha" --arg name "$name" --arg digest "sha256:$digest" \
@@ -143,7 +189,7 @@ jobs:
             13578644295 product-sd1-model-migrate-v1-qualified-42384463475 \
             e511af2854a110bc0998a0c8a6de7e36378e8a1a68d90568e811577c931e7ee9
           verify "$SOURCE_RUN" "$SOURCE_HEAD" "$SOURCE_WORKFLOW" "$SOURCE_JOB" \
-            "$SOURCE_STEP" "$SOURCE_ID" "$SOURCE_NAME" "$SOURCE_DIGEST"
+            "$SOURCE_STEP" "$SOURCE_ID" "$SOURCE_NAME" "$SOURCE_DIGEST" "$SOURCE_MODE"
       - name: Checkout exact candidate branch
         uses: actions/checkout@v4
         with:
@@ -304,6 +350,7 @@ jobs:
             .retired_delta > 0 and .guest_failure == null
           ' build/product-sd1-migrated-autorelay/4312m/card-progress.json >/dev/null || exit 16
       - name: Upload complete stage five before completion
+        id: upload_terminal
         uses: actions/upload-artifact@v4
         with:
           name: product-sd1-migrated-${{ inputs.stage5 }}m-${{ github.run_id }}
@@ -326,6 +373,56 @@ jobs:
             grep -Fxq 'qualification=PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS' "$ready"
             printf 'Product RTL %sM sealed/uploaded; Debian service/login not yet proved.\n' "$mark" >> "$GITHUB_STEP_SUMMARY"
           done
+      - name: Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs
+        id: publish_terminal
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TERMINAL: ${{ inputs.stage5 }}
+          ARTIFACT_ID: ${{ steps.upload_terminal.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload_terminal.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          ready="build/product-sd1-migrated-autorelay/${TERMINAL}m/.migration-ready"
+          progress="build/product-sd1-migrated-autorelay/${TERMINAL}m/card-progress.json"
+          field() { sed -n "s/^$1=//p" "$2" | head -1; }
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          host="$(field snapshot_host_sha256 "$ready")"
+          rtl="$(field snapshot_rtl_sha256 "$ready")"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ &&
+             "$ARTIFACT_DIGEST" =~ ^sha256:[a-f0-9]{64}$ &&
+             "$host" =~ ^[a-f0-9]{64}$ && "$rtl" =~ ^[a-f0-9]{64}$ &&
+             "$(sha "build/product-sd1-migrated-autorelay/${TERMINAL}m/persistent.pre.host")" == "$host" &&
+             "$(sha "build/product-sd1-migrated-autorelay/${TERMINAL}m/persistent.pre.rtl")" == "$rtl" &&
+             "$(field model_sha256 "$ready")" == b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 ]] || exit 16
+          jq -e --argjson terminal "$((TERMINAL*1000000))" '
+            .qualification == "MIGRATED_REAL_PRODUCT_RTL_20M_NOT_DEBIAN_PASS" and
+            .to_cycles == $terminal and .from_cycles == ($terminal - 20000000) and
+            .retired_delta > 0 and .guest_failure == null
+          ' "$progress" >/dev/null || exit 16
+          artifact_name="product-sd1-migrated-${TERMINAL}m-${GITHUB_RUN_ID}"
+          # upload-artifact@v4 has already succeeded, but GitHub REST metadata
+          # may become visible slightly later. Never fabricate an artifact ID.
+          published=0
+          for attempt in 1 2 3 4 5 6; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/terminal-artifacts.json" &&
+               jq -e --arg name "$artifact_name" --arg digest "$ARTIFACT_DIGEST" \
+                 --arg sha "$TARGET_SHA" --argjson id "$ARTIFACT_ID" '
+                   [.artifacts[] | select(.id == $id and .name == $name and
+                     .digest == $digest and .workflow_run.head_sha == $sha and
+                     .expired == false and .size_in_bytes > 1000000)] | length == 1
+                 ' "$RUNNER_TEMP/terminal-artifacts.json" >/dev/null; then
+              published=1
+              break
+            fi
+            sleep 3
+          done
+          [[ "$published" == 1 ]] || exit 16
+          echo "artifact_id=$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=${ARTIFACT_DIGEST#sha256:}" >> "$GITHUB_OUTPUT"
+          echo "host_sha=$host" >> "$GITHUB_OUTPUT"
+          echo "rtl_sha=$rtl" >> "$GITHUB_OUTPUT"
+          echo "PRODUCT_SD1_MIGRATED_AUTORUN_TERMINAL_AUTHENTICATED stage=${TERMINAL}m artifact_id=$ARTIFACT_ID host_sha=$host rtl_sha=$rtl"
       - name: Always archive diagnostic logs after failure or success
         if: always()
         uses: actions/upload-artifact@v4
