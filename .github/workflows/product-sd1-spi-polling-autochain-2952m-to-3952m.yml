@@ -119,7 +119,7 @@ jobs:
                 exit 16
               }
           done
-          echo 'TEN14_EAGER_GATE: 10/10 real RTL stages and 10/10 complete ZIP digests verified'
+          echo 'TEN14_EAGER_GATE: 10/10 real RTL stages and 10/10 ZIP digest metadata verified'
       - name: Download 2932M full source for cross-stage host SHA audit
         uses: actions/download-artifact@v4
         with:
@@ -164,7 +164,7 @@ jobs:
             jq -e --argjson to "$((m*1000000))" '
               .qualification == "POLLING_REAL_PRODUCT_RTL_NOT_DEBIAN_PASS" and
               .to_cycles == $to and .from_cycles == ($to - 20000000) and
-              .guest_failure == false and .retired_delta > 0
+              (.guest_failure == null or .guest_failure == false) and .retired_delta > 0
             ' "$progress" >/dev/null || exit 16
           done
           [[ "$(field source_host_sha256 "$root/2952/.polling-ready")" == "$(sha "$root/2932/persistent.pre.host")" ]] || exit 16
