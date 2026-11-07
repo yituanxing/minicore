@@ -1,0 +1,183 @@
+name: Product SD1 exact vmlinux recovery offline
+
+# Inert until the one-off PR label is added. Rebuilds exactly the existing
+# frozen GPIO-CS Linux Image solely to recover ELF symbols for snapshot
+# inspection. Does NOT run RTL/QEMU, alter SD media, or cache a new model.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-sd1-vmlinux-recover-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  recover-symbols-only:
+    if: >-
+      github.event.label.name == 'product-sd1-vmlinux-recover-once' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_SD1_GPIO_CS_DIAGNOSTIC_BUILD: '1'
+      AETHERCORE_SD1_GPIO_CS_OBJECT_PROBE: '0'
+      AETHERCORE_SD1_VMLINUX_RECOVERY: '1'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout frozen candidate source and validate isolated scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Reject any unqualified diagnostic source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_gpio_cs_diag_build.sh
+          bash -n tools/ci/product_sd1_vmlinux_recover.sh
+          python3 -m unittest tests_py.test_product_sd1_gpio_cs_diag_build_contract -v
+          python3 -m unittest tests_py.test_product_sd1_gpio_cs_diag_build_isolation -v
+          test "$(sha256sum tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch | awk '{print $1}')" = \
+            ff408c203b461d504f48152840698b077f8ea948a07ad5235f4afb8436282638
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          echo 'Offline symbol recovery only; no live relay/model/firmware/SD alterations.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore verified official signed Debian SD1 media by exact key
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Verify immutable source media before any kernel build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == 'true' ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || {
+            echo 'SIGNED_SD1_MEDIA_CACHE_MISSING: do not rebuild or fall back' >&2
+            exit 16
+          }
+          python3 tools/ci/product_sd1_official_seed.py verify
+          [[ ! -e build/product-sd1-gpio-cs-diagnostic &&
+             ! -e build/product-sd1-vmlinux-recovery ]] || {
+            echo 'NONISOLATED_DIAGNOSTIC_OUTPUT_PRESENT' >&2
+            exit 16
+          }
+
+      - name: Restore pinned GCC 13.3 toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore frozen upstream Linux and OpenSBI sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore exact DTB build dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Verify Java 17 and install only missing build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/javac" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+            export PATH="$java17_home/bin:$PATH"
+          fi
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          missing=()
+          for pair in 'bison:bison' 'flex:flex' 'bc:bc' 'dtc:device-tree-compiler' \
+                      'pahole:dwarves' 'make:make' 'gcc:build-essential' \
+                      'g++:build-essential' 'git:git'; do
+            command -v "${pair%%:*}" >/dev/null || missing+=("${pair#*:}")
+          done
+          test -r /usr/include/openssl/ssl.h || missing+=(libssl-dev)
+          test -r /usr/include/libelf.h || missing+=(libelf-dev)
+          if (( ${#missing[@]} )); then
+            mapfile -t missing < <(printf '%s\n' "${missing[@]}" | sort -u)
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 15m \
+              sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          chmod +x mill
+
+      - name: Activate exact toolchain and source-only preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 20m \
+            bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          source software/rv64/linux_early.env
+          test "$(cat "${HOME}/.cache/aethercore/rv64/linux/linux-${RV64_LINUX_VERSION}/.aethercore-linux-source-sha256")" = \
+            "$RV64_LINUX_SHA256"
+          source software/rv64/opensbi_first_exec.env
+          git -C "${HOME}/.cache/aethercore/l32/opensbi/${RV64_OPENSBI_COMMIT}" \
+            rev-parse HEAD | grep -Fx "$RV64_OPENSBI_COMMIT"
+
+      - name: Rebuild identical patched SD1 Image in isolated output tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 65m \
+            bash tools/ci/product_sd1_gpio_cs_diag_build.sh
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+
+      - name: Hard-gate exact Image SHA and recover only matching symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sd1_vmlinux_recover.sh
+          grep -Fxq 'SD1_VMLINUX_RECOVERY_RESULT: status=EXACT_IMAGE_MATCH' \
+            build/product-sd1-vmlinux-recovery/recovery-manifest.txt
+          cat build/product-sd1-vmlinux-recovery/recovery-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive only verified vmlinux and System.map; never SD or DDR
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-exact-vmlinux-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            build/product-sd1-vmlinux-recovery/vmlinux
+            build/product-sd1-vmlinux-recovery/System.map
+            build/product-sd1-vmlinux-recovery/recovery-manifest.txt
