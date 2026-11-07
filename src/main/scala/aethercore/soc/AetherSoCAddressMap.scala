@@ -19,17 +19,45 @@ final case class AetherSoCAddressMap(
     mtimeAddress: BigInt,
     mtimecmpAddress: BigInt,
     plicBase: BigInt,
-    plicBytes: BigInt
+    plicBytes: BigInt,
+    spiBase: BigInt = BigInt("10001000", 16),
+    spiBytes: BigInt = BigInt("00000020", 16),
+    spiCsGpioBase: BigInt = BigInt("10002000", 16),
+    spiCsGpioBytes: BigInt = BigInt("00000010", 16)
 ) {
   require(bootRomBytes > 0)
   require(ramBytes > 0)
   require(uartBytes > 0)
   require(plicBytes > 0)
+  require(spiBytes >= 20)
+  require(spiCsGpioBytes >= 8)
 
   val bootRomLimit: BigInt = bootRomBase + bootRomBytes
   val ramLimit: BigInt = ramBase + ramBytes
   val uartLimit: BigInt = uartBase + uartBytes
   val plicLimit: BigInt = plicBase + plicBytes
+  val spiLimit: BigInt = spiBase + spiBytes
+  val spiCsGpioLimit: BigInt = spiCsGpioBase + spiCsGpioBytes
+
+  // The optional SD/SPI apertures are reserved even when the controller is
+  // excluded from the engineering-only Product hardware configuration.
+  private val regions = Seq(
+    ("bootrom", bootRomBase, bootRomLimit),
+    ("ram", ramBase, ramLimit),
+    ("uart", uartBase, uartLimit),
+    ("exit", exitAddress, exitAddress + 8),
+    ("mtime", mtimeAddress, mtimeAddress + 8),
+    ("mtimecmp", mtimecmpAddress, mtimecmpAddress + 8),
+    ("plic", plicBase, plicLimit),
+    ("spi", spiBase, spiLimit),
+    ("spi-cs-gpio", spiCsGpioBase, spiCsGpioLimit)
+  )
+  for (i <- regions.indices; j <- (i + 1) until regions.size) {
+    val (aName, aStart, aEnd) = regions(i)
+    val (bName, bStart, bEnd) = regions(j)
+    require(aEnd <= bStart || bEnd <= aStart,
+      s"AetherSoC address regions $aName and $bName overlap")
+  }
 }
 
 object AetherSoCAddressMap {
@@ -71,7 +99,10 @@ final case class AetherSoCBoardSpec(
     machineTimerInterruptId: Int,
     timebaseFrequencyHz: Long,
     uartClockFrequencyHz: Long,
-    uartBaud: Int
+    uartBaud: Int,
+    spiPlicSourceId: Int = 11,
+    spiBusClockFrequencyHz: Long = 50_000_000L,
+    spiMaxFrequencyHz: Long = 12_500_000L
 ) {
   require(plicSourceCount > 0)
   require(uartPlicSourceId > 0 && uartPlicSourceId <= plicSourceCount)
@@ -80,6 +111,10 @@ final case class AetherSoCBoardSpec(
   require(timebaseFrequencyHz > 0)
   require(uartClockFrequencyHz > 0)
   require(uartBaud > 0)
+  require(spiPlicSourceId > 0 && spiPlicSourceId <= plicSourceCount)
+  require(spiPlicSourceId != uartPlicSourceId)
+  require(spiBusClockFrequencyHz > 0)
+  require(spiMaxFrequencyHz > 0 && spiMaxFrequencyHz <= spiBusClockFrequencyHz / 2)
 
   private val uartDivisorDenominator = 16L * uartBaud.toLong
   require(

@@ -1,0 +1,252 @@
+name: AetherCore Product Physical FPGA Pin and RV64GC Cost
+
+# Four complete 100-minute synthesis jobs are explicit evidence collection,
+# not the fast PR development loop. Human PR label is the opt-in bridge until
+# workflow_dispatch is present on the default branch.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      capacity:
+        description: One implemented single-lane Product CPU geometry
+        required: true
+        default: small
+        type: choice
+        options:
+          - small
+          - expanded
+
+permissions:
+  contents: read
+
+env:
+  # Keep the launcher version pinned across the validation and four synth hosts.
+  MILL_VERSION: '1.1.2'
+
+concurrency:
+  group: aethercore-product-physical-ppa-${{ github.ref }}-${{ inputs.capacity || 'small' }}
+  # Finish expensive four-way synthesis; only stale pending snapshots are replaced.
+  cancel-in-progress: false
+
+jobs:
+  validate-product-rtl:
+    name: Validate the single shared Product CPU/SoC topology
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-physical-ppa')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Mill distribution
+        id: mill-dist-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/mill-${{ env.MILL_VERSION }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-mill-dist-${{ env.MILL_VERSION }}-v1
+
+      - name: Validate exact product and physical pin RTL
+        shell: bash
+        run: |
+          chmod +x mill
+          ./mill aethercore.test.testOnly \
+            aethercore.AetherCoreProductSoCElaborationSpec \
+            aethercore.ProductCoreConfigSpec
+
+      - name: Confirm pinned Mill distribution was actually used
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$HOME/.cache/aethercore/mill-${MILL_VERSION}"
+
+      - name: Save validated Mill distribution for all four synthesis jobs
+        if: success() && steps.mill-dist-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/mill-${{ env.MILL_VERSION }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-mill-dist-${{ env.MILL_VERSION }}-v1
+
+  fpga-physical-synthesis:
+    name: ${{ matrix.isa }} / ${{ matrix.boundary }} full-SoC ECP5 proxy
+    needs: validate-product-rtl
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      # Each variant uses the same source recipe and selected Product geometry.
+      # One runner shutdown must not cancel three already completed netlists.
+      fail-fast: false
+      matrix:
+        isa: [integer, floating]
+        boundary: [probe, pins]
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Mill distribution from validated job
+        id: mill-dist-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/mill-${{ env.MILL_VERSION }}
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-mill-dist-${{ env.MILL_VERSION }}-v1
+
+      - name: Require validated Mill distribution before synthesis
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ steps.mill-dist-cache.outputs.cache-hit }}' != true ]] ||
+             [[ ! -x "$HOME/.cache/aethercore/mill-${MILL_VERSION}" ]]; then
+            echo 'ERROR: pinned Mill binary missing from shared synthesis cache' >&2
+            exit 1
+          fi
+
+      - name: Install synthesis proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y yosys jq
+          yosys -V
+          yosys -Q -p 'help ltp' | grep -q -- '-noff'
+          chmod +x mill
+
+      - name: Synthesize one exact Product SoC variant
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aethercore-product-physical-ppa"
+          bash tools/compare_product_fpga_pin_cost.sh \
+            '${{ inputs.capacity || 'small' }}' "$out" \
+            '${{ matrix.isa }}' '${{ matrix.boundary }}'
+
+      - name: Preserve partial variant evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          capacity='${{ inputs.capacity || 'small' }}'
+          source="$RUNNER_TEMP/aethercore-product-physical-ppa/$capacity/${{ matrix.isa }}/${{ matrix.boundary }}"
+          target="build/product-physical-ppa-evidence/$capacity/${{ matrix.isa }}/${{ matrix.boundary }}"
+          mkdir -p "$target"
+          for item in metrics.json yosys.log; do
+            if [[ -f "$source/$item" ]]; then
+              cp "$source/$item" "$target/$item"
+            fi
+          done
+          git rev-parse HEAD > "$target/commit.sha"
+
+      - name: Upload independent synthesis artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-physical-fpga-ppa-${{ inputs.capacity || 'small' }}-${{ matrix.isa }}-${{ matrix.boundary }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/product-physical-ppa-evidence/
+
+  report-physical-ppa:
+    name: Compare four completed netlists and preserve all evidence
+    needs: [validate-product-rtl, fpga-physical-synthesis]
+    # A failed or interrupted matrix lane must still leave an explicit report
+    # failure and preserve all artifacts from the lanes that did finish.
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-physical-ppa'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Download all four independent synthesis artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Include earlier attempts: rerun-failed-jobs reuses successful
+          # matrix artifacts from its original attempt.
+          pattern: product-physical-fpga-ppa-${{ inputs.capacity || 'small' }}-*-${{ github.run_id }}-*
+          merge-multiple: false
+          path: build/product-physical-ppa-downloads
+
+      - name: Select newest artifact for each exact synthesis lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/collect_product_physical_ppa.py \
+            '${{ inputs.capacity || 'small' }}' \
+            '${{ github.run_id }}' \
+            build/product-physical-ppa-downloads \
+            build/product-physical-ppa-evidence
+
+      - name: Report exact FPGA resource deltas
+        shell: bash
+        run: |
+          set -euo pipefail
+          capacity='${{ inputs.capacity || 'small' }}'
+          root="build/product-physical-ppa-evidence"
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          for isa in integer floating; do
+            for boundary in probe pins; do
+              dir="$root/$capacity/$isa/$boundary"
+              test -s "$dir/metrics.json"
+              test "$(cat "$dir/commit.sha")" = "$expected"
+            done
+          done
+          python3 tools/report_product_fpga_pin_cost.py "$capacity" "$root"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('build/product-physical-ppa-evidence')
+          capacity = '${{ inputs.capacity || 'small' }}'
+          report = json.loads((root / capacity / 'summary.json').read_text())
+          keys = ('port_bits', 'lut4', 'ff', 'bram', 'dpr', 'dsp', 'depth')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(f'## Full Product FPGA SoC: {capacity}\n\n')
+              f.write('| Metric | IMAC probe | IMAC pins | RV64GC probe | RV64GC pins |\n')
+              f.write('| --- | ---: | ---: | ---: | ---: |\n')
+              m = report['measurements']
+              for key in keys:
+                  f.write(f'| {key} | {m["integer"]["probe"][key]} | '
+                          f'{m["integer"]["pins"][key]} | '
+                          f'{m["floating"]["probe"][key]} | '
+                          f'{m["floating"]["pins"][key]} |\n')
+              f.write('\nThis is an unrouted ECP5 proxy, not FPGA Fmax, '
+                      'DDR, IEEE differential or Debian signoff.\n')
+          PY
+
+      - name: Upload exact-head synthesis evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-physical-fpga-ppa-summary-${{ inputs.capacity || 'small' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/product-physical-ppa-evidence/

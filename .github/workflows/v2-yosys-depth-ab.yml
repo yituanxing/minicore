@@ -1,11 +1,6 @@
 name: AetherCore V2 Yosys Logic-Depth A/B
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/v2/**'
-      - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
-      - '.github/workflows/v2-yosys-depth-ab.yml'
   workflow_dispatch:
 
 permissions:

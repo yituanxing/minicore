@@ -42,6 +42,16 @@ class TranslationUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
     dut.io.pteData.poke(0.U)
     dut.io.pteFault.poke(false.B)
     dut.io.responseReady.poke(false.B)
+    dut.io.hitProbe.foreach { probe =>
+      probe.requestValid.poke(false.B)
+      probe.virtualAddress.poke(0.U)
+      probe.rootPpn.poke(0.U)
+      probe.privilege.poke(PrivilegeMode.Supervisor.U)
+      probe.write.poke(false.B)
+      probe.translationEnabled.poke(true.B)
+      probe.sum.poke(false.B)
+      probe.mxr.poke(false.B)
+    }
   }
 
   private def request(dut: TranslationUnit, va: BigInt, root: BigInt): Unit = {
@@ -165,6 +175,63 @@ class TranslationUnitSpec extends AnyFlatSpec with Matchers with ChiselSim {
       dut.io.accessFault.expect(false.B)
       dut.io.leafLevel.expect(3.U)
       dut.io.physicalAddress.expect(pa.U)
+    }
+  }
+
+  it should "reject noncanonical TLB aliases and probe cached hits during an unrelated page walk" in {
+    simulate(new TranslationUnit(PageTableGeometry.Sv39, tlbEntries = 4,
+      withHitProbe = true)) { dut =>
+      initialize(dut)
+      val vaA = BigInt("0000000080001000", 16)
+      val vaB = BigInt("0000000080002000", 16)
+      val invalidAlias = vaA | (BigInt(1) << 39)
+      val root = BigInt(1)
+      val leaf = BigInt("80000", 16)
+      val translatedA = (leaf << 12)
+      dut.io.responseReady.poke(true.B)
+      request(dut, vaA, root)
+      dut.io.pteValid.expect(true.B)
+      dut.io.pteData.poke(pte(2).U)
+      dut.io.pteReady.poke(true.B)
+      dut.clock.step()
+      dut.io.pteData.poke(pte(3).U)
+      dut.clock.step()
+      dut.io.pteData.poke(pte(leaf, read = true, accessed = true).U)
+      dut.clock.step()
+      dut.io.pteReady.poke(false.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.pageFault.expect(false.B)
+      dut.io.physicalAddress.expect(translatedA.U)
+      dut.clock.step() // refill TLB
+
+      // The illegal high bits used to alias vaA's cached low VPN.
+      dut.io.virtualAddress.poke(invalidAlias.U)
+      dut.io.satpRootPpn.poke(root.U)
+      dut.io.requestValid.poke(true.B)
+      dut.io.responseValid.expect(false.B) // never a cached hit
+      dut.io.requestReady.expect(true.B)
+      dut.clock.step()
+      dut.io.requestValid.poke(false.B)
+      dut.io.responseValid.expect(true.B)
+      dut.io.pageFault.expect(true.B)
+      dut.io.pteValid.expect(false.B) // walker rejects before any PTE fetch
+      dut.clock.step()
+
+      // A distinct head request is now waiting for its root PTE.
+      request(dut, vaB, root)
+      dut.io.pteValid.expect(true.B)
+      val probe = dut.io.hitProbe.get
+      probe.virtualAddress.poke(vaA.U)
+      probe.rootPpn.poke(root.U)
+      probe.requestValid.poke(true.B)
+      probe.hit.expect(true.B)
+      probe.physicalAddress.expect(translatedA.U)
+      dut.io.pteValid.expect(true.B) // probe must not steal or advance PTW
+      dut.clock.step(2)
+      probe.hit.expect(true.B)
+      probe.virtualAddress.poke(invalidAlias.U)
+      probe.hit.expect(false.B) // same canonical guard on the second entrance
+      probe.requestValid.poke(false.B)
     }
   }
 

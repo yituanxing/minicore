@@ -1,0 +1,390 @@
+name: Product SD1 GPIO-CS patched kernel RTL checkpoint relay
+
+# Second explicit gate, enabled only after the separate patch Image/OpenSBI
+# job successfully published a SHA-verified cache. Never resumes frozen 312M.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-gpio-cs-diag-short-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  patched-kernel-short:
+    if: >-
+      (github.event.label.name == 'product-sd1-gpio-cs-diag-short' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-32m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-92m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-112m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-132m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-152m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-172m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-192m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-212m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-232m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-252m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-272m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-292m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-312m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-332m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-352m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-372m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-392m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-412m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-432m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-452m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-472m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-492m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-512m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-532m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-552m' ||
+       github.event.label.name == 'product-sd1-gpio-cs-diag-advance-572m') &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_ALLOW_PRODUCT_SD1_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_SD1_GPIO_CS_RTL_DIAG: '1'
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      JOBS: '4'
+      IS_ADVANCE: ${{ github.event.label.name != 'product-sd1-gpio-cs-diag-short' }}
+      # Immutable, independently qualified source links. Extend only after an
+      # actual saved-state artifact and verified boot profile exist.
+      ADVANCE_SOURCE_RUN: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-572m' && '42337896688' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-552m' && '42337615835' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-532m' && '42331718087' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-512m' && '42331545677' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-492m' && '42330330735' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-472m' && '42330038426' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-452m' && '42329689141' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-432m' && '42329425421' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-412m' && '42329085644' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-392m' && '42328803369' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-372m' && '42328447147' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-352m' && '42328224294' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-332m' && '42327950846' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-312m' && '42327660700' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-292m' && '42327058494' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-272m' && '42326763349' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-252m' && '42326535567' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-232m' && '42326262239' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-212m' && '42326027714' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-192m' && '42325812471' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-172m' && '42325261377' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-152m' && '42324995836' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-132m' && '42324761002' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-112m' && '42324435535' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-92m' && '42246826509' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '42246225589' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '42245421838' || '42242315003' }}
+      ADVANCE_SOURCE_ARTIFACT: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-572m' && 'product-sd1-gpio-cs-diagnostic-552m-42337896688' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-552m' && 'product-sd1-gpio-cs-diagnostic-532m-42337615835' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-532m' && 'product-sd1-gpio-cs-diagnostic-512m-42331718087' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-512m' && 'product-sd1-gpio-cs-diagnostic-492m-42331545677' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-492m' && 'product-sd1-gpio-cs-diagnostic-472m-42330330735' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-472m' && 'product-sd1-gpio-cs-diagnostic-452m-42330038426' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-452m' && 'product-sd1-gpio-cs-diagnostic-432m-42329689141' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-432m' && 'product-sd1-gpio-cs-diagnostic-412m-42329425421' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-412m' && 'product-sd1-gpio-cs-diagnostic-392m-42329085644' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-392m' && 'product-sd1-gpio-cs-diagnostic-372m-42328803369' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-372m' && 'product-sd1-gpio-cs-diagnostic-352m-42328447147' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-352m' && 'product-sd1-gpio-cs-diagnostic-332m-42328224294' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-332m' && 'product-sd1-gpio-cs-diagnostic-312m-42327950846' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-312m' && 'product-sd1-gpio-cs-diagnostic-292m-42327660700' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-292m' && 'product-sd1-gpio-cs-diagnostic-272m-42327058494' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-272m' && 'product-sd1-gpio-cs-diagnostic-252m-42326763349' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-252m' && 'product-sd1-gpio-cs-diagnostic-232m-42326535567' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-232m' && 'product-sd1-gpio-cs-diagnostic-212m-42326262239' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-212m' && 'product-sd1-gpio-cs-diagnostic-192m-42326027714' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-192m' && 'product-sd1-gpio-cs-diagnostic-172m-42325812471' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-172m' && 'product-sd1-gpio-cs-diagnostic-152m-42325261377' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-152m' && 'product-sd1-gpio-cs-diagnostic-132m-42324995836' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-132m' && 'product-sd1-gpio-cs-diagnostic-112m-42324761002' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-112m' && 'product-sd1-gpio-cs-diagnostic-92m-42324435535' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-92m' && 'product-sd1-gpio-cs-diagnostic-72m-42246826509' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && 'product-sd1-gpio-cs-diagnostic-52m-42246225589' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && 'product-sd1-gpio-cs-diagnostic-32m-42245421838' || 'product-sd1-gpio-cs-diagnostic-12m-42242315003' }}
+      ADVANCE_SOURCE_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-572m' && '552000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-552m' && '532000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-532m' && '512000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-512m' && '492000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-492m' && '472000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-472m' && '452000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-452m' && '432000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-432m' && '412000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-412m' && '392000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-392m' && '372000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-372m' && '352000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-352m' && '332000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-332m' && '312000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-312m' && '292000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-292m' && '272000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-272m' && '252000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-252m' && '232000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-232m' && '212000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-212m' && '192000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-192m' && '172000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-172m' && '152000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-152m' && '132000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-132m' && '112000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-112m' && '92000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-92m' && '72000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '52000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '32000000' || '12000000' }}
+      ADVANCE_TARGET_CYCLES: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-572m' && '572000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-552m' && '552000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-532m' && '532000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-512m' && '512000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-492m' && '492000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-472m' && '472000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-452m' && '452000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-432m' && '432000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-412m' && '412000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-392m' && '392000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-372m' && '372000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-352m' && '352000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-332m' && '332000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-312m' && '312000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-292m' && '292000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-272m' && '272000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-252m' && '252000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-232m' && '232000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-212m' && '212000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-192m' && '192000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-172m' && '172000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-152m' && '152000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-132m' && '132000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-112m' && '112000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-92m' && '92000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '72000000' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52000000' || '32000000' }}
+      ADVANCE_TARGET_TAG: ${{ github.event.label.name == 'product-sd1-gpio-cs-diag-advance-572m' && '572m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-552m' && '552m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-532m' && '532m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-512m' && '512m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-492m' && '492m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-472m' && '472m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-452m' && '452m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-432m' && '432m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-412m' && '412m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-392m' && '392m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-372m' && '372m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-352m' && '352m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-332m' && '332m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-312m' && '312m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-292m' && '292m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-272m' && '272m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-252m' && '252m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-232m' && '232m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-212m' && '212m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-192m' && '192m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-172m' && '172m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-152m' && '152m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-132m' && '132m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-112m' && '112m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-92m' && '92m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-72m' && '72m' || github.event.label.name == 'product-sd1-gpio-cs-diag-advance-52m' && '52m' || '32m' }}
+
+    steps:
+      - name: Checkout exact diagnostic source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Cheap no-longrun diagnostic contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_gpio_cs_diag_short.sh
+          python3 -m unittest tests_py.test_product_sd1_gpio_cs_diag_short_contract -v
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" ]] || exit 3
+          echo 'SD1_GPIO_CS_DIAG_SHORT_SCOPE: 12M new kernel Product RTL + 500k independent replay, no CMD0/SD root/PID1 PASS claim' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore original authenticated full SD1 media
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Reject unverified original media before any simulator build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == 'true' ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+
+      - name: Restore separate patched Image and OpenSBI cache only
+        id: diagnostic
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+
+      - name: Reject missing or unverifiable patched payload before RTL build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diagnostic.outputs.cache-hit }}' == 'true' ]] || {
+            echo 'DIAGNOSTIC_IMAGE_NOT_READY: do not start expensive RTL; await exact patched Image build' >&2
+            exit 16
+          }
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          sha256sum build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+          echo 'Both original and diagnostic caches passed separate exact key gates.' >> "$GITHUB_STEP_SUMMARY"
+
+      # Read-only import of the previously SHA-verified patched kernel 12M state.
+      # The run and artifact name are intentionally immutable; never use latest.
+      - name: Download exact previously published full Product RTL checkpoint
+        if: env.IS_ADVANCE == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ env.ADVANCE_SOURCE_RUN }}
+          name: ${{ env.ADVANCE_SOURCE_ARTIFACT }}
+          github-token: ${{ github.token }}
+          path: build/product-sd1-gpio-cs-rtl-import
+
+      - name: Restore proven Scala/Mill and pinned Verilator 5.054 caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Restore pinned Mill and Scala dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Configure Java 17 and native Product host tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/javac" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+            export PATH="$java17_home/bin:$PATH"
+          fi
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          for cmd in cmake ninja make gcc g++ c++ git python3; do command -v "$cmd" >/dev/null; done
+          chmod +x mill
+          AETHERCORE_VERILATOR_VERSION=5.054 bash tools/ensure_verilator_5_024.sh
+
+      # A relay uses -march=x86-64/-mtune=generic. The older native-CPU cache
+      # was built with -march=native and is NOT a valid portable-model hit.
+      # Keep a dedicated compiler/arch-pinned cache for cross-run restoration.
+      - name: Fingerprint portable compiler ABI for model reuse
+        id: portable-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$(uname -m)-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore portable ABI-qualified SD1 --savable RTL model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-portable-v1-${{ steps.portable-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+
+      # The 12M model was compiled -march=x86-64/-mtune=generic. Do not invoke
+      # the OLD model builder on a different runner when importing its binary:
+      # product_sim_cache.sh still includes /proc/cpuinfo in its fingerprint,
+      # which forces an unnecessary (and checkpoint-incompatible) rebuild.
+      # The advance step below checks the original binary SHA three ways.
+      - name: Build original portable Product --savable model, zero guest cycles
+        if: github.event.label.name == 'product-sd1-gpio-cs-diag-short'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 25m \
+            bash tools/ci/product_checkpoint_sd1_short.sh build
+
+      - name: Reject incompatible imported state and any model-cache fallback
+        if: env.IS_ADVANCE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.model-cache.outputs.cache-hit }}' == 'true' ]] || {
+            echo 'GPIO_CS_RELAY_REJECTED: pinned portable RTL model cache miss' >&2
+            exit 16
+          }
+          import=build/product-sd1-gpio-cs-rtl-import
+          out=build/product-sd1-gpio-cs-rtl-checkpoint
+          mapfile -d '' manifests < <(find "$import" -type f -name .diag-ready -print0)
+          [[ "${#manifests[@]}" == 1 ]] || {
+            echo 'GPIO_CS_RELAY_REJECTED: expected exactly one imported checkpoint manifest' >&2
+            exit 16
+          }
+          source="$(dirname "${manifests[0]}")"
+          for name in .diag-ready persistent.pre.rtl persistent.pre.host phase-timing.txt; do
+            [[ -f "$source/$name" && ! -L "$source/$name" ]] || exit 16
+          done
+          grep -Fxq "boot_cycles=$ADVANCE_SOURCE_CYCLES" "$source/.diag-ready"
+          grep -Fxq 'qualification=SD1_GPIO_CS_DIAGNOSTIC_CHECKPOINT_NOT_DEBIAN_PASS' "$source/.diag-ready"
+          model=build/product-sd1-persistent-checkpoint/savable-model
+          executable="$model/obj/VAetherCoreProductDebianSdRV64SimTop"
+          [[ -x "$executable" && -s "$model/.savable-source-key" &&
+             -s "$model/.product-model-identity" ]] || exit 16
+          model_sha="$(sha256sum "$executable" | cut -d ' ' -f 1)"
+          grep -Fxq "simulator_sha256=$model_sha" "$model/.product-model-identity" || {
+            echo 'GPIO_CS_RELAY_REJECTED: cached simulator bytes differ from its own sealed identity' >&2
+            exit 16
+          }
+          grep -Fxq "model_sha256=$model_sha" "$source/.diag-ready" || {
+            echo 'GPIO_CS_RELAY_REJECTED: cached model bytes differ from 12M snapshot model' >&2
+            exit 16
+          }
+          grep -Fxq "source_model_key=$(< "$model/.savable-source-key")" "$source/.diag-ready" || {
+            echo 'GPIO_CS_RELAY_REJECTED: cached model source key differs from 12M checkpoint' >&2
+            exit 16
+          }
+          mkdir -p "$out/advance-source.imported"
+          cp -- "$source/.diag-ready" "$source/persistent.pre.rtl" \
+            "$source/persistent.pre.host" "$source/phase-timing.txt" \
+            "$out/advance-source.imported/"
+          echo "Exact portable Product binary and $ADVANCE_SOURCE_CYCLES checkpoint reused without recompilation; source key/three SHA identities checked." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache distinct portable SD1 model if no compatible cache exists
+        if: success() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-portable-v1-${{ steps.portable-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+
+      - name: Real patched-kernel 12M Product RTL and independent same-cycle replay
+        if: github.event.label.name == 'product-sd1-gpio-cs-diag-short'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 15m \
+            bash tools/ci/product_sd1_gpio_cs_diag_short.sh run |
+            tee build/product-sd1-gpio-cs-short-run.log
+          grep -Fq 'PRODUCT_SD1_GPIO_CS_DIAG_SHORT_STATE_SAVED cycle=12000000 ' \
+            build/product-sd1-gpio-cs-short-run.log
+          echo 'Patched kernel 12M full RTL+DDR+SD state built and cross-process replay qualified; CMD0 remains for later 332-352M stage.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Real patched-kernel Product RTL checkpoint continuation
+        if: env.IS_ADVANCE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 15m \
+            bash tools/ci/product_sd1_gpio_cs_diag_short.sh advance \
+              build/product-sd1-gpio-cs-rtl-checkpoint/advance-source.imported \
+              "$ADVANCE_TARGET_CYCLES" |
+            tee "build/product-sd1-gpio-cs-advance-$ADVANCE_TARGET_TAG.log"
+          grep -Fq "PRODUCT_SD1_GPIO_CS_DIAG_SHORT_STATE_SAVED cycle=$ADVANCE_TARGET_CYCLES " \
+            "build/product-sd1-gpio-cs-advance-$ADVANCE_TARGET_TAG.log"
+          echo "Patched $ADVANCE_SOURCE_CYCLES->$ADVANCE_TARGET_CYCLES full Product RTL checkpoint saved; no CMD0 or Debian claim." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain immutable separate diagnostic 12M Product RTL checkpoint
+        if: success() && github.event.label.name == 'product-sd1-gpio-cs-diag-short'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-12m-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: true
+          path: |
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/.diag-ready
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/persistent.pre.rtl
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/persistent.pre.host
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/save.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restore.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/continuous.state
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restored.state
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/phase-timing.txt
+
+      - name: Retain immutable patched full Product RTL checkpoint
+        if: success() && env.IS_ADVANCE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-${{ env.ADVANCE_TARGET_TAG }}-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: true
+          path: |
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/.diag-ready
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/persistent.pre.rtl
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/persistent.pre.host
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/save.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/phase-timing.txt
+
+      # Never let a profiler regression discard an already authenticated RTL
+      # checkpoint: upload the complete 32M state in the preceding step first.
+      - name: Analyze persisted Linux boot phase profile
+        if: success() && env.IS_ADVANCE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' stages < <(find build/product-sd1-gpio-cs-rtl-checkpoint \
+            -maxdepth 1 -type d -name 'advance.*' -print0)
+          [[ "${#stages[@]}" == 1 ]] || exit 16
+          python3 tools/ci/product_sd1_gpio_cs_boot_profile.py \
+            --previous build/product-sd1-gpio-cs-rtl-checkpoint/advance-source.imported \
+            --current "${stages[0]}" \
+            --output "build/product-sd1-gpio-cs-profile-$ADVANCE_TARGET_TAG"
+          echo "$ADVANCE_SOURCE_CYCLES->$ADVANCE_TARGET_CYCLES boot phase profile recorded and hashed." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain diagnostic boot profile independent of RTL snapshot
+        if: success() && env.IS_ADVANCE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-boot-profile-${{ env.ADVANCE_TARGET_TAG }}-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/segments.jsonl
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/SHA256SUMS
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/uart-cumulative.log
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/uart-delta.bin
+
+      - name: Upload small logs and SHA ledger, even on preflight failure
+        if: always() && github.event.label.name == 'product-sd1-gpio-cs-diag-short'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-short-evidence-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 90
+          include-hidden-files: true
+          path: |
+            build/product-sd1-gpio-cs-short-run.log
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/.diag-ready
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/save.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/restore.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/boot-12m.*/phase-timing.txt
+
+      - name: Upload advance evidence even if a stage failed
+        if: always() && env.IS_ADVANCE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-gpio-cs-diagnostic-advance-evidence-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 90
+          include-hidden-files: true
+          path: |
+            build/product-sd1-gpio-cs-advance-${{ env.ADVANCE_TARGET_TAG }}.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/.diag-ready
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/save.log
+            build/product-sd1-gpio-cs-rtl-checkpoint/advance.*/phase-timing.txt
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/segments.jsonl
+            build/product-sd1-gpio-cs-profile-${{ env.ADVANCE_TARGET_TAG }}/SHA256SUMS

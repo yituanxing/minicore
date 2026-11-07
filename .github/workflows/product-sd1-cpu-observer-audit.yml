@@ -1,0 +1,63 @@
+name: Product SD1 CPU observer snapshot-only audit
+on:
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: product-sd1-cpu-observer-812m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  audit:
+    if: >-
+      github.event.label.name == 'product-sd1-cpu-observer-812m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Test host decoder with no RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest tests_py.test_product_sd1_cpu_observer_audit -v
+      - name: Download immutable 772M full checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42344795877
+          name: product-sd1-spi-polling-772m-42344795877
+          github-token: ${{ github.token }}
+          path: build/cpu-observer-source/772m
+      - name: Download immutable 812M full checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42344795877
+          name: product-sd1-spi-polling-812m-42344795877
+          github-token: ${{ github.token }}
+          path: build/cpu-observer-source/812m
+      - name: SHA-check RTL, host DDR and card progress; compare CPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/product_sd1_cpu_observer_audit.py \
+            --before build/cpu-observer-source/772m --before-cycles 772000000 \
+            --after build/cpu-observer-source/812m --after-cycles 812000000 \
+            --output build/cpu-observer-result/observer-772m-812m.json
+          (cd build/cpu-observer-result && sha256sum *.json > SHA256SUMS)
+          cat build/cpu-observer-result/observer-772m-812m.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve only observer report, not DDR/SD images
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-cpu-observer-812m-${{ github.run_id }}
+          retention-days: 90
+          path: build/cpu-observer-result/
+          if-no-files-found: error

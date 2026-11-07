@@ -282,7 +282,7 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
 
     val unsupportedProfiles = Seq(
       "float" -> IsaConfig(32, Set('I', 'F'), Set('M')),
-      "double" -> IsaConfig(32, Set('I', 'D'), Set('M')),
+      "double" -> IsaConfig(32, Set('I', 'F', 'D'), Set('M')),
       "bitmanip" -> IsaConfig(32, Set('I', 'B'), Set('M')),
       "unknown-z" -> IsaConfig(32, Set('I'), Set('M'), zExtensions = Set("Zba")),
       "hypervisor" -> IsaConfig(32, Set('I'), Set('M', 'H'))
@@ -295,6 +295,8 @@ class CoreConfigSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "reject unsupported architectural, extension, VM and platform widths early" in {
+    an[IllegalArgumentException] should be thrownBy
+      IsaConfig(xlen = 64, extensions = Set('I', 'D'), privilegeModes = Set('M'))
     an[IllegalArgumentException] should be thrownBy
       IsaConfig(xlen = 48, extensions = Set('I'), privilegeModes = Set('M'))
 

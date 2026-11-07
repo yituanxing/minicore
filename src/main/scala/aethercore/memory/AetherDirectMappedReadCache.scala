@@ -76,11 +76,6 @@ class AetherDirectMappedReadCache(
   private val lineTag = Mem(entries, UInt(TagBits.W))
   private val lineData = Mem(entries, UInt(dataBits.W))
   private val lineByteValid = Mem(entries, UInt(BeatBytes.W))
-  // Incremented by write/atomic traffic to conservatively suppress an older
-  // read fill from being installed after a later writer touched this index.
-  private val lineEpoch =
-    RegInit(VecInit(Seq.fill(entries)(0.U(4.W))))
-
   private val outstanding =
     RegInit(VecInit(Seq.fill(TxnCount)(false.B)))
   private val fillValid =
@@ -89,7 +84,6 @@ class AetherDirectMappedReadCache(
   private val fillTag = Reg(Vec(TxnCount, UInt(TagBits.W)))
   private val fillOffset = Reg(Vec(TxnCount, UInt(OffsetBits.W)))
   private val fillMask = Reg(Vec(TxnCount, UInt(BeatBytes.W)))
-  private val fillEpoch = Reg(Vec(TxnCount, UInt(4.W)))
 
   private val req = io.upstreamRequest.bits
   private val reqIndex =
@@ -152,7 +146,18 @@ class AetherDirectMappedReadCache(
   responses.io.in(1).valid := io.downstreamResponse.valid
   responses.io.in(1).bits := io.downstreamResponse.bits
   io.downstreamResponse.ready := responses.io.in(1).ready
-  io.upstreamResponse <> responses.io.out
+  // A previously offered miss response must not change identity just because
+  // a fresh cache hit becomes eligible while the consumer is backpressured.
+  // RR arbitration is dynamic; the flow-through skid pins the FULL response
+  // after the first stalled offer and is transparent on the fast path.
+  private val responseSkid = Module(new Queue(
+    new AetherMemResponse(dataBits, txnIdBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
+  responseSkid.io.enq <> responses.io.out
+  io.upstreamResponse <> responseSkid.io.deq
 
   private val hitResponseFire = responses.io.in(0).fire
   private val hitCanAccept = !hitResponseValid || hitResponseFire
@@ -164,6 +169,8 @@ class AetherDirectMappedReadCache(
 
   private val hitRequestFire = io.upstreamRequest.fire && readHit
   private val forwardedRequestFire = io.downstreamRequest.fire
+  private val forwardedWriterFire =
+    forwardedRequestFire && req.op =/= AetherMemOp.Read
 
   private val shiftedHitData =
     (lineData(reqIndex) >> (reqOffset << 3))(dataBits - 1, 0)
@@ -209,14 +216,21 @@ class AetherDirectMappedReadCache(
       fillTag(txn) := reqTag
       fillOffset(txn) := reqOffset
       fillMask(txn) := reqMask
-      fillEpoch(txn) := lineEpoch(reqIndex)
     }
 
     when(req.op =/= AetherMemOp.Read) {
       // Writers/atomics remain fully owned by downstream memory. Invalidate
       // matching state immediately so no later read can consume stale bytes
-      // while the write is in flight.
-      lineEpoch(reqIndex) := lineEpoch(reqIndex) + 1.U
+      // while the write is in flight. Also permanently cancel every older
+      // outstanding fill touching this index: a finite-width epoch would
+      // wrap if enough writes were accepted during a delayed RAM read and
+      // could incorrectly turn that stale response into a valid cache line.
+      // Same-index cancellation is intentionally conservative across tags.
+      for (oldTxn <- 0 until TxnCount) {
+        when(fillValid(oldTxn) && fillIndex(oldTxn) === reqIndex) {
+          fillValid(oldTxn) := false.B
+        }
+      }
       when(lineValid(reqIndex) && lineTag(reqIndex) === reqTag) {
         // lineValid is the architectural ownership bit. Once cleared, stale
         // byte-valid RAM contents are ignored; the next fill sees sameLine=false
@@ -238,7 +252,10 @@ class AetherDirectMappedReadCache(
       fillValid(responseTxn) &&
         io.downstreamResponse.bits.last &&
         !io.downstreamResponse.bits.fault &&
-        lineEpoch(fillIndex(responseTxn)) === fillEpoch(responseTxn)
+        // A write accepted on this very cycle has not yet updated the
+        // registered fillValid bit. Suppress the simultaneous read response
+        // before it can override the write's line invalidation assignment.
+        !(forwardedWriterFire && reqIndex === fillIndex(responseTxn))
 
     when(canFill) {
       val index = fillIndex(responseTxn)

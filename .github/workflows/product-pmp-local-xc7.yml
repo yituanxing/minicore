@@ -1,0 +1,180 @@
+name: Product PMP local XC7 equivalence and area
+
+# Explicitly opt-in: do not elaborate or synthesize the entire Product SoC.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-pmp-local-xc7-${{ github.event.pull_request.number || github.ref }}
+  # Other agents add PR labels too. An unrelated labeled event must never
+  # cancel a valid, already-running PMP A/B measurement.
+  cancel-in-progress: false
+
+jobs:
+  pmp-local:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.label.name == 'product-pmp-local-xc7' || github.event.label.name == 'product-pmp-area-only'))
+    name: PMP geometry, captured snapshot and standalone mapping
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact selected Product commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator 5.024 cache
+        if: github.event.label.name != 'product-pmp-area-only'
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build requirements only on cache miss
+        if: github.event.label.name != 'product-pmp-area-only' && steps.verilator-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Initialize focused output and pinned simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          mkdir -p "$RUNNER_TEMP/product-pmp-local-xc7/rtl" "$RUNNER_TEMP/product-pmp-local-xc7/mill-out"
+          echo "MILL_OUTPUT_DIR=$RUNNER_TEMP/product-pmp-local-xc7/mill-out" >> "$GITHUB_ENV"
+          if [[ '${{ github.event.label.name }}' != 'product-pmp-area-only' ]]; then
+            bash tools/ensure_verilator_5_024.sh
+          fi
+
+      - name: Test PMP reference, upper address, CSR and in-flight snapshots
+        if: github.event.label.name != 'product-pmp-area-only'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly \
+            aethercore.PmpRangeDecoderActiveSpec \
+            aethercore.PmpCheckerSpec \
+            aethercore.ProductDataResolverSpec \
+            aethercore.RV64PmpCsrSpec \
+            2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/pmp-tests.log"
+
+      - name: Elaborate standalone RV64 PA56 PMP range decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.runMain aethercore.ElaboratePmpRangeDecoderRV64 \
+            --target-dir "$RUNNER_TEMP/product-pmp-local-xc7/rtl" \
+            2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/elaboration.log"
+          test -s "$RUNNER_TEMP/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv"
+
+      - name: Install pinned standalone XC7 mapper without apt mirrors
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          # Both apt paths have already stalled on hosted runners; keep this
+          # pinned, isolated WebAssembly Yosys for a local A/B *only*. The
+          # full Product FPGA mapping still uses native Yosys separately.
+          python3 -m venv "$root/yosys-venv"
+          timeout --signal=TERM --kill-after=10s 120s \
+            "$root/yosys-venv/bin/python" -m pip install \
+            --disable-pip-version-check --timeout 25 --retries 1 \
+            yowasp-yosys==0.70.0.0.post1259
+          "$root/yosys-venv/bin/yowasp-yosys" -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
+          echo "YOSYS_EXEC=$root/yosys-venv/bin/yowasp-yosys" >> "$GITHUB_ENV"
+
+      - name: Map PMP decoder only to Xilinx 7-series cells
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          cd "$root"
+          "$YOSYS_EXEC" -Q -T -l yosys.log -p \
+            'read_verilog -sv -DSYNTHESIS rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx'
+          grep -q 'PmpRangeDecoder' "$root/yosys.log"
+          echo 'Local PA56 PMP XC7 logic map finished. This is not full-SoC device fit or timing signoff.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and map the exact pre-optimization decoder as A/B baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          baseline=a15197f96e5869e69269202a0a9caffdbe1f5255
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git worktree add --detach "$root/baseline-source" "$baseline"
+          # The baseline changes only the original production decoder. Reuse
+          # this probe entry point to compare identical interfaces and settings.
+          install -m 0644 src/main/scala/aethercore/ElaboratePmpRangeDecoderRV64.scala \
+            "$root/baseline-source/src/main/scala/aethercore/ElaboratePmpRangeDecoderRV64.scala"
+          mkdir -p "$root/baseline-rtl" "$root/baseline-mill-out"
+          (
+            cd "$root/baseline-source"
+            chmod +x mill
+            MILL_OUTPUT_DIR="$root/baseline-mill-out" \
+              ./mill aethercore.runMain aethercore.ElaboratePmpRangeDecoderRV64 \
+              --target-dir "$root/baseline-rtl"
+          ) 2>&1 | tee "$root/baseline-elaboration.log"
+          test -s "$root/baseline-rtl/PmpRangeDecoder.sv"
+          cd "$root"
+          "$YOSYS_EXEC" -Q -T -l yosys-baseline.log -p \
+            'read_verilog -sv -DSYNTHESIS baseline-rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx'
+
+      - name: Record directly comparable old and new LUT totals
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          lut_count() {
+            awk '/=== PmpRangeDecoder ===/ { in_top=1; sum=0; next }
+                 in_top && $1 ~ /^LUT[2-6]$/ { sum+=$2 }
+                 in_top && $2 ~ /^LUT[2-6]$/ { sum+=$1 }
+                 in_top && /Estimated number of LCs/ { last=sum; in_top=0 }
+                 END { if (last == 0) exit 1; print last }' "$1"
+          }
+          old="$(lut_count "$root/yosys-baseline.log")"
+          new="$(lut_count "$root/yosys.log")"
+          delta="$((new - old))"
+          {
+            printf 'Pre-optimization commit: %s\n' a15197f96e5869e69269202a0a9caffdbe1f5255
+            printf 'Old standalone LUT2..LUT6: %s\n' "$old"
+            printf 'New standalone LUT2..LUT6: %s\n' "$new"
+            printf 'New minus old LUTs: %+d\n' "$delta"
+            printf 'Identical RV64 PA56 16-entry elaborator and YoWASP Yosys 0.70.0 XC7 mapping; no P&R or Fmax claim.\n'
+          } | tee "$root/lut-comparison.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve real tests and local area evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-pmp-local-xc7-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/product-pmp-local-xc7/*.log
+            ${{ runner.temp }}/product-pmp-local-xc7/lut-comparison.txt
+            ${{ runner.temp }}/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv
+            ${{ runner.temp }}/product-pmp-local-xc7/baseline-rtl/PmpRangeDecoder.sv

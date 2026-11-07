@@ -1,0 +1,118 @@
+{
+  "qualification": "OBSERVED_POLLING_SPI_SECTOR_READ_TPUT_NOT_FULL_DEBIAN_BOOT_OR_CAUSAL_AB_PROOF",
+  "tested_on": "2026-11-07",
+  "source_pr": 379,
+  "source_run_id": 42342072950,
+  "fixed_firmware_sha256": "4c9b6ed61950094e2551bda780fbea9c79ded65fab433f13b06e2eb64817e5be",
+  "fixed_dtb_sha256": "72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1c",
+  "fixed_model_sha256": "5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc",
+  "fixed_linux_image_sha256": "522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393",
+  "fixed_sd_media_sha256": "6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7",
+  "verification": "Downloaded original three GitHub Actions ZIP artifacts; streamed SHA256 over uncompressed persistent.pre.host, persistent.pre.rtl and card-progress.json; all three matched each corresponding .polling-ready SHA.",
+  "samples": [
+    {
+      "to": 412,
+      "from": 392,
+      "artifact_id": 13562336653,
+      "sd_reads": 16,
+      "sd_read_delta": 16,
+      "sd_commands": 26,
+      "sd_command_delta": 5,
+      "retired": 102932084,
+      "retired_delta": 4921681,
+      "sim_wall_seconds": 121,
+      "host_sha256": "cd71e141ce20ebb272b8170bd52c7c2d7643991168313d5a31e2da55e6e1420c",
+      "rtl_sha256": "944285fd878f81d0e4280daf7233cbc3ff4e3565f924de3a79ae1eb4ecb60007",
+      "profile_sha256": "9373422d962cc4bfa1a6e54041db1a0b278ab5f94da252bd7931ca337d2ff2f3",
+      "artifact_name": "product-sd1-spi-polling-412m-42342072950",
+      "to_cycles": 412000000,
+      "from_cycles": 392000000,
+      "sd_card_init_complete": true,
+      "sd_74_clocks_seen": true,
+      "guest_failure": null,
+      "ext4_mounted": false
+    },
+    {
+      "to": 432,
+      "from": 412,
+      "artifact_id": 13562411838,
+      "sd_reads": 165,
+      "sd_read_delta": 149,
+      "sd_commands": 32,
+      "sd_command_delta": 6,
+      "retired": 107635053,
+      "retired_delta": 4702969,
+      "sim_wall_seconds": 113,
+      "host_sha256": "3f869ad91ce907bebefeb775a290adc3230a308de7fab035ed2426e7ae54c3e8",
+      "rtl_sha256": "e8018eea665b1dea7beaa22508333e303a9ccd8767c4fe4c2bef9da8539472b5",
+      "profile_sha256": "04a7176b8852ad6d8580898d18c7039e48a26f4cf437ff0e72106a4010bd4ae5",
+      "artifact_name": "product-sd1-spi-polling-432m-42342072950",
+      "to_cycles": 432000000,
+      "from_cycles": 412000000,
+      "sd_card_init_complete": true,
+      "sd_74_clocks_seen": true,
+      "guest_failure": null,
+      "ext4_mounted": false
+    },
+    {
+      "to": 452,
+      "from": 432,
+      "artifact_id": 13562352201,
+      "sd_reads": 306,
+      "sd_read_delta": 141,
+      "sd_commands": 39,
+      "sd_command_delta": 7,
+      "retired": 112346920,
+      "retired_delta": 4711867,
+      "sim_wall_seconds": 114,
+      "host_sha256": "c59892f82ed97a9d841535dfdffdf7c4294ce85a60899b1e5e4aca9e8a504012",
+      "rtl_sha256": "e7349e0f910bb9d2bbb176fad0f6f1c9bd85d9adf35044384d0aa9114895b3ae",
+      "profile_sha256": "a8f228f681f408acaa48a6b772818a4caf21d462543eeef0f78d15da42c4eaab",
+      "artifact_name": "product-sd1-spi-polling-452m-42342072950",
+      "to_cycles": 452000000,
+      "from_cycles": 432000000,
+      "sd_card_init_complete": true,
+      "sd_74_clocks_seen": true,
+      "guest_failure": null,
+      "ext4_mounted": false
+    }
+  ],
+  "comparison": {
+    "irq_reference": {
+      "run_ids": [
+        42337615835,
+        42337896688
+      ],
+      "sample_cycles_per_window": 20000000,
+      "sd_reads_per_window": 13,
+      "approx_cycles_per_sector": 1538461.5384615385
+    },
+    "polling_steady_sample": {
+      "windows": [
+        {
+          "from": 412000000,
+          "to": 432000000,
+          "read_delta": 149
+        },
+        {
+          "from": 432000000,
+          "to": 452000000,
+          "read_delta": 141
+        }
+      ],
+      "sd_sectors_read": 290,
+      "rtl_cycles_total": 40000000,
+      "approx_cycles_per_sector": 137931.0344827586
+    },
+    "observed_ratio_reads_per_equal_cycles": 11.153846153846153,
+    "caution": "Reference intervals are different guest execution windows and workload states, so this ratio is not a controlled causal A/B, and is NOT a full Debian boot acceleration factor."
+  },
+  "boot_status": {
+    "sd_init_complete": true,
+    "sd_reads_by_452m": 306,
+    "ext4_root_mounted": false,
+    "native_init_started": false,
+    "login_seen": false,
+    "cmd0_r1_pin_waveform_proven": false
+  }
+}

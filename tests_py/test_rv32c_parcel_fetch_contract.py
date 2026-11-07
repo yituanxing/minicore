@@ -29,9 +29,9 @@ class Rv32cParcelFetchContract(unittest.TestCase):
 
         self.assertIn("Set('I', 'M', 'A', 'C')", config)
         self.assertNotIn("!isa.hasC || isa.xlen == 32", config)
-        self.assertIn("class RvcParcelController(val xlen: Int = 32) extends Module", parcel)
+        self.assertIn("class RvcParcelController(val xlen: Int = 32, val withDouble: Boolean = false) extends Module", parcel)
         self.assertIn("require(Set(32, 64).contains(xlen)", parcel)
-        self.assertIn("val decompressor = Module(new RvcDecompressor(xlen))", parcel)
+        self.assertIn("val decompressor = Module(new RvcDecompressor(xlen, withDouble))", parcel)
         self.assertIn("val rv32imcSoftware", config)
 
         # CoreConfig/RTL capability is broader than the named qualification matrix.

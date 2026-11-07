@@ -1,0 +1,42 @@
+name: Product signed SD1 migrated RTL 4112M to 4212M five-stage automatic relay
+
+# Unique opt-in label; all five 20M stages are driven by one reviewed shared
+# workflow.  Source is the ACTUAL qualified 4112M ZIP from #42385718698.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-migrated-4112-4212m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated_five_stages:
+    if: >-
+      github.event.label.name == 'product-sd1-migrated-4112m-to-4212m-auto' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '4112'
+      stage1: '4132'
+      stage2: '4152'
+      stage3: '4172'
+      stage4: '4192'
+      stage5: '4212'
+      source_run: '42385718698'
+      source_head_sha: '0913957fbde7a0fa574fd89565ec683ecf54ad7f'
+      source_workflow_path: '.github/workflows/product-sd1-migrated-4012-to-4112m-autorelay.yml'
+      source_job: 'five_recoverable_stages'
+      source_completed_step: 'Preserve completed 4112M checkpoint before declaring batch success'
+      source_artifact_id: '13580215128'
+      source_artifact_name: 'product-sd1-migrated-4112m-42385718698'
+      source_artifact_digest: '6433c3a75a562f1422178185d28a07e59199d581267fb40c6ad40a30d205691d'
+      source_host_sha: '8cb71295499f9ce3b5fa4d8b7dd66cd2ebd50f365d4b7738e074e5d220430308'
+      source_rtl_sha: '06d554fab9c906ed44dfc780fa5be673f33d1e7d7b8bcf43aa1e549855821df4'

@@ -6,7 +6,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 COMPLETION = ROOT / "src/main/scala/aethercore/core/v2/TinyCompletion.scala"
 EXECUTION = ROOT / "src/main/scala/aethercore/core/v2/TinyExecution.scala"
 BACKEND = ROOT / "src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala"
-PERFORMANCE = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2Performance.scala"
+# The active V2 Linux P8 elaboration uses the host-visible observation top,
+# not the retired read-only-probe wrapper in AetherCoreV2Performance.scala.
+PERFORMANCE = ROOT / "src/main/scala/aethercore/sim/AetherCoreV2HostPerformance.scala"
 
 
 class V2P83CompletionBandwidthSourceContract(unittest.TestCase):

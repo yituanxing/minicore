@@ -1,0 +1,219 @@
+name: Product SD1 polling 2952M-to-3952M uninterrupted five-job relay
+
+# Single PR label can start waiting BEFORE ten14 reaches 2952M. No guest cycles
+# until an independent read-only source gate passes; then five dependent RTL jobs.
+# No GITHUB_TOKEN recursive labels; each 20M stage has a 90-day full checkpoint.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-spi-polling-autochain-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  await_ten14_source:
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-advance-3952m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Await exact ten14 run and independently gate all ten stages
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          source_sha=5962de820f6756f9dcecf12357d83a805c98b4b3
+          source_run=42370596743
+          source_workflow=410300347
+          run_json="$RUNNER_TEMP/sd1-ten14-run.json"
+          jobs_json="$RUNNER_TEMP/sd1-ten14-jobs.json"
+          artifacts_json="$RUNNER_TEMP/sd1-ten14-artifacts.json"
+          completed=0
+          for attempt in $(seq 1 110); do
+            if ! gh api "repos/$repo/actions/runs/$source_run" > "$run_json"; then
+              echo "TEN14_EAGER_GATE: run API unavailable, retry $attempt"
+              sleep 30
+              continue
+            fi
+            jq -e --arg repo "$repo" --arg sha "$source_sha" \
+              --arg branch 'design/rv64gc-product-architecture-20261103' \
+              --argjson run "$source_run" --argjson workflow "$source_workflow" '
+                .id == $run and .workflow_id == $workflow and .run_attempt == 1 and
+                .event == "pull_request" and .repository.full_name == $repo and
+                .head_repository.full_name == $repo and .head_branch == $branch and
+                .head_sha == $sha
+              ' "$run_json" >/dev/null || {
+                echo 'TEN14_EAGER_GATE_REJECTED: source run identity changed' >&2
+                exit 16
+              }
+            status="$(jq -r '.status' "$run_json")"
+            if [[ "$status" == completed ]]; then
+              [[ "$(jq -r '.conclusion' "$run_json")" == success ]] || {
+                echo 'TEN14_EAGER_GATE_REJECTED: source run completed without success' >&2
+                exit 16
+              }
+              completed=1
+              break
+            fi
+            [[ "$status" == in_progress || "$status" == queued || "$status" == pending ||
+               "$status" == waiting || "$status" == requested ]] || {
+              echo "TEN14_EAGER_GATE_REJECTED: unsupported source status $status" >&2
+              exit 16
+            }
+            echo "TEN14_EAGER_GATE_WAIT: run=$source_run status=$status attempt=$attempt/110"
+            sleep 30
+          done
+          [[ "$completed" == 1 ]] || {
+            echo 'TEN14_EAGER_GATE_REJECTED: source did not complete inside bounded wait' >&2
+            exit 16
+          }
+          gh api "repos/$repo/actions/runs/$source_run/jobs?per_page=100" > "$jobs_json"
+          jq -e '
+            .total_count == 1 and (.jobs | length) == 1 and
+            .jobs[0].name == "polling-12m" and
+            .jobs[0].status == "completed" and .jobs[0].conclusion == "success" and
+            ([.jobs[0].steps[] | select(.name | startswith("Execute authentic polling Product RTL "))] | length) == 10 and
+            ([.jobs[0].steps[] | select(.name | startswith("Upload authenticated "))] | length) == 10
+          ' "$jobs_json" >/dev/null || {
+            echo 'TEN14_EAGER_GATE_REJECTED: job topology/steps mismatch' >&2
+            exit 16
+          }
+          gh api "repos/$repo/actions/runs/$source_run/artifacts?per_page=100" > "$artifacts_json"
+          for n in $(seq 1 10); do
+            source_m="$((2752 + (n-1)*20))"
+            target_m="$((source_m+20))"
+            execute="Execute authentic polling Product RTL ${source_m}M to ${target_m}M"
+            upload="Upload authenticated ${target_m}M full RTL-DDR-SD checkpoint BEFORE next interval"
+            for step_name in "$execute" "$upload"; do
+              jq -e --arg name "$step_name" '
+                [.jobs[0].steps[] |
+                  select(.name == $name and .status == "completed" and .conclusion == "success")] |
+                  length == 1
+              ' "$jobs_json" >/dev/null || {
+                echo "TEN14_EAGER_GATE_REJECTED: missing success step $step_name" >&2
+                exit 16
+              }
+            done
+            artifact="product-sd1-spi-polling-${target_m}m-${source_run}"
+            jq -e --arg name "$artifact" --arg sha "$source_sha" \
+              --argjson run "$source_run" '
+                [.artifacts[] |
+                  select(.name == $name and .expired == false and
+                    .size_in_bytes > 1000000 and
+                    ((.digest // "") | test("^sha256:[0-9a-f]{64}$")) and
+                    .workflow_run.id == $run and
+                    .workflow_run.head_sha == $sha)] | length == 1
+              ' "$artifacts_json" >/dev/null || {
+                echo "TEN14_EAGER_GATE_REJECTED: missing unique signed ZIP metadata $artifact" >&2
+                exit 16
+              }
+          done
+          echo 'TEN14_EAGER_GATE: 10/10 real RTL stages and 10/10 ZIP digest metadata verified'
+      - name: Download 2932M full source for cross-stage host SHA audit
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42370596743
+          name: product-sd1-spi-polling-2932m-42370596743
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/sd1-ten14-gate/2932
+      - name: Download exact terminal 2952M full RTL-DDR-SD source
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42370596743
+          name: product-sd1-spi-polling-2952m-42370596743
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/sd1-ten14-gate/2952
+      - name: Independently validate 2932M-to-2952M host, RTL, progress, and frozen identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sd1-ten14-gate"
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          field() { sed -n "s/^$1=//p" "$2" | head -1; }
+          for m in 2932 2952; do
+            dir="$root/$m"
+            ready="$dir/.polling-ready"
+            [[ -s "$ready" && ! -L "$ready" ]] || exit 16
+            grep -Fxq 'schema=AETSDCP1' "$ready"
+            grep -Fxq 'qualification=PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS' "$ready"
+            grep -Fxq "boot_cycles=$((m*1000000))" "$ready"
+            grep -Fxq 'model_sha256=5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc' "$ready"
+            grep -Fxq 'firmware_sha256=4c9b6ed61950094e2551bda780fbea9c79ded65fab433f13b06e2eb64817e5be' "$ready"
+            grep -Fxq 'dtb_sha256=72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1c' "$ready"
+            grep -Fxq 'sd_image_sha256=6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7' "$ready"
+            grep -Fxq 'linux_image_sha256=522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393' "$ready"
+            for kind in host rtl; do
+              blob="$dir/persistent.pre.$kind"
+              [[ -s "$blob" && ! -L "$blob" ]] || exit 16
+              [[ "$(field "snapshot_${kind}_sha256" "$ready")" == "$(sha "$blob")" ]] || exit 16
+            done
+            progress="$dir/card-progress.json"
+            [[ -s "$progress" && ! -L "$progress" ]] || exit 16
+            [[ "$(field card_progress_sha256 "$ready")" == "$(sha "$progress")" ]] || exit 16
+            jq -e --argjson to "$((m*1000000))" '
+              .qualification == "POLLING_REAL_PRODUCT_RTL_NOT_DEBIAN_PASS" and
+              .to_cycles == $to and .from_cycles == ($to - 20000000) and
+              (.guest_failure == null or .guest_failure == false) and .retired_delta > 0
+            ' "$progress" >/dev/null || exit 16
+          done
+          [[ "$(field source_host_sha256 "$root/2952/.polling-ready")" == "$(sha "$root/2932/persistent.pre.host")" ]] || exit 16
+          [[ "$(field rootfs_result_sha256 "$root/2952/.polling-ready")" == "$(field rootfs_result_sha256 "$root/2932/.polling-ready")" ]] || exit 16
+          [[ "$(field rootfs_result_sha256 "$root/2952/.polling-ready")" =~ ^[0-9a-f]{64}$ ]] || exit 16
+          echo 'TEN14_EAGER_GATE_PASS: authenticated 2952M terminal and 2932M source continuity'
+  stage_01:
+    needs: await_ten14_source
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-advance-3952m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: 42370596743
+      source_artifact_name: product-sd1-spi-polling-2952m-42370596743
+      source_boot_m: 2952
+      terminal_boot_m: 3152
+  stage_02:
+    needs: stage_01
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3152m-${{ github.run_id }}
+      source_boot_m: 3152
+      terminal_boot_m: 3352
+  stage_03:
+    needs: stage_02
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3352m-${{ github.run_id }}
+      source_boot_m: 3352
+      terminal_boot_m: 3552
+  stage_04:
+    needs: stage_03
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3552m-${{ github.run_id }}
+      source_boot_m: 3552
+      terminal_boot_m: 3752
+  stage_05:
+    needs: stage_04
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ github.run_id }}
+      source_artifact_name: product-sd1-spi-polling-3752m-${{ github.run_id }}
+      source_boot_m: 3752
+      terminal_boot_m: 3952

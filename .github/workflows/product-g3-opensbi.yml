@@ -1,0 +1,213 @@
+name: AetherCore Product G3 Real OpenSBI First Execution
+
+# Full OpenSBI/RTL runtime is a costly evidence gate, not a source-iteration
+# prerequisite. Only explicit workflow_dispatch or a human-added PR label
+# requests it; ordinary PR synchronize events retain the short G0/G1/G2 gates.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g3-${{ github.event.pull_request.number || github.ref }}
+  # A deliberate 55-minute evidence run must not be replaced by a source edit.
+  cancel-in-progress: false
+
+jobs:
+  first-firmware:
+    name: Real Product SmallOoO OpenSBI plus S-mode UART milestone
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g3-longrun')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      AETHERCORE_VERILATOR_VERSION: '5.024'
+      SIM_SETTLE_MODE: reference
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Configure Product firmware and RTL build
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected"
+          chmod +x ./mill tools/ci/rv64_opensbi_first_exec.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh tools/ensure_verilator_5_024.sh
+          root="$RUNNER_TEMP/aethercore-product-g3"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+          echo "G3_ROOT=$root" >> "$GITHUB_ENV"
+          # G3 and G4 use the exact same Product OpenSBI simulator TOP and
+          # C++ ABI. Share G4's model cache instead of compiling it twice.
+          model="$RUNNER_TEMP/aethercore-product-g4-pid1/model"
+          echo "PRODUCT_OPENSBI_MODEL=$model" >> "$GITHUB_ENV"
+          echo "PRODUCT_OPENSBI_OBJ=$model/obj" >> "$GITHUB_ENV"
+          echo "product_exact_head=$actual"
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact Verilator 5.024 cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator build prerequisites on cache miss
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git xz-utils
+
+      - name: Validate or build exact Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Restore pinned RV64 Linux GCC cache
+        id: gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Provision pinned RV64 GCC
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Restore pinned unchanged OpenSBI 1.6 source
+        id: opensbi-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
+
+      - name: Validate unchanged OpenSBI build contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/rv64_opensbi_first_exec.sh
+          python3 -m py_compile tools/ci/make_l32_dtb.py
+          python3 -m unittest \
+            tests_py.test_rv64_opensbi_first_exec_contract \
+            tests_py.test_opensbi_dtb_profiles -v
+
+      - name: Build pinned unchanged OpenSBI and S-mode payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$G3_ROOT/software"
+          mkdir -p "$build"
+          bash tools/ci/rv64_opensbi_first_exec.sh "$build"
+          grep -q '^RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS$' "$build/result.txt"
+          echo "PRODUCT_OPENSBI_BUILD=$build" >> "$GITHUB_ENV"
+
+      - name: Save pinned OpenSBI source on cache miss
+        if: success() && steps.opensbi-source-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-opensbi-1.6-bd613dd92113f683052acfb23d9dc8ba60029e0a-v1
+
+      - name: Fingerprint shared Product G3/G4 OpenSBI RTL model
+        id: model-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          key="$(bash tools/ci/product_sim_cache.sh fingerprint "$PRODUCT_OPENSBI_MODEL" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore identical compiled Product G3/G4 model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g4-pid1/model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g4-${{ steps.model-key.outputs.key }}
+
+      - name: Verify or build shared Product OpenSBI host simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          cache_args=("$PRODUCT_OPENSBI_MODEL" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags")
+          if [[ '${{ steps.model-cache.outputs.cache-hit }}' == 'true' ]]; then
+            bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"
+            echo 'PRODUCT_G3_IDENTICAL_G4_MODEL_REUSED: no RTL generation or host C++ rebuild'
+          else
+            verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.024/bin/verilator"
+            [[ -x "$verilator_bin" ]] || { echo 'Pinned Verilator 5.024 missing' >&2; exit 22; }
+            make -f Makefile.l32-linux-boot BUILD_DIR="$PRODUCT_OPENSBI_MODEL" \
+              TOP=AetherCoreProductOpenSbiRV64SimTop \
+              ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
+              VERILATOR="$verilator_bin -LDFLAGS -ldl" JOBS=4 \
+              SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" sim
+            bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
+          fi
+
+      - name: Save shared Product G3/G4 model for later gates
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        # Cache uploads are an acceleration, not a firmware qualification
+        # prerequisite. A concurrent G4 writer may win the same exact key.
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g4-pid1/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
+
+      - name: Require real OpenSBI banner and S-mode UART payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          firmware="$PRODUCT_OPENSBI_BUILD/opensbi/platform/generic/firmware/fw_payload.bin"
+          simulator="$PRODUCT_OPENSBI_OBJ/VAetherCoreProductOpenSbiRV64SimTop"
+          log="$G3_ROOT/product-opensbi-first-exec.log"
+          test -s "$firmware"
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          bash tools/ci/product_sim_cache.sh verify "$PRODUCT_OPENSBI_MODEL" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags"
+          test -x "$simulator"
+          if ! "$simulator" "$firmware" 30000000 \
+              'RV64 OpenSBI S-mode payload PASS' 0 0 '' '' 0 1000000 0 \
+              2>&1 | tee "$log"; then
+            echo '--- Product first-exec failure diagnostics ---' >&2
+            tail -n 160 "$log" >&2 || true
+            exit 1
+          fi
+          grep -Fq 'OpenSBI v1.6' "$log"
+          grep -Fq 'RV64 OpenSBI S-mode payload PASS' "$log"
+          grep -Eq '^L32_OPENSBI_BANNER cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          grep -Eq '^L32_UART_MILESTONE cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          grep -Eq '^L32_RUNTIME_MILESTONE_PASS cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          echo 'PRODUCT_G3_REAL_OPENSBI_PASS: external firmware executed through Product ROB and emitted UART milestone'

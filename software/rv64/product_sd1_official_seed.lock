@@ -1,0 +1,13 @@
+# G5-SD1 official source lock: independently checked on 2026-11-06 UTC.
+# Docker Hub official library/debian OCI index fetched by immutable digest;
+# its raw bytes SHA256 match the index digest and it contains a linux/riscv64
+# child. Both snapshot.debian.org InRelease files were fetched over HTTPS,
+# verified with the installed official Debian archive keyring, and hashed.
+# The seed still requires an explicit default-branch workflow_dispatch and
+# may fail closed if a historical upstream package is no longer available.
+# No workflow inputs, rolling tags, fallback rootfs or password hashes here.
+RV64_SD1_DEBIAN_OCI_DIGEST=sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+RV64_SD1_DEBIAN_SNAPSHOT_UTC=20261105T000000Z
+RV64_SD1_DEBIAN_SECURITY_SNAPSHOT_UTC=20261105T000000Z
+RV64_SD1_DEBIAN_INRELEASE_SHA256=0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675
+RV64_SD1_DEBIAN_SECURITY_INRELEASE_SHA256=ac28e06f2908a9ef13b9c36a45a7cea0c6f4e8ba5ec57e46696477f0fad1be96

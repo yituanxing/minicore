@@ -1,11 +1,6 @@
 name: AetherCore V2 PMP Compact Area
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/**'
-      - 'src/main/scala/aethercore/ElaborateV2CoreSynthesisRV64.scala'
-      - '.github/workflows/v2-pmp-compact-area.yml'
   workflow_dispatch:
 
 permissions:

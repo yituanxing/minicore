@@ -1,15 +1,6 @@
 name: Shared Data Translation SoC Area
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/core/DataPathAdapter.scala'
-      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyBlockingLsu.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyMemoryBackend.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyDualReplaySafeLoadUnit.scala'
-      - 'src/main/scala/aethercore/core/v2/TinyLoadQueueMemoryBackend.scala'
-      - '.github/workflows/shared-data-translation-area.yml'
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,284 @@
+name: AetherCore Product SD1 Official Offline Media Seed
+
+# Explicit human opt-in on the reviewed default branch, or by labeling the
+# first-party Product Draft PR. This job creates the
+# real Debian package/rootfs/kernel/OpenSBI/SD artifacts with ZERO Product RTL
+# or QEMU-system guest cycles. Debian package maintainer scripts DO execute in
+# the isolated riscv64 OCI/QEMU-user container; this is not a simulated boot.
+# No guest DDR snapshot, simulator model or password-bearing image is uploaded.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Deliberately authorize bounded cold official SD1 source/media build (no RTL boot)
+        required: true
+        type: choice
+        options:
+          - 'NO'
+          - SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES
+        default: 'NO'
+  # The Product Draft cannot workflow_dispatch its own workflow before it
+  # reaches default. An exact, first-party PR label is the explicit operator
+  # gate for preparing offline media without merging an unfinished CPU/SoC.
+  # Synchronize/push, ordinary labels and automatic retries never start it.
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-sd1-official-seed-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  product-sd1-official-seed:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirmation == 'SEED_OFFICIAL_SD1_ZERO_RTL_CYCLES' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'product-sd1-official-seed' &&
+       github.event.pull_request.number == 379 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103')
+    runs-on: ubuntu-24.04
+    # HARD cold limit, including external OCI/APT, cross compiler, Linux,
+    # OpenSBI and cache compression/upload. No automatic retry or fallback.
+    timeout-minutes: 150
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RV64_LINUX_JOBS: '4'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_DEBIAN_STAGE: sd1
+
+    steps:
+      - name: Checkout reviewed exact Product revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Reject missing or unreviewed official supply pins before network
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$RV64_DEBIAN_STAGE" = sd1
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" ]] || {
+            echo 'Official SD1 media seed must never inherit an RTL longrun confirmation' >&2
+            exit 19
+          }
+          test ! -e build/rv64-debian-sd1-official-rootfs
+          test ! -e build/product-sd1-official-seed
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          python3 -m unittest tests_py.test_product_sd1_official_seed_contract -v
+          bash -n tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh \
+            tools/ci/rv64_debian_rootfs_build.sh \
+            tools/ci/rv64_debian_sd1_sd_image_build.sh \
+            tools/ci/rv64_debian_linux_build.sh \
+            tools/ci/rv64_debian_payload_build.sh
+          echo 'ONLY OFFLINE SD1 MEDIA: no Product RTL elaboration/boot, no guest DDR snapshot, no login credentials' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore exact fixed Bootlin GCC 13.3 toolchain when available
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore G4 source/build cache for pinned Linux and OpenSBI
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore G4 Mill and Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Qualify preinstalled Java 17 and provision only missing native build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The official Ubuntu 24.04 Actions image already ships Java 17,
+          # CMake, Ninja and the ordinary build toolchain. Reinstalling its
+          # 120 MB JDK on every clean runner previously exhausted the 15m
+          # preflight timeout before the Debian seed was even attempted.
+          # If that runner contract ever changes, fail closed for Java rather
+          # than download an uncontrolled JDK during this long-running job.
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/java" && -x "$java17_home/bin/javac" ]]; then
+            export JAVA_HOME="$java17_home"
+            export PATH="$JAVA_HOME/bin:$PATH"
+            echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+            echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+          fi
+          command -v java >/dev/null
+          command -v javac >/dev/null
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+
+          missing_packages=()
+          need_command() {
+            command -v "$1" >/dev/null 2>&1 || missing_packages+=("$2")
+          }
+          need_command bc bc
+          need_command gcc build-essential
+          need_command g++ build-essential
+          need_command make build-essential
+          need_command bison bison
+          need_command flex flex
+          need_command dtc device-tree-compiler
+          need_command pahole dwarves
+          need_command qemu-riscv64-static qemu-user-static
+          need_command mkfs.ext4 e2fsprogs
+          need_command curl curl
+          need_command xz xz-utils
+          need_command git git
+          need_command python3 python3
+          test -r /usr/include/openssl/ssl.h || missing_packages+=(libssl-dev)
+          test -r /usr/include/libelf.h || missing_packages+=(libelf-dev)
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64 || missing_packages+=(binfmt-support)
+          if (( ${#missing_packages[@]} )); then
+            # Deduplicate package names while preserving the explicit minimal
+            # dependency set. The native system's apt index is not a project
+            # cache and is touched only when a required tool is missing.
+            mapfile -t missing_packages < <(printf '%s\n' "${missing_packages[@]}" | sort -u)
+            printf 'SD1_RUNNER_MISSING_TOOLS packages=%s\n' "${missing_packages[*]}"
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 20m sudo apt-get install -y --no-install-recommends "${missing_packages[@]}"
+          else
+            echo 'SD1_RUNNER_TOOLS_ALREADY_PRESENT'
+          fi
+          docker version
+          command -v gpgv
+          if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-riscv64 ]] && command -v update-binfmts >/dev/null 2>&1; then
+            sudo update-binfmts --enable qemu-riscv64
+          fi
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64 || {
+            echo 'Pinned Debian OCI package configuration requires installed/enabled qemu-riscv64 binfmt on this ephemeral runner; refusing unqualified host execution' >&2
+            exit 13
+          }
+          chmod +x mill
+
+      - name: Validate and activate immutable RV64 Linux GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 20m bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build unchanged source-verified Linux baseline and OpenSBI
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 35m bash tools/ci/rv64_linux_early_build.sh
+          grep -Fxq 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' build/rv64-linux-early/result.txt
+
+      # The immutable complete-media cache cannot exist until the ENTIRE SD1
+      # rootfs succeeds. Keep already downloaded public .debs separately even
+      # on a 503/504 failure; never mistake this for a qualified rootfs.
+      # The lock hash binds OCI + both signed snapshot releases. Each attempt
+      # saves a unique cache, and the next attempt restores the newest prefix.
+      - name: Restore partial official Debian apt package downloads
+        id: apt_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-official-apt-cache
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-
+
+      - name: Supply official Debian riscv64 snapshot-pinned configured rootfs
+        id: offline_rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No console credentials or crypt hashes are allowed into the
+          # shared GitHub Actions cache (including public PR restore scope).
+          unset RV64_SD1_LOGIN_USER RV64_SD1_LOGIN_PASSWORD_HASH_FILE
+          timeout --signal=TERM --kill-after=30s 75m \
+            bash tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh
+          # source.env contains only absolute archive path and its actual SHA.
+          source build/rv64-debian-sd1-official-rootfs/source.env
+          test "$RV64_DEBIAN_STAGE" = sd1
+          timeout --signal=TERM --kill-after=30s 20m bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -Fxq 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' build/rv64-debian-rootfs/result.txt
+          grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
+            build/rv64-debian-sd1-official-rootfs/console-provisioning.txt
+
+      # If the CDN failed before fetching Packages indexes, there are no
+      # completed .debs worth caching. Do not publish an empty cache that a
+      # future run might mistakenly count as useful downloaded progress.
+      - name: Count fully downloaded public Debian archives
+        id: apt_download_count
+        if: >-
+          always() &&
+          (steps.offline_rootfs.outcome == 'success' || steps.offline_rootfs.outcome == 'failure')
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          if [[ -d build/product-sd1-official-apt-cache ]]; then
+            count="$(find build/product-sd1-official-apt-cache -maxdepth 1 -type f -name '*.deb' | wc -l)"
+          fi
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "SD1_APT_FULL_DEB_CACHE_COUNT=$count"
+
+      # Save the verified full-.deb cache even when the source stage stops
+      # early. This action never saves a partial /sbin/init or guest DDR.
+      - name: Preserve partial Debian package cache on success or failure
+        if: >-
+          always() &&
+          (steps.offline_rootfs.outcome == 'success' || steps.offline_rootfs.outcome == 'failure') &&
+          steps.apt_download_count.outputs.count != '0' &&
+          steps.apt_download_count.outputs.count != '' &&
+          steps.apt_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-official-apt-cache
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build native MBR ext4 media, then matching RV64GC Linux and independent DTB
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 15m bash tools/ci/rv64_debian_sd1_sd_image_build.sh
+          timeout --signal=TERM --kill-after=30s 35m bash tools/ci/rv64_debian_linux_build.sh
+          timeout --signal=TERM --kill-after=30s 15m bash tools/ci/rv64_debian_payload_build.sh
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-debian-boot/result.txt
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Run no-RTL offline SD/firmware preflight and seal provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 5m bash tools/ci/product_sim_sd1_manual.sh preflight
+          python3 tools/ci/product_sd1_official_seed.py seal
+          python3 tools/ci/product_sd1_official_seed.py verify
+          cat build/product-sd1-official-seed/seed-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save EXACT SHA-checked official SD1 media supply cache, never guest DDR
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}

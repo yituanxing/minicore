@@ -3,20 +3,20 @@ package aethercore.core
 import chisel3._
 import chisel3.util._
 
-/** Shared integer RVC decompressor for RV32C and RV64C.
+/** Shared RVC decompressor for RV32C and RV64C.
   *
   * The decompressor translates one standard 16-bit compressed instruction into
   * the canonical 32-bit instruction consumed by the existing decoder. The
   * output instruction width is always 32 bits even for RV64; RV64 semantics
-  * are represented by the normal RV64 base opcodes (for example ADDIW/ADDW,
-  * LD/SD). Floating-point compressed encodings remain fail-closed because the
-  * current AetherCore capability surface does not implement F/D.
+  * are represented by normal RV64 base opcodes (for example ADDIW/ADDW,
+  * LD/SD). Optional C.FLD/C.FSD/C.FLDSP/C.FSDSP are gated on D, independently
+  * of XLEN; they remain fail-closed for every legacy integer-only instance.
   *
   * XLEN owns the few RVC opcode aliases whose meaning differs between RV32C
   * and RV64C. Standard HINT encodings remain legal and expand to harmless base
   * instructions whose architectural effect is a no-op.
   */
-class RvcDecompressor(val xlen: Int) extends Module {
+class RvcDecompressor(val xlen: Int, val withDouble: Boolean = false) extends Module {
   require(Set(32, 64).contains(xlen), s"RVC decompression requires XLEN 32 or 64, got $xlen")
 
   val io = IO(new Bundle {
@@ -29,6 +29,8 @@ class RvcDecompressor(val xlen: Int) extends Module {
   private val OpImm = "b0010011".U(7.W)
   private val OpImm32 = "b0011011".U(7.W)
   private val OpStore = "b0100011".U(7.W)
+  private val OpLoadFp = "b0000111".U(7.W)
+  private val OpStoreFp = "b0100111".U(7.W)
   private val Op = "b0110011".U(7.W)
   private val Op32 = "b0111011".U(7.W)
   private val OpLui = "b0110111".U(7.W)
@@ -39,8 +41,9 @@ class RvcDecompressor(val xlen: Int) extends Module {
   private def iType(imm12: UInt, rs1: UInt, funct3: UInt, rd: UInt, opcode: UInt): UInt =
     Cat(imm12(11, 0), rs1(4, 0), funct3(2, 0), rd(4, 0), opcode(6, 0))
 
-  private def sType(imm12: UInt, rs2: UInt, rs1: UInt, funct3: UInt): UInt =
-    Cat(imm12(11, 5), rs2(4, 0), rs1(4, 0), funct3(2, 0), imm12(4, 0), OpStore)
+  private def sType(imm12: UInt, rs2: UInt, rs1: UInt, funct3: UInt,
+                    opcode: UInt = OpStore): UInt =
+    Cat(imm12(11, 5), rs2(4, 0), rs1(4, 0), funct3(2, 0), imm12(4, 0), opcode)
 
   private def bType(imm13: UInt, rs2: UInt, rs1: UInt, funct3: UInt): UInt =
     Cat(
@@ -120,6 +123,12 @@ class RvcDecompressor(val xlen: Int) extends Module {
             legal := true.B
           }
         }
+        is("b001".U) { // C.FLD (D extension on RV32 or RV64)
+          if (withDouble) {
+            expanded := iType(ldImm12, rs1Prime, 3.U, rdPrime, OpLoadFp)
+            legal := true.B
+          }
+        }
         is("b010".U) { // C.LW
           expanded := iType(lwImm12, rs1Prime, 2.U, rdPrime, OpLoad)
           legal := true.B
@@ -133,6 +142,12 @@ class RvcDecompressor(val xlen: Int) extends Module {
         is("b110".U) { // C.SW
           expanded := sType(lwImm12, rs2Prime, rs1Prime, 2.U)
           legal := true.B
+        }
+        is("b101".U) { // C.FSD (D extension on RV32 or RV64)
+          if (withDouble) {
+            expanded := sType(ldImm12, rs2Prime, rs1Prime, 3.U, OpStoreFp)
+            legal := true.B
+          }
         }
         is("b111".U) { // RV64C C.SD; RV32C aliases this space to unsupported C.FSW
           if (xlen == 64) {
@@ -251,6 +266,12 @@ class RvcDecompressor(val xlen: Int) extends Module {
 
     is("b10".U) {
       switch(funct3) {
+        is("b001".U) { // C.FLDSP: f0 is a valid destination register
+          if (withDouble) {
+            expanded := iType(ldspImm12, 2.U, 3.U, rd, OpLoadFp)
+            legal := true.B
+          }
+        }
         is("b000".U) { // C.SLLI; RV64 uses c[12] as shamt[5]
           when(shiftEncodingLegal) {
             expanded := iType(logicalShiftImm12, rd, 1.U, rd, OpImm)
@@ -295,6 +316,12 @@ class RvcDecompressor(val xlen: Int) extends Module {
               expanded := rType(0.U, rs2, rd, 0.U, rd, Op)
               legal := true.B
             }
+          }
+        }
+        is("b101".U) { // C.FSDSP
+          if (withDouble) {
+            expanded := sType(sdspImm12, rs2, 2.U, 3.U, OpStoreFp)
+            legal := true.B
           }
         }
         is("b110".U) { // C.SWSP

@@ -1,0 +1,434 @@
+name: AetherCore Product SD1 C1 reusable rootfs boundary artifact relay
+
+# ONLY a same-repository, explicitly labeled PR or deliberate default-branch
+# dispatch may upload the 256MiB RTL/DDR/SPI snapshot as a PUBLIC artifact.
+# Source media is independently verified, credential-free official Debian SD1.
+# The prefix remains rootfs-independent until UART C1_READY and a separate
+# c1-release action checks the v2 SD read ledger before replacing the image.
+# No push, schedule, secret, private storage or unattended infinite replay.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Upload guest DDR and SD state to public GitHub Artifacts (only credential-free sealed official media)
+        type: choice
+        required: true
+        default: 'NO'
+        options: ['NO', 'PUBLIC_C1_FULL_DDR_ARTIFACT_RELAY']
+      mode:
+        description: Start sealed C1 prefix or reuse previous verified artifact
+        type: choice
+        required: true
+        default: advance
+        options: [seed, advance]
+      source_run_id:
+        description: Prior successful C1 artifact run ID, required for manual advance
+        type: string
+        required: false
+      windows:
+        description: Bounded 20M-cycle warm windows after seed/restore
+        type: choice
+        required: true
+        default: '3'
+        options: ['1', '3', '5']
+  pull_request:
+    types: [labeled]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: product-sd1-c1-public-artifact-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  c1-public-artifact:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirmation == 'PUBLIC_C1_FULL_DDR_ARTIFACT_RELAY' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'product-sd1-c1-public-artifact-relay' &&
+       github.event.pull_request.number == 379 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 160
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      REQUESTED_MODE: ${{ inputs.mode || 'auto' }}
+      REQUESTED_RUN_ID: ${{ inputs.source_run_id || '' }}
+      WINDOWS: ${{ inputs.windows || '3' }}
+      AETHERCORE_ALLOW_PRODUCT_SD1_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_SD1_C1_CONFIRM: GENERIC_LINUX_ROOTFS_BOUNDARY
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      RV64_LINUX_JOBS: '4'
+      RV64_DEBIAN_STAGE: sd1
+
+    steps:
+      - name: Checkout exact reviewed revision without retained write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+
+      - name: Refuse credentials and validate bounded C1 helper contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$WINDOWS" == 1 || "$WINDOWS" == 3 || "$WINDOWS" == 5 ]]
+          [[ -z "${RV64_SD1_LOGIN_USER:-}" && -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" ]]
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" ]]
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          bash -n tools/ci/product_sd1_c1_artifact_relay.sh \
+            tools/ci/product_sd1_c1_checkpoint.sh \
+            tools/ci/product_sd1_c1_firmware_build.sh
+          python3 -m unittest tests_py.test_product_sd1_c1_artifact_relay_contract -v
+
+      - name: Pin conservative C1 RTL host ISA firmware and ledger compatibility
+        id: compat
+        shell: bash
+        run: |
+          set -euo pipefail
+          compat="$(bash tools/ci/product_sd1_c1_artifact_relay.sh fingerprint)"
+          [[ "$compat" =~ ^PRODUCT_SD1_C1_COMPATIBILITY_SHA256=[a-f0-9]{64}$ ]]
+          echo "sha256=${compat#*=}" >> "$GITHUB_OUTPUT"
+          echo "$compat"
+
+      - name: Discover successful same-source C1 artifact or deliberately start new prefix
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="$REQUESTED_MODE"
+          [[ "$mode" == seed || "$mode" == advance || "$mode" == auto ]] || exit 11
+          source_run="$REQUESTED_RUN_ID"
+          compatibility='${{ steps.compat.outputs.sha256 }}'
+          [[ "$compatibility" =~ ^[a-f0-9]{64}$ ]] || exit 15
+          if [[ "$mode" == auto && -z "$source_run" ]]; then
+            # Rootfs-only code/manifest changes may reuse the same immutable
+            # C1 RTL/FW/kernel prefix. Any RTL, host, C1 guest or ABI input
+            # change produces a distinct fingerprint and forces a new seed.
+            # Repository-wide artifacts can exceed one 100-item page after
+            # unrelated FPGA jobs; first query ONLY the C1 relay workflow.
+            mapfile -t candidates < <(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-c1-checkpoint-relay.yml/runs" -X GET \
+              -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
+              --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | .id')
+            for candidate in "${candidates[@]}"; do
+              [[ "$candidate" =~ ^[0-9]+$ ]] || continue
+              expected="product-sd1-c1-state-v1-$compatibility-$candidate"
+              if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$expected"; then
+                source_run="$candidate"
+                break
+              fi
+            done
+            [[ -n "$source_run" ]] && mode=advance || mode=seed
+          fi
+          if [[ "$mode" == advance ]]; then
+            [[ "$source_run" =~ ^[1-9][0-9]*$ && "$source_run" != "$GITHUB_RUN_ID" ]] || {
+              echo 'C1_ARTIFACT_SOURCE_REQUIRED: provide successful exact-revision source run ID' >&2
+              exit 12
+            }
+            meta="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$source_run")"
+            jq -e --arg repo "$GITHUB_REPOSITORY" \
+              '.repository.full_name == $repo and .conclusion == "success" and
+               .path == ".github/workflows/product-sd1-c1-checkpoint-relay.yml" and
+               (.event == "pull_request" or .event == "workflow_dispatch")' <<< "$meta" >/dev/null
+            printf 'source_run_id=%s\nartifact_name=product-sd1-c1-state-v1-%s-%s\n' \
+              "$source_run" "$compatibility" "$source_run" >> "$GITHUB_OUTPUT"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "PRODUCT_SD1_C1_ARTIFACT_MODE_SELECTED mode=$mode source_run=${source_run:-none} source_sha=$TARGET_SHA compatibility_sha256=$compatibility"
+
+      - name: Preflight NEW long RTL prefix with independently successful native and C1 QEMU oracles
+        if: steps.source.outputs.mode == 'seed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Source manifests/QEMU oracles explicitly verify signed media and
+          # Debian native init, plus C1 READY->GO->ext4 handoff, respectively.
+          # Neither proves Product RTL C1; both are cheap preconditions before
+          # spending hours constructing a new cold RTL prefix. An already
+          # proven compatible prestate instead uses the SHA verified artifact.
+          oracle_source_unchanged() {
+            local oracle_sha="$1" comparison
+            [[ "$oracle_sha" =~ ^[a-f0-9]{40}$ ]] || return 1
+            [[ "$oracle_sha" == "$TARGET_SHA" ]] && return 0
+            comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$oracle_sha...$TARGET_SHA" 2>/dev/null)" || return 1
+            # Prior oracle success may be reused across unrelated FPGA docs
+            # and mapping-script commits, but NEVER across changed guest
+            # kernel, RTL, QEMU, C1 handoff or media-building source.
+            jq -e --arg old "$oracle_sha" '
+              .merge_base_commit.sha == $old and .behind_by == 0 and
+              (.status == "ahead" or .status == "identical") and
+              (.total_commits | type == "number" and . <= 64) and
+              (.files | type == "array" and length < 300) and
+              all(.files[];
+                .status != "renamed" and
+                (.filename | test("^(docs/|tests_py/test_product_fpga_[^/]+[.]py$|tools/ci/product_fpga_[^/]+[.](sh|py)$|[.]github/workflows/product-fpga-[^/]+[.]yml$|[.]github/workflows/product-sd1-(official-artifact-relay|c1-checkpoint-relay)[.]yml$|tools/ci/product_sd1_(artifact_relay|c1_artifact_relay)[.]sh$|tests_py/test_product_sd1_(artifact_relay|c1_artifact_relay)_contract[.]py$|tests_py/test_product_sd1_cross_commit_qemu_gate_contract[.]py$)"))
+              )
+            ' <<< "$comparison" >/dev/null
+          }
+          for required in product-sd1-native-qemu-oracle.yml product-sd1-c1-qemu-oracle.yml; do
+            # Workflow-specific query avoids eviction by many unrelated
+            # skipped PR jobs. Each candidate must be an ancestor of HEAD.
+            mapfile -t candidates < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$required/runs" \
+              -X GET -f event=pull_request -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
+              --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
+            matched=''
+            for entry in "${candidates[@]}"; do
+              IFS=$'\t' read -r run_id oracle_sha <<< "$entry"
+              [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+              if oracle_source_unchanged "$oracle_sha"; then
+                matched="$run_id"
+                echo "C1_RTL_LONGRUN_QEMU_ORACLE_VERIFIED workflow=$required run=$run_id oracle_sha=$oracle_sha target_sha=$TARGET_SHA"
+                break
+              fi
+            done
+            [[ -n "$matched" ]] || {
+              echo "C1_RTL_LONGRUN_PRECHECK_REJECTED: require successful unchanged-source $required first" >&2
+              exit 18
+            }
+          done
+
+      - name: Restore exact sealed official Debian SD1 source/media cache, no rebuild
+        id: sealed_media
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Fail before costly RTL if sealed credential-free official media missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Exact v2 cache hits and the single pinned legacy v1 key are admissible;
+          # the following signed-media/whole-image SHA verifier is mandatory.
+          [[ '${{ steps.sealed_media.outputs.cache-hit }}' == true ||
+             ( '${{ steps.sealed_media.outputs.cache-hit }}' == false &&
+               '${{ steps.sealed_media.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+            echo 'C1_ARTIFACT_EXACT_OFFICIAL_SD1_SEED_CACHE_REQUIRED' >&2
+            exit 16
+          }
+          python3 tools/ci/product_sd1_official_seed.py verify
+          grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
+            build/product-sd1-official-seed/console-provisioning.txt
+          grep -Fxq 'console_login_user=NONE' \
+            build/product-sd1-official-seed/console-provisioning.txt
+          test -s build/rv64-debian-sd1-sd/sd-rootfs.img
+
+      - name: Re-key individually SHA-verified official Debian media without RTL source coupling
+        if: steps.sealed_media.outputs.cache-hit == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: ${{ steps.sealed_media.outputs.cache-primary-key }}
+
+      - name: Download complete source C1 RTL/DDR/SPI artifact (no source rebuild)
+        if: steps.source.outputs.mode == 'advance'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.artifact_name }}
+          run-id: ${{ steps.source.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/product-c1-source-artifact
+
+      - name: Verify exact SHA manifests and restore source model plus 256MiB state
+        if: steps.source.outputs.mode == 'advance'
+        id: restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sd1_c1_artifact_relay.sh restore \
+            "$RUNNER_TEMP/product-c1-source-artifact" | tee "$RUNNER_TEMP/c1-restored.txt"
+          source_dir="$(sed -n 's/^PRODUCT_SD1_C1_PUBLIC_ARTIFACT_RESTORED directory=\([^ ]*\).*/\1/p' "$RUNNER_TEMP/c1-restored.txt")"
+          [[ -d "$source_dir" && -f "$source_dir/.c1-ready" ]]
+          echo "proof_dir=$source_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact fixed GCC Linux toolchain for NEW prefix only
+        if: steps.source.outputs.mode == 'seed'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore exact frozen Linux/OpenSBI sources for NEW prefix only
+        if: steps.source.outputs.mode == 'seed'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Reuse exact existing Scala and Mill cache for NEW prefix only
+        if: steps.source.outputs.mode == 'seed'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Reuse exact existing pinned Verilator 5.054 savable toolchain
+        if: steps.source.outputs.mode == 'seed'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Install bounded missing native Linux and RTL build prerequisites
+        if: steps.source.outputs.mode == 'seed'
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -x "$java17_home/bin/java" && -x "$java17_home/bin/javac" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+          fi
+          command -v javac
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          missing=()
+          for entry in python3:python3 gcc:build-essential g++:build-essential \
+            make:make git:git curl:curl bc:bc bison:bison flex:flex \
+            autoconf:autoconf cmake:cmake ninja:ninja-build \
+            pkg-config:pkg-config dtc:device-tree-compiler \
+            pahole:dwarves xz:xz-utils; do
+            command -v "${entry%%:*}" >/dev/null || missing+=("${entry#*:}")
+          done
+          for package in libfl-dev libgmp-dev zlib1g-dev libssl-dev libelf-dev; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | \
+              grep -Fxq 'install ok installed' || missing+=("$package")
+          done
+          if (( ${#missing[@]} )); then
+            mapfile -t missing < <(printf '%s\n' "${missing[@]}" | sort -u)
+            timeout --signal=TERM --kill-after=20s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=20s 15m \
+              sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          bash tools/ensure_verilator_5_024.sh
+
+      - name: Activate exact Bootlin Linux GCC 13.3 into subsequent build steps
+        if: steps.source.outputs.mode == 'seed'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 15m \
+            bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build only isolated rootfs-independent C1 Image and OpenSBI firmware
+        if: steps.source.outputs.mode == 'seed'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AETHERCORE_RV64_LINUX_CROSS_COMPILE"
+          bash tools/ci/product_sd1_c1_initramfs_build.sh check-source
+          timeout --signal=TERM --kill-after=20s 5m \
+            bash tools/ci/product_sd1_c1_initramfs_build.sh prepare
+          timeout --signal=TERM --kill-after=20s 35m \
+            bash tools/ci/product_sd1_c1_kernel_build.sh prepare
+          timeout --signal=TERM --kill-after=20s 25m \
+            bash tools/ci/product_sd1_c1_firmware_build.sh prepare
+          timeout --signal=TERM --kill-after=20s 15m \
+            bash tools/ci/product_checkpoint_sd1_short.sh build
+
+      - name: Save first 12M real guest cycles (does not claim C1_READY)
+        if: steps.source.outputs.mode == 'seed'
+        id: seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCT_SD1_C1_BOOT_CYCLES=12000000 \
+            bash tools/ci/product_sd1_c1_checkpoint.sh save | tee "$RUNNER_TEMP/c1-seed.txt"
+          proof_dir="$(sed -n 's/^PRODUCT_SD1_C1_CHECKPOINT_SAVED directory=\([^ ]*\).*/\1/p' "$RUNNER_TEMP/c1-seed.txt")"
+          [[ -d "$proof_dir" ]]
+          echo "proof_dir=$proof_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Advance restored C1 prefix in at most five independently bounded 20M windows
+        shell: bash
+        id: advance
+        env:
+          RESTORED_PROOF: ${{ steps.restore.outputs.proof_dir }}
+          SEED_PROOF: ${{ steps.seed.outputs.proof_dir }}
+        run: |
+          set -euo pipefail
+          proof="${RESTORED_PROOF:-$SEED_PROOF}"
+          [[ -n "$proof" && -f "$proof/.c1-ready" ]]
+          for ((i=0; i<WINDOWS; i++)); do
+            if grep -Eq '^PRODUCT_SD1_C1_PREFIX_(SAVED|ADVANCED) .*ready=1 ' "$proof/save.log"; then
+              echo 'C1_READY already proven: preserving reusable kernel-before-rootfs state'
+              break
+            fi
+            now="$(sed -n 's/^cycle=//p' "$proof/.c1-ready")"
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            next=$((now + 20000000))
+            (( next <= 4000000000 )) || { echo 'C1_ARTIFACT_CYCLE_LIMIT_REACHED'; break; }
+            bash tools/ci/product_sd1_c1_checkpoint.sh advance "$proof" "$next" | \
+              tee "$RUNNER_TEMP/c1-advance-$i.txt"
+            proof="$(sed -n 's/^PRODUCT_SD1_C1_CHECKPOINT_ADVANCED directory=\([^ ]*\).*/\1/p' "$RUNNER_TEMP/c1-advance-$i.txt")"
+            [[ -d "$proof" && -f "$proof/.c1-ready" ]]
+          done
+          echo "proof_dir=$proof" >> "$GITHUB_OUTPUT"
+
+      - name: Seal a complete 11-file C1 full-state public artifact with SHA256
+        shell: bash
+        env:
+          LATEST_PROOF: ${{ steps.advance.outputs.proof_dir }}
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sd1_c1_artifact_relay.sh package \
+            "$LATEST_PROOF" \
+            "$RUNNER_TEMP/product-c1-artifact"
+          test -s "$RUNNER_TEMP/product-c1-artifact/RELAY-MANIFEST"
+          echo 'C1 public artifact: exact portable savable model, separate C1 FW/Image, 256MiB host DDR/SPI, RTL, v2 SD read ledger; no source SD/rootfs bytes or login credentials' >> "$GITHUB_STEP_SUMMARY"
+          ready="$(sed -n 's/^ready=//p' "$RUNNER_TEMP/product-c1-artifact/RELAY-MANIFEST")"
+          echo "C1_READY=$ready (only 1 proves RTL UART rootfs_unmounted=1; never a Debian native login PASS)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish complete recoverable first-party C1 artifact for compatible rootfs swaps
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-c1-state-v1-${{ steps.compat.outputs.sha256 }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/product-c1-artifact/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 1
+          retention-days: 14

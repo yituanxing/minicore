@@ -42,7 +42,9 @@ class L32BusyBoxMultiprocessContract(unittest.TestCase):
         for required in (
             "VERILATOR_MODEL_OPT ?= -O3", "VERILATOR_THREADS ?= 1", "VERILATOR_THREAD_FLAGS := $(if $(filter 1,$(VERILATOR_THREADS)),,--threads $(VERILATOR_THREADS))",
             'VERILATOR_MAKE_OPT ?= -MAKEFLAGS "OPT_FAST=-O3 OPT_GLOBAL=-O3"', "SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native",
-            "$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_THREAD_FLAGS) $(VERILATOR_MAKE_OPT) --cc --exe --build", '-CFLAGS "$(SIM_CXXFLAGS)"',
+            "$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_THREAD_FLAGS) $(VERILATOR_MAKE_OPT) --cc --exe --build", '-CFLAGS "$(SIM_CXXFLAGS) $(SIM_SETTLE_CXXFLAGS)"',
+            "SIM_SETTLE_MODE ?= reference", "SIM_SETTLE_CXXFLAGS := -DAETHERCORE_SIM_ADAPTIVE_SETTLE",
+            "else ifeq ($(SIM_SETTLE_MODE),reference)", "$(error unknown SIM_SETTLE_MODE",
             "UART_COMMAND_FILE ?=", "POST_INPUT_MAX_CYCLES ?= 0", "PROGRESS_INTERVAL_CYCLES ?= 25000000", "RUN_DEPS ?= sim", "run-existing:",
             'missing existing L32 simulator $(OBJ_DIR)/V$(TOP); run run-local once first', "RUN_DEPS= run-local", "run-local: $(RUN_DEPS)",
             "export AETHERCORE_UART_COMMAND := $(UART_COMMAND)", 'uart_command="$${AETHERCORE_UART_COMMAND-}"', 'uart_command="$$(cat "$(UART_COMMAND_FILE)")"',

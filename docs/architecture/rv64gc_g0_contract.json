@@ -1,0 +1,1071 @@
+{
+  "schema_version": 1,
+  "status": "proposed-g0-contract-not-rtl-implementation",
+  "baseline": {
+    "repository": "yituanxing/minicore",
+    "main_sha": "7ff35c6acdc3068754292bba814e4ec52ba4ec50",
+    "virtual_fpga_pid1": "qualified-v0-only",
+    "product_target": "not-implemented"
+  },
+  "product": {
+    "isa": "RV64GC",
+    "abi": "LP64D",
+    "privilege": [
+      "M",
+      "S",
+      "U"
+    ],
+    "vm": "Sv39",
+    "order": "single-hart RVWMO with MMIO/PMA ordering",
+    "source_line": "single product core with named reduced geometry, v0 kept as reference"
+  },
+  "profiles": [
+    {
+      "id": "G1-minimal-ooo",
+      "decode": 1,
+      "dispatch": 1,
+      "issue": 1,
+      "retire": 1,
+      "rob": 8,
+      "iq": 4,
+      "physical_int": 48,
+      "loadq": 2,
+      "storeq": 2,
+      "fp_enabled": false,
+      "qualified": false,
+      "note": "Architecture proposal; capacities are provisional. All ownership and rollback mechanisms remain present."
+    },
+    {
+      "id": "G2-width2",
+      "decode": 2,
+      "dispatch": 2,
+      "issue": 1,
+      "retire": 2,
+      "rob": 16,
+      "iq": 8,
+      "physical_int": 64,
+      "loadq": 4,
+      "storeq": 4,
+      "fp_enabled": false,
+      "qualified": false,
+      "note": "Prove dual allocation/retirement before deciding whether 2-issue helps; values are tuning points, not frozen silicon."
+    },
+    {
+      "id": "G3-product-candidate",
+      "decode": 2,
+      "dispatch": 2,
+      "issue": 2,
+      "retire": 2,
+      "rob": 64,
+      "iq": 16,
+      "physical_int": 96,
+      "loadq": 16,
+      "storeq": 16,
+      "fp_enabled": true,
+      "qualified": false,
+      "note": "IQ32, wider PRFs and cache sizes remain measured alternatives, not implied requirements. 96 integer PRF is a provisional sizing to avoid 32-spare-register pressure against ROB64, not FPGA-resource qualification."
+    }
+  ],
+  "owners": [
+    {
+      "id": "frontend",
+      "state": [
+        "fetch_pc",
+        "fetch_queue",
+        "parcel_alignment",
+        "fetch_epoch",
+        "predictor_spec_history"
+      ],
+      "input": [
+        "redirect",
+        "itlb_result",
+        "instruction_bytes"
+      ],
+      "output": [
+        "fetch_block",
+        "decoded_pc",
+        "predicted_next_pc"
+      ]
+    },
+    {
+      "id": "decode",
+      "state": [],
+      "input": [
+        "fetch_block",
+        "ISA_config"
+      ],
+      "output": [
+        "ordered_uop_group",
+        "illegal_opcode_or_fetch_fault"
+      ]
+    },
+    {
+      "id": "rename",
+      "state": [
+        "spec_int_rat",
+        "spec_fp_rat",
+        "committed_int_rat",
+        "committed_fp_rat",
+        "free_list",
+        "rename_restore_metadata"
+      ],
+      "input": [
+        "ordered_uop_group",
+        "commit_releases",
+        "recovery_cut"
+      ],
+      "output": [
+        "allocated_uop_group",
+        "src_physical_tags",
+        "dst_physical_tags"
+      ]
+    },
+    {
+      "id": "rob",
+      "state": [
+        "program_order",
+        "rob_head_tail",
+        "rob_lifetimes",
+        "completion_status",
+        "pending_precise_exception",
+        "pending_branch_result"
+      ],
+      "input": [
+        "allocated_uop_group",
+        "tagged_completion",
+        "recovery_cut"
+      ],
+      "output": [
+        "eligible_retirement_prefix",
+        "live_lifetime_check",
+        "survivor_cut"
+      ]
+    },
+    {
+      "id": "iq",
+      "state": [
+        "issue_wait_entries",
+        "resource_reservations",
+        "operand_ready_bits"
+      ],
+      "input": [
+        "allocated_uop_group",
+        "producer_wakeup",
+        "squash_mask"
+      ],
+      "output": [
+        "tagged_execute_requests"
+      ]
+    },
+    {
+      "id": "prf",
+      "state": [
+        "physical_integer_values",
+        "physical_fp_values",
+        "value_ready_bits"
+      ],
+      "input": [
+        "tagged_completion",
+        "physical_read_tags"
+      ],
+      "output": [
+        "operand_values"
+      ]
+    },
+    {
+      "id": "execution",
+      "state": [
+        "functional_unit_lifetimes",
+        "held_responses"
+      ],
+      "input": [
+        "tagged_execute_requests",
+        "kill_epoch"
+      ],
+      "output": [
+        "tagged_completion",
+        "pending_fp_flags"
+      ]
+    },
+    {
+      "id": "recovery",
+      "state": [
+        "active_redirect_generation",
+        "kill_cut"
+      ],
+      "input": [
+        "validated_branch_resolution",
+        "rob_exception",
+        "commit_redirect"
+      ],
+      "output": [
+        "younger_squash",
+        "frontend_redirect",
+        "rename_restore",
+        "mem_cancel"
+      ]
+    },
+    {
+      "id": "lsq",
+      "state": [
+        "load_age_queue",
+        "store_age_queue",
+        "known_store_addresses",
+        "store_data_pending",
+        "committed_store_drain",
+        "load_replay_status"
+      ],
+      "input": [
+        "allocated_memory_uops",
+        "retirement_permit",
+        "tlb_response",
+        "memory_response"
+      ],
+      "output": [
+        "safe_memory_requests",
+        "load_completion",
+        "store_drain_requests"
+      ]
+    },
+    {
+      "id": "mmu_cache",
+      "state": [
+        "itlb_dtlb",
+        "page_walker",
+        "l1_tag_data",
+        "mshr_entries",
+        "translation_epoch"
+      ],
+      "input": [
+        "physical_or_virtual_request",
+        "sfence",
+        "fence_i"
+      ],
+      "output": [
+        "pte_visible_request",
+        "cache_response",
+        "physical_request"
+      ]
+    },
+    {
+      "id": "memory_transport",
+      "state": [
+        "physical_transaction_table",
+        "txn_id_reservations",
+        "response_ownership"
+      ],
+      "input": [
+        "safe_memory_requests",
+        "cache_miss",
+        "response_bus"
+      ],
+      "output": [
+        "AetherMemRequest",
+        "AetherMemResponse"
+      ]
+    },
+    {
+      "id": "commit_csr",
+      "state": [
+        "architectural_csr",
+        "architectural_privilege",
+        "architectural_fflags_fcsr",
+        "architectural_trap_state",
+        "committed_store_permission"
+      ],
+      "input": [
+        "eligible_retirement_prefix",
+        "qualified_interrupt",
+        "pending_privileged_effect"
+      ],
+      "output": [
+        "architectural_trace",
+        "csr_changes",
+        "commit_releases",
+        "trap_redirect"
+      ]
+    },
+    {
+      "id": "platform",
+      "state": [
+        "physical_memory_map",
+        "pma_device_classification",
+        "uart_plic_aclint_state",
+        "axi_devices",
+        "ddr_reset_clock_board"
+      ],
+      "input": [
+        "AetherMemRequest",
+        "physical_irq_lines"
+      ],
+      "output": [
+        "AetherMemResponse",
+        "timer_external_interrupts"
+      ]
+    }
+  ],
+  "identities": [
+    {
+      "id": "RobToken",
+      "owner": "rob",
+      "birth": "atomic ordered ROB allocation",
+      "validate": "slot plus generation and live occupancy; never index alone",
+      "end": "retire or younger squash; generation changes upon reuse",
+      "not_equal_to": [
+        "ProducerTag",
+        "ValueRef",
+        "MemTxnId"
+      ]
+    },
+    {
+      "id": "ProducerTag",
+      "owner": "rename",
+      "birth": "new destination producer at rename",
+      "validate": "physical generation and live producer; x0 never produces",
+      "end": "retire/replacement or invalidation of killed producer",
+      "not_equal_to": [
+        "RobToken",
+        "ValueRef"
+      ]
+    },
+    {
+      "id": "ValueRef",
+      "owner": "prf",
+      "birth": "physical destination reserved with rename",
+      "validate": "physid plus reservation lifetime; never ROB slot alone",
+      "end": "old physical released exactly once when overwriter safely commits or on killed new allocation",
+      "not_equal_to": [
+        "ProducerTag",
+        "RobToken"
+      ]
+    },
+    {
+      "id": "MemTxnId",
+      "owner": "memory_transport",
+      "birth": "accepted external request / MSHR allocation",
+      "validate": "live transport table entry, not only surviving ROB lifetime",
+      "end": "terminal response consumed or killed transaction drained safely",
+      "not_equal_to": [
+        "RobToken"
+      ]
+    },
+    {
+      "id": "BranchEpoch",
+      "owner": "recovery",
+      "birth": "redirect/recovery boundary issuance",
+      "validate": "fetch/execute result must carry valid scope and survivor age",
+      "end": "superseded epoch releases after stale work drained",
+      "not_equal_to": [
+        "RobToken"
+      ]
+    },
+    {
+      "id": "FpEffect",
+      "owner": "rob",
+      "birth": "exception flags and FP result completion bound to live token",
+      "validate": "full ROB lifetime, never speculative FCSR update",
+      "end": "precise in-order commit or squash",
+      "not_equal_to": [
+        "MemTxnId"
+      ]
+    }
+  ],
+  "required_interfaces": [
+    {
+      "id": "FetchGroup",
+      "producer": "frontend",
+      "consumer": "decode",
+      "fields": [
+        "pc",
+        "raw_instruction",
+        "inst_bytes",
+        "prediction",
+        "fetch_fault",
+        "fetch_epoch",
+        "lane_valid"
+      ],
+      "handshake": "ready/valid, no partial advancement across fetch context changes"
+    },
+    {
+      "id": "DispatchGroup",
+      "producer": "rename",
+      "consumer": "rob",
+      "fields": [
+        "lanes_in_order",
+        "rob_identity",
+        "src_tags",
+        "dst_tags",
+        "resource_needs",
+        "precise_exception"
+      ],
+      "handshake": "all valid lanes in a group accept atomically, or none; no partial mutations"
+    },
+    {
+      "id": "Wakeup",
+      "producer": "execution",
+      "consumer": "iq",
+      "fields": [
+        "producer_tag",
+        "generation",
+        "ready",
+        "result_valid"
+      ],
+      "handshake": "killed, recycled or stale tags cannot wake"
+    },
+    {
+      "id": "Completion",
+      "producer": "execution",
+      "consumer": "rob",
+      "fields": [
+        "rob_token",
+        "producer_tag",
+        "value_ref",
+        "result",
+        "exception",
+        "branch",
+        "fp_flags"
+      ],
+      "handshake": "Decoupled holds stable until ready; complete lifecycle validation before state update"
+    },
+    {
+      "id": "RetireBundle",
+      "producer": "rob",
+      "consumer": "commit_csr",
+      "fields": [
+        "ordered_prefix",
+        "retirement_permit",
+        "exception",
+        "priv_effects",
+        "fp_effects",
+        "store_permit"
+      ],
+      "handshake": "contiguous oldest ready prefix of <=retire width; exception instruction never commits"
+    },
+    {
+      "id": "MemoryRequest",
+      "producer": "lsq",
+      "consumer": "memory_transport",
+      "fields": [
+        "paddr",
+        "op",
+        "size",
+        "mask",
+        "pma",
+        "txn_id",
+        "age",
+        "commit_permission"
+      ],
+      "handshake": "no speculative visible write; non-idempotent reads and MMIO serialized"
+    },
+    {
+      "id": "RecoveryCut",
+      "producer": "rob",
+      "consumer": "recovery",
+      "fields": [
+        "surviving_token",
+        "target_pc",
+        "reason",
+        "younger_squash_mask",
+        "epoch"
+      ],
+      "handshake": "older preserved, younger invalidated, late responses rejected"
+    },
+    {
+      "id": "ArchitectureTrace",
+      "producer": "commit_csr",
+      "consumer": "difftest",
+      "fields": [
+        "ordered_pc",
+        "raw_inst",
+        "reg_and_fp_results",
+        "exception",
+        "csr_diff",
+        "memory_effects",
+        "retire_lane"
+      ],
+      "handshake": "ordered per-instruction record, including simultaneous two retire and exact fault boundary",
+      "external_consumer": true
+    }
+  ],
+  "invariants": [
+    {
+      "id": "I01",
+      "gate": "G1",
+      "rule": "Every state key has exactly one mutable owner; consumers use explicit read-only projections or transactions."
+    },
+    {
+      "id": "I02",
+      "gate": "G1",
+      "rule": "Dispatch group allocation is atomic across ROB, IQ, RAT, PRF/free list and LSQ; no resources consumed on failure."
+    },
+    {
+      "id": "I03",
+      "gate": "G1",
+      "rule": "Every completion and wakeup validates full live lifetime identity; killed/late responses cannot mutate a new slot."
+    },
+    {
+      "id": "I04",
+      "gate": "G1",
+      "rule": "Only a contiguous oldest ready retirement prefix may commit; a faulting uop and all younger uops never commit."
+    },
+    {
+      "id": "I05",
+      "gate": "G1",
+      "rule": "Speculative stores, atomics and non-idempotent MMIO effects never externalize before precise commit permission."
+    },
+    {
+      "id": "I06",
+      "gate": "G1",
+      "rule": "Recovery preserves older ROB entries and reconstitutes speculative RAT/free-list mapping for precisely the survivors."
+    },
+    {
+      "id": "I07",
+      "gate": "G2",
+      "rule": "Dual dispatch handles within-group RAW/WAW and x0; dual retire handles older and younger trap/csr/fence conflicts."
+    },
+    {
+      "id": "I08",
+      "gate": "G2",
+      "rule": "An external transaction id outlives its ROB token if needed; cancel drains or discards the transport response safely."
+    },
+    {
+      "id": "I09",
+      "gate": "G3",
+      "rule": "PTW sees latest coherent PTE including dirty DCache state; SFENCE.VMA/FENCE.I enforce their respective visibility domains."
+    },
+    {
+      "id": "I10",
+      "gate": "G3",
+      "rule": "FP results/fflags/FS state update only on matching in-order commit; squashed FP operations have no CSR side effects."
+    },
+    {
+      "id": "I11",
+      "gate": "G4",
+      "rule": "AXI width/txn/CDC, PMA, device map and PHY state remain outside the CPU architectural backend."
+    },
+    {
+      "id": "I12",
+      "gate": "G4",
+      "rule": "Hardware bitstream and Debian LP64D claims require explicit board and software qualification, never inferred from virtual FPGA Linux."
+    }
+  ],
+  "event_priority": [
+    {
+      "when": "head synchronous exception",
+      "must": "no faulting or younger retirement, precise trap; older normal prefix may have retired",
+      "before": "younger branch/commit effects"
+    },
+    {
+      "when": "validated older branch redirect",
+      "must": "invalidate strictly younger ROB/IQ/LSQ/FU/fetch epoch; preserve older in-flight effects",
+      "before": "younger execution or redirect"
+    },
+    {
+      "when": "younger branch redirect and older fault",
+      "must": "older fault eventually wins architectural state; younger never irrevocable",
+      "before": "younger external side effects"
+    },
+    {
+      "when": "interrupt pending",
+      "must": "G1 take only at drained clean boundary, not inside dual-retirement group; G2 interrupt cut remains precise",
+      "before": "next speculative dispatch"
+    },
+    {
+      "when": "same-cycle dual retire",
+      "must": "commit lane0 before lane1; stop at first fault or blocked non-reorderable effect",
+      "before": "younger architectural update"
+    },
+    {
+      "when": "store/AMO or MMIO",
+      "must": "only exact retired permit for external visibility, serialized as platform requires",
+      "before": "physical write"
+    },
+    {
+      "when": "FP flags and CSR/trap",
+      "must": "accumulate pending effects per-uop; commit only in oldest-to-youngest order",
+      "before": "architectural CSR mutation"
+    }
+  ],
+  "scenarios": {
+    "dispatch": [
+      {
+        "id": "dual_all",
+        "requested": 2,
+        "resources": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 2,
+          "lsq": 1
+        },
+        "needed": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 2,
+          "lsq": 1
+        },
+        "redirect": false,
+        "expected": 2
+      },
+      {
+        "id": "dual_iq_short",
+        "requested": 2,
+        "resources": {
+          "rob": 2,
+          "iq": 1,
+          "prf": 2,
+          "lsq": 1
+        },
+        "needed": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 2,
+          "lsq": 1
+        },
+        "redirect": false,
+        "expected": 0
+      },
+      {
+        "id": "dual_prf_short",
+        "requested": 2,
+        "resources": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 1,
+          "lsq": 1
+        },
+        "needed": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 2,
+          "lsq": 1
+        },
+        "redirect": false,
+        "expected": 0
+      },
+      {
+        "id": "dual_flush",
+        "requested": 2,
+        "resources": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 2,
+          "lsq": 1
+        },
+        "needed": {
+          "rob": 2,
+          "iq": 2,
+          "prf": 2,
+          "lsq": 1
+        },
+        "redirect": true,
+        "expected": 0
+      },
+      {
+        "id": "single",
+        "requested": 1,
+        "resources": {
+          "rob": 1,
+          "iq": 1,
+          "prf": 1,
+          "lsq": 0
+        },
+        "needed": {
+          "rob": 1,
+          "iq": 1,
+          "prf": 1,
+          "lsq": 0
+        },
+        "redirect": false,
+        "expected": 1
+      }
+    ],
+    "retire": [
+      {
+        "id": "dual_normal",
+        "entries": [
+          {
+            "id": 0,
+            "ready": true,
+            "fault": false,
+            "store_permit": true
+          },
+          {
+            "id": 1,
+            "ready": true,
+            "fault": false,
+            "store_permit": true
+          }
+        ],
+        "expected_retired": [
+          0,
+          1
+        ],
+        "expected_trap": null
+      },
+      {
+        "id": "head_fault",
+        "entries": [
+          {
+            "id": 0,
+            "ready": true,
+            "fault": true,
+            "store_permit": true
+          },
+          {
+            "id": 1,
+            "ready": true,
+            "fault": false,
+            "store_permit": true
+          }
+        ],
+        "expected_retired": [],
+        "expected_trap": 0
+      },
+      {
+        "id": "younger_fault",
+        "entries": [
+          {
+            "id": 0,
+            "ready": true,
+            "fault": false,
+            "store_permit": true
+          },
+          {
+            "id": 1,
+            "ready": true,
+            "fault": true,
+            "store_permit": true
+          }
+        ],
+        "expected_retired": [
+          0
+        ],
+        "expected_trap": 1
+      },
+      {
+        "id": "older_blocked",
+        "entries": [
+          {
+            "id": 0,
+            "ready": false,
+            "fault": false,
+            "store_permit": true
+          },
+          {
+            "id": 1,
+            "ready": true,
+            "fault": false,
+            "store_permit": true
+          }
+        ],
+        "expected_retired": [],
+        "expected_trap": null
+      },
+      {
+        "id": "store_not_permitted",
+        "entries": [
+          {
+            "id": 0,
+            "ready": true,
+            "fault": false,
+            "store_permit": false
+          },
+          {
+            "id": 1,
+            "ready": true,
+            "fault": false,
+            "store_permit": true
+          }
+        ],
+        "expected_retired": [],
+        "expected_trap": null
+      }
+    ]
+  },
+  "open_decisions": [
+    {
+      "id": "D01",
+      "choice": "board device + real DDR PHY/IP, tool license, clock and Fmax budget",
+      "owner": "project product planning",
+      "must_close_before": "G4 RTL physical integration"
+    },
+    {
+      "id": "D02",
+      "choice": "implementation PRF layout/read-write ports, RAT checkpoint vs walk replay, physical FP registers",
+      "owner": "product backend",
+      "must_close_before": "G1 RTL"
+    },
+    {
+      "id": "D03",
+      "choice": "ROB/IQ/LSQ capacities and issue/completion bandwidth after same-device PPA measurement",
+      "owner": "product backend",
+      "must_close_before": "G2 width expansion"
+    },
+    {
+      "id": "D04",
+      "choice": "DMA noncoherence handling, PTW dirty DCache visibility and FENCE.I boundary",
+      "owner": "memory architecture",
+      "must_close_before": "G3 cache integration"
+    },
+    {
+      "id": "D05",
+      "choice": "floating unit source, FCSR semantics and Linux lazy/eager FP save policy",
+      "owner": "ISA/OS integration",
+      "must_close_before": "G3 FP implementation"
+    },
+    {
+      "id": "D06",
+      "choice": "product core lineage and exact reuse from v2 vs new product package",
+      "owner": "maintainer",
+      "must_close_before": "G1 RTL"
+    }
+  ],
+  "g1_selected_decisions": [
+    {
+      "id": "D02",
+      "status": "selected-for-G1-review-not-RTL-frozen",
+      "decision": "explicit integer PRF + speculative/committed RAT + bitset FreeList + per-destination reverse undo log",
+      "initial": {
+        "integer_arch_registers": 32,
+        "integer_prf": 48,
+        "rob_entries": 8,
+        "issue_width": 1,
+        "retire_width": 1,
+        "rename_width": 1,
+        "prf_read_ports": 2,
+        "prf_write_ports": 1,
+        "fp_enabled": false
+      },
+      "reset": "x0 fixed to physical 0; integer architectural x1..x31 map to phys1..31; FreeList contains physical 32..N-1; x0 never allocates, releases, or writes",
+      "allocation": "rename lane order: read sources from speculative RAT including prior accepted lane writes, reserve free physical destination, retain old mapping in ROB undo entry, then set speculative RAT; grant is atomic with ROB/IQ/LSQ permits",
+      "commit": "update committed RAT on normal in-order retirement, free stale destination once when its replacing instruction commits; no free when completion merely arrives; no free on instruction that does not write",
+      "recovery": "on validated non-head branch mispredict, stop rename and architectural retire; squash only instructions younger than surviving branch by ROB age; walk their rename undo entries in reverse order (youngest first), restore each old mapping in speculative RAT and free only their newly allocated destinations; keep older in-flight and branch; for synchronous trap, retire any permitted older prefix then unwind all uncommitted entries to committed RAT",
+      "completion": "check live RobToken and producer/value allocation generation before PRF write or IQ wakeup; no stale writes after squash/reallocate; async memory transaction lifetime separate",
+      "future": "G2 two-lane rename adds intra-group bypass and 2 physical destination allocators; branch snapshots optional optimization, not a G1 correctness requirement; do not change RecoveryCut interface when optimizing",
+      "rationale": "Small FPGA G1 can tolerate multi-cycle recovery and fewer read/write ports. Checkpointing all speculative mappings and free-list state per branch adds state/collision complexity and may be justified later by measured PPA/IPC, not assumed.",
+      "nax_alternative": "NaxRiscv commit-reschedule dual speculative/committed RAT with dirty-bit selector; may replace per-younger undo strategy only if same identity/precise recovery contracts and FPGA PPA pass; no simultaneous duplicate state owner"
+    },
+    {
+      "id": "D06",
+      "status": "selected-for-G1-review-not-RTL-frozen",
+      "decision": "new one-source product core namespace, stable semantic/platform seams extracted once; retain Tiny v2 as independent qualified regression/golden reference",
+      "product_root": "src/main/scala/aethercore/core/product/",
+      "shared_roots": [
+        "src/main/scala/aethercore/common/",
+        "src/main/scala/aethercore/config/",
+        "src/main/scala/aethercore/memory/",
+        "src/main/scala/aethercore/core/"
+      ],
+      "boundary": "ProductCore must not instantiate or inherit TinyRob, TinyDependencyBackend, TinyMemoryBackend, TinyLoadQueueMemoryBackend or TinyPagedCore. A temporary named semantic adapter may consume TinySemanticDecode only until its shared owner extraction, but no product backend state may come from v2.",
+      "first_code_change": "extract DecodedInstruction/semantic decode ownership exactly once with a v2 compatibility adapter, not a parallel copied C decoder; keep existing CoreConfig.capability check intact so F/D is not falsely advertised",
+      "software_and_soc": "keep AetherSoC v0 boot/AXI/UART/PLIC/ACLINT platform frozen; add a separately selectable ProductCoreComplex/SoC adapter only after minimal core retirement test passes, never silently replace the v0 build",
+      "target_config": "new ProductCoreConfig initially IMA(M/S/U, Sv39) with F/D false until implemented. Preserve ISA vs ABI separation and verify new LP64D profile only at G3.",
+      "no_legacy_mutation": "G1 product PR must not modify v2 Tiny ROB/rename/LSU in order to make product backend compile; any shared semantic extraction must run the v2 regression suite."
+    }
+  ],
+  "g1_release_gates": {
+    "contract_review": "The D02/D06 approach is selected and must be reviewed before a production RTL branch. D01/D03/D04/D05 remain unresolved; no claim of completed G0 freeze until maintainers accept architecture and proof obligations.",
+    "initial_geometry_rule": "For no destination-pressure stalls at full ROB occupancy, integer PRF must have at least 32 + ROB entries. Smaller PRFs are legal but must encode dispatch backpressure; proposed 8/48, 16/64, 64/96 avoid this unnecessary first-order limit.",
+    "changelog": "G3 candidate integer PRF raised from 64 to 96 because ROB64 with only 32 spare integer physical registers could not accommodate 64 simultaneous destination-producing inflight uOps.",
+    "required_before_code": [
+      "agree on shared semantic extraction boundary",
+      "agree on precise RecoveryCut interface and select one rename rollback strategy for G1 RTL (undo or Nax-style dual RAT), never both as duplicate owner",
+      "agree on v0 frozen reference strategy"
+    ],
+    "scope_exclusions": [
+      "No built product RTL",
+      "No automatic Linux PASS inheritance",
+      "No legacy Tiny clone into product",
+      "No automatic board Fmax estimate"
+    ]
+  },
+  "naxriscv_reference": {
+    "upstream_sha": "9f452d50560d02fb391bc8039f5453c54e0911af",
+    "url": "https://github.com/SpinalHDL/NaxRiscv",
+    "primary_architecture_reference": true,
+    "source_checks": [
+      {
+        "path": "src/main/scala/naxriscv/Gen.scala",
+        "finding": "decodeCount, robSize, lq/sq, F/D/C, MMU, RAM and FPGA generation are independently configurable; defaults do not imply distro readiness"
+      },
+      {
+        "path": "src/main/scala/naxriscv/frontend/RfTranslationPlugin.scala",
+        "finding": "two physical rename maps and dirty-mask based commit-reschedule rollback"
+      },
+      {
+        "path": "src/main/scala/naxriscv/frontend/RfAllocationPlugin.scala",
+        "finding": "physical register allocator with commit-time reclamation and x0 protection"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/RobPlugin.scala",
+        "finding": "parametrized completion storage, FPGA distributed RAM alternative"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/CommitPlugin.scala",
+        "finding": "retire width and precise commit-reschedule operation"
+      },
+      {
+        "path": "src/main/scala/naxriscv/lsu2/Lsu2Plugin.scala",
+        "finding": "separate load/store lifetimes, store forwarding/hazard/replay and committed writeback"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/MmuPlugin.scala",
+        "finding": "Sv39 translation/refill"
+      },
+      {
+        "path": "src/main/scala/naxriscv/misc/RegFilePlugin.scala",
+        "finding": "FPGA RAM-based physical register port/banking"
+      }
+    ],
+    "recovery_tradeoff": "G1 reverse undo is a proposed proof/reference strategy, not a permanent FPGA requirement; benchmark Nax-style speculative/committed dual RAT + dirty-mask rollback without changing RecoveryCut contract",
+    "physical_int_observation": "Nax Gen.scala uses an example ROB64 with integer physicalDepth64; our PRF96 is a throughput-capacity candidate, not correctness minimum. Allow backpressure and measure FPGA PPA."
+  },
+  "software_platform_axes": {
+    "orthogonal": [
+      "geometry",
+      "isa_abi",
+      "platform"
+    ],
+    "geometry_profiles": [
+      "G1-minimal-ooo",
+      "G2-width2",
+      "G3-product-candidate"
+    ],
+    "isa_abi_profiles": [
+      {
+        "id": "engineering-rv64ima",
+        "isa": "RV64IMA",
+        "abi": "LP64",
+        "purpose": "Initial RTL retire/memory/trap correctness; cannot claim upstream Debian"
+      },
+      {
+        "id": "upstream-debian-riscv64",
+        "isa": "RV64GC",
+        "abi": "LP64D",
+        "required_extensions": [
+          "I",
+          "M",
+          "A",
+          "F",
+          "D",
+          "C",
+          "Zicsr",
+          "Zifencei"
+        ],
+        "privilege": [
+          "M",
+          "S",
+          "U"
+        ],
+        "virtual_memory": "Sv39",
+        "required_state": [
+          "FPR",
+          "fcsr",
+          "fflags",
+          "FS Dirty/Clean",
+          "precise FP retirement",
+          "context switch preservation"
+        ],
+        "purpose": "Upstream Debian riscv64 native binaries and dynamic libraries; independent of ROB width"
+      }
+    ],
+    "platform_profiles": [
+      {
+        "id": "virtual-soc",
+        "required": [
+          "OpenSBI",
+          "Linux PID1",
+          "retirement-differential",
+          "MMU"
+        ],
+        "evidence": "simulation-only"
+      },
+      {
+        "id": "fpga-debian",
+        "required": [
+          "physical FPGA bitstream timing-closed",
+          "clock and reset",
+          "calibrated external DDR",
+          "UART",
+          "interrupt/timer",
+          "DTB",
+          "block storage SD/eMMC",
+          "persistent rootfs",
+          "OpenSBI",
+          "Linux",
+          "Debian riscv64",
+          "native glibc dynamic linking",
+          "login/shell",
+          "apt/dpkg",
+          "thread/atomics/futex",
+          "filesystem persistence after reboot"
+        ],
+        "evidence": "must be proven on actual board"
+      }
+    ],
+    "release_gates": [
+      {
+        "id": "D0",
+        "name": "board-first v0",
+        "requires": [
+          "actual FPGA board clock/reset",
+          "DDR calibration",
+          "UART/AXI real hardware"
+        ],
+        "can_parallelize_with": [
+          "D1",
+          "D2"
+        ]
+      },
+      {
+        "id": "D1",
+        "name": "small product OoO correctness",
+        "requires": [
+          "single source RTL",
+          "rename/ROB/LSQ/precise retirement",
+          "Spike differential"
+        ],
+        "can_parallelize_with": [
+          "D0"
+        ]
+      },
+      {
+        "id": "D2",
+        "name": "small geometry distro-compatible ISA/ABI",
+        "requires": [
+          "RV64GC",
+          "LP64D",
+          "F/D/C",
+          "Sv39",
+          "FCSR/FS state",
+          "atomics/futex",
+          "process context switching"
+        ],
+        "must_precede": "D3"
+      },
+      {
+        "id": "D3",
+        "name": "physical FPGA upstream Debian",
+        "requires": [
+          "D0",
+          "D2",
+          "SD/eMMC persistent storage",
+          "Linux + Debian login",
+          "dynamic userspace",
+          "package manager",
+          "reboot persistence"
+        ],
+        "must_precede": "D4"
+      },
+      {
+        "id": "D4",
+        "name": "wider OoO performance",
+        "requires": [
+          "same-source Medium/Large",
+          "FPGA PPA/IPC measured"
+        ],
+        "not_prerequisite_of": "D3"
+      }
+    ]
+  }
+}

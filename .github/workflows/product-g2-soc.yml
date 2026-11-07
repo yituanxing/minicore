@@ -1,0 +1,175 @@
+name: AetherCore Product G2 SoC and Commit Trace Gate
+
+# Separate structural elaboration from directed Verilator qualification. Both
+# are explicit operator actions; neither is queued on a routine source push.
+on:
+  workflow_dispatch:
+    inputs:
+      gate:
+        description: Product SoC RTL elaboration, directed checks, or both
+        required: true
+        type: choice
+        options: [rtl, directed, both]
+        default: rtl
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g2-${{ github.event.pull_request.number || github.ref }}
+  # All PR label events share the group, including events whose jobs will skip.
+  # Keep operator-started G2 RTL/directed runs alive across unrelated labels.
+  cancel-in-progress: false
+
+jobs:
+  product-g2-rtl:
+    name: Product unified, AXI4, FPGA and OpenSBI-host RTL
+    if: github.event_name == 'workflow_dispatch' && (inputs.gate == 'rtl' || inputs.gate == 'both') || (github.event_name == 'pull_request' && (github.event.label.name == 'product-g2-rtl' || github.event.label.name == 'product-g2-both'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Configure G2 RTL Mill directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-product-g2-rtl"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Elaborate Product unified, AXI4 and FPGA SoC
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/aethercore-product-g2-rtl"
+          for entry in \
+            ElaborateProductUnifiedMemorySoC \
+            ElaborateProductAxi4SoC \
+            ElaborateProductFpgaSoC; do
+            target="$root/$entry"
+            mkdir -p "$target"
+            ./mill aethercore.runMain "aethercore.soc.$entry" --target-dir "$target"
+            find "$target" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+          done
+          host="$root/ElaborateProductOpenSbiRV64SimTop"
+          mkdir -p "$host"
+          ./mill aethercore.runMain aethercore.sim.ElaborateProductOpenSbiRV64SimTop --target-dir "$host"
+          find "$host" -maxdepth 1 -name '*.sv' -print -quit | grep -q .
+
+  product-g2-directed:
+    name: Product physical trace and BootROM-to-UART smoke
+    if: github.event_name == 'workflow_dispatch' && (inputs.gate == 'directed' || inputs.gate == 'both') || (github.event_name == 'pull_request' && (github.event.label.name == 'product-g2-directed' || github.event.label.name == 'product-g2-both'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore exact fixed Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-
+
+      - name: Install Verilator prerequisites if absent
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Configure G2 directed Mill directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/aethercore-product-g2-directed"
+          mkdir -p "$root/mill-out"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Restore G2 directed Mill output accelerator
+        id: mill-output-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g2-directed/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g2-directed-v1-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-g2-directed-v1-
+
+      - name: Validate or build exact Verilator
+        shell: bash
+        run: bash tools/ensure_verilator_5_024.sh
+
+      - name: Save validated Verilator on cache miss
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Run Product physical trace and SoC integration tests
+        shell: bash
+        run: |
+          ./mill aethercore.test.testOnly \
+            aethercore.ProductCommitTraceSpec \
+            aethercore.ProductFloatingCommitTraceSpec \
+            aethercore.AetherCoreProductUnifiedMemorySoCSpec \
+            aethercore.AetherCoreProductSoCElaborationSpec \
+            aethercore.ProductGeometrySoCSpec \
+            aethercore.AetherProductColdBootControlSpec \
+            aethercore.AetherProductAxiColdBootIsolationSpec \
+            aethercore.AetherProductFpgaColdBootElaborationSpec
+
+      - name: Save G2 directed Mill output accelerator
+        if: success() && steps.mill-output-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g2-directed/mill-out
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g2-directed-v1-${{ github.event.pull_request.head.sha || github.sha }}

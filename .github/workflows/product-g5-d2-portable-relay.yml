@@ -1,0 +1,350 @@
+name: AetherCore G5 D2 portable checkpoint relay
+
+# Separate from the historical native relay that SIGILL'ed across GitHub CPUs.
+# Reuses the frozen generated RTL C++ artifact: no Chisel, RTL or Verilator build.
+on:
+  push:
+    branches:
+      - design/rv64gc-product-architecture-20261103
+    paths:
+      - '.github/workflows/product-g5-d2-portable-relay.yml'
+      - 'tools/ci/product_g5_d2_portable_relay.sh'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: product-g5-d2-portable-relay-v1
+  cancel-in-progress: false
+
+jobs:
+  golden-and-continue:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      MODEL_RUN: '42175820228'
+      GOLDEN_RUN: '42168606753'
+      MODEL_ARTIFACT_ID: '13483014390'
+      GOLDEN_ARTIFACT_ID: '13482712269'
+      ORIGIN_SHA: 99a5c86e99f52ed12f95b304635d77613c9505c4
+    steps:
+      - name: Checkout isolated portable relay helper
+        uses: actions/checkout@v4
+        with:
+          path: control
+          persist-credentials: false
+
+      - name: Checkout immutable model/host source
+        uses: actions/checkout@v4
+        with:
+          path: frozen-source
+          ref: 99a5c86e99f52ed12f95b304635d77613c9505c4
+          persist-credentials: false
+
+      - name: Bind stable recovered-output directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'ARTIFACT_OUT=%s/g5-d2-portable-out\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          bash -n control/tools/ci/product_g5_d2_portable_relay.sh
+          test "$(git -C frozen-source rev-parse HEAD)" = "$ORIGIN_SHA"
+
+      - name: Verify both source artifacts are the exact archived successful runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for name in model golden; do
+            if [[ "$name" == model ]]; then
+              run="$MODEL_RUN"; id="$MODEL_ARTIFACT_ID"
+              expect="product-g5-frozen-savable-99a5-42175820228"
+            else
+              run="$GOLDEN_RUN"; id="$GOLDEN_ARTIFACT_ID"
+              expect="g5-d2-checkpoint-42168606753"
+            fi
+            meta="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run")"
+            jq -e '.status=="completed" and .conclusion=="success" and
+                   .repository.full_name==$repo' --arg repo "$GITHUB_REPOSITORY" <<< "$meta" >/dev/null
+            artifact="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/$id")"
+            jq -e --argjson run "$run" --arg name "$expect" \
+              '.expired==false and .workflow_run.id==$run and .name==$name and .size_in_bytes>10000000' \
+              <<< "$artifact" >/dev/null
+            if [[ "$name" == model ]]; then
+              jq -e '.digest == "sha256:6ad18e7ed993d0552df7d0d69d9790886a53d9eee0f08d72a85b37b833cdedf8"' \
+                <<< "$artifact" >/dev/null
+            fi
+            printf 'G5_PORTABLE_SOURCE_VERIFIED kind=%s run=%s artifact_id=%s\n' "$name" "$run" "$id"
+          done
+
+      - name: Download exact Verilator-generated C++ + pinned runtime (no re-elaboration)
+        uses: actions/download-artifact@v4
+        with:
+          name: product-g5-frozen-savable-99a5-42175820228
+          run-id: 42175820228
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/g5-portable-model-source
+
+      - name: Download historical full golden 1.795B and 1.8B snapshots
+        uses: actions/download-artifact@v4
+        with:
+          name: g5-d2-checkpoint-42168606753
+          run-id: 42168606753
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/g5-portable-golden-source
+
+      - name: Rebuild all generated objects portable, prove byte-for-byte GOLDEN, smoke to 1.805B
+        id: qualify
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh prepare \
+            frozen-source "$RUNNER_TEMP/g5-portable-model-source" \
+            "$RUNNER_TEMP/g5-portable-golden-source" "$ARTIFACT_OUT"
+          cat "$ARTIFACT_OUT/model/identity.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Recover qualifying state even when the later 900M continuation fails
+        if: ${{ always() && steps.qualify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-qualified
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/logs/golden-*.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/smoke-*.log
+
+      - name: Portable RTL continuation stage 1/9 through 1.900B cycles
+        id: stage1
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 95000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 1
+        if: ${{ always() && steps.stage1.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage1
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 2/9 through 2.000B cycles
+        id: stage2
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 2
+        if: ${{ always() && steps.stage2.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage2
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 3/9 through 2.100B cycles
+        id: stage3
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 3
+        if: ${{ always() && steps.stage3.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage3
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 4/9 through 2.200B cycles
+        id: stage4
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 4
+        if: ${{ always() && steps.stage4.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage4
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 5/9 through 2.300B cycles
+        id: stage5
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 5
+        if: ${{ always() && steps.stage5.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage5
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 6/9 through 2.400B cycles
+        id: stage6
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 6
+        if: ${{ always() && steps.stage6.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage6
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 7/9 through 2.500B cycles
+        id: stage7
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 7
+        if: ${{ always() && steps.stage7.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage7
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 8/9 through 2.600B cycles
+        id: stage8
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 8
+        if: ${{ always() && steps.stage8.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage8
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Portable RTL continuation stage 9/9 through 2.700B cycles
+        id: stage9
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash control/tools/ci/product_g5_d2_portable_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist fully hashed portable G5 checkpoint stage 9
+        if: ${{ always() && steps.stage9.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-portable-${{ github.run_id }}-stage9
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-portable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-portable-out/model/identity.txt
+            ${{ runner.temp }}/g5-d2-portable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-portable-out/progress.log
+            ${{ runner.temp }}/g5-d2-portable-out/logs/*.log
+
+      - name: Verify final horizon and summarize portable replay
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$ARTIFACT_OUT/checkpoints/c2700000000"
+          test -s "$latest/COMPLETE"
+          (cd "$latest" && sha256sum --check --status COMPLETE)
+          grep -Fq 'qualification=HISTORICAL_1795_1800_FULL_HOST_RTL_BYTE_IDENTICAL' \
+            "$ARTIFACT_OUT/model/identity.txt"
+          cat "$latest/manifest.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo 'G5_D2_PORTABLE_FINAL_PASS cycles=2700000000 golden=byte-identical' >> "$GITHUB_STEP_SUMMARY"
+

@@ -73,4 +73,53 @@ class AetherSoCDtsSpec extends AnyFlatSpec with Matchers {
       AetherSoCDts.render(board, isa = "rv64ima_zicsr", mmu = "sv48")
     }
   }
+
+  it should "preserve legacy and RAM-only Product board selection without SPI nodes" in {
+    for ((product, sourceCount) <- Seq(false -> 16, true -> 52)) {
+      val selected = AetherSoCDtsBoardSelection.select(productBoard = product, spiSd = false)
+      selected.plicSourceCount shouldBe sourceCount
+      val text = AetherSoCDts.render(selected, enableSpiSd = false)
+      text should include(s"riscv,ndev = <${sourceCount}>;")
+      text should not include "mmc-spi-slot"
+      text should not include "opencores,tiny-spi-rtlsvn2"
+    }
+  }
+
+  it should "select Product PLIC 52 and the exact SPI clocks for SD media" in {
+    val selected = AetherSoCDtsBoardSelection.select(
+      productBoard = true,
+      spiSd = true,
+      spiClockHz = Some(48_000_000L),
+      spiMaxHz = Some(12_000_000L)
+    )
+    selected.plicSourceCount shouldBe 52
+    selected.spiBusClockFrequencyHz shouldBe 48_000_000L
+    selected.spiMaxFrequencyHz shouldBe 12_000_000L
+    val text = AetherSoCDts.render(selected, enableSpiSd = true)
+    text should include("riscv,ndev = <52>;")
+    text should include("compatible = \"opencores,tiny-spi-rtlsvn2\";")
+    text should include("compatible = \"mmc-spi-slot\";")
+    text should include("clock-frequency = <48000000>;")
+    text should include("spi-max-frequency = <12000000>;")
+  }
+
+  it should "reject SPI media and SPI-clock options outside their owning board profile" in {
+    val noProduct = intercept[IllegalArgumentException] {
+      AetherSoCDtsBoardSelection.select(productBoard = false, spiSd = true)
+    }
+    noProduct.getMessage should include("--spi-sd requires --product")
+
+    for (product <- Seq(false, true)) {
+      val clockWithoutSpi = intercept[IllegalArgumentException] {
+        AetherSoCDtsBoardSelection.select(
+          productBoard = product, spiSd = false, spiClockHz = Some(50_000_000L))
+      }
+      clockWithoutSpi.getMessage should include("require --spi-sd")
+      val maxWithoutSpi = intercept[IllegalArgumentException] {
+        AetherSoCDtsBoardSelection.select(
+          productBoard = product, spiSd = false, spiMaxHz = Some(12_500_000L))
+      }
+      maxWithoutSpi.getMessage should include("require --spi-sd")
+    }
+  }
 }

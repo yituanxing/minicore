@@ -1,0 +1,645 @@
+name: AetherCore Product SD1 official credential-free public artifact relay
+
+# Explicit first-party, public TEST media only. Each label event spends <=100M
+# real SD1 RTL cycles, broken into independently checked <=20M stages. A later
+# *new* label event can resume the exact latest sealed run artifact. This
+# background evidence lane intentionally runs the exact a15197f9 RTL source
+# which produced the first verified checkpoint; ongoing PR HEAD RTL changes
+# are NOT qualified by that old model and cannot silently reset its progress.
+# Never run on push, synchronize, schedule, workflow_run, forks or other images.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-official-public-relay-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  official-public-artifact-relay:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.label.name == 'product-sd1-public-artifact-relay' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      # Explicit frozen RTL/ABI source for the credential-free Debian longrun.
+      # To qualify NEW RTL, deliberately revise this pin after a new QEMU,
+      # full-media and checkpoint-compatibility preflight. Never infer a new
+      # RTL PASS merely because the development PR head moved forward.
+      TARGET_SHA: a15197f96e5869e69269202a0a9caffdbe1f5255
+      REVIEWED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_SD1_PUBLIC_ARTIFACT_CONFIRM: PUBLIC_CREDENTIAL_FREE_SD1_TEST
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY
+      AETHERCORE_ALLOW_PRODUCT_SD1_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      AETHERCORE_SD1_PERSISTENT_BOOT_CYCLES: '12000000'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout immutable first-party Product SD1 source without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Cheap source and permission contract before downloading any large input
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$TARGET_SHA" = a15197f96e5869e69269202a0a9caffdbe1f5255
+          [[ "$REVIEWED_PR_HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 19
+          [[ "$GITHUB_HEAD_REF" == design/rv64gc-product-architecture-20261103 ]] || exit 19
+          # A force-push that drops the reviewed frozen baseline MUST stop the
+          # background relay before any expensive work or artifact lookup.
+          comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$TARGET_SHA...$REVIEWED_PR_HEAD_SHA")"
+          jq -e --arg frozen "$TARGET_SHA" '
+            .merge_base_commit.sha == $frozen and .behind_by == 0 and
+            (.status == "ahead" or .status == "identical")
+          ' <<< "$comparison" >/dev/null || {
+            echo 'PUBLIC_SD1_FROZEN_SOURCE_NOT_ANCESTOR: checked PR no longer carries frozen RTL baseline' >&2
+            exit 19
+          }
+          echo "PUBLIC_SD1_RTL_FROZEN_LANE source_sha=$TARGET_SHA pr_head_sha=$REVIEWED_PR_HEAD_SHA qualification=FROZEN_RTL_ONLY_NOT_CURRENT_HEAD"
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          [[ -z "${RV64_SD1_LOGIN_USER:-}" && -z "${RV64_SD1_LOGIN_PASSWORD:-}" &&
+             -z "${RV64_SD1_LOGIN_PASSWORD_HASH:-}" &&
+             -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" &&
+             -z "${AETHERCORE_SD1_PERSISTENT_UART_COMMAND:-}" &&
+             -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 3
+          bash -n tools/ci/product_sd1_artifact_relay.sh \
+            tools/ci/product_sd1_checkpoint_relay.sh \
+            tools/ci/product_checkpoint_sd1_short.sh
+          python3 -m unittest tests_py.test_product_sd1_artifact_relay_contract -v
+          test -s software/rv64/product_sd1_official_seed.lock
+          ! grep -Eqi 'UNSET|PLACEHOLDER|TODO' software/rv64/product_sd1_official_seed.lock
+          echo 'PUBLIC_SD1_RELAY_SCOPE: official credential-free test only; at most 100M RTL cycles this run; no unverifiable PID1 claim'
+
+      - name: Pin immutable SD1 RTL model and simulator checkpoint compatibility
+        id: compat
+        shell: bash
+        run: |
+          set -euo pipefail
+          compat="$(bash tools/ci/product_sd1_artifact_relay.sh fingerprint)"
+          [[ "$compat" =~ ^PRODUCT_SD1_PUBLIC_ARTIFACT_COMPATIBILITY_SHA256=[a-f0-9]{64}$ ]] || exit 15
+          echo "sha256=${compat#*=}" >> "$GITHUB_OUTPUT"
+          echo "$compat"
+
+      - name: Require native Debian QEMU oracle PASS on unchanged boot and media inputs
+        id: qemu-gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The earlier official SD1 rootfs media seed is necessary but not
+          # sufficient: an authentic /sbin/init/agetty/login preflight must
+          # independently PASS before spending hours in Product RTL.
+          # Query ONLY this workflow. The repository has dozens of skipped
+          # workflows per PR label, so an unfiltered 100-run page drops a
+          # valid previous oracle after unrelated FPGA commits.
+          mapfile -t qemu_runs < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-native-qemu-oracle.yml/runs" -X GET \
+            -f event=pull_request -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
+            --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | [.id,.head_sha] | @tsv')
+          for entry in "${qemu_runs[@]}"; do
+            IFS=$'\t' read -r qemu_id qemu_sha <<< "$entry"
+            [[ "$qemu_sha" =~ ^[a-f0-9]{40}$ && "$qemu_id" =~ ^[0-9]+$ ]] || continue
+            if [[ "$qemu_sha" != "$TARGET_SHA" ]]; then
+              # Cross-revision reuse is permitted ONLY for an ancestor and
+              # an audited, small diff of non-QEMU/non-media files. No
+              # changes to seed, guest kernel, ABI, RTL, QEMU watcher, or
+              # common build inputs can pass this gate. A later SHA alone
+              # is not evidence that a rootfs boot remains qualified.
+              comparison="$(gh api "repos/$GITHUB_REPOSITORY/compare/$qemu_sha...$TARGET_SHA" 2>/dev/null)" || continue
+              jq -e --arg old "$qemu_sha" '
+                .merge_base_commit.sha == $old and .behind_by == 0 and
+                (.status == "ahead" or .status == "identical") and
+                (.total_commits | type == "number" and . <= 64) and
+                (.files | type == "array" and length < 300) and
+                all(.files[];
+                  .status != "renamed" and
+                  (.filename | test("^(docs/|tests_py/test_product_fpga_[^/]+[.]py$|tools/ci/product_fpga_[^/]+[.](sh|py)$|[.]github/workflows/product-fpga-[^/]+[.]yml$|[.]github/workflows/product-sd1-(official-artifact-relay|c1-checkpoint-relay)[.]yml$|tools/ci/product_sd1_(artifact_relay|c1_artifact_relay)[.]sh$|tests_py/test_product_sd1_(artifact_relay|c1_artifact_relay)_contract[.]py$|tests_py/test_product_sd1_cross_commit_qemu_gate_contract[.]py$|tools/ci/product_sd1_c1_qemu_watch[.]py$|tests_py/test_product_sd1_c1_qemu_oracle_contract[.]py$)"))
+                )
+              ' <<< "$comparison" >/dev/null || continue
+            fi
+            artifact="product-sd1-qemu-native-init-$qemu_id"
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$qemu_id/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$artifact"; then
+              echo "run_id=$qemu_id" >> "$GITHUB_OUTPUT"
+              echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+              echo "PUBLIC_SD1_RELAY_NATIVE_QEMU_GATE_SOURCE_READY run=$qemu_id oracle_sha=$qemu_sha target_sha=$TARGET_SHA"
+              exit 0
+            fi
+          done
+          echo 'PUBLIC_SD1_RELAY_QEMU_GATE_PENDING: unchanged QEMU/media source, SUCCESS oracle, and available SHA/UART evidence required before RTL longrun' >&2
+          exit 17
+
+      - name: Download bounded native Debian QEMU SHA and guest UART evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.qemu-gate.outputs.artifact }}
+          path: build/product-sd1-public-artifact-relay/qemu-evidence
+          run-id: ${{ steps.qemu-gate.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Restore exact previously frozen official Debian SD image and firmware
+        id: seed-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Verify signed official Debian/rootfs/image byte identity before costly work
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Exact v2 cache hits and the single pinned legacy v1 key are admissible;
+          # the following signed-media/whole-image SHA verifier is mandatory.
+          [[ '${{ steps.seed-cache.outputs.cache-hit }}' == true ||
+             ( '${{ steps.seed-cache.outputs.cache-hit }}' == false &&
+               '${{ steps.seed-cache.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+            echo 'PUBLIC_SD1_RELAY_SEED_CACHE_MISS: no speculative cold build or longrun' >&2
+            exit 16
+          }
+          python3 tools/ci/product_sd1_official_seed.py verify
+          grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
+            build/product-sd1-official-seed/console-provisioning.txt
+          grep -Fxq 'console_login_user=NONE' \
+            build/product-sd1-official-seed/console-provisioning.txt
+          bash tools/ci/product_sim_sd1_manual.sh preflight
+          oracle=build/product-sd1-public-artifact-relay/qemu-evidence
+          test -s "$oracle/result.txt"
+          test -s "$oracle/boot-result.txt"
+          test -s "$oracle/boot-uart.log"
+          grep -Fxq 'PRODUCT_SD1_QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL' \
+            "$oracle/boot-result.txt"
+          grep -Fxq 'root_mounted=ext4' "$oracle/boot-result.txt"
+          grep -Fxq 'native_pid1=/sbin/init' "$oracle/boot-result.txt"
+          grep -Fxq 'login_prompt=OBSERVED_NOT_AUTHENTICATED' "$oracle/boot-result.txt"
+          oracle_sd="$(sed -n 's/^sd_image_sha256=//p' "$oracle/result.txt")"
+          current_sd="$(sed -n 's/^sd_image_sha256=//p' build/rv64-debian-sd1-sd/result.txt)"
+          oracle_root="$(sed -n 's/^rootfs_result_sha256=//p' "$oracle/result.txt")"
+          current_root="$(sha256sum build/rv64-debian-rootfs/result.txt | cut -d' ' -f1)"
+          [[ "$oracle_sd" =~ ^[0-9a-f]{64}$ && "$oracle_sd" == "$current_sd" &&
+             "$oracle_root" =~ ^[0-9a-f]{64}$ && "$oracle_root" == "$current_root" ]] || {
+            echo 'PUBLIC_SD1_RELAY_QEMU_MEDIA_IDENTITY_MISMATCH: cannot reuse old oracle for different official seed' >&2
+            exit 18
+          }
+          echo 'PUBLIC_SD1_RELAY_OFFICIAL_MEDIA_PASS: fixed signed rootfs/SD/FW/DTB/Linux hash preflight; zero guest cycles'
+
+      - name: Re-key individually SHA-verified official Debian media without RTL source coupling
+        if: steps.seed-cache.outputs.cache-hit == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: ${{ steps.seed-cache.outputs.cache-primary-key }}
+
+      - name: Select newest verified successful or recovered public relay stage
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A previous run is a *hint*, never trusted until downloaded bytes,
+          # stage manifests and original simulator SHA have been checked.
+          compat='${{ steps.compat.outputs.sha256 }}'
+          [[ "$compat" =~ ^[a-f0-9]{64}$ ]] || exit 19
+          # A GitHub API error may NEVER be mistaken for "no prior state".
+          run_list="$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-official-artifact-relay.yml/runs" -X GET \
+            -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100)" || {
+            echo 'PUBLIC_SD1_RELAY_HISTORY_QUERY_FAILED: refusing unverified cold bootstrap' >&2
+            exit 22
+          }
+          jq -e '.workflow_runs | type == "array"' <<< "$run_list" >/dev/null || {
+            echo 'PUBLIC_SD1_RELAY_HISTORY_SCHEMA_INVALID: refuse unverified cold bootstrap' >&2
+            exit 22
+          }
+          candidate_lines="$(jq -r '
+            .workflow_runs[] |
+            select((.conclusion == "success" or .conclusion == "failure") and
+                   .head_repository.full_name == .repository.full_name) |
+            [.id,.head_sha,.conclusion] | @tsv
+          ' <<< "$run_list")" || {
+            echo 'PUBLIC_SD1_RELAY_HISTORY_PARSE_FAILED: refuse unverified cold bootstrap' >&2
+            exit 22
+          }
+          matching_runs=()
+          if [[ -n "$candidate_lines" ]]; then
+            mapfile -t matching_runs <<< "$candidate_lines"
+          fi
+          for entry in "${matching_runs[@]}"; do
+            IFS=$'\t' read -r candidate_id candidate_sha candidate_result <<< "$entry"
+            [[ "$candidate_sha" =~ ^[a-f0-9]{40}$ && "$candidate_id" =~ ^[0-9]+$ ]] || continue
+            # Exact compatibility key survives unrelated FPGA and document
+            # commits. An RTL/firmware/host/seed-input change creates a new
+            # name and never triggers unsafe reuse of a stale full snapshot.
+            if [[ "$candidate_result" == success ]]; then
+              expected="product-sd1-official-public-stage-$compat-$candidate_id"
+            elif [[ "$candidate_result" == failure ]]; then
+              expected="product-sd1-official-public-recovery-$compat-$candidate_id"
+            else
+              continue
+            fi
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate_id/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.expired == false) | .name' | grep -Fxq "$expected"; then
+              echo "source_run_id=$candidate_id" >> "$GITHUB_OUTPUT"
+              echo "source_artifact=$expected" >> "$GITHUB_OUTPUT"
+              echo "PUBLIC_SD1_RELAY_SOURCE_RUN=$candidate_id kind=$candidate_result exact_compat=$compat"
+              exit 0
+            fi
+          done
+          if (( ${#matching_runs[@]} )); then
+            echo 'PUBLIC_SD1_RELAY_PRIOR_STATE_UNAVAILABLE: historical run exists but no compatible unexpired verified artifact; refusing silent cold restart' >&2
+            exit 22
+          fi
+          # The first API page might contain 100 unrelated skipped label
+          # events while an older verified state lives on a later page.
+          # A truncated history is NOT evidence that first boot is safe.
+          history_total="$(jq -er '.total_count | select(type == "number" and . >= 0)' <<< "$run_list")" || exit 22
+          if (( history_total >= 100 )); then
+            echo 'PUBLIC_SD1_RELAY_HISTORY_TRUNCATED: prior state may be on a later page; refuse cold bootstrap' >&2
+            exit 22
+          fi
+          echo 'PUBLIC_SD1_RELAY_FIRST_BOOT: no prior completed artifact run exists; bounded 12M-cycle bootstrap permitted'
+
+      - name: Download only selected previous full-state public test artifact
+        if: steps.source.outputs.source_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.source_artifact }}
+          path: build/product-sd1-public-artifact-relay/source
+          run-id: ${{ steps.source.outputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify archived model and true host RTL/DDR/UART state before any restore
+        if: steps.source.outputs.source_run_id != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sd1_artifact_relay.sh verify \
+            build/product-sd1-public-artifact-relay/source
+          echo 'PUBLIC_SD1_RELAY_WARM_SOURCE_PASS: original savable executable+DDR/RTL/SD state and UART hashes match; NO cold boot'
+
+      # Only a first-run bootstrap needs the costly Scala/Verilator savable
+      # build. Subsequent cross-run continuations use the exact archived host
+      # executable SHA, never a rebuilt host-specific model cache/fingerprint.
+      - name: Restore proven Scala/Mill dependencies for first-run bootstrap
+        if: steps.source.outputs.source_run_id == ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator 5.054 from proven exact cache for first boot
+        if: steps.source.outputs.source_run_id == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: First-run Java 17 and pinned savable model toolchain
+        if: steps.source.outputs.source_run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/javac" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+            export JAVA_HOME="$java17_home"
+            export PATH="$JAVA_HOME/bin:$PATH"
+          fi
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          missing=()
+          for pair in 'bison:bison' 'flex:flex' 'dtc:device-tree-compiler' 'pahole:dwarves'; do
+            binary="${pair%%:*}"; package="${pair#*:}"
+            command -v "$binary" >/dev/null 2>&1 || missing+=("$package")
+          done
+          for package in libfl-dev libgmp-dev zlib1g-dev libssl-dev libelf-dev; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | \
+              grep -Fxq 'install ok installed' || missing+=("$package")
+          done
+          if (( ${#missing[@]} )); then
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 15m \
+              sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          AETHERCORE_VERILATOR_VERSION=5.054 bash tools/ensure_verilator_5_024.sh
+          timeout --signal=TERM --kill-after=10s 900s \
+            bash tools/ci/product_checkpoint_sd1_short.sh build
+
+      - name: Bootstrap once or continue in five verified 20M-cycle windows
+        id: stage
+        env:
+          PRODUCT_SD1_RELAY_COMPAT_SHA: ${{ steps.compat.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=build/product-sd1-public-artifact-relay
+          mkdir -p "$root/work" "$root/publish" "$root/analysis"
+          # Analysis is diagnostic only. Verify its independent SHA manifest
+          # before inheriting it; do not mix it into the savable model ABI.
+          if [[ -d "$root/source/analysis" ]]; then
+            test -f "$root/source/analysis/SHA256SUMS" || {
+              echo 'PUBLIC_SD1_ANALYSIS_MANIFEST_MISSING: refuse unverified inherited evidence' >&2
+              exit 21
+            }
+            [[ -z "$(find "$root/source/analysis" -type l -print -quit)" ]] || exit 21
+            (cd "$root/source/analysis" && sha256sum --check --status SHA256SUMS)
+            cp -a -- "$root/source/analysis/." "$root/analysis/"
+            rm -f -- "$root/analysis/SHA256SUMS"
+          fi
+          # Record runner identity and CPU to separate Linux-phase and
+          # host-capacity effects in later timing analysis.
+          {
+            printf 'run_id=%s\nrunner_name=%s\nrunner_os=%s\nrunner_arch=%s\n' \
+              "$GITHUB_RUN_ID" "${RUNNER_NAME:-unknown}" "$RUNNER_OS" "$RUNNER_ARCH"
+            printf 'sim_settle_mode=%s\nverilator_threads=%s\n' \
+              "$SIM_SETTLE_MODE" "$VERILATOR_THREADS"
+            uname -a
+            lscpu
+          } > "$root/analysis/runner-$GITHUB_RUN_ID.txt"
+          if [[ -n '${{ steps.source.outputs.source_run_id }}' ]]; then
+            current="$root/source"
+          else
+            current="$root/work/first"
+            bash tools/ci/product_sd1_artifact_relay.sh bootstrap "$current"
+          fi
+          initial="$(sed -n 's/^cycles=//p' "$current/artifact-manifest.txt")"
+          [[ "$initial" =~ ^[1-9][0-9]*$ ]]
+          maximum=$((initial + 100000000))
+          (( maximum <= 4000000000 )) || maximum=4000000000
+          # A completed native login is terminal. Never spend another 100M
+          # cycles just because the operator re-attached the same label.
+          observed="$(python3 tools/ci/product_sd1_relay_state.py --snapshot "$current")"
+          terminal="$(python3 -c 'import json,sys; x=json.loads(sys.argv[1].partition(" ")[2]); print(int(x["login"] and x["ext4_root_mounted"] and x["native_init_started"]))' "$observed")"
+          [[ "$terminal" == 0 || "$terminal" == 1 ]]
+          printf '%s\n' "$observed" > "$root/analysis/start-state-$GITHUB_RUN_ID.txt"
+          if [[ "$terminal" == 1 ]]; then
+            echo 'native_login=1' >> "$GITHUB_OUTPUT"
+            echo "PUBLIC_SD1_RELAY_NATIVE_LOGIN_ALREADY_PASS: cycle=$initial; reuse verified terminal state"
+          fi
+          for step in 1 2 3 4 5; do
+            [[ "$terminal" == 0 ]] || break
+            old="$(sed -n 's/^cycles=//p' "$current/artifact-manifest.txt")"
+            (( old < maximum )) || break
+            next=$((old + 20000000))
+            (( next <= maximum )) || next="$maximum"
+            target="$root/work/step-$step"
+            previous="$current"
+            started_seconds="$SECONDS"
+            started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            bash tools/ci/product_sd1_artifact_relay.sh advance "$previous" "$target" "$next" \
+              | tee "$root/work/step-$step.log"
+            elapsed_seconds=$((SECONDS - started_seconds))
+            finished_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            # Each completed 20M window gets independent, source-attributed
+            # performance evidence even when a later window fails.
+            cp -- "$target/save.log" "$root/analysis/run-$GITHUB_RUN_ID-step-$step-save.log"
+            cp -- "$root/work/step-$step.log" "$root/analysis/run-$GITHUB_RUN_ID-step-$step-relay.log"
+            python3 - "$previous" "$target" "$root/analysis/segments.jsonl" \
+              "$GITHUB_RUN_ID" "$step" "$elapsed_seconds" "$started_utc" "$finished_utc" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          sys.path.insert(0, str(Path.cwd() / "tools/ci"))
+          from product_sd1_relay_state import (
+              decode, sha256, MAGIC, VERSION, MAX_UART, read_exact, read_u64, read_string
+          )
+          before_host = Path(sys.argv[1]) / "persistent.pre.host"
+          after_host = Path(sys.argv[2]) / "persistent.pre.host"
+          old = decode(before_host)
+          new = decode(after_host)
+          if old["identity"] != new["identity"]:
+              raise ValueError("SD1 frozen model/media identities changed within relay")
+          # Read only the bounded UART preamble; never allocate the 256 MiB DDR
+          # payload or change the original savable checkpoint representation.
+          def extract_uart(host):
+              with host.open("rb") as stream:
+                  if read_exact(stream, 8) != MAGIC or read_u64(stream) != VERSION:
+                      raise ValueError("wrong SD1 UART host checkpoint schema")
+                  for _ in range(6):
+                      read_string(stream, 128)
+                  read_string(stream, 128)
+                  read_string(stream, 4096)
+                  for _ in range(18):
+                      read_u64(stream)
+                  return read_string(stream, MAX_UART)
+          prior_uart = extract_uart(before_host)
+          current_uart = extract_uart(after_host)
+          if len(prior_uart) != old["uart_bytes"] or len(current_uart) != new["uart_bytes"]:
+              raise ValueError("SD1 UART byte count differs from verified observer")
+          if not current_uart.startswith(prior_uart):
+              raise ValueError("SD1 UART is not append-only across relay stage")
+          analysis = Path(sys.argv[3]).parent
+          uart_delta = current_uart[len(prior_uart):]
+          (analysis / f"uart-delta-run-{sys.argv[4]}-step-{sys.argv[5]}.bin").write_bytes(uart_delta)
+          (analysis / "uart-cumulative-latest.log").write_bytes(current_uart)
+          # Missing SPI counters remain null, never inferred as zero.
+          saved = (Path(sys.argv[2]) / "save.log").read_text(errors="replace")
+          sd_observed = {}
+          for key in ("sd-cmds", "sd-reads", "sd-writes", "sd-init", "sd-cow-sectors"):
+              values = re.findall(r"(?<![A-Za-z0-9-])" + re.escape(key) + r"=(\d+)", saved)
+              sd_observed[key.replace("-", "_")] = int(values[-1]) if values else None
+          # Guest printk timestamps measure kernel clock time, never
+          # simulator wall time. Keep the largest invisible-print interval
+          # as a diagnostic signal, not a proven stalled initcall.
+          printk_pattern = re.compile(rb"(?m)^\[\s*(\d+\.\d+)\]\s*([^\r\n]*)")
+          prior_printk = list(printk_pattern.finditer(prior_uart))
+          current_printk = list(printk_pattern.finditer(current_uart))
+          printk_times = [float(m.group(1)) for m in current_printk]
+          max_gap = max((b - a for a, b in zip(printk_times, printk_times[1:])), default=None)
+          last_printk = current_printk[-1] if current_printk else None
+          duration = int(sys.argv[6])
+          cycles = int(new["cycles"]) - int(old["cycles"])
+          retired = int(new["commits"]) - int(old["commits"])
+          record = {
+              "run_id": int(sys.argv[4]), "window": int(sys.argv[5]),
+              "started_utc": sys.argv[7], "finished_utc": sys.argv[8],
+              "runner_name": os.environ.get("RUNNER_NAME", "unknown"),
+              "frozen_rtl_sha": os.environ["TARGET_SHA"],
+              "compatibility_sha256": os.environ["PRODUCT_SD1_RELAY_COMPAT_SHA"],
+              "identity_sha256": dict(zip(
+                  ("model", "firmware", "dtb", "sd_image", "linux_image", "rootfs_result"),
+                  new["identity"]
+              )),
+              "from_cycle": old["cycles"], "to_cycle": new["cycles"],
+              "from_commits": old["commits"], "to_commits": new["commits"],
+              "retired_delta": retired,
+              "cpi": round(cycles / retired, 5) if retired else None,
+              "wall_seconds": duration,
+              "cycles_per_wall_second": round(cycles / duration, 1) if duration else None,
+              "uart_bytes_before": old["uart_bytes"], "uart_bytes_after": new["uart_bytes"],
+              "uart_delta_bytes": len(uart_delta),
+              "uart_hash": new["uart_hash"],
+              "uart_cumulative_sha256": hashlib.sha256(current_uart).hexdigest(),
+              "uart_delta_sha256": hashlib.sha256(uart_delta).hexdigest(),
+              "guest_kernel_clock_not_rtl_wall": True,
+              "last_guest_printk_sec": float(last_printk.group(1)) if last_printk else None,
+              "last_printk_line": last_printk.group(2).decode("utf-8", "replace")[:180] if last_printk else None,
+              "new_printk_lines": len(current_printk) - len(prior_printk),
+              "max_inter_printk_gap_sec": round(max_gap, 6) if max_gap is not None else None,
+              "sd_observed": sd_observed,
+              "opensbi": new["opensbi"], "ext4": new["ext4_root_mounted"],
+              "native_init": new["native_init_started"], "login": new["login"],
+              "failure": new["failure"],
+              "host_snapshot_sha256": sha256(after_host),
+          }
+          with Path(sys.argv[3]).open("a", encoding="utf-8") as out:
+              out.write(json.dumps(record, sort_keys=True) + "\n")
+          PY
+            current="$target"
+            if grep -Fq 'PRODUCT_SD1_PUBLIC_ARTIFACT_NATIVE_GETTY_PROMPT_PASS ' \
+              "$root/work/step-$step.log"; then
+              echo 'native_login=1' >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+          bash tools/ci/product_sd1_artifact_relay.sh verify "$current"
+          # Publish an artifact only after its final stage has been verified.
+          cp -a -- "$current/." "$root/publish/"
+          bash tools/ci/product_sd1_artifact_relay.sh verify "$root/publish"
+          # Auxiliary analysis has its own digest; no change to AETSDCP1.
+          (cd "$root/analysis" &&
+            find . -type f ! -name SHA256SUMS -print0 | sort -z |
+            xargs -0 sha256sum > SHA256SUMS)
+          mkdir -p "$root/publish/analysis"
+          cp -a -- "$root/analysis/." "$root/publish/analysis/"
+          echo "cycles=$(sed -n 's/^cycles=//p' "$root/publish/artifact-manifest.txt")" >> "$GITHUB_OUTPUT"
+          echo "commits=$(sed -n 's/^commits=//p' "$root/publish/artifact-manifest.txt")" >> "$GITHUB_OUTPUT"
+          echo 'ready=1' >> "$GITHUB_OUTPUT"
+          echo "PRODUCT_SD1_PUBLIC_ARTIFACT_PUBLISH_READY cycles=$(sed -n 's/^cycles=//p' "$root/publish/artifact-manifest.txt")" \
+            | tee "$root/publish/status.txt"
+
+      - name: Publish credential-free exact-model full-state relay artifact for next run
+        if: success() && steps.stage.outputs.ready == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-${{ github.run_id }}
+          path: build/product-sd1-public-artifact-relay/publish/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 1
+          retention-days: 90
+
+      - name: Publish strict stage result; login only when UART and guest init prove it
+        if: success() && steps.stage.outputs.ready == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## Official Debian SD1 public credential-free RTL relay'
+            echo "- Frozen RTL source: $TARGET_SHA"
+            echo "- Current PR HEAD: $REVIEWED_PR_HEAD_SHA (NOT qualified by frozen RTL run)"
+            echo '- Media: exact signed official SD1 seed cache; SHA cross-checked'
+            echo "- Retirement state: ${{ steps.stage.outputs.commits }} instructions / ${{ steps.stage.outputs.cycles }} RTL cycles"
+            echo "- Next-run artifact: product-sd1-official-public-stage-${{ steps.compat.outputs.sha256 }}-$GITHUB_RUN_ID (90 days)"
+            echo '- Full RTL/DDR/card and original portable savable simulator SHA: checked'
+            if [[ '${{ steps.stage.outputs.native_login }}' == 1 ]]; then
+              echo '- **NATIVE GETTY PROMPT PASS**: UART login, ext4 root, and /sbin/init seen in same original host checkpoint'
+            else
+              echo '- **NOT YET NATIVE LOGIN PASS**: eligible for the next manual label event, no success inference from a green CI job'
+            fi
+            echo '- Public test snapshots contain NO provisioned guest credentials; do not use this path with private images'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A later window can fail after an earlier one has been fully sealed.
+      # Preserve ONLY the most recent verified good window; keep the run red.
+      - name: Recover last individually verified window on later failure
+        if: failure() && steps.stage.outcome == 'failure'
+        id: salvage
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=build/product-sd1-public-artifact-relay
+          mkdir -p "$root/analysis"
+          for log in "$root"/work/step-*.log; do
+            [[ -f "$log" ]] || continue
+            cp -- "$log" "$root/analysis/run-$GITHUB_RUN_ID-failure-$(basename "$log")"
+          done
+          for n in 5 4 3 2 1; do
+            candidate="$root/work/step-$n"
+            [[ -f "$candidate/ARTIFACT_COMPLETE" ]] || continue
+            if bash tools/ci/product_sd1_artifact_relay.sh verify "$candidate"; then
+              mkdir -p "$root/recovery"
+              cp -a -- "$candidate/." "$root/recovery/"
+              (cd "$root/analysis" &&
+                find . -type f ! -name SHA256SUMS -print0 | sort -z |
+                xargs -0 sha256sum > SHA256SUMS)
+              cp -a -- "$root/analysis" "$root/recovery/analysis"
+              echo "ready=1" >> "$GITHUB_OUTPUT"
+              echo "PUBLIC_SD1_VERIFIED_PARTIAL_SALVAGED window=$n"
+              exit 0
+            fi
+          done
+          echo 'PUBLIC_SD1_NO_VERIFIED_PARTIAL: source artifact remains intact'
+
+      - name: Upload only independently verified partial on failure
+        if: failure() && steps.salvage.outputs.ready == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-official-public-recovery-${{ steps.compat.outputs.sha256 }}-${{ github.run_id }}
+          path: build/product-sd1-public-artifact-relay/recovery/
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 1
+          retention-days: 90
+
+      - name: Retain per-window Linux boot analysis
+        if: always() && (steps.stage.outcome == 'success' || steps.stage.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-public-boot-analysis-${{ github.run_id }}
+          path: build/product-sd1-public-artifact-relay/analysis/
+          if-no-files-found: error
+          retention-days: 90

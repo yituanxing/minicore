@@ -1,0 +1,830 @@
+name: AetherCore Product G5 Real Debian RV64GC Dynamic PID1
+
+# A real Debian userspace can require billions of slow RTL cycles. Full Product
+# Debian qualification is manual-only; source edits must never queue it.
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: First qualify a short same-cycle Debian Top A/B; full PID1 is explicitly opt-in
+        required: true
+        type: choice
+        options: [short-ab, full]
+        default: short-ab
+      verilator_version:
+        description: Full runs default to 5.054 (bounded Debian Top A/B required); 5.024 is an explicit fallback
+        required: true
+        type: choice
+        options: ['5.054', '5.024']
+        default: '5.054'
+      settle_mode:
+        description: Fixed reference or Product-qualified adaptive memory settle
+        required: true
+        type: choice
+        options: [reference, adaptive]
+        default: reference
+      debian_stage:
+        description: D1 glibc PID1, D2 native processes/filesystems, or D3 full native Debian login prompt
+        required: true
+        type: choice
+        options: [d1, d2, d3]
+        default: d2
+      full_rootfs_archive_url:
+        description: D3 only; explicit HTTPS URL of a complete native Debian riscv64 tar archive
+        required: false
+        type: string
+      full_rootfs_sha256:
+        description: D3 only; exact 64-digit SHA256 of that archive
+        required: false
+        type: string
+  # This workflow exists only on the Product PR branch until merged. GitHub
+  # cannot workflow_dispatch a workflow absent from the default branch; a
+  # specifically named human-added label is the PR-safe manual entry point.
+  # product-g5-short-ab: D2 + independent 5.024/5.054 30M-cycle A/B only.
+  # product-g5-longrun: explicit ONE D2 late-boot forensic run with savable
+  # 5.054, one cold prefix and a restartable full-RTL continuation. This path
+  # never executes either performance A/B or the throwaway non-savable model.
+  # product-g5-resume-artifact: import archived 900M Product RTL/DDR state,
+  # reproduce its original 900.5M golden continuation byte for byte with the
+  # newly rebuilt exact-source simulator (runner native-code hashes can vary),
+  # then resume at 900.5M to precisely 950M in bounded restore processes.
+  # There is no cold replay, watchdog, or relaxed unverified model identity.
+  # D3 requires URL and SHA inputs and therefore remains unavailable until
+  # this workflow reaches main (or a separately qualified artifact bridge).
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: aethercore-product-g5-debian-${{ github.event.pull_request.number || github.ref }}
+  # A human chooses whether to stop an already running milestone.
+  cancel-in-progress: false
+
+jobs:
+  product-debian-rv64gc:
+    name: Product SmallOoO RV64GC bounded A/B or manual Debian D1/D2/D3
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       (github.event.label.name == 'product-g5-short-ab' ||
+        github.event.label.name == 'product-g5-longrun' ||
+        github.event.label.name == 'product-g5-resume-artifact'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      # Source, RTL and firmware are pinned; a Golden equivalence bridge below
+      # tests rebuilt host compatibility before using historic model identity.
+      TARGET_SHA: ${{ github.event.label.name == 'product-g5-resume-artifact' && '99a5c86e99f52ed12f95b304635d77613c9505c4' || github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_G5_RESUME_ONLY: ${{ github.event.label.name == 'product-g5-resume-artifact' && '1' || '0' }}
+      AETHERCORE_G5_FORENSIC: ${{ github.event_name == 'pull_request' && (github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact') && '1' || '0' }}
+      AETHERCORE_G5_RUN_MODE: ${{ github.event.label.name == 'product-g5-short-ab' && 'short-ab' || inputs.run_mode || 'full' }}
+      AETHERCORE_VERILATOR_VERSION: ${{ (github.event.label.name == 'product-g5-short-ab' || github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact' || inputs.run_mode == 'short-ab') && '5.054' || inputs.verilator_version || '5.054' }}
+      SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
+      RV64_DEBIAN_STAGE: ${{ inputs.debian_stage || 'd2' }}
+      # Keep short same-cycle A/B concise; a consciously selected full boot
+      # records initcall entry/return so a late-boot stall is not anonymous.
+      RV64_DEBIAN_INITCALL_TRACE: ${{ (github.event.label.name == 'product-g5-longrun' || github.event.label.name == 'product-g5-resume-artifact' || inputs.run_mode == 'full') && '1' || '0' }}
+      RV64_DEBIAN_FULL_ROOTFS_URL: ${{ inputs.full_rootfs_archive_url }}
+      RV64_DEBIAN_FULL_ROOTFS_SHA256: ${{ inputs.full_rootfs_sha256 }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Reject unsupported or unqualified simulation modes before heavy setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$AETHERCORE_G5_RUN_MODE" == short-ab || "$AETHERCORE_G5_RUN_MODE" == full ]] || {
+            echo 'unknown G5 run mode' >&2; exit 20;
+          }
+          [[ "$SIM_SETTLE_MODE" == reference &&
+             ( "$AETHERCORE_VERILATOR_VERSION" == 5.024 || "$AETHERCORE_VERILATOR_VERSION" == 5.054 ) ]] || {
+            echo 'G5 only allows 5.024/5.054 reference; adaptive requires an independent Debian Top proof' >&2
+            exit 20
+          }
+          if [[ "$AETHERCORE_G5_RUN_MODE" == short-ab ]]; then
+            [[ "$AETHERCORE_VERILATOR_VERSION" == 5.054 ]] || exit 20
+            echo 'PRODUCT_G5_SHORT_AB_ONLY: no full PID1 or distribution longrun in this job'
+          fi
+
+      - name: Reject unsupported or underspecified Debian stage before heavy work
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RV64_DEBIAN_STAGE" in d1|d2) ;; d3)
+            [[ "$RV64_DEBIAN_FULL_ROOTFS_URL" == https://* ]] || {
+              echo 'D3 requires a full native Debian riscv64 HTTPS rootfs archive URL' >&2
+              exit 17
+            }
+            [[ "$RV64_DEBIAN_FULL_ROOTFS_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || {
+              echo 'D3 requires an exact 64-digit rootfs SHA256' >&2
+              exit 18
+            }
+            ;; *) echo "unknown Debian stage: $RV64_DEBIAN_STAGE" >&2; exit 19 ;;
+          esac
+
+      - name: Install fixed RTL and upstream Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves qemu-user
+          docker version
+
+      - name: Restore selected pinned Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-${{ env.AETHERCORE_VERILATOR_VERSION }}-v2-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-${{ env.AETHERCORE_VERILATOR_VERSION }}-v2-
+
+      - name: Restore fixed RV64 GCC cache from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore fixed Scala dependencies from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified upstream Linux and OpenSBI from G4
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Provision selected pinned Verilator and frozen GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          chmod +x ./mill tools/ensure_verilator_5_024.sh tools/ensure_verilator_5_054.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh
+          # The generic 5.024 installer honors AETHERCORE_VERILATOR_VERSION.
+          # In short A/B this job is 5.054; pin the reference explicitly or
+          # the next line just installs 5.054 twice and preflight fails.
+          if [[ "$AETHERCORE_G5_FORENSIC" != 1 ]]; then
+            AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ensure_verilator_5_024.sh
+          fi
+          if [[ "$AETHERCORE_VERILATOR_VERSION" == 5.054 ]]; then
+            bash tools/ensure_verilator_5_054.sh
+          fi
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          toolchain_root="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}"
+          verilator_bin="$toolchain_root/verilator-$AETHERCORE_VERILATOR_VERSION/bin/verilator"
+          [[ -x "$verilator_bin" ]] || { echo 'Pinned selected Product G5 Verilator missing' >&2; exit 21; }
+          case "$AETHERCORE_VERILATOR_VERSION" in
+            5.024) expected_revision=522bead374d6b7b2adb316304126e5361b18bcf1 ;;
+            5.054) expected_revision=bbb60a403932a9f695cb6ff001ceb73de6ad9234 ;;
+            *) exit 22 ;;
+          esac
+          [[ "$(< "$toolchain_root/verilator-$AETHERCORE_VERILATOR_VERSION/.aethercore-source-revision")" == "$expected_revision" ]] || {
+            echo 'Pinned Product G5 Verilator source revision mismatch' >&2
+            exit 22
+          }
+          echo "PRODUCT_VERILATOR_BIN=$verilator_bin" >> "$GITHUB_ENV"
+
+      - name: Save selected Verilator toolchain for future Product runs
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: ${{ steps.verilator-cache.outputs.cache-primary-key }}
+
+      - name: Build qualified unchanged upstream Linux baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -qx 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' \
+            build/rv64-linux-early/result.txt
+
+      - name: Require independently sourced full Debian rootfs for D3
+        if: env.RV64_DEBIAN_STAGE == 'd3'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RV64_DEBIAN_FULL_ROOTFS_URL" == https://* ]] || {
+            echo 'D3 explicitly requires an HTTPS full Debian riscv64 rootfs archive; no slim-rootfs fallback' >&2
+            exit 17
+          }
+          [[ "$RV64_DEBIAN_FULL_ROOTFS_SHA256" =~ ^[[:xdigit:]]{64}$ ]] || {
+            echo 'D3 requires the exact full rootfs archive SHA256' >&2
+            exit 18
+          }
+          archive="$RUNNER_TEMP/aethercore-debian-d3-full-rootfs.tar"
+          curl --fail --location --show-error --silent --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            "$RV64_DEBIAN_FULL_ROOTFS_URL" -o "$archive"
+          printf '%s  %s\n' "$RV64_DEBIAN_FULL_ROOTFS_SHA256" "$archive" | sha256sum -c -
+          echo "RV64_DEBIAN_FULL_ROOTFS_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Provision selected native Debian riscv64 rootfs and verify LP64D dynamic ELF
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -qx 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-rootfs/result.txt
+
+      - name: Cheap Debian and D2 native-oracle preflight before Product RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          rootfs="$(sed -n 's/^rootfs=//p' build/rv64-debian-rootfs/result.txt | head -n 1)"
+          qemu-riscv64 -L "$rootfs" "$rootfs/bin/dash" -c \
+            'printf "DEBIAN_QEMU_DYNAMIC_SHELL_OK\n"'
+          arch="$(qemu-riscv64 -L "$rootfs" "$rootfs/usr/bin/dpkg" --print-architecture)"
+          test "$arch" = riscv64
+          echo 'DEBIAN_QEMU_LP64D_ORACLE_PASS: unmodified Debian ELF and loader ran under QEMU'
+          if [[ "$RV64_DEBIAN_STAGE" == d2 ]]; then
+            # Product D2 cannot spend ~1.8 billion RTL cycles merely to learn
+            # that a cross-glibc binary, F/D, pthread/futex or mmap probe is
+            # broken. QEMU-user is a host/kernel compatibility oracle ONLY;
+            # it does not qualify the Product RTL implementation.
+            probe="$rootfs/usr/local/libexec/aethercore-d2-native-probe"
+            test -x "$probe"
+            probe_log="$RUNNER_TEMP/aethercore-product-d2-qemu-native.log"
+            qemu-riscv64 -L "$rootfs" "$probe" > "$probe_log" 2>&1 || {
+              cat "$probe_log" >&2
+              echo 'D2 native probe fails in QEMU-user: refusing expensive RTL' >&2
+              exit 31
+            }
+            grep -Fxq 'AETHERCORE_D2_NATIVE_FP_THREADS_FUTEX_VM_OK' "$probe_log" || {
+              cat "$probe_log" >&2
+              echo 'D2 native probe marker missing under QEMU-user' >&2
+              exit 32
+            }
+            echo 'DEBIAN_D2_NATIVE_QEMU_ORACLE_PASS: native LP64D F/D, threads, futex, VM and signals'
+          fi
+          if [[ "$RV64_DEBIAN_STAGE" == d3 ]]; then
+            # Do NOT qemu-user launch a real PID1: boot/service management
+            # belongs to the actual kernel. Just reject invalid native ELF
+            # or missing guest interpreter before the huge RTL run.
+            for path in sbin/init usr/sbin/agetty usr/bin/login; do
+              binary="$rootfs/$path"
+              if [[ ! -x "$binary" ]]; then
+                case "$path" in
+                  usr/sbin/agetty) binary="$rootfs/sbin/agetty" ;;
+                  usr/bin/login) binary="$rootfs/bin/login" ;;
+                esac
+              fi
+              test -x "$binary"
+              metadata="$(readelf -h -l -A "$binary")"
+              grep -q 'Class:[[:space:]]*ELF64' <<< "$metadata"
+              grep -q 'Machine:[[:space:]]*RISC-V' <<< "$metadata"
+              grep -q 'double-float ABI' <<< "$metadata"
+              interpreter="$(sed -n 's/^.*Requesting program interpreter: \([^]]*\)].*$/\1/p' <<< "$metadata")"
+              if [[ -n "$interpreter" ]]; then
+                [[ "$interpreter" == /* && -f "$rootfs$interpreter" ]] || {
+                  echo "D3 native ELF $binary references missing guest interpreter $interpreter" >&2
+                  exit 33
+                }
+              fi
+            done
+            echo 'DEBIAN_D3_NATIVE_ELF_INTERPRETER_PREFLIGHT_PASS: init/getty/login identity only; no init launched'
+          fi
+
+      - name: Build real RV64GC FPU/C Linux, DTB and OpenSBI payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_debian_linux_build.sh
+          bash tools/ci/rv64_debian_payload_build.sh
+          grep -qx 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-boot/result.txt
+          if [[ "$RV64_DEBIAN_INITCALL_TRACE" == 1 ]]; then
+            grep -Fq 'initcall_debug loglevel=8' build/rv64-debian-boot/result.txt || {
+              echo 'Full G5 diagnosis lost initcall trace bootargs' >&2
+              exit 35
+            }
+          fi
+          payload=build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          test -s "$payload"
+          bytes="$(stat -c%s "$payload")"
+          if (( bytes > 268435456 )); then
+            echo "Product D${RV64_DEBIAN_STAGE#d} payload is ${bytes} bytes; simulator RAM is limited to 256MiB (268435456 bytes)" >&2
+            echo 'Refuse oversized native initramfs now, before Product RTL model build or long-run' >&2
+            exit 34
+          fi
+
+      - name: Download exact prior 900M G5 RTL/DDR state (no cold execution)
+        if: env.AETHERCORE_G5_RESUME_ONLY == '1'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42028338206
+          name: aethercore-product-g5-debian-42028338206
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/g5-900m-source-artifact
+
+      - name: Verify and stage original 900M same-image Product checkpoint
+        if: env.AETHERCORE_G5_RESUME_ONLY == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == 99a5c86e99f52ed12f95b304635d77613c9505c4 ]] || {
+            echo 'G5 resume must use the exact historic code, never current mutable PR head' >&2; exit 41;
+          }
+          staged="$RUNNER_TEMP/g5-900m-source-artifact/minicore/minicore/build/product-g5-long-forensic"
+          target="$GITHUB_WORKSPACE/build/product-g5-long-forensic"
+          [[ -d "$staged" && ! -L "$staged" && ! -e "$target" ]] || {
+            echo 'Original 900M artifact layout differs, or destination already exists' >&2; exit 42;
+          }
+          [[ -z "$(find "$staged" -type l -print -quit)" ]] || {
+            echo 'Refuse symlinks in imported 900M checkpoint evidence' >&2; exit 42;
+          }
+          for required in identity.txt pre.sha256 persistent.pre.rtl persistent.pre.host \
+              persistent.restored.rtl persistent.restored.host \
+              persistent.continuous.rtl persistent.continuous.host \
+              restored.state continuous.state save.log restore.log; do
+            [[ -s "$staged/$required" ]] || { echo "Missing original checkpoint $required" >&2; exit 43; }
+          done
+          for expected in \
+              'model_sha256=aa35c80024238420bea3976db677db2e0ef028aad9800482926b926e50155b71' \
+              'firmware_sha256=d525de6a58422de93da6de5312d38867611153da94c580bca31f90ebf13eff2c' \
+              'linux_image_sha256=02f054667dd67028545c20929b1e332d1a0ff358280ab431ce479f87f72345af' \
+              'rootfs_result_sha256=7b664594a266914585d2621e6ec1e918b60721ee6c5ba7e810cebc9e70f9edb5' \
+              'vmlinux_sha256=6f5afbdc6fabd14819219d4928289c163d73f3aee9b38c72c4c866b1c50c5c69' \
+              'checkpoint_cycles=900000000' \
+              'top=AetherCoreProductDebianRV64SimTop'; do
+            grep -Fxq "$expected" "$staged/identity.txt" || {
+              echo "Original G5 checkpoint identity mismatch: $expected" >&2; exit 44;
+            }
+          done
+          [[ "$(stat -c%s "$staged/persistent.pre.host")" -gt 268435456 &&
+             "$(head -c8 "$staged/persistent.pre.host")" == AETG5CP1 ]] || {
+            echo 'Imported 900M host RAM state damaged' >&2; exit 45;
+          }
+          (cd "$staged" && sha256sum --check --status pre.sha256) || {
+            echo 'Imported 900M RTL+DDR digest mismatch' >&2; exit 46;
+          }
+          cmp "$staged/persistent.continuous.rtl" "$staged/persistent.restored.rtl" || {
+            echo 'Prior golden 900.5M RTL self-replay does not match' >&2; exit 46;
+          }
+          cmp "$staged/persistent.continuous.host" "$staged/persistent.restored.host" || {
+            echo 'Prior golden 900.5M host/DDR self-replay does not match' >&2; exit 46;
+          }
+          cmp "$staged/continuous.state" "$staged/restored.state" || {
+            echo 'Prior golden 900.5M observer trace does not match' >&2; exit 46;
+          }
+          image="$(sed -n 's/^linux_image=//p' build/rv64-debian-boot/result.txt | head -1)"
+          [[ -s "$image" &&
+             "$(sha256sum "$image" | awk '{print $1}')" == 02f054667dd67028545c20929b1e332d1a0ff358280ab431ce479f87f72345af &&
+             "$(sha256sum build/rv64-debian-rootfs/result.txt | awk '{print $1}')" == 7b664594a266914585d2621e6ec1e918b60721ee6c5ba7e810cebc9e70f9edb5 &&
+             "$(sha256sum build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin | awk '{print $1}')" == d525de6a58422de93da6de5312d38867611153da94c580bca31f90ebf13eff2c &&
+             "$(sha256sum build/rv64-debian-linux/obj/vmlinux | awk '{print $1}')" == 6f5afbdc6fabd14819219d4928289c163d73f3aee9b38c72c4c866b1c50c5c69 ]] || {
+            echo 'Current Product rootfs/Image/firmware/vmlinux differs from archived 900M inputs' >&2; exit 47;
+          }
+          # Original artifact lives in RUNNER_TEMP, outside the upload path.
+          # Never mutate or re-upload the 1.1GB immutable checkpoint history.
+          echo "G5_ORIGINAL_PROOF_DIR=$staged" >> "$GITHUB_ENV"
+          echo 'PRODUCT_G5_ARCHIVED_900M_ARTIFACT_PASS source_sha=99a5c86 input_sha256=PASS old_900p5m_self_replay=IDENTICAL cold_replayed=0'
+
+      - name: Fingerprint exact Product Debian RTL and simulator inputs
+        if: env.AETHERCORE_G5_FORENSIC != '1'
+        id: model-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          key="$(bash tools/ci/product_sim_cache.sh fingerprint "$RUNNER_TEMP/aethercore-product-g5-debian/model" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore identical compiled Product Debian RTL model
+        if: env.AETHERCORE_G5_FORENSIC != '1'
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-${{ steps.model-key.outputs.key }}
+
+      - name: Prepare or verify exact Product Debian RTL simulator
+        if: env.AETHERCORE_G5_FORENSIC != '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
+          mkdir -p "$build"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          cache_args=("$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")
+          if [[ '${{ steps.model-cache.outputs.cache-hit }}' == 'true' ]]; then
+            bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"
+          else
+            make -f Makefile.l32-linux-boot BUILD_DIR="$build" \
+              TOP=AetherCoreProductDebianRV64SimTop \
+              ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+              VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" JOBS=4 \
+              SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" sim
+            bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
+          fi
+
+      - name: Save qualified compiled Product Debian model before slow execution
+        if: env.AETHERCORE_G5_FORENSIC != '1' && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
+
+      - name: Fingerprint independent 5.024 Debian Top baseline model
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1'
+        id: baseline-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          baseline="$RUNNER_TEMP/aethercore-product-g5-debian/baseline-5.024"
+          key="$(AETHERCORE_VERILATOR_VERSION=5.024 bash tools/ci/product_sim_cache.sh fingerprint \
+            "$baseline" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact independent 5.024 Debian Top reference model
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1'
+        id: baseline-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-baseline-${{ steps.baseline-key.outputs.key }}
+
+      - name: Qualify 5.054 on the identical native Debian RTL for bounded 30M cycles
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_G5_SHORT_AB: '1'
+          AETHERCORE_G5_AB_BASELINE_MODEL: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
+          AETHERCORE_G5_AB_CANDIDATE_MODEL: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          AETHERCORE_G5_AB_CYCLES: '30000000'
+          AETHERCORE_G5_AB_WALL_SECONDS: '600'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_short_ab_selftest.sh
+          bash tools/ci/product_g5_short_ab.sh preflight
+          bash tools/ci/product_g5_short_ab.sh run
+          grep -Fxq 'qualification=PRODUCT_G5_DEBIAN_TOP_5054_REFERENCE_SAME_CYCLE_NOT_PID1_PASS' \
+            build/product-g5-short-ab/qualification.txt
+          cat build/product-g5-short-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache verified 5.024 Debian Top baseline before any full run
+        if: env.AETHERCORE_VERILATOR_VERSION == '5.054' && env.AETHERCORE_G5_FORENSIC != '1' && steps.baseline-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/baseline-5.024
+          key: ${{ steps.baseline-cache.outputs.cache-primary-key }}
+
+      - name: Run selected real Debian D1/D2/D3 userspace milestone on Product RV64GC
+        if: env.AETHERCORE_G5_RUN_MODE == 'full' && env.AETHERCORE_G5_FORENSIC != '1'
+        shell: bash
+        env:
+          # Full runs are expensive: after the known late-initcall banner,
+          # capture the interrupted (pre-IRQ) PC and stop after 100M silent
+          # cycles rather than burning another ~700M with no new evidence.
+          AETHERCORE_G5_STALL_WATCHDOG_CYCLES: '100000000'
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
+          case "$RV64_DEBIAN_STAGE" in
+            d1) milestone='DEBIAN_RISCV64_GLIBC_PID1_OK' ;;
+            d2) milestone='DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK' ;;
+            d3) milestone='login:' ;;
+            *) echo "unknown Debian stage $RV64_DEBIAN_STAGE" >&2; exit 19 ;;
+          esac
+
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" TOP=AetherCoreProductDebianRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+            FW_BIN=build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS=4 MAX_CYCLES=1800000000 \
+            MILESTONE="$milestone" \
+            MIN_INTERRUPTS=0 MIN_STIP=0 MIN_SEIP=0 \
+            REQUIRE_LAYERED_COMPRESSED=1 PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" \
+            run-existing
+          log="$build/logs/boot-probe.log"
+          grep -Fq 'Linux version 6.6.143' "$log"
+          grep -q '^L32_LAYERED_COMPRESSED_PASS ' "$log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$log"
+          case "$RV64_DEBIAN_STAGE" in
+            d1)
+              grep -Fq 'AETHERCORE_DEBIAN_DYNAMIC_INIT_START' "$log"
+              grep -Fq 'DEBIAN_RISCV64_GLIBC_PID1_OK' "$log"
+              echo 'PRODUCT_G5_DEBIAN_D1_DYNAMIC_PID1_PASS'
+              ;;
+            d2)
+              grep -Fq 'AETHERCORE_DEBIAN_D2_START' "$log"
+              grep -Fq 'AETHERCORE_D2_NATIVE_FP_THREADS_FUTEX_VM_OK' "$log"
+              grep -Fq 'DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK' "$log"
+              echo 'PRODUCT_G5_DEBIAN_D2_NATIVE_PROCESSES_FS_SIGNALS_PASS'
+              ;;
+            d3)
+              grep -Fq 'AETHERCORE_DEBIAN_D3_NATIVE_INIT_HANDOFF' "$log"
+              grep -Eq '(^|[[:space:]])login:' "$log"
+              echo 'PRODUCT_G5_DEBIAN_D3_NATIVE_LOGIN_PROMPT_PASS: native /sbin/init and serial-getty reached prompt; login authentication remains separate'
+              ;;
+          esac
+
+      - name: Run one restartable G5 D2 late-boot forensic session without performance A/B
+        if: env.AETHERCORE_G5_FORENSIC == '1' && env.AETHERCORE_G5_RESUME_ONLY != '1'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_G5_PERSISTENT_CHECKPOINT: '1'
+          AETHERCORE_ALLOW_PRODUCT_G5_LONG_DIAGNOSE: '1'
+          AETHERCORE_G5_LONG_CHECKPOINT_CYCLES: '900000000'
+          AETHERCORE_G5_LONG_TOTAL_CYCLES: '1800000000'
+          AETHERCORE_G5_LONG_REPLAY_CYCLES: '900000000'
+          AETHERCORE_G5_STALL_WATCHDOG_CYCLES: '100000000'
+          AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX: 'diagnostic'
+          PRODUCT_G5_LONG_PROOF_DIR: ${{ github.workspace }}/build/product-g5-long-forensic
+        run: |
+          set -euo pipefail
+          [[ "$RV64_DEBIAN_STAGE" == d2 && "$AETHERCORE_VERILATOR_VERSION" == 5.054 &&
+             "$SIM_SETTLE_MODE" == reference && "$RV64_DEBIAN_INITCALL_TRACE" == 1 ]] || {
+            echo 'Forensic path only supports trace-enabled D2/5.054/reference' >&2
+            exit 20
+          }
+          mkdir -p "$PRODUCT_G5_LONG_PROOF_DIR"
+          rc=0
+          bash tools/ci/product_checkpoint_g5_short.sh diagnose || rc=$?
+          log="$PRODUCT_G5_LONG_PROOF_DIR/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX}.log"
+          if [[ -s "$log" ]]; then
+            grep -E '^PRODUCT_G5_RESUME_DIAGNOSTIC_RESULT ' \
+              "$log" >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+          if [[ "$rc" != 0 ]]; then
+            echo "PRODUCT_G5_FORENSIC_NOT_PID1 result_rc=$rc; preserving cold/continued RTL+DDR checkpoints for exact PC analysis" >&2
+            exit "$rc"
+          fi
+          grep -Eq '^PRODUCT_G5_RESUME_DIAGNOSTIC_RESULT status=0 ' \
+            "$PRODUCT_G5_LONG_PROOF_DIR/diagnostic.log"
+          echo 'PRODUCT_G5_DEBIAN_D2_NATIVE_PID1_FORENSIC_PASS: exact RTL+DDR replay reached Debian D2 milestone'
+
+      - name: Golden-gated restore of original G5 900M checkpoint to 950M without cold boot
+        if: env.AETHERCORE_G5_RESUME_ONLY == '1'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_G5_PERSISTENT_CHECKPOINT: '1'
+          PRODUCT_G5_PERSISTENT_OUT: ${{ github.workspace }}/build/product-g5-persistent-checkpoint
+        run: |
+          set -euo pipefail
+          [[ "$RV64_DEBIAN_STAGE" == d2 && "$AETHERCORE_VERILATOR_VERSION" == 5.054 &&
+             "$SIM_SETTLE_MODE" == reference && "$RV64_DEBIAN_INITCALL_TRACE" == 1 &&
+             -n "${G5_ORIGINAL_PROOF_DIR:-}" && -d "$G5_ORIGINAL_PROOF_DIR" ]] || {
+            echo 'G5 golden bridge requires pinned original D2/5.054/reference checkpoint' >&2; exit 48;
+          }
+          bash tools/ci/product_checkpoint_g5_short.sh build
+          sim="$GITHUB_WORKSPACE/build/product-g5-persistent-checkpoint/product-g5-checkpoint"
+          fw="$GITHUB_WORKSPACE/build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin"
+          old_model_sha=aa35c80024238420bea3976db677db2e0ef028aad9800482926b926e50155b71
+          firmware_sha=d525de6a58422de93da6de5312d38867611153da94c580bca31f90ebf13eff2c
+          [[ -x "$sim" && -s "$fw" &&
+             "$(sha256sum "$fw" | awk '{print $1}')" == "$firmware_sha" ]] || {
+            echo 'G5 golden bridge model or firmware missing/mismatched after build' >&2; exit 49;
+          }
+          rebuilt_model_sha="$(sha256sum "$sim" | awk '{print $1}')"
+          # Native -march=native on GitHub runners can alter the rebuilt binary
+          # without altering the RTL. Trust neither git SHA nor the new hash
+          # alone: independently reproduce the entire original 500K continuation
+          # and bit-compare both generated RTL and 256MiB host/DDR snapshots.
+          proof="$GITHUB_WORKSPACE/build/product-g5-long-forensic"
+          [[ ! -e "$proof" && ! -L "$proof" ]] || {
+            echo 'Refuse to overwrite an existing G5 bridge evidence directory' >&2; exit 50;
+          }
+          mkdir -p "$proof"
+          work="$(mktemp -d "$RUNNER_TEMP/g5-900m-bridge.XXXXXXXX")"
+          original="$G5_ORIGINAL_PROOF_DIR/persistent"
+          golden="$work/golden"
+          ln "$original.pre.rtl" "$golden.pre.rtl"
+          ln "$original.pre.host" "$golden.pre.host"
+          timeout --signal=TERM --kill-after=10s 600s \
+            "$sim" restore "$fw" "$golden" "$old_model_sha" "$firmware_sha" \
+            1800000000 'Linux version 6.6.143' 500000 \
+            > "$proof/bridge-golden.log" 2>&1 || {
+              tail -70 "$proof/bridge-golden.log" >&2
+              echo 'G5 rebuilt host failed archived 900M-to-900.5M golden replay' >&2; exit 51;
+            }
+          cmp "$golden.restored.rtl" "$original.restored.rtl" &&
+            cmp "$golden.restored.host" "$original.restored.host" || {
+              echo 'G5 archived golden RTL/DDR mismatch: host ABI/model migration not proven; refusing to resume' >&2
+              exit 52
+            }
+          grep -Fxq "$(< "$G5_ORIGINAL_PROOF_DIR/restored.state")" "$proof/bridge-golden.log" || {
+            echo 'G5 golden observer/trace/commit/UART fingerprint changed; refusing to resume' >&2
+            exit 53
+          }
+          echo "PRODUCT_G5_REBUILT_HOST_GOLDEN_BRIDGE_PASS old_model_sha=$old_model_sha rebuilt_model_sha=$rebuilt_model_sha exact_900p5m_rtl=1 exact_900p5m_ddr=1"
+          {
+            printf 'source_commit=99a5c86e99f52ed12f95b304635d77613c9505c4\n'
+            printf 'archived_run_id=42028338206\narchived_artifact_id=13419381149\n'
+            printf 'archived_model_sha256=%s\nrebuilt_model_sha256=%s\n' "$old_model_sha" "$rebuilt_model_sha"
+            printf 'firmware_sha256=%s\n' "$firmware_sha"
+            printf 'golden_replay_cycles=500000\ngolden_rtl_host_identical=1\n'
+            printf 'snapshot_start_cycles=900000000\nsnapshot_target_cycles=950000000\n'
+          } > "$proof/bridge-identity.txt"
+
+          # Golden snapshot starts at 900.5M; 4.5M + 9 * 5M = 49.5M,
+          # bringing the guest to EXACTLY 950M without redoing cold 900M.
+          current_rtl="$original.restored.rtl"
+          current_host="$original.restored.host"
+          expected_cycles=900500000
+          for i in $(seq 1 10); do
+            replay=5000000
+            (( i != 1 )) || replay=4500000
+            prefix="$(printf '%s/segment-%02d' "$work" "$i")"
+            ln "$current_rtl" "$prefix.pre.rtl"
+            ln "$current_host" "$prefix.pre.host"
+            log="$(printf '%s/bridge-segment-%02d.log' "$proof" "$i")"
+            timeout --signal=TERM --kill-after=10s 600s \
+              "$sim" restore "$fw" "$prefix" "$old_model_sha" "$firmware_sha" \
+              1800000000 'Linux version 6.6.143' "$replay" > "$log" 2>&1 || {
+                tail -70 "$log" >&2
+                echo "G5 bridge restore failed in segment $i" >&2; exit 54;
+              }
+            (( expected_cycles += replay ))
+            line="$(grep -E '^PRODUCT_G5_PERSISTENT_CONTINUATION ' "$log")"
+            [[ "$line" == *" cycles=$expected_cycles time=$expected_cycles "* &&
+               -s "$prefix.restored.rtl" && -s "$prefix.restored.host" ]] || {
+              echo "G5 bridge chunk $i has wrong cycle/time or incomplete state: $line" >&2; exit 55;
+            }
+            printf '%s\n' "$line" >> "$proof/bridge-segments.state"
+            rtl_sha="$(sha256sum "$prefix.restored.rtl" | awk '{print $1}')"
+            host_sha="$(sha256sum "$prefix.restored.host" | awk '{print $1}')"
+            printf 'segment=%02d replay=%d cycles=%d rtl_sha256=%s host_sha256=%s\n' \
+              "$i" "$replay" "$expected_cycles" "$rtl_sha" "$host_sha" \
+              >> "$proof/bridge-segment-hashes.txt"
+            echo "PRODUCT_G5_BRIDGE_PROGRESS segment=$i cycles=$expected_cycles $(sed -n 's/.* commits=\([0-9]*\) .*uart_bytes=\([0-9]*\) uart_hash=\([^ ]*\).*/commits=\1 uart_bytes=\2 uart_hash=\3/p' <<< "$line")"
+            if (( i > 1 )); then
+              previous="$(printf '%s/segment-%02d' "$work" "$((i - 1))")"
+              # Only private generated intermediate copies are removed; the
+              # archived 900M/900.5M originals live elsewhere and are untouched.
+              rm -f "$previous.pre.rtl" "$previous.pre.host" \
+                "$previous.restored.rtl" "$previous.restored.host"
+            fi
+            current_rtl="$prefix.restored.rtl"
+            current_host="$prefix.restored.host"
+          done
+          [[ "$expected_cycles" == 950000000 ]] || {
+            echo 'G5 bridge did not reach exact 950M requested bound' >&2; exit 56;
+          }
+          mv "$current_rtl" "$proof/persistent.bridge-950m.rtl"
+          mv "$current_host" "$proof/persistent.bridge-950m.host"
+          (cd "$proof" && sha256sum persistent.bridge-950m.rtl persistent.bridge-950m.host > bridge-950m.sha256)
+          (cd "$G5_ORIGINAL_PROOF_DIR" && sha256sum --check --status pre.sha256) || {
+            echo 'Archived original 900M state mutated during bridge; refusing qualification' >&2; exit 57;
+          }
+          cmp "$G5_ORIGINAL_PROOF_DIR/persistent.restored.rtl" \
+              "$G5_ORIGINAL_PROOF_DIR/persistent.continuous.rtl"
+          cmp "$G5_ORIGINAL_PROOF_DIR/persistent.restored.host" \
+              "$G5_ORIGINAL_PROOF_DIR/persistent.continuous.host"
+          # Read ONLY the host Observer UART, not the subsequent 256MiB RAM.
+          # A plain binary grep over RAM could find an unprinted milestone
+          # inside the initramfs and report a false Debian PID1 success.
+          python3 - "$proof/persistent.bridge-950m.host" <<'PY' | tee "$proof/bridge-final-observer.txt"
+          import struct
+          import sys
+
+          with open(sys.argv[1], 'rb') as snapshot:
+              def word():
+                  data = snapshot.read(8)
+                  if len(data) != 8:
+                      raise ValueError('truncated G5 Observer header')
+                  return struct.unpack('<Q', data)[0]
+
+              def byte_string(limit):
+                  size = word()
+                  if size > limit:
+                      raise ValueError('invalid G5 Observer string bound')
+                  data = snapshot.read(size)
+                  if len(data) != size:
+                      raise ValueError('truncated G5 Observer string')
+                  return data
+
+              if snapshot.read(8) != b'AETG5CP1' or word() != 1:
+                  raise ValueError('invalid final G5 host snapshot identity')
+              for maximum in (64, 64, 128, 128, 4096):
+                  byte_string(maximum)
+              policy_budget, guest_time, mem_wait = (word(), word(), word())
+              observer_words = [word() for _ in range(15)]
+              uart = byte_string(32 * 1024 * 1024)
+              for _ in range(3 + 2 + 3 + 6):
+                  word()
+              recent_pcs = [word() for _ in range(16)]
+              recent_count, recent_index = word(), word()
+              if guest_time != 950000000 or observer_words[0] != guest_time:
+                  raise ValueError('G5 final host Observer cycles disagree')
+              if recent_count > 16 or recent_index >= 16:
+                  raise ValueError('invalid recent PC ring')
+              pcs = [recent_pcs[(recent_index - recent_count + j) % 16]
+                     for j in range(recent_count)]
+              markers = (b'AETHERCORE_DEBIAN_D2_START',
+                         b'AETHERCORE_D2_NATIVE_FP_THREADS_FUTEX_VM_OK',
+                         b'DEBIAN_RISCV64_D2_PROCESSES_FS_SIGNALS_OK')
+              pid1 = all(marker in uart for marker in markers)
+              print('PRODUCT_G5_BRIDGE_FINAL_OBSERVER cycles=%d commits=%d'
+                    ' uart_bytes=%d exceptions=%d interrupts=%d stip=%d'
+                    ' last_exception_pc=0x%x recent_commit_pcs=%s pid1_qualified=%d' %
+                    (guest_time, observer_words[1], len(uart), observer_words[5],
+                     observer_words[6], observer_words[7], observer_words[11],
+                     ','.join(hex(pc) for pc in pcs), int(pid1)))
+              print('PRODUCT_G5_BRIDGE_FINAL_UART_TAIL ' +
+                    repr(uart[-320:].decode('utf-8', errors='replace')))
+          PY
+          echo 'PRODUCT_G5_900M_TO_950M_BRIDGE_PASS cold_replayed=0 golden_rtl_host_identical=1 extra_cycles=50000000 pid1_qualification_reported_separately=1'
+          tail -1 "$proof/bridge-segments.state" >> "$GITHUB_STEP_SUMMARY"
+          echo 'PRODUCT_G5_900M_TO_950M_GOLDEN_BRIDGE_COMPLETE old_and_new_host_sha_recorded=1 original_snapshots_unchanged=1' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Symbolize captured exception, interrupted and retired PCs using this run's exact vmlinux
+        if: always() && env.AETHERCORE_G5_FORENSIC == '1' && env.AETHERCORE_G5_RESUME_ONLY != '1'
+        shell: bash
+        env:
+          AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX: 'diagnostic'
+        run: |
+          set -euo pipefail
+          proof="$GITHUB_WORKSPACE/build/product-g5-long-forensic"
+          logfile="$proof/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX:-diagnostic}.log"
+          if [[ -s "$logfile" &&
+                -s build/rv64-debian-linux/obj/vmlinux &&
+                -s build/rv64-debian-linux/obj/System.map ]]; then
+            python3 tools/ci/product_g5_forensic_symbols.py \
+              --trace "$logfile" \
+              --system-map build/rv64-debian-linux/obj/System.map \
+              --vmlinux build/rv64-debian-linux/obj/vmlinux \
+              > "$proof/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX:-diagnostic}-pc-symbols.txt" || {
+                echo 'G5 exact-kernel symbolization unavailable; raw trace and vmlinux are retained' >&2
+                exit 0
+              }
+            sed -n '1,36p' "$proof/${AETHERCORE_G5_DIAGNOSTIC_OUTPUT_SUFFIX:-diagnostic}-pc-symbols.txt" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'G5 forensic trace or matching kernel symbols absent; no PC attribution attempted'
+          fi
+
+      - name: Preserve artifact identity, resolved kernel config and boot trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-product-g5-debian-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          # Future forensic artifacts include the exact executable and source
+          # keys that generated their snapshots. The historic 900M one did not.
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-rootfs/evidence/*
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/evidence/*
+            build/rv64-debian-linux/obj/vmlinux
+            build/rv64-debian-linux/obj/System.map
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/evidence/*
+            build/product-g5-short-ab/qualification.txt
+            build/product-g5-short-ab/*.state
+            build/product-g5-short-ab/*.run.log
+            build/product-g5-long-forensic/**
+            build/product-g5-persistent-checkpoint/product-g5-checkpoint
+            build/product-g5-persistent-checkpoint/.host-source-key
+            build/product-g5-persistent-checkpoint/.host-binary-sha
+            build/product-g5-persistent-checkpoint/logs/*.log
+            ${{ runner.temp }}/aethercore-product-g5-debian/model/logs/*.log

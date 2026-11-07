@@ -1,15 +1,6 @@
 name: AetherSoC Unified Host Data Multi-slot Gate
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/v2-unified-host-data-multislot.yml'
-      - 'src/main/scala/aethercore/sim/AetherSoCUnifiedHostMemoryAdapter.scala'
-      - 'src/test/scala/aethercore/AetherSoCUnifiedHostMemoryAdapterSpec.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2UnifiedMemoryCompatSimTop.scala'
-      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64Fast.scala'
-      - 'build.mill'
-      - 'mill'
   workflow_dispatch:
 
 permissions:

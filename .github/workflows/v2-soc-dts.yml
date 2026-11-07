@@ -14,6 +14,7 @@ on:
       - 'tests_py/test_rv64_linux_early_contract.py'
       - 'tests_py/test_rv64_minimal_initramfs_contract.py'
       - '.github/workflows/v2-soc-dts.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

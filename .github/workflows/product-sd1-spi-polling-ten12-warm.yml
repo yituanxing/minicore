@@ -1,0 +1,324 @@
+name: Product SD1 polling 2352M-to-2552M ten-stage warm relay
+
+# Isolated new firmware cold start, same qualified Verilator 5.054 RTL binary.
+# NEVER restores the previous IRQ-based 572M Product DDR checkpoint.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-spi-polling-ten12-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  polling-12m:
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-advance-2552m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_ALLOW_PRODUCT_SD1_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_SD1_SPI_POLLING_SHORT: '1'
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+    steps:
+      - name: Checkout immutable candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+      - name: Cheap short-mode syntax checks, no guest cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_spi_polling_relay.sh
+          python3 -m unittest tests_py.test_product_sd1_spi_polling_dts tests_py.test_product_sd1_card_snapshot -v
+      - name: Restore full unchanged official signed Debian SD image
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Reject missing or altered official media
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == true ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore original GPIO-CS fixed Linux Image, not rebuilding kernel
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Reject missing fixed Linux candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true ]] || exit 16
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+      - name: Import exact distinct polling firmware build evidence
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      - name: Import exact 12M polling full state from replay-qualified run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42363703492
+          name: product-sd1-spi-polling-2352m-42363703492
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-2352m-import
+      - name: Restore pinned 5.054 native Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+      - name: Fingerprint portable host compiler ABI
+        id: portable-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$(uname -m)-$compiler" >> "$GITHUB_OUTPUT"
+      - name: Restore original portable savable Product RTL model
+        id: model
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-savable-portable-v1-${{ steps.portable-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/l32_opensbi_runtime.h', 'sim/l32_sd_spi_card.h', 'sim/l32_sd_spi_snapshot_codec.h', 'sim/product_rv64_checkpoint_sd1_main.cpp', 'tools/ci/product_checkpoint_sd1_short.sh', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh') }}
+      - name: Reject simulator rebuild/mismatch before guest cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.model.outputs.cache-hit }}' == true ]] || {
+            echo 'PRODUCT_SD1_POLLING_SHORT_REJECTED: portable model cache miss; do not rebuild' >&2
+            exit 16
+          }
+          [[ -x build/product-sd1-persistent-checkpoint/savable-model/obj/VAetherCoreProductDebianSdRV64SimTop ]] || exit 16
+      - name: Verify exactly one 2352M full polling source, no prior IRQ state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' ready < <(find build/product-sd1-spi-polling-2352m-import -type f -name .polling-ready -print0)
+          [[ "${#ready[@]}" == 1 ]] || exit 16
+          source="$(dirname "${ready[0]}")"
+          grep -Fxq 'boot_cycles=2352000000' "$source/.polling-ready"
+          grep -Fxq 'qualification=PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS' "$source/.polling-ready"
+          echo "POLLING_SOURCE=$source" >> "$GITHUB_ENV"
+      - name: Execute authentic polling Product RTL 2352M to 2372M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh "$POLLING_SOURCE" 2372000000
+          grep -Fxq 'boot_cycles=2372000000' build/product-sd1-spi-polling-relay/2372m/.polling-ready
+      - name: Upload authenticated 2372M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2372m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2372m/
+      - name: Execute authentic polling Product RTL 2372M to 2392M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2372m 2392000000
+          grep -Fxq 'boot_cycles=2392000000' build/product-sd1-spi-polling-relay/2392m/.polling-ready
+      - name: Upload authenticated 2392M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2392m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2392m/
+      - name: Execute authentic polling Product RTL 2392M to 2412M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2392m 2412000000
+          grep -Fxq 'boot_cycles=2412000000' build/product-sd1-spi-polling-relay/2412m/.polling-ready
+      - name: Upload authenticated 2412M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2412m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2412m/
+      - name: Execute authentic polling Product RTL 2412M to 2432M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2412m 2432000000
+          grep -Fxq 'boot_cycles=2432000000' build/product-sd1-spi-polling-relay/2432m/.polling-ready
+      - name: Upload authenticated 2432M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2432m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2432m/
+      - name: Execute authentic polling Product RTL 2432M to 2452M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2432m 2452000000
+          grep -Fxq 'boot_cycles=2452000000' build/product-sd1-spi-polling-relay/2452m/.polling-ready
+      - name: Upload authenticated 2452M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2452m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2452m/
+      - name: Execute authentic polling Product RTL 2452M to 2472M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2452m 2472000000
+          grep -Fxq 'boot_cycles=2472000000' build/product-sd1-spi-polling-relay/2472m/.polling-ready
+      - name: Upload authenticated 2472M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2472m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2472m/
+      - name: Execute authentic polling Product RTL 2472M to 2492M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2472m 2492000000
+          grep -Fxq 'boot_cycles=2492000000' build/product-sd1-spi-polling-relay/2492m/.polling-ready
+      - name: Upload authenticated 2492M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2492m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2492m/
+      - name: Execute authentic polling Product RTL 2492M to 2512M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2492m 2512000000
+          grep -Fxq 'boot_cycles=2512000000' build/product-sd1-spi-polling-relay/2512m/.polling-ready
+      - name: Upload authenticated 2512M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2512m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2512m/
+      - name: Execute authentic polling Product RTL 2512M to 2532M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2512m 2532000000
+          grep -Fxq 'boot_cycles=2532000000' build/product-sd1-spi-polling-relay/2532m/.polling-ready
+      - name: Upload authenticated 2532M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2532m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2532m/
+      - name: Execute authentic polling Product RTL 2532M to 2552M
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 9m bash tools/ci/product_sd1_spi_polling_relay.sh build/product-sd1-spi-polling-relay/2532m 2552000000
+          grep -Fxq 'boot_cycles=2552000000' build/product-sd1-spi-polling-relay/2552m/.polling-ready
+      - name: Upload authenticated 2552M full RTL-DDR-SD checkpoint BEFORE next interval
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2552m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-spi-polling-relay/2552m/
+      - name: Preserve every completed polling stage log and SD counters
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-2352m-to-2552m-evidence-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/product-sd1-spi-polling-relay/2372m/.polling-ready
+            build/product-sd1-spi-polling-relay/2372m/card-progress.json
+            build/product-sd1-spi-polling-relay/2372m/save.log
+            build/product-sd1-spi-polling-relay/2392m/.polling-ready
+            build/product-sd1-spi-polling-relay/2392m/card-progress.json
+            build/product-sd1-spi-polling-relay/2392m/save.log
+            build/product-sd1-spi-polling-relay/2412m/.polling-ready
+            build/product-sd1-spi-polling-relay/2412m/card-progress.json
+            build/product-sd1-spi-polling-relay/2412m/save.log
+            build/product-sd1-spi-polling-relay/2432m/.polling-ready
+            build/product-sd1-spi-polling-relay/2432m/card-progress.json
+            build/product-sd1-spi-polling-relay/2432m/save.log
+            build/product-sd1-spi-polling-relay/2452m/.polling-ready
+            build/product-sd1-spi-polling-relay/2452m/card-progress.json
+            build/product-sd1-spi-polling-relay/2452m/save.log
+            build/product-sd1-spi-polling-relay/2472m/.polling-ready
+            build/product-sd1-spi-polling-relay/2472m/card-progress.json
+            build/product-sd1-spi-polling-relay/2472m/save.log
+            build/product-sd1-spi-polling-relay/2492m/.polling-ready
+            build/product-sd1-spi-polling-relay/2492m/card-progress.json
+            build/product-sd1-spi-polling-relay/2492m/save.log
+            build/product-sd1-spi-polling-relay/2512m/.polling-ready
+            build/product-sd1-spi-polling-relay/2512m/card-progress.json
+            build/product-sd1-spi-polling-relay/2512m/save.log
+            build/product-sd1-spi-polling-relay/2532m/.polling-ready
+            build/product-sd1-spi-polling-relay/2532m/card-progress.json
+            build/product-sd1-spi-polling-relay/2532m/save.log
+            build/product-sd1-spi-polling-relay/2552m/.polling-ready
+            build/product-sd1-spi-polling-relay/2552m/card-progress.json
+            build/product-sd1-spi-polling-relay/2552m/save.log

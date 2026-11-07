@@ -25,15 +25,12 @@ def pull_request_paths(path: Path) -> list[str]:
 
 class L32CiTopologyContractTest(unittest.TestCase):
     def test_current_public_pr_signoff_lanes_are_hosted(self):
-        # The public repository no longer treats the historical deep L32
-        # self-hosted BusyBox lane as the canonical PR hardware owner. Fast
-        # Gate plus the currently targeted hosted real-system lanes own normal
-        # PR qualification.
+        # Historical L32/RV64 and V2 deep lanes are available for explicit
+        # qualification; the fast and targeted hosted gates own normal PR CI.
         for filename in (
             "fast-gate.yml",
             "l32-linux-build.yml",
             "l32-linux-handoff.yml",
-            "rv64-minimal-initramfs-v1.yml",
         ):
             with self.subTest(workflow=filename):
                 text = (WORKFLOWS / filename).read_text()
@@ -66,6 +63,44 @@ class L32CiTopologyContractTest(unittest.TestCase):
         self.assertIn('MILESTONE="RV64 USER UART IRQ OK"', pid1)
         self.assertIn("MIN_STIP=1", pid1)
         self.assertIn("MIN_SEIP=1", pid1)
+
+    def test_historical_v2_rv64_qualifications_have_explicit_dispatch(self):
+        # The 15 existing dispatch endpoints are already present on main and
+        # therefore no longer need PR triggers. Three PR-only endpoints gain a
+        # dispatch declaration here but retain PR validation until that entry
+        # point is published on the default branch.
+        manual_only = (
+            "rv64-minimal-initramfs-v1.yml",
+            "v2-soc-virtual-fpga-linux-pid1.yml",
+            "v2-p8-linux-performance.yml",
+            "v2-soc-icache-arch-ab.yml",
+            "v2-soc-unified-linux-pid1.yml",
+            "v2-a8-rv64c-workload.yml",
+            "v2-yosys-depth-ab.yml",
+            "v2-p8-architecture-ab.yml",
+            "v2-a8-architecture-closure.yml",
+            "v2-fast-adaptive-ab.yml",
+            "shared-data-translation-area.yml",
+            "v2-unified-host-data-multislot.yml",
+            "v2-soc-fpga-synth-proxy.yml",
+            "pa32-soc-area.yml",
+            "v2-pmp-compact-area.yml",
+        )
+        pending_default_branch_dispatch = (
+            "v2-soc-dts.yml",
+            "v2-soc-virtual-fpga-linux-runtime.yml",
+            "v2-soc-axi4-linux-runtime.yml",
+        )
+        for filename in manual_only:
+            with self.subTest(workflow=filename):
+                text = (WORKFLOWS / filename).read_text()
+                self.assertIn("workflow_dispatch:", text)
+                self.assertNotIn("pull_request:", text)
+        for filename in pending_default_branch_dispatch:
+            with self.subTest(workflow=filename):
+                text = (WORKFLOWS / filename).read_text()
+                self.assertIn("workflow_dispatch:", text)
+                self.assertIn("pull_request:", text)
 
     def test_legacy_l32_prefix_milestones_are_manual_or_dedicated_branch_only(self):
         for filename in (

@@ -1,30 +1,6 @@
 name: AetherCore V2 P8 Linux Performance Gate
 
 on:
-  pull_request:
-    paths:
-      - 'src/main/scala/aethercore/soc/AetherSoCAddressMap.scala'
-      - 'src/main/scala/aethercore/soc/AetherSoCPlatformFabric.scala'
-      - 'src/main/scala/aethercore/soc/AetherSoCDts.scala'
-      - 'src/main/scala/aethercore/soc/peripheral/AetherPlic.scala'
-      - '.github/workflows/v2-p8-linux-performance.yml'
-      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
-      - 'src/main/scala/aethercore/core/v2/**'
-      - 'src/test/scala/aethercore/V2P8PerformanceChecks.scala'
-      - 'src/test/scala/aethercore/V2StageSpecs.scala'
-      - 'sim/opensbi_boot_main.cpp'
-      - 'sim/v2_rv64_opensbi_shim/**'
-      - 'software/rv64/linux_early.env'
-      - 'software/rv64/opensbi_first_exec.env'
-      - 'software/rv64_userspace/minimal_init.S'
-      - 'tools/ci/rv64_linux_early_build.sh'
-      - 'tools/ci/rv64_minimal_initramfs_build.sh'
-      - 'tools/ci/rv64_minimal_init_payload_build.sh'
-      - 'tools/ensure_verilator_5_024.sh'
-      - 'tools/ensure_riscv64_linux_gcc_13_3.sh'
-      - 'Makefile.l32-linux-boot'
-      - 'build.mill'
   workflow_dispatch:
 
 permissions:

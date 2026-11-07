@@ -1,7 +1,10 @@
 #pragma once
 
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 #include "verilated.h"
+#endif
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -59,6 +62,58 @@ struct DataMemoryWaitState {
   std::uint32_t observedStallCycles = 0;
 };
 
+// Explicit owner of host-side transport state. A future Product checkpoint
+// must serialize this alongside VerilatedContext, the RTL model and host RAM;
+// a function-local static cannot safely survive a restore/new simulation.
+struct TransportRuntimeState {
+  DataMemoryWaitState dataWait;
+};
+
+// Optional G5 RV64GC differential retirement oracle, shared by the Verilator
+// and GSIM host runners. Hash architectural integer and floating retirement
+// *values*, not just the PCs/instructions: an F/D register or fflags mismatch
+// must not be hidden behind an identical Linux UART banner and memory hash.
+// Neither G3 nor legacy V2 enable or call this observer.
+struct ProductDebianRetireDigest {
+  static constexpr std::uint64_t kBasis = 14695981039346656037ULL;
+  static constexpr std::uint64_t kPrime = 1099511628211ULL;
+  std::uint64_t retirement = kBasis;
+  std::uint64_t integer = kBasis;
+  std::uint64_t floating = kBasis;
+  std::uint64_t floatingWrites = 0;
+  std::uint64_t flagEvents = 0;
+
+  static void mix(std::uint64_t& hash, std::uint64_t value) {
+    for (unsigned shift = 0; shift < 64; shift += 8) {
+      hash ^= static_cast<std::uint8_t>(value >> shift);
+      hash *= kPrime;
+    }
+  }
+
+  void record(std::uint64_t pc, std::uint32_t inst,
+              bool integerWrite, std::uint8_t integerRd,
+              std::uint64_t integerData, bool floatingWrite,
+              std::uint8_t floatingRd, std::uint64_t floatingData,
+              std::uint8_t fflags, bool floatingDirty) {
+    mix(retirement, pc);
+    mix(retirement, inst);
+    mix(integer, integerWrite ? 1 : 0);
+    if (integerWrite) {
+      mix(integer, integerRd);
+      mix(integer, integerData);
+    }
+    mix(floating, floatingWrite ? 1 : 0);
+    mix(floating, fflags);
+    mix(floating, floatingDirty ? 1 : 0);
+    if (floatingWrite) {
+      mix(floating, floatingRd);
+      mix(floating, floatingData);
+      ++floatingWrites;
+    }
+    flagEvents += fflags != 0;
+  }
+};
+
 
 /**
  * Shared byte-addressed RAM for the OpenSBI/Linux simulation boundary.
@@ -74,14 +129,88 @@ struct DataMemoryWaitState {
  */
 class Memory {
  public:
+  struct Snapshot {
+    std::vector<std::uint8_t> bytes;
+    bool reservationValid = false;
+    std::uint64_t reservationAddress = 0;
+    std::size_t reservationSize = 0;
+  };
+
   Memory() : bytes_(kRamSize, 0) {}
 
+  // Host RAM and LR/SC reservation are part of the architectural checkpoint.
+  // Do not snapshot merely the Verilator registers or restore a QEMU state.
+  Snapshot snapshot() const {
+    return {bytes_, reservationValid_, reservationAddress_, reservationSize_};
+  }
+
+  void restore(const Snapshot& state) {
+    if (state.bytes.size() != kRamSize)
+      throw std::runtime_error("wrong host RAM size in Product snapshot");
+    bytes_ = state.bytes;
+    reservationValid_ = state.reservationValid;
+    reservationAddress_ = state.reservationAddress;
+    reservationSize_ = state.reservationSize;
+  }
+
+  // Stable little-endian FNV-1a transport fingerprint for short A/B runs. A
+  // cheap comparison at the same simulated cycle catches RAM/LRSC divergence
+  // without logging hundreds of megabytes on every measured candidate.
+  std::uint64_t fingerprint() const {
+    std::uint64_t hash = 14695981039346656037ULL;
+    constexpr std::uint64_t kPrime = 1099511628211ULL;
+    auto mix = [&](std::uint8_t byte) {
+      hash ^= byte;
+      hash *= kPrime;
+    };
+    for (std::uint8_t byte : bytes_) mix(byte);
+    mix(reservationValid_ ? 1 : 0);
+    auto mixWord = [&](std::uint64_t value) {
+      for (unsigned i = 0; i < 8; ++i) mix(static_cast<std::uint8_t>(value >> (8 * i)));
+    };
+    mixWord(reservationAddress_);
+    mixWord(static_cast<std::uint64_t>(reservationSize_));
+    return hash;
+  }
+
   void loadAtBase(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) throw std::runtime_error("cannot open image: " + path);
+    const auto length = static_cast<std::streamoff>(input.tellg());
+    if (length < 0) throw std::runtime_error("cannot determine image size: " + path);
+    if (static_cast<std::uint64_t>(length) > bytes_.size())
+      throw std::runtime_error(
+          "firmware/image exceeds fixed 256MiB Product simulator RAM: " + path);
+    std::fill(bytes_.begin(), bytes_.end(), 0);
+    input.seekg(0, std::ios::beg);
     input.read(reinterpret_cast<char*>(bytes_.data()),
-               static_cast<std::streamsize>(bytes_.size()));
-    if (input.bad()) throw std::runtime_error("failed while reading image: " + path);
+               static_cast<std::streamsize>(length));
+    if (input.bad() || input.gcount() != static_cast<std::streamsize>(length))
+      throw std::runtime_error("failed while reading full image: " + path);
+    clearReservation();
+  }
+
+  // A Product SD1 FPGA boot loader places its independent DTB in DDR after
+  // loading the firmware, at the exact FW_PAYLOAD_FDT_ADDR contract. This
+  // bounded secondary transfer mirrors that physical loader while leaving
+  // the historical base-only G4/G5 runner untouched. It is not a checkpoint
+  // and cannot overwrite memory outside the simulated DDR aperture.
+  void loadBoundedRegion(const std::string& path, std::uint64_t address,
+                         std::size_t maxBytes) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) throw std::runtime_error("cannot open DDR region image: " + path);
+    const auto signedLength = static_cast<std::streamoff>(input.tellg());
+    if (signedLength <= 0 ||
+        static_cast<std::uint64_t>(signedLength) > maxBytes)
+      throw std::runtime_error("invalid bounded DDR region image length: " + path);
+    const auto length = static_cast<std::size_t>(signedLength);
+    if (!contains(address, length))
+      throw std::runtime_error("bounded DDR image exceeds simulator memory: " + path);
+    input.seekg(0, std::ios::beg);
+    input.read(reinterpret_cast<char*>(bytes_.data() + (address - kRamBase)),
+               static_cast<std::streamsize>(length));
+    if (input.bad() || input.gcount() != static_cast<std::streamsize>(length))
+      throw std::runtime_error("short bounded DDR image read: " + path);
     clearReservation();
   }
 
@@ -240,6 +369,7 @@ inline std::size_t dataBytesFromMemSize(std::uint32_t encoded) {
   }
 }
 
+#ifndef AETHERCORE_GSIM_HOST_MEMORY_ONLY
 /** Drive the shared RV32/RV64 physical-memory boundary for one low phase. */
 template <typename Top>
 void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
@@ -255,8 +385,11 @@ void driveMemory(Top& top, const Memory& memory, bool dataReady = true) {
 
   const bool dvalid = top.io_memValid;
   const auto daddr = static_cast<std::uint64_t>(top.io_memAddr);
-  const auto dbytes = dataBytesFromMemSize(
-      static_cast<std::uint32_t>(top.io_memSize));
+  // Valid gates the architectural size/operation contract. In particular an
+  // idle or not-yet-initialized Verilator output need not carry a meaningful
+  // MemSize enum; only decode it when an actual host transaction exists.
+  const auto dbytes = dvalid ? dataBytesFromMemSize(
+      static_cast<std::uint32_t>(top.io_memSize)) : std::size_t{1};
   const bool dfault = dvalid && !memory.contains(daddr, dbytes);
   top.io_memReady = dataReady;
   top.io_memFault = dfault;
@@ -317,8 +450,9 @@ bool adaptiveRedriveMemoryChanged(Top& top, const Memory& memory) {
  */
 template <typename Top>
 bool step(Top& top, VerilatedContext& context, Memory& memory,
+          TransportRuntimeState& runtime,
           bool rxValid, std::uint8_t rxByte) {
-  static DataMemoryWaitState dataWait;
+  auto& dataWait = runtime.dataWait;
   const std::uint32_t configuredWait = dataMemoryWaitCycles();
 
   if (top.reset) {
@@ -418,7 +552,8 @@ bool step(Top& top, VerilatedContext& context, Memory& memory,
 }
 
 template <typename Top>
-void initialize(Top& top, Memory& memory) {
+void initialize(Top& top, Memory& memory, TransportRuntimeState& runtime) {
+  runtime = {};
   top.reset = 1;
   top.clock = 0;
   top.io_rxValid = 0;
@@ -426,5 +561,25 @@ void initialize(Top& top, Memory& memory) {
   driveMemory(top, memory);
   top.eval();
 }
+
+// Backward-compatible API for historical one-instance harnesses. New Product
+// runners use the explicit state overload to support future checkpointing.
+template <typename Top>
+TransportRuntimeState& legacyRuntimeState() {
+  static TransportRuntimeState runtime;
+  return runtime;
+}
+
+template <typename Top>
+bool step(Top& top, VerilatedContext& context, Memory& memory,
+          bool rxValid, std::uint8_t rxByte) {
+  return step(top, context, memory, legacyRuntimeState<Top>(), rxValid, rxByte);
+}
+
+template <typename Top>
+void initialize(Top& top, Memory& memory) {
+  initialize(top, memory, legacyRuntimeState<Top>());
+}
+#endif  // !AETHERCORE_GSIM_HOST_MEMORY_ONLY
 
 }  // namespace aethercore::l32sim

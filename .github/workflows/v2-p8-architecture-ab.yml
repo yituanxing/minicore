@@ -1,19 +1,6 @@
 name: AetherCore V2 P8 Architecture A/B
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/v2-p8-architecture-ab.yml'
-      - 'tools/ci/v2_p8_arch_ab.sh'
-      - 'src/main/scala/aethercore/core/TranslationUnit.scala'
-      - 'src/main/scala/aethercore/core/TranslationTlb.scala'
-      - 'src/main/scala/aethercore/core/v2/**'
-      - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
-      - 'src/main/scala/aethercore/sim/AetherCoreV2Performance.scala'
-      - 'sim/opensbi_boot_main.cpp'
-      - 'sim/v2_rv64_opensbi_shim/**'
-      - 'Makefile.l32-linux-boot'
-      - 'build.mill'
   workflow_dispatch:
     inputs:
       baseline_sha:

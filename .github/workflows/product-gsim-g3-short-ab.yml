@@ -1,0 +1,395 @@
+name: AetherCore Product GSIM real G3 short same-cycle gate
+
+# Opt-in only: one OpenSBI 1.6/S-mode UART program on Product RTL, 30M cycles
+# per engine. Reuses PA32's pinned GSIM frontend patch/bridge, not PA32 evidence.
+# Optionally stage unchanged Linux 6.6.143 and run a bounded GSIM-only 100M
+# early prefix, after G3 strict A/B and fork-COW qualify. NEVER Debian or PID1.
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Bound the same cached Product simulator to G3 or early Linux (never Debian/PID1)
+        type: choice
+        required: true
+        options: [g3-only, g4-early]
+        default: g3-only
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-gsim-g3-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-product-g3-gsim-ab:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(fromJSON('["product-gsim-g3-short-ab","product-gsim-g4-early"]'), github.event.label.name))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_ALLOW_PRODUCT_GSIM_AB: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_OPENSBI_JOBS: '4'
+      GSIM_PREFIX_OPT: '-O3'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact commit and reject Debian inputs
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Freeze explicit Product G3 or bounded G4-only scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" && -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 2
+          scope='${{ inputs.scope }}'
+          if [[ '${{ github.event_name }}' == pull_request ]]; then
+            case '${{ github.event.label.name }}' in
+              product-gsim-g3-short-ab) scope=g3-only ;;
+              product-gsim-g4-early) scope=g4-early ;;
+              *) exit 3 ;;
+            esac
+          fi
+          case "$scope" in g3-only|g4-early) ;; *) exit 3 ;; esac
+          echo "PRODUCT_GSIM_SCOPE=$scope" >> "$GITHUB_ENV"
+          echo "PRODUCT_GSIM_CI_START: scope=$scope OpenSBI S-mode UART 30M first; NO Debian/PID1"
+
+      - name: Reuse Mill Scala dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator 5.054 build
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-ab-v1-
+
+      - name: Reuse pinned RV64 GCC and OpenSBI 1.6 source
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64-opensbi/opensbi/bd613dd92113f683052acfb23d9dc8ba60029e0a
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g3-fw-v1
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Reuse immutable Linux 6.6.143 and initramfs object caches for optional G4
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        id: linux-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Restore pinned GSIM source and native frontend cache
+        id: gsim-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Install real GSIM/RTL/OpenSBI build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make \
+            zlib1g-dev autoconf cmake ninja-build libssl-dev libelf-dev \
+            libreadline-dev pkg-config build-essential bc device-tree-compiler \
+            dwarves xz-utils
+          bash -n tools/ci/product_gsim_build.sh tools/ci/product_gsim_g3_ab.sh
+          python3 -m py_compile tools/ci/product_gsim_frontend_patch.py tools/ci/product_gsim_compare.py
+          python3 tools/ci/product_gsim_compare_selftest.py
+
+      - name: Fingerprint native CPU/clang ABI for safe generated-model reuse
+        id: native-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          # -march=native binaries are unsafe to move to arbitrary x86_64 CPUs.
+          # Cache only when the host model, ISA feature flags and clang match.
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(clang++-19 --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Product generated GSIM native model for identical host ABI
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+          # Restore an older native model only on the exact SAME CPU/clang
+          # ABI. product_gsim_build.sh always re-elaborates actual Product
+          # CHIRRTL and checks generator/native IDs before skipping a build;
+          # a change to unrelated Scala/SoC files cannot silently pass.
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-
+
+      - name: Restore the single Product Verilator 5.054 reference model safely
+        id: verilator-model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-g3-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          # A restored cross-source object is only a candidate: the live
+          # product_sim_cache.sh fingerprint includes all Product sources,
+          # generator/toolchain bytes and the executable SHA. Stale objects
+          # are rebuilt before any guest execution or qualification ticket.
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-
+
+      # The pinned provisioner writes CROSS_COMPILE to GITHUB_ENV for the NEXT
+      # step. Invoking the firmware builder in the same shell step would lose
+      # the exported path and fail before any Product simulation begins.
+      - name: Provision pinned RV64 GCC for subsequent firmware step
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Reuse/build unchanged real OpenSBI G3 UART firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_opensbi_first_exec.sh
+          grep -Fxq 'RV64_OPENSBI_FIRST_EXEC_BUILD: status=PASS' build/rv64-opensbi-first-exec/result.txt
+          sha256sum --check --status build/rv64-opensbi-first-exec/evidence/sha256.txt
+
+      - name: Build and fingerprint BOTH actual Product models, no guest run yet
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g3_ab.sh build
+          grep -Fxq 'status=PRODUCT_GSIM_G3_MODELS_VERIFIED' build/product-gsim-g3-ab/model-ready.txt
+          echo 'Product GSIM and Verilator models compiled and independently source/ABI fingerprinted. Runtime not yet qualified.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save pinned 5.054 toolchain before Product guest execution
+        if: success() && steps.verilator-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      # Save BEFORE the 30M-cycle differential. A genuine CPU/UART/RAM mismatch
+      # must fail the gate but must NOT throw away the expensive native builds.
+      - name: Save pinned GSIM frontend immediately after verified builds
+        if: success() && steps.gsim-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Save generated Product GSIM model immediately after verified build
+        if: success() && steps.native-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-native-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_frontend_patch.py', 'tools/ci/product_gsim_build.sh') }}
+
+      - name: Save verified Product Verilator model before the differential
+        if: success() && steps.verilator-model-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-g3-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-vmodel-v1-${{ steps.native-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Compare real G3 UART CPU/RAM/IRQ state at exactly 30M cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This phase MUST NOT rebuild or silently accept stale model inputs.
+          bash tools/ci/product_gsim_g3_ab.sh run
+          grep -Fxq 'qualification=PRODUCT_GSIM_G3_IDENTICAL_NOT_LINUX_PASS' build/product-gsim-g3-ab/qualification.txt
+          cat build/product-gsim-g3-ab/compare.txt >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g3-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g3-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      # The exact Product 5.054/reference Verilator archive is already built
+      # and rigorously compared against GSIM above. Fork the live RTL state
+      # from a real OpenSBI banner rather than building a separate three-model
+      # experiment just to exercise short deterministic checkpoint replays.
+      - name: Replay two Product G3 fork-COW checkpoints from the cached single model
+        shell: bash
+        env:
+          G3_MODEL_TICKET: build/product-gsim-g3-ab/model-ready.txt
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_forkcow_g3_smoke.sh | tee build/product-gsim-g3-ab/forkcow-g3.log
+          grep -Fq 'PRODUCT_FORKCOW_G3_SHORT_PASS' build/product-gsim-g3-ab/forkcow-g3.log
+          echo 'Real Product OpenSBI fork-COW twice PASS from one already built Verilator model (NOT PID1 or Debian).' >> "$GITHUB_STEP_SUMMARY"
+
+      # Explicit G4 opt-in only. Measure strict and fast host overhead on the
+      # *same* already-qualified G3 GSIM binary/firmware before using fast
+      # mode on Linux. Functional end-state matching is not G4 same-cycle A/B.
+      - name: Measure strict versus fast GSIM host loop on 30M real G3 cycles
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_GSIM_FAST_AB: '1'
+        run: |
+          set -euo pipefail
+          python3 tools/ci/product_gsim_fast_ab_selftest.py
+          bash tools/ci/product_gsim_sparse_request_selftest.sh
+          bash tools/ci/product_gsim_fast_ab.sh preflight
+          bash tools/ci/product_gsim_fast_ab.sh run
+          grep -Fxq 'qualification=PRODUCT_GSIM_FAST_AB_FUNCTIONAL_STATE_MATCH_NOT_G4_VERILATOR_AB_NOT_PID1' \
+            build/product-gsim-fast-ab/qualification.txt
+          cat build/product-gsim-fast-ab/results.tsv >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-fast-ab/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      # Linux's unchanged source/object cache avoids the baseline compile, but
+      # minimal_initramfs_build.sh normally copies and rebuilds an entire
+      # second kernel on every fresh runner. Cache only the final qualified
+      # Image/ELF/config/PID1 bytes, never a potentially stale Kbuild object
+      # tree. Exact input recipe changes deliberately miss this cache.
+      - name: Restore immutable G4 minimal-initramfs Image and proof files
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        id: initramfs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-linux-initramfs/obj/arch/riscv/boot/Image
+            build/rv64-linux-initramfs/obj/vmlinux
+            build/rv64-linux-initramfs/obj/.config
+            build/rv64-linux-initramfs/minimal-init/init
+            build/rv64-linux-initramfs/minimal-init/initramfs.list
+            build/rv64-linux-initramfs/evidence
+            build/rv64-linux-initramfs/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-minimal-initramfs-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Stage unchanged Linux 6.6.143 RAM-initramfs firmware only when requested
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          initramfs_dir=build/rv64-linux-initramfs
+          baseline_image="$(sed -n 's/^kernel_image=//p' build/rv64-linux-early/result.txt | head -1)"
+          if [[ '${{ steps.initramfs-cache.outputs.cache-hit }}' == 'true' ]] &&
+             [[ -n "$baseline_image" ]] &&
+             grep -Fxq 'RV64_MINIMAL_INITRAMFS_BUILD_RESULT: status=PASS' "$initramfs_dir/result.txt" &&
+             grep -Fxq 'linux_version=6.6.143' "$initramfs_dir/result.txt" &&
+             grep -Fxq "baseline_image=$baseline_image" "$initramfs_dir/result.txt" &&
+             grep -Fxq "file /init $PWD/$initramfs_dir/minimal-init/init 0755 0 0" "$initramfs_dir/minimal-init/initramfs.list" &&
+             sha256sum --check --status "$initramfs_dir/evidence/sha256.txt" &&
+             grep -Fxq "image_sha256=$(sha256sum "$initramfs_dir/obj/arch/riscv/boot/Image" | awk '{print $1}')" "$initramfs_dir/result.txt" &&
+             "${AETHERCORE_RV64_LINUX_CROSS_COMPILE}readelf" -h "$initramfs_dir/obj/vmlinux" | grep -q 'Machine:[[:space:]]*RISC-V'; then
+            echo 'RV64_G4_MINIMAL_INITRAMFS_CACHE_HIT: byte-verified Image, vmlinux, PID1, config and baseline path'
+          else
+            echo 'RV64_G4_MINIMAL_INITRAMFS_CACHE_MISS: build the exact Linux Image and reproducible PID1'
+            bash tools/ci/rv64_minimal_initramfs_build.sh
+          fi
+          timeout --signal=TERM --kill-after=5s 180s \
+            bash tools/ci/rv64_minimal_init_payload_build.sh
+          grep -Fxq 'RV64_MINIMAL_INIT_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-minimal-init-boot/result.txt
+          grep -Fxq 'spi_sd=0' build/rv64-minimal-init-boot/result.txt
+
+      - name: Save qualified Linux source/object cache before bounded G4 runtime
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early' && success() && steps.linux-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Save qualified G4 minimal-initramfs Image after hashing its bytes
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early' && success() && steps.initramfs-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-linux-initramfs/obj/arch/riscv/boot/Image
+            build/rv64-linux-initramfs/obj/vmlinux
+            build/rv64-linux-initramfs/obj/.config
+            build/rv64-linux-initramfs/minimal-init/init
+            build/rv64-linux-initramfs/minimal-init/initramfs.list
+            build/rv64-linux-initramfs/evidence
+            build/rv64-linux-initramfs/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-g4-minimal-initramfs-v1-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'software/rv64_userspace/minimal_init.S', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_initramfs_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Run exactly 100M real Product GSIM early Linux cycles within 285 seconds
+        if: env.PRODUCT_GSIM_SCOPE == 'g4-early'
+        shell: bash
+        env:
+          AETHERCORE_ALLOW_PRODUCT_GSIM_G4_EARLY: '1'
+          AETHERCORE_PRODUCT_GSIM_G4_EARLY_CYCLES: '100000000'
+          AETHERCORE_PRODUCT_GSIM_G4_WALL_SECONDS: '285'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g4_early_selftest.sh
+          bash tools/ci/product_gsim_g4_early.sh preflight
+          bash tools/ci/product_gsim_g4_early.sh run
+          grep -Fxq 'qualification=PRODUCT_GSIM_G4_100000000_CYCLES_LINUX_BANNER_GSIM_ONLY_NOT_VERILATOR_AB_NOT_PID1_PASS' \
+            build/product-gsim-g4-early/qualification.txt
+          grep -Fxq 'cycles=100000000' build/product-gsim-g4-early/qualification.txt
+          echo 'Product GSIM G4 early: exactly 100M real Linux-prefix cycles with a kernel banner; NOT G4 Verilator A/B, PID1, or Debian.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-gsim-g4-early/qualification.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload same-cycle state, identities, build logs, measured throughput
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-gsim-g3-ab-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-opensbi-first-exec/result.txt
+            build/rv64-opensbi-first-exec/evidence/sha256.txt
+            build/product-gsim-bridge/build-identity.txt
+            build/product-gsim-bridge/*.log
+            build/product-gsim-g3-ab/*.txt
+            build/product-gsim-g3-ab/*.tsv
+            build/product-gsim-g3-ab/*.log
+            build/product-gsim-g3-ab/logs/*.log
+            build/product-gsim-fast-ab/qualification.txt
+            build/product-gsim-fast-ab/compare.txt
+            build/product-gsim-fast-ab/results.tsv
+            build/product-gsim-fast-ab/logs/*.log
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
+            build/rv64-minimal-init-boot/evidence/sha256.txt
+            build/product-gsim-g4-early/qualification.txt
+            build/product-gsim-g4-early/linux-early.run.log
