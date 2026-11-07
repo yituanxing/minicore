@@ -62,6 +62,23 @@ At both DDR checkpoints the reciprocal task list closes with 41 dynamic tasks. P
 
 The authentic 2352M→2372M 20M-cycle interval retired **4,697,935 instructions**, read **158 SD sectors** (+80,896 bytes), took **117 host seconds** (~0.171 MHz simulation throughput), had 200 interrupts, 100 exceptions and no new UART bytes; `guest_failure=null`, `login_seen=false`. Its 2372M final-16 retired PC sample resolves using the **exact** vmlinux symbols to kernel `crc_itu_t` (`0xffffffff803fed90`), while the earlier 2352M sample resolves to `tiny_spi_txrx_bufs` (`spi-oc-tiny.c`). These one-instant samples are compatible with active SD/SPI/CRC work and suggest an I/O bottleneck to investigate; **they do not prove the whole interval was spent in those functions, systemd completion, or an FPGA Fmax**.
 
+## Follow-up: authenticated 2452M–2552M userspace and SPI evidence
+
+All four full [ten12 run #42365653328](https://github.com/yituanxing/minicore/actions/runs/42365653328) Product RTL-DDR-SD ZIPs were separately downloaded and SHA-256 rehashed. Their `.polling-ready` Host/RTL/card-progress hashes match the decompressed bytes; source Host hash continuity at 2512→2532→2552M was independently verified, with frozen model/firmware/DTB/Linux Image/SD/rootfs identities unchanged. The exact recovered `System.map` and read-only Sv39 DDR traversal were reused.
+
+| Cycles | Artifact / independently verified ZIP SHA-256 | PID1 mapped user 4KiB page equivalents | Dynamic tasks | SD cumulative reads |
+| --- | --- | ---: | ---: | ---: |
+| 2452M | `#13571303628` / `51fe4cfe74d5d308cc5b7447ec5ae676ee3006011c8ee0e2803d1e799d61b888` | 960 | 41 | 15,114 |
+| 2512M | `#13571887449` / `93179df7d442375839bb86bd79bd1b51b7351e15cab7cce9f0667760b2cd00af` | 1,069 | 41 | 15,511 |
+| 2532M | `#13572212068` / `b8e64d8559f37672a6971726cd4eb5321926cac0a4bd825bdccfbfc109b2ba74` | 1,069 | 41 | 15,662 |
+| 2552M | `#13572267043` / `33487c15cd3c3436276428d426937a7751a7a12d79b604fc508a1c1b63c9be77` | 1,071 | 41 | 15,786 |
+
+Every task-list walk closed with reciprocal pointers; PID1 (`pid=tgid=1`, `comm=init`, `argv=/sbin/init`) remained the **only task with a non-null user `mm`**, `__state=0` (`TASK_RUNNING`), with unchanged `mm`, PGD and `exe_file` pointers. There were **zero systemd child/service processes** and `login_seen=false`, `guest_failure=null` across these observations; the authentic 2552M terminal is **not** Debian login PASS. PID1 user mappings **increased by 109 pages** from 2452M to 2512M, plateaued through 2532M, then increased by 2 by 2552M. PID1 task bytes changed across checkpoints; its `mm` bytes changed between 2452/2512 and 2532/2552. This is real evolving userspace memory state, not a guarantee of eventual service startup.
+
+CPU observer's final-16 retired PCs at 2512M were in low user VAs `0x3f88c8dff0..0x3f88c8e66c`; at 2532M the exact `vmlinux` resolved kernel PC `0xffffffff805e97e2` to `tiny_spi_setup_transfer`, and at 2552M `0xffffffff805e9b6a` to `tiny_spi_txrx_bufs` (`spi-oc-tiny.c`). The 2512M, 2532M and 2552M intervals each retired approximately 4.7–4.8 million instructions in 119–121 host seconds, while reading 100, 151 and 124 SD sectors respectively. UART added zero bytes. These **instantaneous CPU PC samples** support SD/SPI polling activity but do **not** quantify the fraction of each full interval spent in those functions, prove systemd readiness, or establish an FPGA frequency.
+
+At an explicitly **assumed** guest clock of 50 MHz, 2552M represents 51.04 simulated guest seconds, and 15,786 512-byte read sectors correspond to roughly **155 KiB/s cumulative guest-observed SD read throughput**; the final 124-sector/20M-cycle interval gives a similar estimate. This is conditional on the nominal 50 MHz model clock and sector-counter semantics, **not** the wall-clock RTL simulation throughput (~0.16–0.17 MHz simulated cycles per host second), not an observed FPGA Fmax, and not yet proof that SPI accounts for most systemd startup wall time. Profiling should separately quantify SD transfer and CPU wait.
+
 ## Strict remaining acceptance boundary
 
 **Established:** authentic Product RTL, complete DDR+SD snapshot continuity, real ext4 root mount, PID1 kernel task with user `mm`, RISC-V dynamic ELF execution of `/sbin/init`, and `exe_file` pointing to systemd.
