@@ -1,0 +1,322 @@
+name: Product SD1 reusable five-stage 20M authenticated RTL continuation
+
+# One shared implementation for every signed checkpoint batch. Callers only
+# supply the exact previously sealed run, ZIP and snapshot pins, plus five
+# contiguous 20M milestones. No cold boot, RTL regenerate, or old-cache touch.
+on:
+  workflow_call:
+    inputs:
+      start_m:
+        required: true
+        type: string
+      stage1:
+        required: true
+        type: string
+      stage2:
+        required: true
+        type: string
+      stage3:
+        required: true
+        type: string
+      stage4:
+        required: true
+        type: string
+      stage5:
+        required: true
+        type: string
+      source_run:
+        required: true
+        type: string
+      source_head_sha:
+        required: true
+        type: string
+      source_workflow_path:
+        required: true
+        type: string
+      source_job:
+        required: true
+        type: string
+      source_completed_step:
+        required: true
+        type: string
+      source_artifact_id:
+        required: true
+        type: string
+      source_artifact_name:
+        required: true
+        type: string
+      source_artifact_digest:
+        required: true
+        type: string
+      source_host_sha:
+        required: true
+        type: string
+      source_rtl_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  relay_five:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V2_MIGRATED
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      AETHERCORE_SD1_AUTORELAY_START_M: ${{ inputs.start_m }}
+      AETHERCORE_SD1_AUTORELAY_START_HOST_SHA256: ${{ inputs.source_host_sha }}
+      AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256: ${{ inputs.source_rtl_sha }}
+    steps:
+      - name: Authenticate qualified model, exact source run and five strict milestones
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          START: ${{ inputs.start_m }}
+          STAGE1: ${{ inputs.stage1 }}
+          STAGE2: ${{ inputs.stage2 }}
+          STAGE3: ${{ inputs.stage3 }}
+          STAGE4: ${{ inputs.stage4 }}
+          STAGE5: ${{ inputs.stage5 }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+          SOURCE_HEAD: ${{ inputs.source_head_sha }}
+          SOURCE_WORKFLOW: ${{ inputs.source_workflow_path }}
+          SOURCE_JOB: ${{ inputs.source_job }}
+          SOURCE_STEP: ${{ inputs.source_completed_step }}
+          SOURCE_ID: ${{ inputs.source_artifact_id }}
+          SOURCE_NAME: ${{ inputs.source_artifact_name }}
+          SOURCE_DIGEST: ${{ inputs.source_artifact_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$START" =~ ^[0-9]{4}$ && "$START" -ge 4012 &&
+             "$(((START-4012)%100))" -eq 0 && "$((START+100))" -le 8000 &&
+             "$STAGE1" == "$((START+20))" && "$STAGE2" == "$((START+40))" &&
+             "$STAGE3" == "$((START+60))" && "$STAGE4" == "$((START+80))" &&
+             "$STAGE5" == "$((START+100))" &&
+             "$SOURCE_RUN" =~ ^[0-9]{8,12}$ && "$SOURCE_ID" =~ ^[0-9]+$ &&
+             "$SOURCE_HEAD" =~ ^[a-f0-9]{40}$ &&
+             "$SOURCE_DIGEST" =~ ^[a-f0-9]{64}$ &&
+             "$SOURCE_NAME" == "product-sd1-migrated-${START}m-${SOURCE_RUN}" &&
+             "$SOURCE_WORKFLOW" == .github/workflows/product-sd1-migrated-*.yml &&
+             -n "$SOURCE_JOB" && -n "$SOURCE_STEP" &&
+             "$AETHERCORE_SD1_AUTORELAY_START_HOST_SHA256" =~ ^[a-f0-9]{64}$ &&
+             "$AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          repo="$GITHUB_REPOSITORY"
+          verify() {
+            local run="$1" sha="$2" path="$3" job="$4" step="$5" art_id="$6" name="$7" digest="$8"
+            gh api "repos/$repo/actions/runs/$run" > "$RUNNER_TEMP/run-$run.json"
+            jq -e --arg repo "$repo" --arg sha "$sha" --arg path "$path" \
+              --argjson run "$run" '
+              .id == $run and .run_attempt == 1 and .event == "pull_request" and
+              .repository.full_name == $repo and .head_repository.full_name == $repo and
+              .head_branch == "design/rv64gc-product-architecture-20261103" and
+              .head_sha == $sha and .status == "completed" and .conclusion == "success" and
+              (.path | contains($path))
+            ' "$RUNNER_TEMP/run-$run.json" >/dev/null || exit 16
+            gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
+            jq -e --arg job "$job" --arg step "$step" '
+              [.jobs[] | select(.name == $job and .status == "completed" and
+                .conclusion == "success" and
+                ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1))] | length == 1
+            ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+            gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/art-$run.json"
+            jq -e --arg sha "$sha" --arg name "$name" --arg digest "sha256:$digest" \
+              --argjson id "$art_id" '
+              [.artifacts[] | select(.id == $id and .name == $name and
+                .digest == $digest and .workflow_run.head_sha == $sha and
+                .expired == false and .size_in_bytes > 1000000)] | length == 1
+            ' "$RUNNER_TEMP/art-$run.json" >/dev/null || exit 16
+          }
+          verify 42384463475 dc8ab72669000c19e0494afbd0e28d4f82ee3374 \
+            '.github/workflows/product-sd1-model-migrate-v1-differential.yml' \
+            migrate_and_diff 'Archive new candidate executable and authenticated 3992M result' \
+            13578644295 product-sd1-model-migrate-v1-qualified-42384463475 \
+            e511af2854a110bc0998a0c8a6de7e36378e8a1a68d90568e811577c931e7ee9
+          verify "$SOURCE_RUN" "$SOURCE_HEAD" "$SOURCE_WORKFLOW" "$SOURCE_JOB" \
+            "$SOURCE_STEP" "$SOURCE_ID" "$SOURCE_NAME" "$SOURCE_DIGEST"
+      - name: Checkout exact candidate branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+      - name: Verify exact five-segment script
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 16
+          bash -n tools/ci/product_sd1_migrated_autorelay_20m.sh
+      - name: Restore signed original Debian SD/rootfs media
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Verify the immutable original signed Debian seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == true ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore exact GPIO-CS Linux Image
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Reject missing exact GPIO-CS Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true ]] || exit 16
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+      - name: Import signed original polling firmware and DTB
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      - name: Restore exact QUALIFIED executable (no generated RTL build)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42384463475
+          name: product-sd1-model-migrate-v1-qualified-42384463475
+          github-token: ${{ github.token }}
+          path: build/product-sd1-model-migration-v1
+      - name: Import authenticated complete initial checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.source_run }}
+          name: ${{ inputs.source_artifact_name }}
+          github-token: ${{ github.token }}
+          path: build/product-sd1-autorelay-import/${{ inputs.start_m }}m
+      - name: Verify source Host and RTL digest plus candidate ELF ABI
+        shell: bash
+        env:
+          SOURCE_HOST_SHA: ${{ inputs.source_host_sha }}
+          SOURCE_RTL_SHA: ${{ inputs.source_rtl_sha }}
+          START: ${{ inputs.start_m }}
+        run: |
+          set -euo pipefail
+          model=build/product-sd1-model-migration-v1/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop
+          initial="build/product-sd1-autorelay-import/${START}m"
+          [[ "$(sha256sum "$model" | cut -d' ' -f1)" == b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 &&
+             "$(sha256sum "$initial/persistent.pre.host" | cut -d' ' -f1)" == "$SOURCE_HOST_SHA" &&
+             "$(sha256sum "$initial/persistent.pre.rtl" | cut -d' ' -f1)" == "$SOURCE_RTL_SHA" ]] || exit 16
+          [[ "$(uname -m)" == x86_64 ]] || exit 16
+          readelf -h "$model" | grep -Eq 'Class:[[:space:]]+ELF64' || exit 16
+          readelf -h "$model" | grep -Eq 'Machine:[[:space:]]+Advanced Micro Devices X86-64' || exit 16
+          chmod 755 "$model"
+          [[ "$(sha256sum "$model" | cut -d' ' -f1)" == b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 ]] || exit 16
+          ldd "$model" > "$RUNNER_TEMP/model-dynamic-abi.txt"
+          ! grep -Fq 'not found' "$RUNNER_TEMP/model-dynamic-abi.txt" || exit 16
+      - name: Advance genuine RTL segment one
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-autorelay-import/${{ inputs.start_m }}m ${{ inputs.stage1 }}
+      - name: Upload complete stage one before any next cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-${{ inputs.stage1 }}m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/${{ inputs.stage1 }}m
+      - name: Advance genuine RTL segment two
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/${{ inputs.stage1 }}m ${{ inputs.stage2 }}
+      - name: Upload complete stage two before any next cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-${{ inputs.stage2 }}m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/${{ inputs.stage2 }}m
+      - name: Advance genuine RTL segment three
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/${{ inputs.stage2 }}m ${{ inputs.stage3 }}
+      - name: Upload complete stage three before any next cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-${{ inputs.stage3 }}m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/${{ inputs.stage3 }}m
+      - name: Advance genuine RTL segment four
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/${{ inputs.stage3 }}m ${{ inputs.stage4 }}
+      - name: Upload complete stage four before any next cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-${{ inputs.stage4 }}m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/${{ inputs.stage4 }}m
+      - name: Advance genuine RTL segment five
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/${{ inputs.stage4 }}m ${{ inputs.stage5 }}
+      - name: Upload complete stage five before completion
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-${{ inputs.stage5 }}m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/${{ inputs.stage5 }}m
+      - name: Distinguish five complete stages from Debian guest service login
+        shell: bash
+        env:
+          STAGE1: ${{ inputs.stage1 }}
+          STAGE2: ${{ inputs.stage2 }}
+          STAGE3: ${{ inputs.stage3 }}
+          STAGE4: ${{ inputs.stage4 }}
+          STAGE5: ${{ inputs.stage5 }}
+        run: |
+          set -euo pipefail
+          for mark in "$STAGE1" "$STAGE2" "$STAGE3" "$STAGE4" "$STAGE5"; do
+            ready="build/product-sd1-migrated-autorelay/${mark}m/.migration-ready"
+            grep -Fxq 'qualification=PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS' "$ready"
+            printf 'Product RTL %sM sealed/uploaded; Debian service/login not yet proved.\n' "$mark" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Always archive diagnostic logs after failure or success
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-autorelay-logs-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/product-sd1-migrated-autorelay/logs
+            build/product-sd1-migrated-autorelay/.stage-*

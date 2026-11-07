@@ -3,14 +3,14 @@ set -euo pipefail
 
 # Repeatable, publish-once real Product RTL 20M stage.  This script NEVER
 # starts at reset, never recompiles RTL, and never mutates the source snapshot.
-# Invoked five times by a single label-only workflow, with each successful
-# complete snapshot uploaded *before* the following stage is attempted.
+# Invoked five times by a single label-only workflow (or its reusable
+# workflow_call successor); the next batch changes only the sealed start pins.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 die() { echo "PRODUCT_SD1_MIGRATED_AUTORELAY_REJECTED: $*" >&2; exit 16; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 field() { sed -n "s/^$1=//p" "$2" | head -1; }
-[[ $# == 2 ]] || die 'usage: SOURCE_COMPLETE_STAGE_DIR TARGET_MILLIONS (4032..4112 in 20M steps)'
+[[ $# == 2 ]] || die 'usage: SOURCE_COMPLETE_STAGE_DIR TARGET_MILLIONS (20M increments)'
 [[ "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_FULL_DEBIAN_SIGNED_RELAY_V2_MIGRATED &&
    "${AETHERCORE_VERILATOR_VERSION:-}" == 5.054 &&
    "${SIM_SETTLE_MODE:-}" == reference &&
@@ -18,20 +18,28 @@ field() { sed -n "s/^$1=//p" "$2" | head -1; }
    "${AETHERCORE_DATA_MEM_WAIT_CYCLES:-}" == 0 ]] ||
   die 'exact original SD1 migrated Product RTL timing profile required'
 
-case "$2" in
-  4032|4052|4072|4092|4112) target_m="$2" ;;
-  *) die 'unauthorized milestone or missing 20M stage' ;;
-esac
+batch_start_m="${AETHERCORE_SD1_AUTORELAY_START_M:-4012}"
+[[ "$batch_start_m" =~ ^[0-9]{4}$ && "$batch_start_m" -ge 4012 &&
+   "$(((batch_start_m-4012)%100))" -eq 0 &&
+   "$((batch_start_m+100))" -le 8000 ]] ||
+  die 'batch must start on the next bounded 100M milestone below migrated-model 8B ceiling'
+[[ "$2" =~ ^[0-9]+$ ]] || die 'invalid target milestone'
+target_m="$2"
+[[ "$target_m" -gt "$batch_start_m" &&
+   "$target_m" -le "$((batch_start_m+100))" &&
+   "$(((target_m-batch_start_m)%20))" -eq 0 ]] ||
+  die 'unauthorized milestone or missing 20M stage'
 target="$((target_m*1000000))"
 source_dir="$(realpath -e "$1")"
 [[ "$source_dir" == "$ROOT/build/product-sd1-migrated-cross4b/4012m" ||
+   "$source_dir" == "$ROOT/build/product-sd1-autorelay-import/${batch_start_m}m" ||
    "$source_dir" == "$ROOT/build/product-sd1-migrated-autorelay/"* ]] ||
   die 'foreign state directory; only authenticated prior Product checkpoint permitted'
 ready="$source_dir/.migration-ready"
 [[ -s "$ready" && ! -L "$ready" ]] || die 'missing source publish-once seal'
 start="$(field boot_cycles "$ready")"
 [[ "$start" =~ ^[0-9]+$ && "$((target-start))" -eq 20000000 &&
-   "$((start%1000000))" -eq 0 && "$target" -le 4112000000 ]] ||
+   "$((start%1000000))" -eq 0 && "$target" -le "$(((batch_start_m+100)*1000000))" ]] ||
   die 'stage must restore immediately previous 20M milestone'
 [[ "$(field schema "$ready")" == AETSDCP1 ]] || die 'source Host schema mismatch'
 case "$(field qualification "$ready")" in
@@ -46,6 +54,7 @@ FW_SHA=4c9b6ed61950094e2551bda780fbea9c79ded65fab433f13b06e2eb64817e5be
 DTB_SHA=72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1c
 SD_SHA=6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7
 LINUX_SHA=522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393
+ROOTFS_SHA=f2f8c6bf118c0be578b633dfd5486e0d1e1ef7becdaf093bbc4f16f62d0e474e
 qual="$ROOT/build/product-sd1-model-migration-v1/qualification-manifest.txt"
 sim="$ROOT/build/product-sd1-model-migration-v1/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop"
 [[ -s "$qual" && ! -L "$qual" && -x "$sim" && ! -L "$sim" &&
@@ -60,7 +69,7 @@ grep -Fxq 'PRODUCT_SD1_MODEL_MIGRATION_V1: status=QUALIFIED_UNDER_4B_ONLY' "$qua
    "$(field dtb_sha256 "$ready")" == "$DTB_SHA" &&
    "$(field sd_image_sha256 "$ready")" == "$SD_SHA" &&
    "$(field linux_image_sha256 "$ready")" == "$LINUX_SHA" &&
-   "$(field rootfs_result_sha256 "$ready")" =~ ^[a-f0-9]{64}$ ]] ||
+   "$(field rootfs_result_sha256 "$ready")" == "$ROOTFS_SHA" ]] ||
   die 'previous stage model/media identity drift'
 for kind in host rtl; do
   file="$source_dir/persistent.pre.$kind"
@@ -71,10 +80,28 @@ done
 [[ -s "$source_dir/card-progress.json" && ! -L "$source_dir/card-progress.json" &&
    "$(field card_progress_sha256 "$ready")" == "$(sha "$source_dir/card-progress.json")" ]] ||
   die 'previous stage activity evidence unsealed'
-if [[ "$start" == 4012000000 ]]; then
-  [[ "$(sha "$source_dir/persistent.pre.host")" == 975524bafd1c64169d012ae0d2d773f50feafaee771e401a2c5b527781c436d5 &&
-     "$(sha "$source_dir/persistent.pre.rtl")" == 2dba2498e577b88c8225fb60891d06191761ad61c59b4032f9b4c82182112bb4 ]] ||
-    die 'original 4012M source artifact SHA changed'
+if [[ "$start" == "$((batch_start_m*1000000))" ]]; then
+  case "$batch_start_m" in
+    4012)
+      initial_host_sha=975524bafd1c64169d012ae0d2d773f50feafaee771e401a2c5b527781c436d5
+      initial_rtl_sha=2dba2498e577b88c8225fb60891d06191761ad61c59b4032f9b4c82182112bb4
+      ;;
+    *)
+      initial_host_sha="${AETHERCORE_SD1_AUTORELAY_START_HOST_SHA256:-}"
+      initial_rtl_sha="${AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256:-}"
+      [[ "$initial_host_sha" =~ ^[a-f0-9]{64}$ &&
+         "$initial_rtl_sha" =~ ^[a-f0-9]{64}$ ]] ||
+        die 'new batch requires actual sealed source artifact SHA pins'
+      if [[ "$batch_start_m" == 4112 ]]; then
+        [[ "$initial_host_sha" == 8cb71295499f9ce3b5fa4d8b7dd66cd2ebd50f365d4b7738e074e5d220430308 &&
+           "$initial_rtl_sha" == 06d554fab9c906ed44dfc780fa5be673f33d1e7d7b8bcf43aa1e549855821df4 ]] ||
+          die 'original sealed 4112M milestone pinned SHA mismatch'
+      fi
+      ;;
+  esac
+  [[ "$(sha "$source_dir/persistent.pre.host")" == "$initial_host_sha" &&
+     "$(sha "$source_dir/persistent.pre.rtl")" == "$initial_rtl_sha" ]] ||
+    die 'pinned batch-start source artifact SHA changed'
 fi
 
 # Full official signed seed is verified exactly ONCE by the workflow before
