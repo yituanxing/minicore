@@ -136,12 +136,23 @@ jobs:
              "$SOURCE_RUN" =~ ^[0-9]{8,12}$ && "$SOURCE_ID" =~ ^[0-9]+$ &&
              "$SOURCE_HEAD" =~ ^[a-f0-9]{40}$ &&
              "$SOURCE_DIGEST" =~ ^[a-f0-9]{64}$ &&
-             ( "$SOURCE_MODE" == cross_run || "$SOURCE_MODE" == intra_run ) &&
+             ( "$SOURCE_MODE" == cross_run || "$SOURCE_MODE" == intra_run ||
+               "$SOURCE_MODE" == post_publish_failure ) &&
              "$SOURCE_NAME" == "product-sd1-migrated-${START}m-${SOURCE_RUN}" &&
              "$SOURCE_WORKFLOW" == .github/workflows/product-sd1-migrated-*.yml &&
              -n "$SOURCE_JOB" && -n "$SOURCE_STEP" &&
              "$AETHERCORE_SD1_AUTORELAY_START_HOST_SHA256" =~ ^[a-f0-9]{64}$ &&
              "$AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          if [[ "$SOURCE_MODE" == post_publish_failure ]]; then
+            [[ "$SOURCE_JOB" == 'stage_01 / relay_five' &&
+               "$SOURCE_STEP" == 'Upload complete stage five before completion' &&
+               "$SOURCE_RUN" == 42390234019 &&
+               "$SOURCE_HEAD" == 3a0459929bbe82c9858bfafe83921a88acf1f546 &&
+               "$SOURCE_WORKFLOW" == '.github/workflows/product-sd1-migrated-4312-to-4512m-handoff-smoke.yml' &&
+               "$SOURCE_ID" == 13581472527 &&
+               "$SOURCE_NAME" == product-sd1-migrated-4412m-42390234019 &&
+               "$SOURCE_DIGEST" == 6fbeb0935ddbd2d005e0b2d74173d305b8b8d2d61e53874b1c6b6ce002483d4d ]] || exit 16
+          fi
           repo="$GITHUB_REPOSITORY"
           verify() {
             local run="$1" sha="$2" path="$3" job="$4" step="$5" art_id="$6" name="$7" digest="$8" mode="${9:-cross_run}"
@@ -160,21 +171,33 @@ jobs:
               .head_sha == $sha and
               (if $mode == "intra_run" then
                 .status == "in_progress" and .conclusion == null
+               elif $mode == "post_publish_failure" then
+                .status == "completed" and .conclusion == "failure"
                else .status == "completed" and .conclusion == "success" end) and
               (.path | contains($path))
             ' "$RUNNER_TEMP/run-$run.json" >/dev/null || exit 16
             gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
             jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
               [.jobs[] | select(.name == $job and .status == "completed" and
-                .conclusion == "success" and
+                (if $mode == "post_publish_failure" then
+                   .conclusion == "failure" and
+                   ([.steps[] | select(.conclusion == "failure") | .name] ==
+                     ["Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs"])
+                 else .conclusion == "success" end) and
                 ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1) and
-                (if $mode == "intra_run" then
+                (if $mode == "intra_run" or $mode == "post_publish_failure" then
                    ([.steps[] | select((.name | startswith("Advance genuine RTL segment ")) and
                      .status == "completed" and .conclusion == "success")] | length == 5) and
                    ([.steps[] | select((.name | startswith("Upload complete stage ")) and
                      .status == "completed" and .conclusion == "success")] | length == 5)
                  else true end))] | length == 1
             ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+            if [[ "$mode" == post_publish_failure ]]; then
+              jq -e '
+                [.jobs[] | select(.name == "stage_02" and .status == "completed" and
+                  .conclusion == "skipped")] | length == 1
+              ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+            fi
             gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/art-$run.json"
             jq -e --arg sha "$sha" --arg name "$name" --arg digest "sha256:$digest" \
               --argjson id "$art_id" '
@@ -389,8 +412,11 @@ jobs:
           sha() { sha256sum "$1" | cut -d' ' -f1; }
           host="$(field snapshot_host_sha256 "$ready")"
           rtl="$(field snapshot_rtl_sha256 "$ready")"
+          # upload-artifact@v4 outputs a bare SHA-256, whereas the GitHub
+          # artifacts REST API prefixes the same digest with "sha256:".
+          digest_hex="${ARTIFACT_DIGEST#sha256:}"
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ &&
-             "$ARTIFACT_DIGEST" =~ ^sha256:[a-f0-9]{64}$ &&
+             "$digest_hex" =~ ^[a-f0-9]{64}$ &&
              "$host" =~ ^[a-f0-9]{64}$ && "$rtl" =~ ^[a-f0-9]{64}$ &&
              "$(sha "build/product-sd1-migrated-autorelay/${TERMINAL}m/persistent.pre.host")" == "$host" &&
              "$(sha "build/product-sd1-migrated-autorelay/${TERMINAL}m/persistent.pre.rtl")" == "$rtl" &&
@@ -404,9 +430,9 @@ jobs:
           # upload-artifact@v4 has already succeeded, but GitHub REST metadata
           # may become visible slightly later. Never fabricate an artifact ID.
           published=0
-          for attempt in 1 2 3 4 5 6; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/terminal-artifacts.json" &&
-               jq -e --arg name "$artifact_name" --arg digest "$ARTIFACT_DIGEST" \
+               jq -e --arg name "$artifact_name" --arg digest "sha256:$digest_hex" \
                  --arg sha "$TARGET_SHA" --argjson id "$ARTIFACT_ID" '
                    [.artifacts[] | select(.id == $id and .name == $name and
                      .digest == $digest and .workflow_run.head_sha == $sha and
@@ -419,7 +445,7 @@ jobs:
           done
           [[ "$published" == 1 ]] || exit 16
           echo "artifact_id=$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
-          echo "artifact_digest=${ARTIFACT_DIGEST#sha256:}" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$digest_hex" >> "$GITHUB_OUTPUT"
           echo "host_sha=$host" >> "$GITHUB_OUTPUT"
           echo "rtl_sha=$rtl" >> "$GITHUB_OUTPUT"
           echo "PRODUCT_SD1_MIGRATED_AUTORUN_TERMINAL_AUTHENTICATED stage=${TERMINAL}m artifact_id=$ARTIFACT_ID host_sha=$host rtl_sha=$rtl"
