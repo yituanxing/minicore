@@ -1,0 +1,136 @@
+name: Product SD1 isolated SPI polling firmware candidate
+
+# Zero guest cycles; preserve old IRQ-path RTL state. Candidate firmware
+# has a different DTB and must NOT resume patched-IRQ 512M/572M state.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-sd1-polling-fw-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  polling-firmware-only:
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-build' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_SD1_SPI_POLLING_BUILD: '1'
+      RV64_LINUX_JOBS: '4'
+    steps:
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+      - name: Cheap polling isolation and parser contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_spi_polling_build.sh
+          python3 -m unittest tests_py.test_product_sd1_spi_polling_dts -v
+          python3 -m py_compile tools/ci/product_sd1_spi_polling_dts.py
+      - name: Restore original signed Debian media without rebuilding
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Reject unverified official SD media
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == 'true' ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore separate exact patched kernel and original IRQ firmware
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Reject missing old diagnostic identity before recompiling
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true ]] || exit 16
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+      - name: Restore pinned GCC13.3 and OpenSBI source
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+      - name: Restore pinned OpenSBI source cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+      - name: Ensure pinned compiler and dtc only
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v dtc >/dev/null; then
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get install -y device-tree-compiler
+          fi
+          timeout --signal=TERM --kill-after=30s 15m \
+            bash tools/ensure_riscv64_linux_gcc_13_3.sh
+      - name: Build only distinct polling DTB and OpenSBI payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 18m \
+            bash tools/ci/product_sd1_spi_polling_build.sh
+          cat build/product-sd1-spi-polling-candidate/manifest.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Cache separate polling candidate by exact reviewed sources
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-spi-polling-candidate/boot
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-spi-polling-fw-v1-${{ hashFiles('tools/ci/product_sd1_spi_polling_dts.py', 'tools/ci/product_sd1_spi_polling_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Upload distinct firmware+DTB, SHA and logs, never SD media
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-spi-polling-build-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            build/product-sd1-spi-polling-candidate/manifest.txt
+            build/product-sd1-spi-polling-candidate/dts-proof.txt
+            build/product-sd1-spi-polling-candidate/opensbi-build.log
+            build/product-sd1-spi-polling-candidate/boot
