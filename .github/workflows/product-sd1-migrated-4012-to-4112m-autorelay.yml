@@ -1,0 +1,252 @@
+name: Product SD1 qualified migrated RTL 4012M to 4112M automatic five-segment checkpoint relay
+
+# One deliberate label triggers all FIVE sequential 20M continuations.  Each
+# checkpoint is uploaded before the next segment, so a later failure cannot
+# erase an already completed segment.  Never cold boot or regenerate Verilator.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-migrated-4012-4112m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  five_recoverable_stages:
+    if: >-
+      github.event.label.name == 'product-sd1-migrated-4012m-to-4112m-auto' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V2_MIGRATED
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+    steps:
+      - name: Authenticate both successful source runs and immutable model and 4012M ZIPs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          verify_run() {
+            local run="$1" commit="$2" path="$3" job="$4" step="$5" artifact="$6" id="$7" digest="$8"
+            gh api "repos/$repo/actions/runs/$run" > "$RUNNER_TEMP/run-$run.json"
+            jq -e --arg repo "$repo" --arg sha "$commit" --arg path "$path" \
+              --argjson run "$run" '
+              .id == $run and .run_attempt == 1 and
+              .event == "pull_request" and .repository.full_name == $repo and
+              .head_repository.full_name == $repo and .head_sha == $sha and
+              .head_branch == "design/rv64gc-product-architecture-20261103" and
+              .status == "completed" and .conclusion == "success" and
+              (.path | contains($path))
+            ' "$RUNNER_TEMP/run-$run.json" >/dev/null || exit 16
+            gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
+            jq -e --arg job "$job" --arg step "$step" '
+              [.jobs[] | select(.name == $job and
+                .status == "completed" and .conclusion == "success" and
+                ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1))] | length == 1
+            ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+            gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/artifacts-$run.json"
+            jq -e --arg sha "$commit" --arg name "$artifact" \
+              --arg digest "sha256:$digest" --argjson id "$id" '
+              [.artifacts[] | select(.id == $id and .name == $name and
+                .digest == $digest and .workflow_run.head_sha == $sha and
+                .expired == false and .size_in_bytes > 1000000)] | length == 1
+            ' "$RUNNER_TEMP/artifacts-$run.json" >/dev/null || exit 16
+          }
+          verify_run \
+            42384463475 dc8ab72669000c19e0494afbd0e28d4f82ee3374 \
+            '.github/workflows/product-sd1-model-migrate-v1-differential.yml' \
+            migrate_and_diff \
+            'Archive new candidate executable and authenticated 3992M result' \
+            product-sd1-model-migrate-v1-qualified-42384463475 13578644295 \
+            e511af2854a110bc0998a0c8a6de7e36378e8a1a68d90568e811577c931e7ee9
+          verify_run \
+            42384994484 726c2e78e5c795295d28d209068c400dc59d18ae \
+            '.github/workflows/product-sd1-model-migrate-v1-cross-4b.yml' \
+            crossed_4b \
+            'Preserve real 4012M Host RTL DDR SD checkpoint' \
+            product-sd1-migrated-4012m-42384994484 13579545296 \
+            322fc5d4428dc016db024d4b3485df903b412e460cde059a1c95262f5c6d3b0a
+      - name: Checkout exact candidate snapshot validator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+      - name: Verify syntax and exact repository version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 16
+          bash -n tools/ci/product_sd1_migrated_autorelay_20m.sh
+      - name: Restore the original signed Debian seed and immutable SD rootfs
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Reject missing original signed Debian seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == true ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore original GPIO-CS Linux Image
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Reject missing GPIO-CS Linux Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true ]] || exit 16
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+      - name: Import exact original signed polling FW and DTB
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      - name: Restore QUALIFIED new Host executable without Verilator rebuild
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42384463475
+          name: product-sd1-model-migrate-v1-qualified-42384463475
+          github-token: ${{ github.token }}
+          path: build/product-sd1-model-migration-v1
+      - name: Restore authenticated first migrated 4012M snapshot
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42384994484
+          name: product-sd1-migrated-4012m-42384994484
+          github-token: ${{ github.token }}
+          path: build/product-sd1-migrated-cross4b
+      - name: Check candidate executable and 4012M baseline before any guest cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          model=build/product-sd1-model-migration-v1/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop
+          initial=build/product-sd1-migrated-cross4b/4012m
+          [[ "$(sha256sum "$model" | cut -d' ' -f1)" == b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 &&
+             "$(sha256sum "$initial/persistent.pre.host" | cut -d' ' -f1)" == 975524bafd1c64169d012ae0d2d773f50feafaee771e401a2c5b527781c436d5 &&
+             "$(sha256sum "$initial/persistent.pre.rtl" | cut -d' ' -f1)" == 2dba2498e577b88c8225fb60891d06191761ad61c59b4032f9b4c82182112bb4 ]] || exit 16
+          [[ "$(uname -m)" == x86_64 ]] || exit 16
+          readelf -h "$model" | grep -Eq 'Class:[[:space:]]+ELF64' || exit 16
+          readelf -h "$model" | grep -Eq 'Machine:[[:space:]]+Advanced Micro Devices X86-64' || exit 16
+          chmod 755 "$model"
+          [[ "$(sha256sum "$model" | cut -d' ' -f1)" == b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 ]] || exit 16
+          ldd "$model" > "$RUNNER_TEMP/model-dynamic-abi.txt"
+          ! grep -Fq 'not found' "$RUNNER_TEMP/model-dynamic-abi.txt" || exit 16
+      - name: Authentic RTL segment 4012M to 4032M
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-cross4b/4012m 4032
+      - name: Preserve completed 4032M checkpoint before continuing
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-4032m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/4032m
+      - name: Authentic RTL segment 4032M to 4052M
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/4032m 4052
+      - name: Preserve completed 4052M checkpoint before continuing
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-4052m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/4052m
+      - name: Authentic RTL segment 4052M to 4072M
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/4052m 4072
+      - name: Preserve completed 4072M checkpoint before continuing
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-4072m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/4072m
+      - name: Authentic RTL segment 4072M to 4092M
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/4072m 4092
+      - name: Preserve completed 4092M checkpoint before continuing
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-4092m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/4092m
+      - name: Authentic RTL segment 4092M to 4112M
+        timeout-minutes: 25
+        shell: bash
+        run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/4092m 4112
+      - name: Preserve completed 4112M checkpoint before declaring batch success
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-4112m-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build/product-sd1-migrated-autorelay/4112m
+      - name: Summarize five sealed Product checkpoints without Debian PASS claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mark in 4032 4052 4072 4092 4112; do
+            grep -Fxq 'qualification=PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS' \
+              "build/product-sd1-migrated-autorelay/${mark}m/.migration-ready"
+            printf 'Completed authentic Product RTL stage %sM; artifact uploaded; not Debian PASS.\n' "$mark" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Preserve segment diagnostics even after late failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-4012-4112m-logs-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/product-sd1-migrated-autorelay/logs
+            build/product-sd1-migrated-autorelay/.stage-*
