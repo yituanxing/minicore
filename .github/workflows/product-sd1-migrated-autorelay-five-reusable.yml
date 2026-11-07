@@ -54,6 +54,10 @@ on:
       source_rtl_sha:
         required: true
         type: string
+      require_2pow32_crossing:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -286,6 +290,19 @@ jobs:
         timeout-minutes: 25
         shell: bash
         run: bash tools/ci/product_sd1_migrated_autorelay_20m.sh build/product-sd1-migrated-autorelay/${{ inputs.stage4 }}m ${{ inputs.stage5 }}
+      - name: Prove host plus Verilator 64-bit time traversed the real 2^32 edge
+        if: inputs.require_2pow32_crossing
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ inputs.stage4 }}' == 4292 && '${{ inputs.stage5 }}' == 4312 ]] || exit 16
+          jq -e '
+            .from_cycles == 4292000000 and .to_cycles == 4312000000 and
+            .verilator_context_time_before == 4292000000 and
+            .verilator_context_time_after == 4312000000 and
+            .crossed_2pow32_boundary_verified == true and
+            .retired_delta > 0 and .guest_failure == null
+          ' build/product-sd1-migrated-autorelay/4312m/card-progress.json >/dev/null || exit 16
       - name: Upload complete stage five before completion
         uses: actions/upload-artifact@v4
         with:

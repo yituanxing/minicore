@@ -147,12 +147,26 @@ python3 - "$source_dir/persistent.pre.host" "$stage/persistent.pre.host" \
 import json,sys
 from pathlib import Path
 sys.path.insert(0,'tools/ci')
-from product_sd1_relay_state import decode
+from product_sd1_relay_state import decode,read_exact,read_u64,read_string,MAGIC,VERSION
 from product_sd1_card_snapshot import card_state_from_host
 from product_sd1_cpu_observer_audit import inspect as inspect_cpu,compare as compare_cpu
 src,dst=map(Path,sys.argv[1:3]); media=sys.argv[3]; elapsed=int(sys.argv[4]); report=Path(sys.argv[5])
 before,after=decode(src),decode(dst)
 cb,ca=card_state_from_host(src),card_state_from_host(dst)
+def context_time(path):
+    # AETSDCP1 stores Verilator context time as a full little-endian u64,
+    # independently of the Observer's full u64 cycle counter.  Read both
+    # to catch any accidental 32-bit truncation at the 2^32 boundary.
+    with path.open('rb') as stream:
+        if read_exact(stream,8)!=MAGIC or read_u64(stream)!=VERSION:
+            raise SystemExit('AUTORELAY_REJECTED: invalid 64-bit Host time schema')
+        for _ in range(6): read_string(stream,128)
+        read_string(stream,128)
+        read_string(stream,4096)
+        read_u64(stream)
+        return read_u64(stream)
+if context_time(src)!=before['cycles'] or context_time(dst)!=after['cycles']:
+    raise SystemExit('AUTORELAY_REJECTED: 64-bit Verilator/Observer time mismatch')
 with src.open('rb') as fh: cpu_before=inspect_cpu(fh)
 with dst.open('rb') as fh: cpu_after=inspect_cpu(fh)
 cpu=compare_cpu(cpu_before,cpu_after)
@@ -162,6 +176,9 @@ if before['identity']!=after['identity'] or ca['sd_media_sha256']!=media or afte
     raise SystemExit('AUTORELAY_REJECTED: guest failure or signed identity drift')
 if cpu['retired_delta']!=after['commits']-before['commits']:
     raise SystemExit('AUTORELAY_REJECTED: CPU observer retirement mismatch')
+crossed_uint32_boundary=before['cycles']<(1<<32)<=after['cycles']
+if crossed_uint32_boundary and not (before['cycles']==4292000000 and after['cycles']==4312000000):
+    raise SystemExit('AUTORELAY_REJECTED: unexpected 2^32 boundary stage')
 for key in ('sd_command_count','sd_reads','sd_writes'):
     if ca[key]<cb[key]:
         raise SystemExit('AUTORELAY_REJECTED: SD activity counter regressed: '+key)
@@ -170,6 +187,9 @@ result={
     'qualification':'MIGRATED_REAL_PRODUCT_RTL_20M_NOT_DEBIAN_PASS',
     'from_cycles':before['cycles'],'to_cycles':after['cycles'],
     'retired_delta':cpu['retired_delta'],'sim_wall_seconds':elapsed,
+    'verilator_context_time_before':context_time(src),
+    'verilator_context_time_after':context_time(dst),
+    'crossed_2pow32_boundary_verified':crossed_uint32_boundary,
     'sd_command_delta':ca['sd_command_count']-cb['sd_command_count'],
     'sd_read_delta':ca['sd_reads']-cb['sd_reads'],
     'sd_write_delta':ca['sd_writes']-cb['sd_writes'],
