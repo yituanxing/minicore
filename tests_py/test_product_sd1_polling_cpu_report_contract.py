@@ -14,7 +14,7 @@ class ProductPollingCpuReportContract(unittest.TestCase):
         self.assertIn('"last_16_retired_pc":cpu["last_16_retired_pc"]', source)
         self.assertIn("PRODUCT_SD1_SPI_POLLING_RELAY_SAVED cycle=", source)
         self.assertIn("snapshot_host_sha256=$(sha", source)
-        self.assertNotIn("PRODUCT_SD1_PERSISTENT_STAGE_ADVANCED old_cycles=$start new_cycles=$target", source)
+        self.assertIn("PRODUCT_SD1_PERSISTENT_STAGE_ADVANCED old_cycles=$start new_cycles=$target", source)
 
 
 if __name__ == "__main__":
