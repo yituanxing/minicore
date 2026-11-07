@@ -31,6 +31,22 @@ All addresses below were read **offline** from the saved DDR; no RTL was rerun a
 - A later observer reported RISC-V store page-fault cause 15 at `0x3f88c913e8`, fault address `0x3f883966c0`. At **2032M**, that address maps through PID1's user PGD to physical `0x80c296c0` with PTE low flags `0x53` (valid/readable/user/accessed, not writable). This is **consistent with a normal COW write fault**, not enough to prove either successful COW resolution or a bug. Later-state attribution requires a same-cycle snapshot.
 - The 2032M interval itself retired 4,652,464 instructions, read 91 SD sectors, logged no new UART bytes and `guest_failure=null`. Root ext4 was mounted. These are liveness counters, not an init-completion certificate.
 
+## Follow-up: four authenticated DDR checkpoints (1992M–2132M)
+
+All four full Product RTL-DDR-SD ZIPs were separately downloaded and rehashed. A read-only Sv39 task-list/PGD walk using the same exact recovered symbols produced these results:
+
+| Cycles | Artifact / ZIP SHA-256 | Tasks (excluding swapper/0) | PID1 `__state` | PID1 user PTE page equivalents | SD cumulative reads |
+| --- | --- | ---: | --- | ---: | ---: |
+| 1992M | `#13570461840` / `e75a09c4cecc12e31109f0a0c5799837f4316fdce12c9759be4a7eb9bb829ef8` | 41 | `0x0` (`TASK_RUNNING`) | 751 | 11,929 |
+| 2032M | `#13570575831` / `b78d8eb3ef1acd3b8200aebd7b70d91696a5c2d6829091fca5f1290461d021a5` | 41 | `0x0` (`TASK_RUNNING`) | 789 | 12,052 |
+| 2072M | `#13570398096` / `02d6cee25ea9745a62d63d7c039e15ca35753613f56dfe7b982581b804eccfd1` | 41 | `0x0` (`TASK_RUNNING`) | 790 | 12,358 |
+| 2132M | `#13571010718` / `b05f43d16811b094c4a64e56c7ed6ca2ab34de6889d32b91d661ae6581ca3f93` | 41 | `0x0` (`TASK_RUNNING`) | 803 | 12,807 |
+
+Each reciprocal task list closed without broken pointers. In **all four**, PID1 was the only task with a non-null user `mm` (same PID/TGID=1, `comm=init`, `/sbin/init` argv, userspace PGD and executable `exe_file`); no systemd child/service tasks appeared. Importantly, the task base `+0x0` value `0xa` is RISC-V `thread_info.flags`, **not** process `__state`: `CONFIG_THREAD_INFO_IN_TASK` places the 48-byte `thread_info` first, with 32-bit `task_struct.__state` at `+0x30`. PID1 `__state=TASK_RUNNING` at every sampled checkpoint (runnable, not proof of continuous on-CPU execution).
+
+PID1 gained **52 user-mapped 4 KiB page equivalents** from 1992M to 2132M, while SD reads increased by **878 sectors**. At user fault VA `0x3f883966c0`, leaf PTE progressed `0x2030a453` at 1992M/2032M (read-only, PA `0x80c29000`) → `0x21fa94d7` at 2072M (writable, new PA `0x87ea5000`) → `0x21fa94d3` at 2132M (same new PA, write-disabled). This is direct evidence of page replacement and subsequent permission changes, **consistent with COW fault handling**; it does not establish the exact syscall or systemd readiness. PID1 task/MM bytes changed across snapshots even though its identity, argv and top-level user PGD pointer stayed the same.
+
+**Revised conclusion:** PID1 is not shown to be permanently blocked or simply looping on an unresolved COW fault. Its user mappings evolved and its sampled task state is runnable. It also has not spawned services or produced a login prompt by 2132M, so complete Debian remains **NOT PASS**.
 ## Strict remaining acceptance boundary
 
 **Established:** authentic Product RTL, complete DDR+SD snapshot continuity, real ext4 root mount, PID1 kernel task with user `mm`, RISC-V dynamic ELF execution of `/sbin/init`, and `exe_file` pointing to systemd.
