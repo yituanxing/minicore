@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: product-sd1-spi-polling-rtl-short-${{ github.event.pull_request.number }}
+  group: product-sd1-spi-polling-five-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
