@@ -225,6 +225,7 @@ int run(int argc,char** argv) {
 }
 } // namespace
 
+#ifndef AETHERCORE_QEMU_RAM_TRACE_EMBED
 int main(int argc,char** argv) {
   try { return run(argc,argv); }
   catch (const std::exception& e) {
@@ -232,3 +233,4 @@ int main(int argc,char** argv) {
     return 2;
   }
 }
+#endif
