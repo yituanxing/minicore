@@ -53,7 +53,9 @@ class PreflightTest(unittest.TestCase):
 
     def test_complete_s_integer_state_is_still_not_an_rtl_pass(self):
         report = self.inspect()
-        self.assertTrue(report['arch_registers_complete'])
+        self.assertTrue(report['minimum_s_mode_register_subset_present'])
+        self.assertFalse(report['pmp_registers_present'])
+        self.assertIn('pmpcfg3', report['missing_pmp_registers'])
         self.assertFalse(report['rtl_handoff_pass'])
         self.assertFalse(report['rtl_injected'])
         self.assertEqual(report['result'], 'C1_SOURCE_REVIEWED_NOT_RTL_RESUMED')
@@ -62,9 +64,9 @@ class PreflightTest(unittest.TestCase):
         del self.regs['priv']
         del self.regs['satp']
         report = self.inspect()
-        self.assertFalse(report['arch_registers_complete'])
-        self.assertIn('priv', report['missing_arch_registers'])
-        self.assertIn('satp', report['missing_arch_registers'])
+        self.assertFalse(report['minimum_s_mode_register_subset_present'])
+        self.assertIn('priv', report['missing_minimum_s_mode_registers'])
+        self.assertIn('satp', report['missing_minimum_s_mode_registers'])
 
     def test_cli_refuses_incomplete_capture_even_with_valid_ram_sha(self):
         del self.regs['priv']
@@ -83,8 +85,16 @@ class PreflightTest(unittest.TestCase):
     def test_fp_state_required_when_mstatus_fs_is_enabled(self):
         self.regs['mstatus'] = '0x2000'
         report = self.inspect()
-        self.assertIn('fcsr', report['missing_arch_registers'])
-        self.assertIn('f31', report['missing_arch_registers'])
+        self.assertIn('fcsr', report['missing_minimum_s_mode_registers'])
+        self.assertIn('f31', report['missing_minimum_s_mode_registers'])
+
+    def test_nonrestorable_warl_and_counter_state_is_explicit(self):
+        self.regs.update({'mcycle': '0x55', 'minstret': '0x22',
+                          'menvcfg': '0x8', 'mcountinhibit': '0x0'})
+        report = self.inspect()
+        self.assertIn('mcycle', report['nonzero_counter_and_warl_csrs'])
+        self.assertIn('menvcfg', report['nonzero_counter_and_warl_csrs'])
+        self.assertFalse(report['rtl_handoff_pass'])
 
     def test_corrupted_ram_and_input_digest_are_rejected(self):
         self.ram.write_bytes(b'0' * 64)
