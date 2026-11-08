@@ -27,6 +27,14 @@ ROOT_MOUNT = b"VFS: Mounted root (ext4 filesystem)"
 PID1_EXEC = b"Run /sbin/init as init process"
 LOGIN_PROMPT = re.compile(rb"(?:^|[\r\n\s])(?:[^\r\n\s]+\s+)?login:\s*$")
 ANSI_ESCAPE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+# QEMU's -serial stdio is not a terminal when launched with a pipe.  Debian's
+# serial agetty can probe terminal geometry using DSR CSI 6 n and wait for an
+# answer instead of printing the login prompt.  Supply an ordinary 80x24
+# terminal-position reply in this *QEMU-only* observer; it is not guest boot
+# evidence and never substitutes for observing a real login prompt.
+CURSOR_POSITION_QUERY = b"\x1b[6n"
+CURSOR_POSITION_REPLY = b"\x1b[24;80R"
+MAX_CURSOR_POSITION_REPLIES = 256
 
 PHASES = ("root_mount", "native_pid1", "first_started_service", "login")
 
@@ -79,6 +87,28 @@ class BootProof:
                 self.phase_wall_seconds["login"] = elapsed_seconds
 
 
+class CursorQueryResponder:
+    """Count complete DSR cursor queries across serial read chunk boundaries.
+
+    Each response is fixed, shorter than PIPE_BUF, and reply count is capped
+    to prevent feeding an unbounded amount of input to a stuck guest.
+    """
+
+    def __init__(self) -> None:
+        self.pending = b""
+        self.replies = 0
+
+    def feed(self, chunk: bytes, *, pid1_seen: bool, login_seen: bool) -> int:
+        combined = self.pending + chunk
+        self.pending = combined[-(len(CURSOR_POSITION_QUERY) - 1):]
+        if not pid1_seen or login_seen:
+            return 0
+        queries = combined.count(CURSOR_POSITION_QUERY)
+        count = min(queries, MAX_CURSOR_POSITION_REPLIES - self.replies)
+        self.replies += count
+        return count
+
+
 def phase_result_lines(proof: BootProof, total_wall_seconds: float) -> str:
     """Time of first observed UART marker relative to QEMU start and login."""
     if total_wall_seconds <= 0:
@@ -125,16 +155,17 @@ def run(args: argparse.Namespace) -> None:
         "-no-reboot",
     ]
     proof = BootProof()
+    responder = CursorQueryResponder()
     started = time.monotonic()
     last_uart = started
     byte_count = 0
     max_log_bytes = 64 * 1024 * 1024
     args.log.parent.mkdir(parents=True, exist_ok=True)
     with args.log.open("xb") as evidence, subprocess.Popen(
-        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, bufsize=0,
     ) as process:
-        assert process.stdout is not None
+        assert process.stdout is not None and process.stdin is not None
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
         try:
@@ -159,6 +190,12 @@ def run(args: argparse.Namespace) -> None:
                             raise ValueError(f"QEMU Linux failed: {proof.failure}")
                         if proof.login_prompt:
                             break
+                        for _ in range(responder.feed(
+                                chunk, pid1_seen=proof.pid1_executed,
+                                login_seen=proof.login_prompt)):
+                            # A tiny, bounded DSR response.  os.write() avoids
+                            # buffering replies until the QEMU subprocess exits.
+                            os.write(process.stdin.fileno(), CURSOR_POSITION_REPLY)
                     elif process.poll() is not None:
                         raise ValueError(f"QEMU exited before native login: {process.returncode}")
                 elif process.poll() is not None:
@@ -186,6 +223,7 @@ def run(args: argparse.Namespace) -> None:
             "login_prompt=OBSERVED_NOT_AUTHENTICATED\n"
             f"elapsed_seconds={elapsed:.3f}\n"
             f"uart_bytes={byte_count}\n"
+            f"qemu_only_terminal_dsr_replies={responder.replies}\n"
             + phase_result_lines(proof, elapsed)
         )
     print(f"PRODUCT_SD1_QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL elapsed_seconds={elapsed:.3f}")

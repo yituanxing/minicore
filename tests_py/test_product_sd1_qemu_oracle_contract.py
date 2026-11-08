@@ -1,8 +1,13 @@
 """Offline, no-guest execution contracts for SD1 native-Debian QEMU oracle."""
 
+import argparse
 from pathlib import Path
 import importlib.util
+import subprocess
+import sys
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +103,70 @@ class ProductSd1QemuOracleContract(unittest.TestCase):
         self.assertTrue(proof.login_prompt)
         self.assertIn("phase_first_started_service=NOT_OBSERVED",
                       qemu_watch.phase_result_lines(proof, 1.0))
+
+    def test_serial_cursor_query_response_is_qemu_only_and_chunk_safe(self):
+        watch = WATCH.read_text()
+        self.assertIn('stdin=subprocess.PIPE, stdout=subprocess.PIPE', watch)
+        responder = qemu_watch.CursorQueryResponder()
+        self.assertEqual(responder.feed(b"\x1b[6n", pid1_seen=False,
+                                        login_seen=False), 0)
+        self.assertEqual(responder.feed(b"prefix\x1b[", pid1_seen=True,
+                                        login_seen=False), 0)
+        self.assertEqual(responder.feed(b"6n middle\x1b[6n", pid1_seen=True,
+                                        login_seen=False), 2)
+        self.assertEqual(responder.feed(b"\x1b[6n", pid1_seen=True,
+                                        login_seen=True), 0)
+        self.assertEqual(responder.replies, 2)
+        self.assertEqual(qemu_watch.CURSOR_POSITION_REPLY, b"\x1b[24;80R")
+
+    def test_cursor_response_cannot_fake_login_and_is_bounded(self):
+        proof = qemu_watch.BootProof()
+        proof.observe(b"VFS: Mounted root (ext4 filesystem)\n")
+        proof.observe(b"Run /sbin/init as init process\n")
+        proof.observe(qemu_watch.CURSOR_POSITION_REPLY * 10)
+        self.assertFalse(proof.login_prompt)
+        responder = qemu_watch.CursorQueryResponder()
+        repeated = qemu_watch.CURSOR_POSITION_QUERY * 300
+        self.assertEqual(responder.feed(repeated, pid1_seen=True,
+                                        login_seen=False),
+                         qemu_watch.MAX_CURSOR_POSITION_REPLIES)
+        self.assertEqual(responder.feed(repeated, pid1_seen=True,
+                                        login_seen=False), 0)
+        self.assertFalse(proof.login_prompt)
+
+    def test_cursor_query_pipe_response_enables_real_login_marker(self):
+        # Stand in for QEMU's raw serial channel, without running any guest.
+        # The fake guest only prints login *after* receiving the terminal DSR.
+        fake_serial = r'''
+import os, sys
+sys.stdout.buffer.write(b"VFS: Mounted root (ext4 filesystem)\n"
+                        b"Run /sbin/init as init process\n" + b"\x1b[6n")
+sys.stdout.buffer.flush()
+if os.read(sys.stdin.fileno(), 64) != b"\x1b[24;80R":
+    sys.exit(7)
+sys.stdout.buffer.write(b"Debian GNU/Linux localhost\nlocalhost login: ")
+sys.stdout.buffer.flush()
+'''
+        real_popen = subprocess.Popen
+
+        def fake_popen(command, **kwargs):
+            self.assertEqual(command[0], "qemu-system-riscv64")
+            self.assertEqual(kwargs["stdin"], subprocess.PIPE)
+            return real_popen([sys.executable, "-c", fake_serial], **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            kernel, sd = base / "Image", base / "sd.img"
+            kernel.write_bytes(b"kernel")
+            sd.write_bytes(b"sd")
+            args = argparse.Namespace(kernel=kernel, sd=sd, timeout=10,
+                                      log=base / "uart.log", result=base / "result.txt")
+            with mock.patch.object(qemu_watch.subprocess, "Popen", side_effect=fake_popen):
+                qemu_watch.run(args)
+            outcome = args.result.read_text()
+            self.assertIn("QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL", outcome)
+            self.assertIn("qemu_only_terminal_dsr_replies=1", outcome)
+            self.assertIn(b"localhost login: ", args.log.read_bytes())
 
 
 if __name__ == "__main__":
