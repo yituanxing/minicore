@@ -20,7 +20,7 @@ jobs:
       github.repository == 'yituanxing/minicore' &&
       github.event_name == 'pull_request' &&
       github.event.action == 'labeled' &&
-      github.event.label.name == 'product-sd1-v3-reviewed-8072-to-8092-qualify' &&
+      github.event.label.name == 'product-sd1-v3-reviewed-8072-to-8092-qualify-r2' &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
@@ -176,7 +176,7 @@ jobs:
              '${{ steps.model.outputs.cache-hit }}' == true &&
              '${{ steps.diag.outputs.cache-hit }}' == true &&
              ( '${{ steps.seed.outputs.cache-hit }}' == true ||
-               '${{ steps.seed.outputs.cache-matched-key }}' ==
+               '${{ steps.seed.outputs.cache-matched-key }}' == \
                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || exit 16
           python3 tools/ci/product_sd1_official_seed.py verify
           grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
