@@ -67,6 +67,38 @@ class ProductSd1QemuOracleContract(unittest.TestCase):
         self.assertIsNotNone(proof.failure)
         self.assertFalse(proof.login_prompt)
 
+    def test_qemu_uart_phase_timeline_is_ordered_and_host_only(self):
+        proof = qemu_watch.BootProof()
+        proof.observe(b"Started fake.service\nlogin: ", 0.1)
+        self.assertFalse(proof.phase_wall_seconds)
+        proof.observe(b"VFS: Mounted root (ext4 filesystem)\n", 0.4)
+        proof.observe(b"Run /sbin/init as init process\n", 0.5)
+        proof.observe(b"\x1b[0;32m Started \x1b[0m systemd-journald.ser", 1.2)
+        self.assertNotIn("first_started_service", proof.phase_wall_seconds)
+        proof.observe(b"vice - Journal Service.\r\n", 1.3)
+        proof.observe(b"localhost login: ", 2.0)
+        self.assertEqual(proof.phase_wall_seconds, {
+            "root_mount": 0.4,
+            "native_pid1": 0.5,
+            "first_started_service": 1.3,
+            "login": 2.0,
+        })
+        timeline = qemu_watch.phase_result_lines(proof, 2.0)
+        self.assertIn("phase_root_mount_of_login_wall_percent=20.000", timeline)
+        self.assertIn("phase_first_started_service_of_login_wall_percent=65.000", timeline)
+        self.assertIn("HOST_MONOTONIC_UART_OBSERVATION_NOT_GUEST_ICOUNT", timeline)
+        with self.assertRaisesRegex(ValueError, "nonpositive"):
+            qemu_watch.phase_result_lines(proof, 0)
+
+    def test_missing_service_marker_is_not_invented(self):
+        proof = qemu_watch.BootProof()
+        proof.observe(b"VFS: Mounted root (ext4 filesystem)\n", 0.3)
+        proof.observe(b"Run /sbin/init as init process\n", 0.4)
+        proof.observe(b"localhost login: ", 1.0)
+        self.assertTrue(proof.login_prompt)
+        self.assertIn("phase_first_started_service=NOT_OBSERVED",
+                      qemu_watch.phase_result_lines(proof, 1.0))
+
 
 if __name__ == "__main__":
     unittest.main()

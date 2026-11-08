@@ -58,7 +58,8 @@ class BpfVerifierSnapshotTest(unittest.TestCase):
             "boot_cycles": 4512000000, "linux_image_sha256": bpf.IMAGE_SHA,
             "pid1_task": "pid1", "syscall_epc": "pc",
             "bpf_attr_addr": "attr", "prog_name": "sd_bind6",
-            "prog_type": 18, "insn_cnt": 82, "expected_attach_type": 9,
+            "prog_type": 18, "insn_cnt": 82,
+            "insns_sha256": "a" * 64, "expected_attach_type": 9,
             "env_addr": "env", "pass_cnt": 1, "insn_processed": 5295,
             "total_states": 133, "jmps_processed": 2262,
         }
@@ -70,6 +71,9 @@ class BpfVerifierSnapshotTest(unittest.TestCase):
         self.assertEqual(result[1]["insn_processed_delta"], 2143)
         other = {**second, "prog_name": "sd_bind4"}
         self.assertFalse(bpf.compare([first, other])[1]
+                         ["same_candidate_syscall_as_previous"])
+        different_code = {**second, "insns_sha256": "b" * 64}
+        self.assertFalse(bpf.compare([first, different_code])[1]
                          ["same_candidate_syscall_as_previous"])
 
 

@@ -67,8 +67,11 @@ jobs:
              -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" ]] || exit 19
           python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
           bash -n tools/ci/product_sd1_qemu_init_oracle.sh
+          bash -n tools/ci/product_sd1_qemu_bpf_launch.sh
           python3 -m unittest tests_py.test_product_sd1_qemu_oracle_contract \
-            tests_py.test_product_sd1_native_qemu_workflow_contract -v
+            tests_py.test_product_sd1_native_qemu_workflow_contract \
+            tests_py.test_product_sd1_qemu_bpf_launch_contract \
+            tests_py.test_product_sd1_qemu_bpf_icount_probe -v
           echo 'QEMU virt boot only; no Product RTL, SD SPI model, guest DDR checkpoint, login credentials or media uploads.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Restore ONLY the exact official signed Debian SD1 media cache
@@ -204,6 +207,25 @@ jobs:
             build/rv64-debian-sd1-qemu-oracle/boot-result.txt
           echo 'SD1_QEMU_NATIVE_INIT_LOGIN_PASS: real Debian /sbin/init & login; QEMU virtio ONLY, not Product SPI/RTL.' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Measure exact sd_bind6 BPF verifier in separate bounded QEMU TCG process
+        id: bpf_compare
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is supplemental QEMU-only icount evidence. Independent QEMU
+          # native login PASS above never depends on a GDB/QMP profiling pass.
+          timeout --signal=TERM --kill-after=10s 9m \
+            bash tools/ci/product_sd1_qemu_bpf_launch.sh
+          echo 'SD1_QEMU_BPF_ICOUNT_MEASURED: exact sd_bind6 QEMU guest instructions; optional post-UART-login sample is a non-atomic whole-boot lower bound, never RTL cycles.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report BPF instrumentation outcome independently from native Debian login
+        if: always() && steps.bpf_compare.outcome == 'failure'
+        shell: bash
+        run: |
+          echo '::warning::SD1_QEMU_BPF_DIAGNOSTIC_FAILED_OR_INCOMPARABLE; existing QEMU Debian login verdict is unchanged.'
+          echo 'SD1_QEMU_BPF_DIAGNOSTIC_FAILED_OR_INCOMPARABLE: no verifier fraction can be claimed; native QEMU login and Product RTL status unchanged.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload bounded log and SHA evidence only (never SD image or guest DDR)
         if: always()
         uses: actions/upload-artifact@v4
@@ -215,3 +237,6 @@ jobs:
             build/rv64-debian-sd1-qemu-oracle/result.txt
             build/rv64-debian-sd1-qemu-oracle/boot-result.txt
             build/rv64-debian-sd1-qemu-oracle/boot-uart.log
+            build/rv64-debian-sd1-qemu-oracle/bpf-icount-probe.json
+            build/rv64-debian-sd1-qemu-oracle/bpf-qemu-uart.log
+            build/rv64-debian-sd1-qemu-oracle/bpf-qemu-stderr.log

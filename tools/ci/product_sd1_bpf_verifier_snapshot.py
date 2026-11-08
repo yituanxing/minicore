@@ -183,6 +183,13 @@ def inspect(path):
             raise ValueError("BPF verifier state/program length inconsistent")
         if u64(env, 8) == 0 or u32(env, 0x2E04) > 1000000:
             raise ValueError("invalid verifier_env program pointer or processed count")
+        # BPF_PROG_LOAD union bpf_attr has insns at +8: an array of exactly
+        # insn_cnt * sizeof(struct bpf_insn) (8) bytes in PID 1's userspace.
+        # Sv39 translation and the DDR bound are checked on every page.
+        insns_addr = u64(attr, 8)
+        if not insns_addr or insns_addr >= (1 << 38):
+            raise ValueError("invalid BPF user instruction pointer")
+        insns_sha256 = hashlib.sha256(mem.virt(pgd, insns_addr, insn_count * 8)).hexdigest()
         result = {
             "boot_cycles": int(pins["boot_cycles"]),
             "linux_image_sha256": pins["linux_image_sha256"],
@@ -194,6 +201,8 @@ def inspect(path):
             "prog_name": name,
             "prog_type": u32(attr),
             "insn_cnt": insn_count,
+            "insns_addr": f"0x{insns_addr:x}",
+            "insns_sha256": insns_sha256,
             "expected_attach_type": u32(attr, 0x44),
             "env_addr": f"0x{ENV_ADDR:x}",
             "insn_idx": idx,
@@ -219,7 +228,7 @@ def compare(rows):
         same = all(previous[key] == current[key] for key in
                    ("linux_image_sha256", "pid1_task", "syscall_epc",
                     "bpf_attr_addr", "prog_name", "prog_type", "insn_cnt",
-                    "expected_attach_type", "env_addr", "pass_cnt"))
+                    "insns_sha256", "expected_attach_type", "env_addr", "pass_cnt"))
         current["same_candidate_syscall_as_previous"] = same
         if same:
             current["insn_processed_delta"] = current["insn_processed"] - previous["insn_processed"]

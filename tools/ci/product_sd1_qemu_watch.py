@@ -26,6 +26,9 @@ FAILURE_PATTERNS = (
 ROOT_MOUNT = b"VFS: Mounted root (ext4 filesystem)"
 PID1_EXEC = b"Run /sbin/init as init process"
 LOGIN_PROMPT = re.compile(rb"(?:^|[\r\n\s])(?:[^\r\n\s]+\s+)?login:\s*$")
+ANSI_ESCAPE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+
+PHASES = ("root_mount", "native_pid1", "first_started_service", "login")
 
 
 class BootProof:
@@ -36,8 +39,10 @@ class BootProof:
         self.failure: str | None = None
         self.tail = b""
         self.pending = b""
+        # Host monotonic observations, not guest kernel time or RTL cycles.
+        self.phase_wall_seconds: dict[str, float] = {}
 
-    def observe(self, chunk: bytes) -> None:
+    def observe(self, chunk: bytes, elapsed_seconds: float | None = None) -> None:
         self.tail = (self.tail + chunk)[-16384:]
         self.pending = (self.pending + chunk)[-16384:]
         for bad in FAILURE_PATTERNS:
@@ -48,16 +53,50 @@ class BootProof:
             position = self.pending.find(ROOT_MOUNT)
             if position >= 0:
                 self.root_mounted = True
+                if elapsed_seconds is not None:
+                    self.phase_wall_seconds["root_mount"] = elapsed_seconds
                 self.pending = self.pending[position + len(ROOT_MOUNT):]
         if self.root_mounted and not self.pid1_executed:
             position = self.pending.find(PID1_EXEC)
             if position >= 0:
                 self.pid1_executed = True
+                if elapsed_seconds is not None:
+                    self.phase_wall_seconds["native_pid1"] = elapsed_seconds
                 self.pending = self.pending[position + len(PID1_EXEC):]
+        # A best-effort *serial text* marker, not proof that a unit is healthy.
+        # Strip ANSI color codes because systemd's status lines are decorated.
+        if self.pid1_executed and "first_started_service" not in self.phase_wall_seconds:
+            clean = ANSI_ESCAPE.sub(b"", self.pending)
+            if any(b"Started " in line and b".service" in line
+                   for line in clean.splitlines()):
+                if elapsed_seconds is not None:
+                    self.phase_wall_seconds["first_started_service"] = elapsed_seconds
         # Getty often emits a prompt without newline. It must occur after
         # both the ext4 root mount and the native /sbin/init exec marker.
         if self.root_mounted and self.pid1_executed and LOGIN_PROMPT.search(self.pending):
             self.login_prompt = True
+            if elapsed_seconds is not None and "login" not in self.phase_wall_seconds:
+                self.phase_wall_seconds["login"] = elapsed_seconds
+
+
+def phase_result_lines(proof: BootProof, total_wall_seconds: float) -> str:
+    """Time of first observed UART marker relative to QEMU start and login."""
+    if total_wall_seconds <= 0:
+        raise ValueError("nonpositive QEMU boot wall time")
+    lines = [
+        "phase_measurement=HOST_MONOTONIC_UART_OBSERVATION_NOT_GUEST_ICOUNT",
+        "phase_granularity=UART_READ_CHUNK_NOT_GUEST_EVENT_TIMESTAMP",
+    ]
+    for phase in PHASES:
+        value = proof.phase_wall_seconds.get(phase)
+        if value is None:
+            lines.append(f"phase_{phase}=NOT_OBSERVED")
+            continue
+        if not 0 <= value <= total_wall_seconds:
+            raise ValueError(f"out-of-range QEMU {phase} phase timestamp")
+        lines.append(f"phase_{phase}_wall_seconds={value:.3f}")
+        lines.append(f"phase_{phase}_of_login_wall_percent={100 * value / total_wall_seconds:.3f}")
+    return "\n".join(lines) + "\n"
 
 
 def run(args: argparse.Namespace) -> None:
@@ -115,7 +154,7 @@ def run(args: argparse.Namespace) -> None:
                         evidence.write(chunk)
                         evidence.flush()
                         last_uart = time.monotonic()
-                        proof.observe(chunk)
+                        proof.observe(chunk, last_uart - started)
                         if proof.failure:
                             raise ValueError(f"QEMU Linux failed: {proof.failure}")
                         if proof.login_prompt:
@@ -147,6 +186,7 @@ def run(args: argparse.Namespace) -> None:
             "login_prompt=OBSERVED_NOT_AUTHENTICATED\n"
             f"elapsed_seconds={elapsed:.3f}\n"
             f"uart_bytes={byte_count}\n"
+            + phase_result_lines(proof, elapsed)
         )
     print(f"PRODUCT_SD1_QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL elapsed_seconds={elapsed:.3f}")
 
