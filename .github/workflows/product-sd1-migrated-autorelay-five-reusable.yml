@@ -137,7 +137,8 @@ jobs:
              "$SOURCE_HEAD" =~ ^[a-f0-9]{40}$ &&
              "$SOURCE_DIGEST" =~ ^[a-f0-9]{64}$ &&
              ( "$SOURCE_MODE" == cross_run || "$SOURCE_MODE" == intra_run ||
-               "$SOURCE_MODE" == post_publish_failure ) &&
+               "$SOURCE_MODE" == post_publish_failure ||
+               "$SOURCE_MODE" == post_stage2_preflight_failure ) &&
              "$SOURCE_NAME" == "product-sd1-migrated-${START}m-${SOURCE_RUN}" &&
              "$SOURCE_WORKFLOW" == .github/workflows/product-sd1-migrated-*.yml &&
              -n "$SOURCE_JOB" && -n "$SOURCE_STEP" &&
@@ -152,6 +153,19 @@ jobs:
                "$SOURCE_ID" == 13581472527 &&
                "$SOURCE_NAME" == product-sd1-migrated-4412m-42390234019 &&
                "$SOURCE_DIGEST" == 6fbeb0935ddbd2d005e0b2d74173d305b8b8d2d61e53874b1c6b6ce002483d4d ]] || exit 16
+          fi
+          if [[ "$SOURCE_MODE" == post_stage2_preflight_failure ]]; then
+            [[ "$START" == 5212 &&
+               "$SOURCE_JOB" == 'stage_01 / relay_five' &&
+               "$SOURCE_STEP" == 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs' &&
+               "$SOURCE_RUN" == 42443737090 &&
+               "$SOURCE_HEAD" == b969367c98e8503dd90953f72fa7576d73a0a479 &&
+               "$SOURCE_WORKFLOW" == '.github/workflows/product-sd1-migrated-5112-to-5312m-autorelay.yml' &&
+               "$SOURCE_ID" == 13603053258 &&
+               "$SOURCE_NAME" == product-sd1-migrated-5212m-42443737090 &&
+               "$SOURCE_DIGEST" == 6e8994e5d9680360051bf6990a6f24d5c727237654937694488cb468c8dc0371 &&
+               "$AETHERCORE_SD1_AUTORELAY_START_HOST_SHA256" == f8b086184cd5751b452f8dc3b5977e34c35c93576ceead3c4561b78c983df830 &&
+               "$AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256" == 1f11120cad31fa71dbaca5e62dc46622037e72a87e7e9fa952db00b80c0b932c ]] || exit 16
           fi
           repo="$GITHUB_REPOSITORY"
           verify() {
@@ -171,50 +185,70 @@ jobs:
               .head_sha == $sha and
               (if $mode == "intra_run" then
                 .status == "in_progress" and .conclusion == null
-               elif $mode == "post_publish_failure" then
+               elif $mode == "post_publish_failure" or $mode == "post_stage2_preflight_failure" then
                 .status == "completed" and .conclusion == "failure"
                else .status == "completed" and .conclusion == "success" end) and
               (.path | contains($path))
             ' "$RUNNER_TEMP/run-$run.json" >/dev/null || exit 16
-            # GitHub can report a completed successful job while temporarily
-            # returning steps: [] from the run-jobs endpoint. Never treat that
-            # incomplete response as proof: wait for the original step-level
-            # attestation, and fail closed if it does not become available.
-            local step_metadata_unavailable=false
-            for metadata_attempt in {1..16}; do
+            # Step telemetry is eventually consistent: even for a completed,
+            # successful job GitHub has returned [] or stale in_progress/null
+            # states. First prefer all exact successful step attestations;
+            # otherwise accept ONLY an eligible completed successful job's
+            # official log with a unique fully pinned terminal certificate.
+            local strict_steps=false
+            for metadata_attempt in {1..3}; do
               gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
-              if ! jq -e --arg job "$job" --arg mode "$mode" '
+              if jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
                 [.jobs[] | select(.name == $job and .status == "completed" and
-                  .conclusion == (if $mode == "post_publish_failure" then "failure" else "success" end) and
-                  ((.steps // []) | length == 0))] | length == 1
+                  (if $mode == "post_publish_failure" then
+                     .conclusion == "failure" and
+                     ([.steps[] | select(.conclusion == "failure") | .name] ==
+                       ["Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs"])
+                   else .conclusion == "success" end) and
+                  ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1) and
+                  (if $mode == "intra_run" or $mode == "post_publish_failure" or
+                         $mode == "post_stage2_preflight_failure" then
+                     ([.steps[] | select((.name | startswith("Advance genuine RTL segment ")) and
+                       .status == "completed" and .conclusion == "success")] | length == 5) and
+                     ([.steps[] | select((.name | startswith("Upload complete stage ")) and
+                       .status == "completed" and .conclusion == "success")] | length == 5)
+                   else true end))] | length == 1
+              ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null; then
+                strict_steps=true
+                break
+              fi
+              if ! jq -e --arg job "$job" '
+                [.jobs[] | select(.name == $job and .status == "completed" and
+                  .conclusion == "success")] | length == 1
               ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null; then
                 break
               fi
-              if [[ "$metadata_attempt" -eq 16 ]]; then
-                step_metadata_unavailable=true
-                break
+              if [[ "$metadata_attempt" -ne 3 ]]; then
+                echo "MIGRATED_AUTORUN_STEP_INDEX_PENDING run=$run job='$job' attempt=$metadata_attempt/3"
+                sleep 5
               fi
-              echo "MIGRATED_AUTORUN_STEP_METADATA_PENDING run=$run job='$job' attempt=$metadata_attempt/16"
-              sleep 20
             done
-            if [[ "$step_metadata_unavailable" == true ]]; then
-              # Narrow secondary attestation for a previous successful terminal
-              # batch whose GitHub Jobs API has still not indexed its steps.
-              # The original complete job log must contain exactly one actual
-              # terminal certificate matching all pinned checkpoint values.
-              [[ "$mode" == cross_run && "$job" == 'stage_02 / relay_five' &&
-                 "$step" == 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs' ]] || {
-                echo "MIGRATED_AUTORUN_REJECTED: no step metadata outside qualified terminal cross-run source" >&2
+            if [[ "$strict_steps" != true ]]; then
+              # The source job must have succeeded, and the source run itself
+              # must already have passed the exact per-mode provenance check.
+              # Never use this fallback for a failed source job or an arbitrary
+              # step name, branch, run or artifact.
+              [[ "$step" == 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs' &&
+                 ( ( "$mode" == cross_run && "$job" == 'stage_02 / relay_five' ) ||
+                   ( "$mode" == intra_run && "$job" == 'stage_01 / relay_five' ) ||
+                   ( "$mode" == post_stage2_preflight_failure && "$job" == 'stage_01 / relay_five' ) ) ]] || {
+                echo "MIGRATED_AUTORUN_REJECTED: unqualified official-log fallback source" >&2
                 exit 16
               }
               local source_job_id
               source_job_id=$(jq -er --arg job "$job" '
                 [.jobs[] | select(.name == $job and .status == "completed" and
-                  .conclusion == "success" and ((.steps // []) | length == 0))] |
+                  .conclusion == "success")] |
                 if length == 1 then .[0].id else empty end
               ' "$RUNNER_TEMP/jobs-$run.json") || exit 16
               [[ "$source_job_id" =~ ^[0-9]+$ ]] || exit 16
-              curl -fsSL --proto '=https' --proto-redir '=https' \
+              curl -fsSL --retry-all-errors --retry 8 --retry-delay 10 \
+                --proto '=https' --proto-redir '=https' \
                 --max-redirs 3 --max-time 90 \
                 -H 'Accept: application/vnd.github+json' \
                 -H "Authorization: Bearer $GH_TOKEN" \
@@ -235,27 +269,23 @@ jobs:
                 exit 16
               }
               echo "MIGRATED_AUTORUN_OFFICIAL_JOB_LOG_ATTESTED run=$run job_id=$source_job_id stage=${START}m"
-            else
-              jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
-              [.jobs[] | select(.name == $job and .status == "completed" and
-                (if $mode == "post_publish_failure" then
-                   .conclusion == "failure" and
-                   ([.steps[] | select(.conclusion == "failure") | .name] ==
-                     ["Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs"])
-                 else .conclusion == "success" end) and
-                ([.steps[] | select(.name == $step and .conclusion == "success")] | length == 1) and
-                (if $mode == "intra_run" or $mode == "post_publish_failure" then
-                   ([.steps[] | select((.name | startswith("Advance genuine RTL segment ")) and
-                     .status == "completed" and .conclusion == "success")] | length == 5) and
-                   ([.steps[] | select((.name | startswith("Upload complete stage ")) and
-                     .status == "completed" and .conclusion == "success")] | length == 5)
-                 else true end))] | length == 1
-              ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
             fi
             if [[ "$mode" == post_publish_failure ]]; then
               jq -e '
                 [.jobs[] | select(.name == "stage_02" and .status == "completed" and
                   .conclusion == "skipped")] | length == 1
+              ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+            fi
+            if [[ "$mode" == post_stage2_preflight_failure ]]; then
+              # The old run failed only when the second job rejected stale
+              # GitHub source-step telemetry; it never advanced another cycle.
+              jq -e '
+                [.jobs[] | select(.name == "stage_02 / relay_five" and
+                  .status == "completed" and .conclusion == "failure" and
+                  ([.steps[] | select(.name == "Authenticate qualified model, exact source run and five strict milestones" and
+                    .conclusion == "failure")] | length == 1) and
+                  ([.steps[] | select((.name | startswith("Advance genuine RTL segment ")) and
+                    .conclusion == "success")] | length == 0))] | length == 1
               ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
             fi
             gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/art-$run.json"
