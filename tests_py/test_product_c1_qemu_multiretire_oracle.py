@@ -1,6 +1,7 @@
 """QEMU-only live single-step oracle guard tests; no CPU RTL is executed."""
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -49,6 +50,10 @@ class FakeRsp:
         if packet == "Qqemu.PhyMemMode:0":
             self.mode = "0"
             return "OK"
+        if packet == "qqemu.sstepbits":
+            return "ENABLE=1,NOIRQ=2,NOTIMER=4"
+        if packet == "qqemu.sstep":
+            return "0x7"
         if packet.startswith("m"):
             if self.index == 0:
                 return "7971"
@@ -103,6 +108,44 @@ class MultiretireOracleTests(unittest.TestCase):
         interrupt = state(ORACLE.SOURCE_PC + 2, ORACLE.EXPECTED_SP_AFTER, "0x20")
         with self.assertRaisesRegex(ORACLE.ProtocolError, "pending interrupt"):
             ORACLE.record(FakeRsp([self.initial, interrupt]), FakeQmp(), self.source, 1)
+
+    def test_irq_boundary_writes_fail_closed_diagnostic_without_oracle(self):
+        interrupt = state(ORACLE.SOURCE_PC + 2, ORACLE.EXPECTED_SP_AFTER, "0x20")
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "qemu-single-step-oracle.rejected.json"
+            rsp = FakeRsp([self.initial, interrupt])
+            with self.assertRaisesRegex(ORACLE.ProtocolError, "pending interrupt"):
+                ORACLE.record(rsp, FakeQmp(), self.source, 1, path)
+            detail = json.loads(path.read_text())
+            self.assertEqual(detail["qualification"],
+                             "QEMU_PENDING_INTERRUPT_DIAGNOSTIC_ONLY_NOT_RTL_DIFFTEST")
+            self.assertFalse(detail["accepted_as_reference"])
+            self.assertEqual(detail["real_product_rtl_retire_count"], 0)
+            self.assertEqual(detail["clean_steps_before_boundary"], 0)
+            self.assertEqual(detail["mip_changed_bits"], "0x20")
+            self.assertEqual(detail["before"]["pc"], self.initial["pc"])
+            self.assertEqual(detail["after"]["pc"], interrupt["pc"])
+            self.assertEqual(detail["qemu_gdb_sstep_mask"], "0x7")
+            self.assertEqual(detail["qemu_gdb_sstepbits"],
+                             "ENABLE=1,NOIRQ=2,NOTIMER=4")
+            self.assertIn("qqemu.sstep", rsp.calls)
+            self.assertIn("qqemu.sstepbits", rsp.calls)
+            self.assertFalse((Path(td) / "qemu-single-step-oracle.json").exists())
+
+    def test_irq_boundary_at_sixth_step_reports_five_clean_steps(self):
+        snapshots = [self.initial, self.one]
+        for i in range(1, 6):
+            snapshots.append(state(ORACLE.SOURCE_PC + 2 + 4 * i,
+                                   ORACLE.EXPECTED_SP_AFTER,
+                                   "0x20" if i == 5 else "0x0"))
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "irq.rejected.json"
+            with self.assertRaisesRegex(ORACLE.ProtocolError, "step 5"):
+                ORACLE.record(FakeRsp(snapshots), FakeQmp(), self.source, 6, path)
+            detail = json.loads(path.read_text())
+            self.assertEqual(detail["requested_step_zero_based"], 5)
+            self.assertEqual(detail["requested_step_ordinal"], 6)
+            self.assertEqual(detail["clean_steps_before_boundary"], 5)
 
     def test_count_and_one_hart_guards(self):
         with self.assertRaisesRegex(ORACLE.ProtocolError, "1..256"):

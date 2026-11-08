@@ -21,6 +21,8 @@ from qemu_arch_export import (Qmp, ProtocolError, RAM_BASE, RAM_SIZE, Rsp,
 
 KEY_CSRS = ("mstatus", "satp", "mip", "mie", "mepc", "mcause", "mtval",
             "sepc", "scause", "stval", "sstatus", "stvec", "mtvec")
+INTERRUPT_DIAGNOSTIC_REGISTERS = ("mip", "mie", "mstatus", "pc", "priv",
+                                  "mcause", "mepc", "scause", "sepc")
 SOURCE_PC = 0xFFFFFFFF808C3490
 SOURCE_RVC = 0x7179
 SOURCE_MISA = 0x800000000014112D
@@ -77,7 +79,46 @@ def read_instruction(rsp, pc):
             "bytes_le": data[:length].hex()}
 
 
-def record(rsp, qmp, source, count):
+def write_interrupt_diagnostic(path, rsp, previous, current, step, stop,
+                               completed_steps):
+    """Preserve the first asynchronous IRQ boundary without qualifying it.
+
+    The artifact is a forensic report, not an oracle trace: no post-boundary
+    step is accepted and none of its state is silently imported into RTL.
+    """
+    if path is None:
+        return
+
+    def inspect(packet):
+        try:
+            return rsp.request(packet)
+        except (ProtocolError, OSError) as exc:
+            return f"unavailable: {exc}"
+
+    before = {name: previous.get(name) for name in INTERRUPT_DIAGNOSTIC_REGISTERS}
+    after = {name: current.get(name) for name in INTERRUPT_DIAGNOSTIC_REGISTERS}
+    report = {
+        "qualification": "QEMU_PENDING_INTERRUPT_DIAGNOSTIC_ONLY_NOT_RTL_DIFFTEST",
+        "accepted_as_reference": False,
+        "real_product_rtl_retire_count": 0,
+        "requested_step_zero_based": step,
+        "requested_step_ordinal": step + 1,
+        "clean_steps_before_boundary": completed_steps,
+        "reason": "pending_interrupt_state_changed",
+        "before": before,
+        "after": after,
+        "mip_changed_bits": hex(int(before["mip"], 16) ^ int(after["mip"], 16)),
+        "qemu_gdb_sstepbits": inspect("qqemu.sstepbits"),
+        "qemu_gdb_sstep_mask": inspect("qqemu.sstep"),
+        "gdb_stop": stop[:120],
+    }
+    # Exclusive creation avoids replacing a report from a previous attempt.
+    with path.open("x", encoding="utf-8") as output:
+        json.dump(report, output, indent=2, sort_keys=True)
+        output.write("\n")
+
+
+def record(rsp, qmp, source, count, failure_report=None):
     require(1 <= count <= 256, "single-step count must be 1..256")
     status = qmp.command("query-status")
     require(not status.get("running") and
@@ -129,6 +170,9 @@ def record(rsp, qmp, source, count):
         require(int(current["priv"], 16) == 1,
                 f"privilege/trap boundary reached at step {i}; not a clean S-mode trace")
         if "mip" in current and "mip" in previous:
+            if current["mip"] != previous["mip"]:
+                write_interrupt_diagnostic(failure_report, rsp, previous, current,
+                                           i, stop, len(trace))
             require(current["mip"] == previous["mip"],
                     f"pending interrupt state changed at step {i}")
         changed = {f"x{r}": current[f"x{r}"] for r in range(1, 32)
@@ -254,7 +298,8 @@ def main():
     try:
         qmp = Qmp(a.qmp_socket, a.wall_seconds)
         try:
-            result = record(rsp, qmp, source, a.count)
+            result = record(rsp, qmp, source, a.count,
+                            a.report.with_suffix(".rejected.json"))
             result["end_memory_delta"] = memory_delta(
                 qmp, a.source_ram, a.report.with_suffix(".post-step-ram.tmp"))
         finally:
