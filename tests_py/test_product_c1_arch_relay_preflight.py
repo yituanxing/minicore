@@ -1,10 +1,12 @@
 """No-RTL, no-QEMU source-contract tests for the proposed C1 handoff."""
 
-import hashlib
 import importlib.util
+import json
 import tempfile
 from pathlib import Path
 import unittest
+from unittest import mock
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +65,20 @@ class PreflightTest(unittest.TestCase):
         self.assertFalse(report['arch_registers_complete'])
         self.assertIn('priv', report['missing_arch_registers'])
         self.assertIn('satp', report['missing_arch_registers'])
+
+    def test_cli_refuses_incomplete_capture_even_with_valid_ram_sha(self):
+        del self.regs['priv']
+        manifest = self.root / 'manifest.json'
+        manifest.write_text(json.dumps(self.export))
+        report = self.root / 'review.json'
+        argv = ['preflight.py', '--manifest', str(manifest), '--ram', str(self.ram),
+                '--report', str(report)]
+        for name, path in self.sources.items():
+            argv += ['--' + name.replace('_', '-'), str(path)]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(preflight, 'RAM_BYTES', 64):
+            self.assertEqual(preflight.main(), 3)
+        self.assertTrue(report.is_file())
+        self.assertFalse(json.loads(report.read_text())['rtl_handoff_pass'])
 
     def test_fp_state_required_when_mstatus_fs_is_enabled(self):
         self.regs['mstatus'] = '0x2000'
