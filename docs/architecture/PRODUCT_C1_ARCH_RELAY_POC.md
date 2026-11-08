@@ -41,12 +41,28 @@ It does not assert device equivalence or successful restoration. The QEMU
 diagnostic source itself is not yet qualified on a real
 QEMU runner in this environment.
 
+## Isolated S-mode P0 restore ABI (implemented, not yet executable in RTL)
+
+`sim/product_c1_arch_restore.S` defines a 408-byte little-endian machine-state
+table (`PC`, 18 CSR slots, `x0..x31`) and an M-mode instruction sequence that
+rebuilds GPR/selected CSR state and attempts `mret` to an S-mode resume PC.
+`tools/ci/product_c1_arch_relay/restore_abi.py` packs that table only after a
+matching SHA-verified source review and only for deliberately restricted P0
+fixtures: FS=Off, SATP=0, no enabled/pending IRQ, all PMP registers explicitly
+zero, and MSTATUS/MEPC already compatible with exact `mret` side effects.
+It is **not** suitable for normal Linux/SD1 snapshots.  Neither compilation
+with the frozen RV64 toolchain nor actual Product RTL execution has occurred.
+
+The Host still needs to provide a reserved/overlay code+state aperture without
+mutating original guest RAM, to switch it off coherently before `fence.i`, and
+to compare resumed retirement against a source reference.
+
 ## Next implementable experiment
 
 1. Use existing G3/G4 real Product OpenSBI and Linux fixtures for a bounded
    comparison. Do **not** try to import QEMU virtio state directly into SD1 SPI.
-2. Add `sim/product_rv64_arch_handoff_main.cpp` and an M-mode restore shim to
-   preload RAM and rebuild GPR/allowed CSR state by retired instructions.
+2. Add `sim/product_rv64_arch_handoff_main.cpp` around the experimental M-mode
+   restore shim to preload RAM and rebuild GPR/allowed CSR state by retired instructions.
    Product currently has no architectural debug-load port. The boot ROM jumps
    to DDR at 0x80000000; a host-owned shim is possible but is **not** proven.
 3. Prove original memory is restored before returning, caches/TLB are
