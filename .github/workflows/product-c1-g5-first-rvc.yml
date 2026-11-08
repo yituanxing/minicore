@@ -43,6 +43,7 @@ jobs:
       VERILATOR_THREADS: '1'
       JOBS: '4'
       RVC_OUT: build/product-c1-g5-first-rvc
+      AETHERCORE_C1_P1_RVC_OUT: build/product-c1-g5-first-rvc
       RVC_CYCLE_LIMIT: '100000'
 
     steps:
