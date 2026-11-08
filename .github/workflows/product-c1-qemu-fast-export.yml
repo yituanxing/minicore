@@ -14,7 +14,9 @@ on:
       - 'tools/ci/product_g5_qemu_export/selftest.py'
       - 'tools/ci/product_c1_arch_relay/preflight.py'
       - 'tools/ci/product_c1_arch_relay/p1_contract.py'
+      - 'tools/ci/product_c1_arch_relay/sv39_source_walk.py'
       - 'tests_py/test_product_c1_p1_contract.py'
+      - 'tests_py/test_product_c1_sv39_source_walk.py'
   workflow_dispatch:
 
 permissions:
@@ -107,6 +109,7 @@ jobs:
           python3 tools/ci/product_g5_qemu_export/selftest.py
           python3 -m unittest -q tests_py.test_product_c1_arch_relay_preflight
           python3 -m unittest -q tests_py.test_product_c1_p1_contract
+          python3 -m unittest -q tests_py.test_product_c1_sv39_source_walk
 
       - name: Real D2 QEMU snapshot export from exact frozen binaries
         run: |
@@ -144,6 +147,24 @@ jobs:
                 ' blockers=' + str(len(result['blockers'])))
           PY
 
+      - name: Prove first physical Linux instruction from sealed Sv39 page tables
+        if: matrix.profile == 'sv39-forced'
+        run: |
+          set -euo pipefail
+          python3 tools/ci/product_c1_arch_relay/sv39_source_walk.py \
+            --manifest "$AETHERCORE_C1_FAST_QEMU_OUT/export/manifest.json" \
+            --ram "$AETHERCORE_C1_FAST_QEMU_OUT/export/ram-0x80000000-0x10000000.bin" \
+            --report "$AETHERCORE_C1_FAST_QEMU_OUT/source-insn.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['AETHERCORE_C1_FAST_QEMU_OUT']) / 'source-insn.json').read_text())
+          assert result['satp_mode'] == 8
+          assert result['rtl_handoff_pass'] is False
+          print('PRODUCT_C1_REAL_SV39_SOURCE_PHYSICAL_INSTRUCTION_PROVEN pa=' +
+                result['translated_physical_pc'] + ' bytes=' + result['instruction_bytes_le'])
+          PY
+
       - name: Archive authentic captured RAM and source review, never RTL PASS
         if: success()
         uses: actions/upload-artifact@v4
@@ -154,6 +175,7 @@ jobs:
             build/product-c1-qemu-fast-export/export/manifest.json
             build/product-c1-qemu-fast-export/source-review.json
             build/product-c1-qemu-fast-export/p1-review.json
+            build/product-c1-qemu-fast-export/source-insn.json
             build/product-c1-qemu-fast-export/source-sha256sums.txt
             build/product-c1-qemu-fast-export/result.txt
             build/product-c1-qemu-fast-export/export.log
