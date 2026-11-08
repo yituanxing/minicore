@@ -11,7 +11,8 @@ G5 QEMU architectural export at `run_init_process`:
 
 - one hart, S-mode capture, 0x80000000-based exact 256 MiB physical RAM;
 - actual SHA-256 of RAM, exact fw_payload, DTB, Linux Image and System.map;
-- breakpoint PC vs captured PC, x0=0 and missing GPR/CSR evidence;
+- breakpoint PC vs captured PC, x0=0 and missing minimum S-mode GPR/CSR evidence;
+- separate PMP register coverage and non-restorable counter/WARL CSR report;
 - 32 FPRs plus FCSR when `mstatus.FS` is not Off;
 - QEMU device/RTL state omissions remain explicit; no unavailable CSR becomes 0.
 
@@ -30,12 +31,14 @@ python3 -m unittest tests_py.test_product_c1_arch_relay_preflight -v
 ```
 
 This tool creates a report only if its target path does not exist, and prints
-`PRODUCT_C1_ARCH_SOURCE_REVIEWED_NOT_RTL_RESUMED`. It **always** writes
+`PRODUCT_C1_ARCH_SOURCE_SUBSET_REVIEWED_NOT_RTL_RESUMED`. It **always** writes
 `rtl_handoff_pass=false`. It is not a state converter or an RTL injector.
 If required architectural registers are absent, it still records their names
 in the JSON report but exits with status 3 (not a successful input gate).
-`arch_registers_complete=true` does not assert device equivalence or successful
-restoration. The QEMU diagnostic source itself is not yet qualified on a real
+`minimum_s_mode_register_subset_present=true` does **not** mean a complete
+or restorable architectural state (notably PMP, counters, WARL and devices).
+It does not assert device equivalence or successful restoration. The QEMU
+diagnostic source itself is not yet qualified on a real
 QEMU runner in this environment.
 
 ## Next implementable experiment
