@@ -54,11 +54,34 @@ The test target stores four values to its DDR marker region:
 3. restored register `x11`, expected `0xcafebabedeadbeef`;
 4. incremented `x12`, expected `42`.
 
-It then loops on `wfi`, with all interrupts disabled. There is no MMIO or
-block-device activity in the fixture. The single active PMP NAPOT entry is
+The original P0 fixture then looped on `wfi`; the P0.1 extension instead
+deliberately traps on a machine-only CSR access, with all interrupts disabled.
+There is no MMIO or block-device activity in the fixture. The single active PMP NAPOT entry is
 `pmpaddr0=0x21ffffff`, `pmpcfg0=0x1f`, allowing RWX for the exact DDR aperture
 `[0x80000000, 0x90000000)`; all other PMP entries remain zero. This is
 deliberately broader than an OS security policy and is **P0-only**.
+
+## P0.1: prove the returned privilege mode
+
+The independently preserved P0 proof is commit `e7c83574d3c107a3eb41dc7645e4ef6a52616411`,
+run `42482915330`, artifact `13618930889`. That first genuine G4 RTL run
+retired MRET at cycle 701 and five verified source-RAM instructions by cycle
+745. It established a minimal executable restore, **not** the S-mode privilege
+level, QEMU source equivalence or Linux operation.
+
+The follow-up synthetic fixture adds a sixth instruction immediately after
+those five stores: `csrr x13,mstatus` (raw instruction `0x300026f3`).
+`mstatus` is a machine-only CSR.  Real S-mode execution must retire a precise
+illegal-instruction exception at `0x80100014`, cause 2, trap value equal to the
+raw instruction. M-mode execution would be legal and **must fail this gate**.
+The host checks all four original marker words first, rejects premature or
+unrelated exceptions, and only then accepts the exact S-mode privilege trap.
+It intentionally stops on exception retirement; no trap vector needs to run.
+The new marker is
+`PRODUCT_C1_P01_RTL_S_MODE_ILLEGAL_CSR_TRAP_PASS_NOT_QEMU`.
+
+This verifies the privilege transition in one isolated synthetic guest. It
+does not make QEMU/Linux state export compatible with the restricted P0 ABI.
 
 The first genuine acceptance needs the compiled code executing in Product
 RTL, a successful S-mode return, all four DDR marker values, and a bounded

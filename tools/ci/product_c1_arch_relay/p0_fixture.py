@@ -31,6 +31,9 @@ SOURCE_X6 = 0x6666666666666666
 SOURCE_X11 = 0xCAFEBABEDEADBEEF
 SOURCE_X12 = 41
 EXPECTED_MARKERS = (SOURCE_X5, SOURCE_X6, SOURCE_X11, SOURCE_X12 + 1)
+PRIVILEGE_PROBE_PC = TARGET_PC + 5 * 4
+PRIVILEGE_PROBE_INSTRUCTION = 0x300026F3  # csrr x13,mstatus
+PRIVILEGE_PROBE_ILLEGAL_CAUSE = 2
 
 
 def make_state():
@@ -74,7 +77,12 @@ def expected():
         'target_pc': f'0x{TARGET_PC:x}',
         'marker_address': f'0x{MARKER_ADDRESS:x}',
         'expected_marker_words': [f'0x{v:x}' for v in EXPECTED_MARKERS],
-        'expected_commits_after_resume': 5,
+        'expected_nonfaulting_commits_after_resume': 5,
+        'expected_exception_commit_index_after_resume': 6,
+        'privilege_probe_pc': f'0x{PRIVILEGE_PROBE_PC:x}',
+        'privilege_probe_inst': f'0x{PRIVILEGE_PROBE_INSTRUCTION:08x}',
+        'privilege_probe_exception_cause': PRIVILEGE_PROBE_ILLEGAL_CAUSE,
+        'privilege_proof': 'S-mode rejects the M-only mstatus CSR read',
     }
 
 

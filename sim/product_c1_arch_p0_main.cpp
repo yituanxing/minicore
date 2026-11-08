@@ -45,6 +45,8 @@ constexpr std::size_t kP0StateOffset = 0x18000;
 constexpr std::uint64_t kP0GuestPc = 0x80100000ULL;
 constexpr std::uint64_t kP0MarkerAddr = 0x80101000ULL;
 constexpr unsigned kP0GuestCommits = 5;
+constexpr std::uint32_t kSModeIllegalCsrProbe = 0x300026f3U;
+constexpr std::uint64_t kIllegalInstructionCause = 2;
 
 std::uint64_t parseNumber(const char* raw, const char* label) {
   const std::string source(raw);
@@ -232,6 +234,7 @@ int run(int argc, char** argv) {
   std::uint64_t commits = 0;
   bool sawMret = false;
   unsigned guestCommits = 0;
+  bool guestMarkersVerified = false;
   for (std::uint64_t cycle = 0; cycle < maxCycles; ++cycle) {
     stepP0(top, context, memory, overlay);
     if (cycle == 3) top.reset = 0;
@@ -240,12 +243,53 @@ int run(int argc, char** argv) {
         top.io_supervisorExternalInterrupt || top.io_uartInterrupt ||
         top.io_uartRxInterrupt)
       throw std::runtime_error("P0 encountered unexported device/interrupt activity");
-    if (top.io_commit_exception || top.io_commit_interrupt)
-      throw std::runtime_error("P0 RTL exception/interrupt before target retirement");
+    if (top.io_commit_interrupt)
+      throw std::runtime_error("P0 RTL unexpected interrupt");
     if (!top.io_commit_valid) continue;
     ++commits;
     const auto pc = static_cast<std::uint64_t>(top.io_commit_pc);
     const auto instruction = static_cast<std::uint32_t>(top.io_commit_inst);
+    if (top.io_commit_exception) {
+      // In S-mode, the M-only mstatus CSR must fault precisely.  A resume
+      // that stayed in M-mode would retire that instruction normally.
+      const auto cause = static_cast<std::uint64_t>(top.io_commit_exceptionCause);
+      const auto value = static_cast<std::uint64_t>(top.io_commit_exceptionValue);
+      const auto raw = static_cast<std::uint32_t>(top.io_commit_rawInst);
+      if (!sawMret || !guestMarkersVerified ||
+          guestCommits != kP0GuestCommits ||
+          pc != targetPc + kP0GuestCommits * 4ULL ||
+          instruction != kSModeIllegalCsrProbe ||
+          raw != kSModeIllegalCsrProbe ||
+          cause != kIllegalInstructionCause ||
+          value != kSModeIllegalCsrProbe)
+        throw std::runtime_error("P0.1 RTL privilege trap differs from S-mode CSR contract");
+      std::cout << "PRODUCT_C1_P01_RTL_S_MODE_ILLEGAL_CSR_TRAP_PASS_NOT_QEMU"
+                << " cycles=" << cycle << " total_commits=" << commits
+                << " fault_pc=0x" << std::hex << pc
+                << " raw_inst=0x" << raw << std::dec
+                << " cause=" << cause << " tval=" << value
+                << " m_only_csr_rejected=1 no_sd1=1\n";
+      const auto actualX5 = memory.readData(kP0MarkerAddr, 8);
+      const auto actualX6 = memory.readData(kP0MarkerAddr + 8, 8);
+      const auto actualX11 = memory.readData(kP0MarkerAddr + 16, 8);
+      const auto actualX12 = memory.readData(kP0MarkerAddr + 24, 8);
+      std::cout << "PRODUCT_C1_P0_RTL_SYNTHETIC_FIXTURE_PASS_NOT_QEMU_HANDOFF"
+                << " cycles=" << cycle << " total_commits=" << commits
+                << " guest_nonfaulting_commits=" << guestCommits
+                << " guest_privilege_fault_commits=1"
+                << " target_pc=0x" << std::hex << targetPc
+                << " marker_addr=0x" << kP0MarkerAddr
+                << " x5=0x" << actualX5
+                << " x6=0x" << actualX6
+                << " x11=0x" << actualX11
+                << " x12=0x" << actualX12 << std::dec
+                << " source_ram_preserved_at_mret=1"
+                << " s_mode_illegal_machine_csr_trap=1"
+                << " pmp_ddr_napot=1 one_hart=1 no_irq=1 no_sd1=1"
+                << " reserved_mib_later_reuse_unqualified=1"
+                << " cache_tlb_transfer_unqualified=1\n";
+      return 0;
+    }
     if (!sawMret) {
       if (pc < aethercore::c1p0::kRestoreBase) {
         // Internal fixed BootROM at 0x1000, not host DDR.
@@ -268,6 +312,8 @@ int run(int argc, char** argv) {
     }
     if (pc != targetPc + guestCommits * 4ULL)
       throw std::runtime_error("P0 synthetic guest retirement PC mismatch");
+    if (guestCommits == kP0GuestCommits)
+      throw std::runtime_error("P0.1 machine-only CSR retired without S-mode trap");
     const auto width = static_cast<unsigned>(top.io_commit_instBytes);
     if (width != 2 && width != 4)
       throw std::runtime_error("P0 resumed instruction has invalid width");
@@ -287,20 +333,7 @@ int run(int argc, char** argv) {
       if (actualX5 != expectedX5 || actualX6 != expectedX6 ||
           actualX11 != expectedX11 || actualX12 != expectedX12 + 1)
         throw std::runtime_error("P0 GPR restore marker mismatch after five retirements");
-      std::cout << "PRODUCT_C1_P0_RTL_SYNTHETIC_FIXTURE_PASS_NOT_QEMU_HANDOFF"
-                << " cycles=" << cycle << " total_commits=" << commits
-                << " guest_commits=" << guestCommits
-                << " target_pc=0x" << std::hex << targetPc
-                << " marker_addr=0x" << kP0MarkerAddr
-                << " x5=0x" << actualX5
-                << " x6=0x" << actualX6
-                << " x11=0x" << actualX11
-                << " x12=0x" << actualX12 << std::dec
-                << " source_ram_preserved_at_mret=1"
-                << " pmp_ddr_napot=1 one_hart=1 no_irq=1 no_sd1=1"
-                << " reserved_mib_later_reuse_unqualified=1"
-                << " cache_tlb_transfer_unqualified=1\n";
-      return 0;
+      guestMarkersVerified = true;
     }
   }
   throw std::runtime_error("P0 expired before first target retirement");

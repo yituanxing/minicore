@@ -21,6 +21,10 @@ aether_c1_p0_target:
     sd x11, 16(x10)
     addi x12, x12, 1
     sd x12, 24(x10)
+    /* A machine-only CSR read must trap as illegal in real S-mode.
+     * It is legal in M-mode, so a false MRET privilege transition cannot
+     * pass the independent P0.1 proof in the RTL retirement stream. */
+    csrr x13, mstatus
 .Lidle:
     wfi
     j .Lidle

@@ -51,8 +51,10 @@ class ProductC1P0FixtureTest(unittest.TestCase):
         asm = (ROOT / 'sim/product_c1_arch_p0_fixture.S').read_text()
         for mnemonic in ('sd x5, 0(x10)', 'sd x6, 8(x10)',
                          'sd x11, 16(x10)', 'addi x12, x12, 1',
-                         'sd x12, 24(x10)'):
+                         'sd x12, 24(x10)', 'csrr x13, mstatus'):
             self.assertIn(mnemonic, asm)
+        self.assertEqual(p0_fixture.PRIVILEGE_PROBE_PC, 0x80100014)
+        self.assertEqual(p0_fixture.PRIVILEGE_PROBE_INSTRUCTION, 0x300026f3)
         self.assertEqual(p0_fixture.EXPECTED_MARKERS,
                          (p0_fixture.SOURCE_X5, p0_fixture.SOURCE_X6,
                           p0_fixture.SOURCE_X11, 42))
@@ -66,6 +68,9 @@ class ProductC1P0FixtureTest(unittest.TestCase):
             manifest = json.loads((out / 'expected.json').read_text())
             self.assertEqual(manifest['target_pc'], '0x80100000')
             self.assertEqual(manifest['state_bytes'], 424)
+            self.assertEqual(manifest['expected_nonfaulting_commits_after_resume'], 5)
+            self.assertEqual(manifest['expected_exception_commit_index_after_resume'], 6)
+            self.assertEqual(manifest['privilege_probe_exception_cause'], 2)
             self.assertFalse(manifest['rtl_handoff_pass'])
             self.assertIn('SYNTHETIC', manifest['qualification'])
 

@@ -197,7 +197,9 @@ jobs:
             "$P0_OUT/logs/product-p0-rtl-run.log"
           grep -Fq 'PRODUCT_C1_P0_RTL_SYNTHETIC_FIXTURE_PASS_NOT_QEMU_HANDOFF' \
             "$P0_OUT/logs/product-p0-rtl-run.log"
-          printf 'PRODUCT_C1_P0_CI_SYNTHETIC_FIVE_RETIRE_MARKERS_ONLY_NOT_QEMU_OR_SD1_PASS\n' \
+          grep -Fq 'PRODUCT_C1_P01_RTL_S_MODE_ILLEGAL_CSR_TRAP_PASS_NOT_QEMU' \
+            "$P0_OUT/logs/product-p0-rtl-run.log"
+          printf 'PRODUCT_C1_P01_CI_SYNTHETIC_FIVE_RETIRE_MARKERS_AND_S_MODE_TRAP_ONLY_NOT_QEMU_OR_SD1_PASS\n' \
             | tee "$P0_OUT/logs/proof-scope.txt"
 
       - name: Upload text proof and diagnostics (never the 256-MiB RAM)

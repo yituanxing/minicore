@@ -29,4 +29,5 @@ struct VAetherCoreProductOpenSbiRV64SimTop {
   std::uint8_t io_commit_interrupt = 0, io_commit_instBytes = 0;
   std::uint64_t io_commit_pc = 0;
   std::uint32_t io_commit_inst = 0, io_commit_rawInst = 0;
+  std::uint64_t io_commit_exceptionCause = 0, io_commit_exceptionValue = 0;
 };
