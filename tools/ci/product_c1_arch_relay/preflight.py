@@ -25,6 +25,11 @@ CSRS = ('misa', 'mstatus', 'medeleg', 'mideleg', 'mie', 'mip', 'mtvec',
 PMP_REGISTERS = tuple(f'pmpaddr{i}' for i in range(16)) + (
     'pmpcfg0', 'pmpcfg2')
 COUNTER_AND_WARL_CSRS = ('mcycle', 'minstret', 'mcountinhibit', 'menvcfg')
+# ProductCoreProfiles.smallDebianTarget: RV64 IM A F D C + S/U.
+# MachineCsrFile computes misa from the declared ISA, with no H extension.
+# This is deliberately pinned to the actual G5 Debian hardware configuration;
+# a new hardware target must update this contract deliberately.
+PRODUCT_G5_DEBIAN_MISA = 0x800000000014112d
 
 
 def reject(message):
@@ -91,6 +96,8 @@ def inspect(export, ram, source_paths, expected_ram_bytes=RAM_BYTES):
     if len(set(missing_source)) != len(missing_source) or set(registers) & set(missing_source):
         reject('contradictory QEMU register availability')
     decoded = {name: parse_hex(raw, name) for name, raw in registers.items()}
+    source_misa = decoded.get('misa')
+    misa_matches_product = source_misa == PRODUCT_G5_DEBIAN_MISA
     pc = parse_hex(export.get('breakpoint_pc'), 'breakpoint PC')
     if decoded.get('pc') != pc or pc & 1:
         reject('PC differs from aligned breakpoint')
@@ -119,6 +126,13 @@ def inspect(export, ram, source_paths, expected_ram_bytes=RAM_BYTES):
         'source_manifest_sha256': manifest_sha(export),
         'source_ram_sha256': memory['sha256'],
         'source_pc': f'0x{pc:x}',
+        'source_misa': f'0x{source_misa:x}' if source_misa is not None else None,
+        'product_g5_debian_misa': f'0x{PRODUCT_G5_DEBIAN_MISA:x}',
+        'misa_exact_match_product_g5_debian': misa_matches_product,
+        'misa_unexpected_bits': (f'0x{source_misa & ~PRODUCT_G5_DEBIAN_MISA:x}'
+                                 if source_misa is not None else None),
+        'misa_missing_bits': (f'0x{PRODUCT_G5_DEBIAN_MISA & ~source_misa:x}'
+                              if source_misa is not None else None),
         'minimum_s_mode_register_subset_present': not missing,
         'missing_minimum_s_mode_registers': missing,
         'pmp_registers_present': not missing_pmp,
@@ -129,6 +143,9 @@ def inspect(export, ram, source_paths, expected_ram_bytes=RAM_BYTES):
         'rtl_handoff_pass': False,
         'rtl_injected': False,
         'blockers': [
+            *([] if misa_matches_product else [
+                'QEMU source misa differs from actual Product G5 Debian ISA; '
+                'source and RTL cannot be called ISA-identical']),
             'RTL architectural restore port or qualified M-mode shim missing',
             'Product CSR WARL, PMP and read-only counter restore not qualified',
             'QEMU/RTL platform, timer, PLIC, UART and LRSC equivalence unproved',

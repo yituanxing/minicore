@@ -82,6 +82,27 @@ class PreflightTest(unittest.TestCase):
         report = self.inspect()
         self.assertFalse(report['minimum_s_mode_register_subset_present'])
         self.assertIn('misa', report['missing_minimum_s_mode_registers'])
+        self.assertFalse(report['misa_exact_match_product_g5_debian'])
+        self.assertFalse(report['rtl_handoff_pass'])
+
+    def test_qemu_hypervisor_extension_is_not_product_misa_match(self):
+        self.regs['misa'] = '0x80000000001411ad'
+        report = self.inspect()
+        self.assertTrue(report['minimum_s_mode_register_subset_present'])
+        self.assertEqual(report['source_misa'], '0x80000000001411ad')
+        self.assertEqual(report['product_g5_debian_misa'], '0x800000000014112d')
+        self.assertFalse(report['misa_exact_match_product_g5_debian'])
+        self.assertEqual(report['misa_unexpected_bits'], '0x80')
+        self.assertEqual(report['misa_missing_bits'], '0x0')
+        self.assertIn('ISA-identical', report['blockers'][0])
+        self.assertFalse(report['rtl_handoff_pass'])
+
+    def test_exact_rv64gc_misa_is_recorded_but_not_a_restore_pass(self):
+        self.regs['misa'] = '0x800000000014112d'
+        report = self.inspect()
+        self.assertTrue(report['misa_exact_match_product_g5_debian'])
+        self.assertEqual(report['misa_unexpected_bits'], '0x0')
+        self.assertEqual(report['misa_missing_bits'], '0x0')
         self.assertFalse(report['rtl_handoff_pass'])
 
     def test_cli_refuses_incomplete_capture_even_with_valid_ram_sha(self):
