@@ -15,8 +15,10 @@ on:
       - 'tools/ci/product_c1_arch_relay/preflight.py'
       - 'tools/ci/product_c1_arch_relay/p1_contract.py'
       - 'tools/ci/product_c1_arch_relay/sv39_source_walk.py'
+      - 'tools/ci/product_c1_arch_relay/first_retire_oracle.py'
       - 'tests_py/test_product_c1_p1_contract.py'
       - 'tests_py/test_product_c1_sv39_source_walk.py'
+      - 'tests_py/test_product_c1_first_retire_oracle.py'
   workflow_dispatch:
 
 permissions:
@@ -110,6 +112,7 @@ jobs:
           python3 -m unittest -q tests_py.test_product_c1_arch_relay_preflight
           python3 -m unittest -q tests_py.test_product_c1_p1_contract
           python3 -m unittest -q tests_py.test_product_c1_sv39_source_walk
+          python3 -m unittest -q tests_py.test_product_c1_first_retire_oracle
 
       - name: Real D2 QEMU snapshot export from exact frozen binaries
         run: |
@@ -165,6 +168,26 @@ jobs:
                 result['translated_physical_pc'] + ' bytes=' + result['instruction_bytes_le'])
           PY
 
+      - name: Derive first retired Linux GPR and PC oracle without touching RTL
+        if: matrix.profile == 'sv39-forced'
+        run: |
+          set -euo pipefail
+          python3 tools/ci/product_c1_arch_relay/first_retire_oracle.py \
+            --manifest "$AETHERCORE_C1_FAST_QEMU_OUT/export/manifest.json" \
+            --source-walk "$AETHERCORE_C1_FAST_QEMU_OUT/source-insn.json" \
+            --report "$AETHERCORE_C1_FAST_QEMU_OUT/first-retire-reference.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          r = json.loads((Path(os.environ['AETHERCORE_C1_FAST_QEMU_OUT']) /
+                          'first-retire-reference.json').read_text())
+          assert r['rtl_instruction_retired'] is False
+          assert r['rtl_handoff_pass'] is False
+          assert r['expected_retired_instruction_count'] == 1
+          print('PRODUCT_C1_QEMU_FIRST_RETIRE_ORACLE_ONLY next_pc=' +
+                r['pc_expected_after'] + ' next_sp=' + r['x2_expected_after'])
+          PY
+
       - name: Archive authentic captured RAM and source review, never RTL PASS
         if: success()
         uses: actions/upload-artifact@v4
@@ -176,6 +199,7 @@ jobs:
             build/product-c1-qemu-fast-export/source-review.json
             build/product-c1-qemu-fast-export/p1-review.json
             build/product-c1-qemu-fast-export/source-insn.json
+            build/product-c1-qemu-fast-export/first-retire-reference.json
             build/product-c1-qemu-fast-export/source-sha256sums.txt
             build/product-c1-qemu-fast-export/result.txt
             build/product-c1-qemu-fast-export/export.log
