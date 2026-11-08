@@ -75,13 +75,13 @@ def read_memory(rsp, address, count):
     return b"".join(chunks)
 
 
-def read_kernel_bpf_copy(rsp, prog_address, expected_bytecode_sha):
-    """Read the already-copied BPF instructions, never userspace or guest writes.
+def inspect_kernel_bpf_copy(rsp, prog_address):
+    """Read a bounded kernel-owned BPF copy, without assuming SHA identity.
 
     Linux 6.6.143 verifier_env->prog (+8) points to the kernel-owned
     struct bpf_prog containing the trailing insnsi[] array.  This avoids
-    reliance on bpf_check entry a0 and on GDB's access to userspace pages.
-    Validate the pinned RV64 struct header and the complete insnsi SHA.
+    reliance on GDB's access to userspace pages.  Validate the pinned RV64
+    struct header and return the complete insnsi SHA for later authentication.
     """
     # QEMU virt may use a different canonical VA mode from Product Sv39.
     # Validate a bounded, aligned readable pointer and the exact BPF header
@@ -94,10 +94,19 @@ def read_kernel_bpf_copy(rsp, prog_address, expected_bytecode_sha):
         raise ProtocolError("kernel bpf_prog type/attach/len mismatch: not comparable")
     insns = read_memory(rsp, prog_address + KERNEL_BPF_INSN_OFFSET,
                         INSTRUCTION_COUNT * 8)
-    if hashlib.sha256(insns).hexdigest() != expected_bytecode_sha:
-        raise ProtocolError("kernel BPF copy SHA mismatch: not comparable")
-    return {"source": "kernel_bpf_prog_insnsi", "kernel_prog_address":
-            f"0x{prog_address:x}", "kernel_insnsi_offset": KERNEL_BPF_INSN_OFFSET}
+    return {"location": {"source": "kernel_bpf_prog_insnsi",
+                         "kernel_prog_address": f"0x{prog_address:x}",
+                         "kernel_insnsi_offset": KERNEL_BPF_INSN_OFFSET},
+            "sha256": hashlib.sha256(insns).hexdigest()}
+
+
+def read_kernel_bpf_copy(rsp, prog_address, expected_bytecode_sha):
+    """Authenticate the entire kernel copy against the Product user attr SHA."""
+    inspected = inspect_kernel_bpf_copy(rsp, prog_address)
+    if inspected["sha256"] != expected_bytecode_sha:
+        raise ProtocolError("kernel BPF copy SHA mismatch: not comparable; "
+                            f"actual_sha256={inspected['sha256']}")
+    return inspected["location"]
 
 
 def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha):
@@ -229,6 +238,30 @@ def probe(rsp, qmp, symbols, expected_bytecode_sha):
         bpf_return_pc = rsp.reg(registers["ra"])
         if bpf_return_pc is None or bpf_return_pc == entry_pc:
             raise ProtocolError("invalid bpf_check return PC")
+        # The Product RTL forensic SHA comes from PID1's original
+        # bpf_attr.insns.  At bpf_check() entry, a0 is struct bpf_prog **
+        # and points to the kernel's early copy *before* verifier rewrites.
+        # Do not assume a particular kernel virtual-address prefix.
+        early_copy = None
+        early_copy_error = None
+        if program["bytecode_sha256"] is None:
+            try:
+                ref_pointer = rsp.reg(registers["a0"])
+                if (not isinstance(ref_pointer, int) or
+                        not 0x1000 <= ref_pointer < (1 << 64) or ref_pointer & 7):
+                    raise ProtocolError("invalid bpf_check entry prog-ref pointer")
+                prog_address = little_u64(read_memory(rsp, ref_pointer, 8), 0)
+                early_copy = inspect_kernel_bpf_copy(rsp, prog_address)
+            except ProtocolError as error:
+                early_copy_error = str(error)
+            else:
+                program["bpf_check_entry_kernel_sha256"] = early_copy["sha256"]
+                if early_copy["sha256"] == expected_bytecode_sha:
+                    program["bytecode_sha256"] = expected_bytecode_sha
+                    program["bytecode_read_location"] = {
+                        **early_copy["location"],
+                        "source": "bpf_check_entry_kernel_prog_ref",
+                    }
         bps.remove(entry_pc)
         common_pc = symbols["do_check_common"]
         bps.add(common_pc)
@@ -240,10 +273,27 @@ def probe(rsp, qmp, symbols, expected_bytecode_sha):
             raise ProtocolError("missing do_check_common env/return address")
         if not 0x1000 <= env_pointer < (1 << 64) or env_pointer & 7:
             raise ProtocolError(f"invalid aligned verifier env pointer: {env_pointer:#x}")
+        prog_address = little_u64(read_memory(rsp, env_pointer + 8, 8), 0)
+        late_copy = inspect_kernel_bpf_copy(rsp, prog_address)
+        program["do_check_common_kernel_sha256"] = late_copy["sha256"]
         if program["bytecode_sha256"] is None:
-            prog_address = little_u64(read_memory(rsp, env_pointer + 8, 8), 0)
-            program["bytecode_read_location"] = read_kernel_bpf_copy(
-                rsp, prog_address, expected_bytecode_sha)
+            if (early_copy is not None and
+                    early_copy["sha256"] != expected_bytecode_sha):
+                # A late-stage SHA can differ after verifier rewriting.  It
+                # is diagnostic only when the early kernel copy mismatched.
+                raise ProtocolError(
+                    "sd_bind6 bpf_check entry kernel SHA differs from Product "
+                    "user bpf_attr: not comparable; "
+                    f"entry_sha256={early_copy['sha256']} "
+                    f"do_check_common_sha256={late_copy['sha256']} "
+                    f"expected_sha256={expected_bytecode_sha}")
+            if late_copy["sha256"] != expected_bytecode_sha:
+                raise ProtocolError(
+                    "sd_bind6 kernel BPF copy SHA mismatch: not comparable; "
+                    f"entry_error={early_copy_error!r} "
+                    f"do_check_common_sha256={late_copy['sha256']} "
+                    f"expected_sha256={expected_bytecode_sha}")
+            program["bytecode_read_location"] = late_copy["location"]
             program["bytecode_sha256"] = expected_bytecode_sha
         if program["bytecode_sha256"] != expected_bytecode_sha:
             raise ProtocolError("sd_bind6 bytecode not authenticated: not comparable")

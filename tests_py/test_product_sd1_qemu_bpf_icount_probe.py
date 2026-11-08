@@ -147,6 +147,56 @@ class QemuBpfProbeTest(unittest.TestCase):
         self.assertEqual(result["program"]["bytecode_sha256"], DIGEST)
         self.assertTrue(result["verifier_accepted_program"])
 
+    def test_bpf_check_entry_copy_authenticated_before_verifier_rewrite(self):
+        rsp = FakeRsp()
+        rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        late_address = PROG_ADDR + 0x2000
+        altered = bytes([0xFF]) + INSTRUCTIONS[1:]
+        late_prog = next(data for base, data in rsp.memory if base == PROG_ADDR)
+        rsp.memory.append((late_address, late_prog[:PROG_INSN_OFFSET] + altered))
+        rsp.memory = [
+            (base, (bytes(data[:8]) + struct.pack("<Q", late_address) + data[16:])
+             if base == ENV_ADDR else data)
+            for base, data in rsp.memory
+        ]
+        result = probe.probe(rsp, FakeQmp(),
+                             {"bpf_check": 0x8000, "do_check_common": 0x8100},
+                             DIGEST)
+        self.assertEqual(result["program"]["bytecode_read_location"]["source"],
+                         "bpf_check_entry_kernel_prog_ref")
+        self.assertEqual(result["program"]["bpf_check_entry_kernel_sha256"], DIGEST)
+        self.assertEqual(result["program"]["do_check_common_kernel_sha256"],
+                         hashlib.sha256(altered).hexdigest())
+
+    def test_entry_sha_mismatch_is_not_rescued_by_late_sha_match(self):
+        rsp = FakeRsp()
+        rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        early_address = PROG_ADDR + 0x2000
+        altered = bytes([0xFF]) + INSTRUCTIONS[1:]
+        early_prog = next(data for base, data in rsp.memory if base == PROG_ADDR)
+        rsp.memory.append((early_address, early_prog[:PROG_INSN_OFFSET] + altered))
+        rsp.memory = [(base, struct.pack("<Q", early_address) if base == PROG_REF_ADDR
+                       else data) for base, data in rsp.memory]
+        with self.assertRaisesRegex(probe.ProtocolError,
+                                    "entry_sha256=.*do_check_common_sha256=.*expected_sha256") as caught:
+            probe.probe(rsp, FakeQmp(),
+                        {"bpf_check": 0x8000, "do_check_common": 0x8100}, DIGEST)
+        self.assertIn(hashlib.sha256(altered).hexdigest(), str(caught.exception))
+        self.assertIn(DIGEST, str(caught.exception))
+
+    def test_late_sha_mismatch_and_unusable_entry_reports_both_stages(self):
+        rsp = FakeRsp()
+        rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        rsp.stops[0]["a0"] = 0
+        altered = bytes([0xFF]) + INSTRUCTIONS[1:]
+        rsp.memory = [(base, data[:PROG_INSN_OFFSET] + altered if base == PROG_ADDR
+                       else data) for base, data in rsp.memory]
+        with self.assertRaisesRegex(probe.ProtocolError,
+                                    "entry_error=.*do_check_common_sha256=.*expected_sha256") as caught:
+            probe.probe(rsp, FakeQmp(),
+                        {"bpf_check": 0x8000, "do_check_common": 0x8100}, DIGEST)
+        self.assertIn(hashlib.sha256(altered).hexdigest(), str(caught.exception))
+
     def test_kernel_copy_fallback_rejects_mismatch_or_invalid_pointer(self):
         rsp = FakeRsp()
         rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
