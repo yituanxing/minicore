@@ -17,7 +17,7 @@ RAM_BYTES = 256 * 1024 * 1024
 RAM_BASE = 0x80000000
 QUALIFICATION = 'QEMU_ARCH_EXPORT_DIAGNOSTIC_ONLY_NOT_RTL_HANDOFF_PASS'
 INPUTS = ('firmware', 'dtb', 'linux_image', 'system_map')
-CSRS = ('mstatus', 'medeleg', 'mideleg', 'mie', 'mip', 'mtvec',
+CSRS = ('misa', 'mstatus', 'medeleg', 'mideleg', 'mie', 'mip', 'mtvec',
         'mscratch', 'mepc', 'mcause', 'mtval', 'stvec', 'sscratch',
         'sepc', 'scause', 'stval', 'satp', 'scounteren')
 # RV64: each 64-bit pmpcfg CSR holds eight 8-bit configuration entries.

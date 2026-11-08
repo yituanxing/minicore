@@ -32,7 +32,7 @@ RAM_SIZE = 256 * 1024 * 1024
 MTIME_ADDR = 0x0200BFF8
 MTIMECMP_ADDR = 0x02004000
 REQUIRED_CSR = (
-    "mstatus", "medeleg", "mideleg", "mie", "mip", "mtvec", "mscratch",
+    "misa", "mstatus", "medeleg", "mideleg", "mie", "mip", "mtvec", "mscratch",
     "mepc", "mcause", "mtval", "mcounteren", "mcountinhibit", "menvcfg",
     "mcycle", "minstret", "stvec", "sscratch", "sepc", "scause",
     "stval", "satp", "scounteren", "senvcfg", "fcsr", "fflags", "frm",

@@ -77,6 +77,13 @@ class PreflightTest(unittest.TestCase):
         self.assertIn('priv', report['missing_minimum_s_mode_registers'])
         self.assertIn('satp', report['missing_minimum_s_mode_registers'])
 
+    def test_missing_misa_does_not_fake_isa_compatibility(self):
+        del self.regs['misa']
+        report = self.inspect()
+        self.assertFalse(report['minimum_s_mode_register_subset_present'])
+        self.assertIn('misa', report['missing_minimum_s_mode_registers'])
+        self.assertFalse(report['rtl_handoff_pass'])
+
     def test_cli_refuses_incomplete_capture_even_with_valid_ram_sha(self):
         del self.regs['priv']
         manifest = self.root / 'manifest.json'
