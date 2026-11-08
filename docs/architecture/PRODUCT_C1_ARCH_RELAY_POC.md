@@ -32,6 +32,8 @@ python3 -m unittest tests_py.test_product_c1_arch_relay_preflight -v
 This tool creates a report only if its target path does not exist, and prints
 `PRODUCT_C1_ARCH_SOURCE_REVIEWED_NOT_RTL_RESUMED`. It **always** writes
 `rtl_handoff_pass=false`. It is not a state converter or an RTL injector.
+If required architectural registers are absent, it still records their names
+in the JSON report but exits with status 3 (not a successful input gate).
 `arch_registers_complete=true` does not assert device equivalence or successful
 restoration. The QEMU diagnostic source itself is not yet qualified on a real
 QEMU runner in this environment.
