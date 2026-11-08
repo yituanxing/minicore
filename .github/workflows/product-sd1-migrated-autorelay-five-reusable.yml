@@ -176,7 +176,26 @@ jobs:
                else .status == "completed" and .conclusion == "success" end) and
               (.path | contains($path))
             ' "$RUNNER_TEMP/run-$run.json" >/dev/null || exit 16
-            gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
+            # GitHub can report a completed successful job while temporarily
+            # returning steps: [] from the run-jobs endpoint. Never treat that
+            # incomplete response as proof: wait for the original step-level
+            # attestation, and fail closed if it does not become available.
+            for metadata_attempt in {1..16}; do
+              gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
+              if ! jq -e --arg job "$job" --arg mode "$mode" '
+                [.jobs[] | select(.name == $job and .status == "completed" and
+                  .conclusion == (if $mode == "post_publish_failure" then "failure" else "success" end) and
+                  ((.steps // []) | length == 0))] | length == 1
+              ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null; then
+                break
+              fi
+              if [[ "$metadata_attempt" -eq 16 ]]; then
+                echo "MIGRATED_AUTORUN_REJECTED: source run $run job '$job' has no GitHub step metadata after 16 checks" >&2
+                exit 16
+              fi
+              echo "MIGRATED_AUTORUN_STEP_METADATA_PENDING run=$run job='$job' attempt=$metadata_attempt/16"
+              sleep 20
+            done
             jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
               [.jobs[] | select(.name == $job and .status == "completed" and
                 (if $mode == "post_publish_failure" then
