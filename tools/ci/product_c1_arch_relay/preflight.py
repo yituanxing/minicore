@@ -131,9 +131,13 @@ def main():
     except (OSError, ValueError) as error:
         print('PRODUCT_C1_ARCH_SOURCE_REJECTED:', error, file=sys.stderr)
         return 2
+    if not review['arch_registers_complete']:
+        print('PRODUCT_C1_ARCH_SOURCE_INCOMPLETE_NOT_RTL_RESUMED',
+              'missing=' + str(len(review['missing_arch_registers'])),
+              file=sys.stderr)
+        return 3
     print('PRODUCT_C1_ARCH_SOURCE_REVIEWED_NOT_RTL_RESUMED',
-          'arch_complete=' + str(int(review['arch_registers_complete'])),
-          'missing=' + str(len(review['missing_arch_registers'])))
+          'arch_complete=1 missing=0')
     return 0
 
 
