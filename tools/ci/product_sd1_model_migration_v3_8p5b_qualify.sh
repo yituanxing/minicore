@@ -105,11 +105,12 @@ old_qual="$ROOT/build/product-sd1-model-migration-v2-draft/qualification-manifes
 [[ -x "$old_sim" && ! -L "$old_sim" && "$(sha "$old_sim")" == "$SOURCE_SHA" &&
    "$(field candidate_model_sha256 "$old_qual")" == "$SOURCE_SHA" &&
    "$(field previous_model_sha256 "$old_qual")" == "$PREVIOUS_SHA" &&
-   "$(field original_model_sha256 "$old_qual")" == "$ORIGINAL_SHA" &&
    "$(field replay_cycles "$old_qual")" == 20000000 &&
    "$(field full_rtl_identical "$old_qual")" == 1 &&
    "$(field full_host_except_model_sha_identical "$old_qual")" == 1 ]] ||
   fail 'qualified migrated-v2 source model/20M proof not authenticated'
+# The original model identity is sealed in BOTH verified C .migration-ready
+# files above, not in Host-v2's original qualification-manifest.txt schema.
 [[ "$(uname -m)" == x86_64 &&
    "$(c++ --version | head -1 | sha256sum | cut -c1-20)" == 89e4c31da3dafc5a664e ]] ||
   fail 'Host-only rebuild must use original frozen compiler ABI'

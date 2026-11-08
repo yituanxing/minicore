@@ -107,8 +107,12 @@ class V3MigrationDraftStatic(unittest.TestCase):
             "cross_8p1b_executed=0",
             "generated_object_hash",
             "product_sd1_official_seed.py verify",
+            'field original_model_sha256 "$ready"',
         ):
             self.assertIn(needle, src)
+        # The official Host-v2 qualification manifest has no original_model_sha256;
+        # that identity is verified from BOTH sealed C source stages instead.
+        self.assertNotIn('field original_model_sha256 "$old_qual"', src)
         authenticated = {
             "8072_HOST": "4a80a8ce142820af18e5729053443179a01dc2c2949456dc6a4397a7e8a751c3",
             "8072_RTL": "21a453ea346ee9d8aee8d25a152d7700e5f0814dd2f223e751b971607535f527",
