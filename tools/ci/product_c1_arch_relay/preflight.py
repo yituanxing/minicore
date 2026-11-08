@@ -124,7 +124,8 @@ def main():
     args = parser.parse_args()
     try:
         review = inspect(json.loads(args.manifest.read_text()), args.ram,
-                         {name: getattr(args, name) for name in INPUTS})
+                         {name: getattr(args, name) for name in INPUTS},
+                         expected_ram_bytes=RAM_BYTES)
         with args.report.open('x', encoding='utf-8') as output:
             json.dump(review, output, indent=2, sort_keys=True)
             output.write('\n')
