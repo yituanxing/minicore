@@ -80,7 +80,8 @@ object PmpCsrWarl {
   }
 }
 
-class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
+class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int,
+                 val enableWarmSeed: Boolean = false) extends Module {
   def this(isa: IsaConfig) = this(isa, isa.xlen)
 
   private val xlen = isa.xlen
@@ -103,6 +104,13 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
     val writeEnable = Input(Bool())
     val writeAddr = Input(UInt(12.W))
     val writeData = Input(UInt(xlen.W))
+
+    // Only the isolated simulator opts into a direct reset-adjacent import.
+    val warmSeed = if (enableWarmSeed) Some(Input(new Bundle {
+      val valid = Bool()
+      val config = Vec(PmpConstants.MaxEntries, UInt(8.W))
+      val address = Vec(PmpConstants.MaxEntries, UInt(pmpAddressBits.W))
+    })) else None
 
     val config = Output(Vec(PmpConstants.MaxEntries, UInt(8.W)))
     val pmpAddress = Output(Vec(PmpConstants.MaxEntries, UInt(pmpAddressBits.W)))
@@ -181,6 +189,16 @@ class PmpCsrFile(val isa: IsaConfig, val paddrBits: Int) extends Module {
           !lockedByNextTor
       ) {
         pmpAddress(entry) := canonicalWriteData(pmpAddressBits - 1, 0)
+      }
+    }
+  }
+
+  if (enableWarmSeed) {
+    when(io.warmSeed.get.valid) {
+      assert(!io.writeEnable, "PMP debug import must exclude regular CSR writes")
+      for (entry <- 0 until PmpConstants.MaxEntries) {
+        config(entry) := io.warmSeed.get.config(entry)
+        pmpAddress(entry) := io.warmSeed.get.address(entry)
       }
     }
   }

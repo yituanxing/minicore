@@ -154,7 +154,8 @@ class AetherCoreProductUnifiedMemorySoC(
     // Legacy geometry selection is used only when no exact CPU target is given.
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly,
+    val enableWarmSeed: Boolean = false
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = AetherCoreProductSoCProfiles.selectEngineeringTarget(
@@ -180,6 +181,9 @@ class AetherCoreProductUnifiedMemorySoC(
     "Product data transaction tags must match the shared platform fabric")
 
   val io = IO(new Bundle {
+    val warmSeed = if (enableWarmSeed)
+      Some(Input(new aethercore.core.product.ProductWarmSeedState(implementedPaddrBits)))
+    else None
     val memoryRequest = Decoupled(
       new AetherMemRequest(implementedPaddrBits, DataBits, externalTxnIdBits))
     val memoryResponse = Flipped(Decoupled(
@@ -232,8 +236,10 @@ class AetherCoreProductUnifiedMemorySoC(
   val core = Module(new ProductSmallPagedCore(
     config,
     enableInstructionBackpressure = true,
-    withSupervisorExternalInterrupt = true
+    withSupervisorExternalInterrupt = true,
+    enableWarmSeed = enableWarmSeed
   ))
+  if (enableWarmSeed) core.io.warmSeed.get := io.warmSeed.get
   val fabric = Module(new AetherSoCPlatformFabric(
     paddrBits = implementedPaddrBits,
     dataBits = DataBits,
@@ -380,7 +386,8 @@ class AetherCoreProductUnifiedMemorySoC(
   fabric.io.uartTxReady :=
     (if (externalPhysicalSeams) io.uartTxReady.get else true.B)
   fabric.io.timebaseTick :=
-    (if (externalPhysicalSeams) io.timebaseTick.get else true.B)
+    (if (externalPhysicalSeams) io.timebaseTick.get else true.B) &&
+      !(if (enableWarmSeed) io.warmSeed.get.hold else false.B)
   if (enableSpiSd) {
     fabric.io.spiMiso.get := io.spiMiso.get
     io.spiSclk.get := fabric.io.spiSclk.get

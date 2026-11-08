@@ -21,8 +21,11 @@ import chisel3._
   */
 class AetherCoreProductUnifiedMemoryCompatSimTop(
     val debianTarget: Boolean = false,
-    val spiSdTarget: Boolean = false
+    val spiSdTarget: Boolean = false,
+    val experimentalWarmSeed: Boolean = false
 ) extends Module {
+  require(!experimentalWarmSeed || (debianTarget && !spiSdTarget),
+    "experimental direct seed is isolated to the Debian RAM-only Product core")
   require(!spiSdTarget || debianTarget,
     "Product SPI-SD simulation requires the real RV64GC Debian ISA/ABI target")
   private val Xlen = 64
@@ -30,6 +33,8 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
   private val DataBits = 64
 
   val io = IO(new Bundle {
+    val warmSeed = if (experimentalWarmSeed)
+      Some(Input(new aethercore.core.product.ProductWarmSeedState(PA))) else None
     val imemValid = Output(Bool())
     val imemAddr = Output(UInt(PA.W))
     val imemBytes = Output(UInt(3.W))
@@ -102,7 +107,9 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
     // become five times shorter than on the Product FPGA shell.
     externalPhysicalSeams = debianTarget,
     productConfigOverride = requestedTarget,
-    boardDevices = selectedBoardDevices))
+    boardDevices = selectedBoardDevices,
+    enableWarmSeed = experimentalWarmSeed))
+  if (experimentalWarmSeed) soc.io.warmSeed.get := io.warmSeed.get
   if (debianTarget) {
     val board = AetherSoCBoardSpec.qualifiedLinux(soc.config.platform)
     val timeTick = Module(new AetherFractionalTickGenerator(
@@ -183,6 +190,12 @@ class AetherCoreProductOpenSbiRV64SimTop
 class AetherCoreProductDebianRV64SimTop
     extends AetherCoreProductUnifiedMemoryCompatSimTop(debianTarget = true)
 
+/** Dedicated reset-adjacent, direct-seeded G5 Product RTL fixture. It adds
+  * no inputs to the production Debian or SD1 simulation top. */
+class AetherCoreProductDebianWarmSeedRV64SimTop
+    extends AetherCoreProductUnifiedMemoryCompatSimTop(
+      debianTarget = true, experimentalWarmSeed = true)
+
 /** SD1 Product Debian SPI-SD: no software storage shortcut or synthetic block
   * MMIO. All SD sectors travel through the Linux mmc_spi driver, OpenCores
   * SPI, GPIO chip select, S-mode PLIC and the host card's four physical pins.
@@ -202,6 +215,14 @@ object ElaborateProductOpenSbiRV64SimTop extends App {
 object ElaborateProductDebianRV64SimTop extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductDebianRV64SimTop,
+    args,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+object ElaborateProductDebianWarmSeedRV64SimTop extends App {
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductDebianWarmSeedRV64SimTop,
     args,
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )

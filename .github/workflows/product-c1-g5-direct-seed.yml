@@ -1,0 +1,138 @@
+name: Product G5 isolated direct architectural seed one-RVC RTL
+
+on:
+  push:
+    branches:
+      - experiment/c1-arch-handoff-20261108
+    paths:
+      - '.github/workflows/product-c1-g5-direct-seed.yml'
+      - 'src/main/scala/aethercore/core/**'
+      - 'src/main/scala/aethercore/soc/**'
+      - 'src/main/scala/aethercore/sim/**'
+      - 'sim/product_c1_g5_direct_seed_main.cpp'
+      - 'tools/ci/product_c1_arch_relay/g5_direct_seed_fixture.py'
+      - 'tools/ci/product_c1_arch_relay/p1_rvc_fixture.py'
+      - 'tests_py/test_product_c1_g5_direct_seed_fixture.py'
+      - 'build.mill'
+      - 'mill'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-c1-g5-direct-seed-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-real-g5-direct-seed:
+    if: github.ref == 'refs/heads/experiment/c1-arch-handoff-20261108'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      VERILATOR_THREADS: '1'
+      JOBS: '4'
+      OUT: build/product-c1-g5-direct-seed
+
+    steps:
+      - name: Checkout exact experiment commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Restore Scala and Mill cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Install pinned tool prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 bison flex libfl-dev \
+            libgmp-dev git curl make zlib1g-dev autoconf cmake ninja-build \
+            libssl-dev libelf-dev libreadline-dev pkg-config build-essential
+
+      - name: Provision Verilator 5.054
+        run: bash tools/ensure_verilator_5_054.sh
+
+      - name: Check independent no-MRET source/port contract
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/logs"
+          python3 -m unittest -v tests_py.test_product_c1_g5_direct_seed_fixture \
+            2>&1 | tee "$OUT/logs/static-fixture-test.log"
+          python3 tools/ci/product_c1_arch_relay/g5_direct_seed_fixture.py \
+            --out-dir "$OUT" 2>&1 | tee "$OUT/logs/fixture.log"
+          test "$(stat -c %s "$OUT/ram-256m.bin")" -eq 268435456
+          sha256sum "$OUT/ram-256m.bin" > "$OUT/logs/source-ram.sha256"
+
+      - name: Elaborate actual opt-in Product G5 warm-state RTL
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$OUT/rtl-seed" \
+            TOP=AetherCoreProductDebianWarmSeedRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianWarmSeedRV64SimTop \
+            JOBS=4 rtl
+          test -n "$(find "$OUT/rtl-seed/rtl" -maxdepth 1 -name '*.sv' -print -quit)"
+
+      - name: Build real Product G5 Verilator host
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT/obj"
+          verilator --cc --exe --build -O3 -Wall -Wno-fatal \
+            --top-module AetherCoreProductDebianWarmSeedRV64SimTop \
+            -Mdir "$OUT/obj" \
+            -CFLAGS "-std=c++20 -O3 -I$GITHUB_WORKSPACE/sim" \
+            -LDFLAGS '-ldl' \
+            "$OUT"/rtl-seed/rtl/*.sv \
+            "$GITHUB_WORKSPACE/sim/product_c1_g5_direct_seed_main.cpp" \
+            -j 4 2>&1 | tee "$OUT/logs/verilator-build.log"
+
+      - name: Bounded actual G5 direct seed Sv39 RVC retire
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 300s \
+            "$OUT/obj/VAetherCoreProductDebianWarmSeedRV64SimTop" \
+            "$OUT/ram-256m.bin" 100000 \
+            2>&1 | tee "$OUT/logs/direct-seed-real-rtl.log"
+          grep -Fq 'PRODUCT_C1_G5_RTL_DIRECT_SEED_HOLD_DDR_UNCHANGED_NO_MRET' \
+            "$OUT/logs/direct-seed-real-rtl.log"
+          grep -Fq 'PRODUCT_C1_G5_RTL_DIRECT_SEED_FIRST_RVC_RETIRED' \
+            "$OUT/logs/direct-seed-real-rtl.log"
+          grep -Fq 'PRODUCT_C1_G5_RTL_DIRECT_ARCH_SEED_RVC_PTW_SP_NEXTPC_PASS_NOT_QEMU_OR_SD1' \
+            "$OUT/logs/direct-seed-real-rtl.log"
+          printf '%s\n' 'SYNTHETIC_G5_DIRECT_ARCH_SEED_ONE_RVC_ONLY_NOT_QEMU_OR_SD1' \
+            > "$OUT/logs/proof-scope.txt"
+
+      - name: Upload bounded proof logs, never guest DDR
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-g5-direct-seed-${{ github.run_id }}
+          path: |
+            build/product-c1-g5-direct-seed/logs/**
+            build/product-c1-g5-direct-seed/rtl-seed/logs/**
+            build/product-c1-g5-direct-seed/expected.json
+          if-no-files-found: warn
+          retention-days: 14

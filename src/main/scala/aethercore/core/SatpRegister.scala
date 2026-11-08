@@ -18,7 +18,8 @@ import chisel3.util.Cat
   */
 class SatpRegister(
     supportedModes: Seq[PageTableGeometry],
-    implementedAsidBits: Int = 0
+    implementedAsidBits: Int = 0,
+    enableWarmSeed: Boolean = false
 ) extends Module {
   require(supportedModes.nonEmpty, "SatpRegister requires at least one paged mode")
 
@@ -50,6 +51,10 @@ class SatpRegister(
   val io = IO(new Bundle {
     val writeEnable = Input(Bool())
     val writeData = Input(UInt(xlen.W))
+    val warmSeed = if (enableWarmSeed) Some(Input(new Bundle {
+      val valid = Bool()
+      val satp = UInt(xlen.W)
+    })) else None
 
     val readData = Output(UInt(xlen.W))
     val translationEnabled = Output(Bool())
@@ -87,6 +92,21 @@ class SatpRegister(
     }
     // The privileged architecture requires an unsupported MODE write to leave
     // the entire satp value unchanged, so there is intentionally no otherwise.
+  }
+
+  if (enableWarmSeed) {
+    when(io.warmSeed.get.valid) {
+      assert(!io.writeEnable, "SATP debug import must exclude regular CSR writes")
+      val debugMode = io.warmSeed.get.satp(modeHigh, modeLow)
+      val debugAsid = io.warmSeed.get.satp(asidLow + asidBits - 1, asidLow)
+      val debugSupported = supportedModes
+        .map(mode => debugMode === mode.satpMode.U(modeBits.W))
+        .reduce(_ || _)
+      assert((debugMode === 0.U && io.warmSeed.get.satp === 0.U) ||
+        (debugSupported && debugAsid === 0.U),
+        "SATP debug import must be canonical, supported, and ASID-zero")
+      satp := io.warmSeed.get.satp
+    }
   }
 
   io.readData := satp

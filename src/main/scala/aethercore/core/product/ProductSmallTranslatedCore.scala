@@ -14,7 +14,8 @@ import chisel3.util._
   * lookup, while the LSQ alone owns physical AetherMem transaction IDs.
   * This is an executable data path, not yet a bootable product Linux SoC.
   */
-class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: Int = 8)
+class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: Int = 8,
+                                 val enableWarmSeed: Boolean = false)
     extends Module {
   private val g = config.geometry
   require(config.rtlElaboratable,
@@ -31,6 +32,8 @@ class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: 
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new ProductDispatch(64)))
+    val warmGpr = if (enableWarmSeed)
+      Some(Input(Valid(new ProductWarmGprWrite))) else None
     val context = Input(new ProductDataTranslationContext(geom))
     val pmpConfig = Input(Vec(PmpConstants.MaxEntries, UInt(8.W)))
     val pmpAddress = Input(Vec(PmpConstants.MaxEntries, UInt(pmpAddressBits.W)))
@@ -63,7 +66,8 @@ class ProductSmallTranslatedCore(val config: ProductCoreConfig, val tlbEntries: 
     val staleCompletion = Output(Bool())
   })
 
-  private val core = Module(new ProductSmallMemoryCore(config))
+  private val core = Module(new ProductSmallMemoryCore(config, enableWarmSeed))
+  if (enableWarmSeed) core.io.warmGpr.get := io.warmGpr.get
   private val resolver = Module(new ProductDataResolver(config, tlbEntries))
 
   core.io.dispatch.valid := io.dispatch.valid

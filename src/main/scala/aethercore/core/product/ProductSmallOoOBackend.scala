@@ -241,7 +241,8 @@ private class ProductIqSlot(
 class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
                              val allowSystem: Boolean = false,
                              val paddrBits: Int = 56,
-                             val enableFloating: Boolean = false) extends Module {
+                             val enableFloating: Boolean = false,
+                             val enableWarmSeed: Boolean = false) extends Module {
   require(geometry.decodeWidth == 1 && geometry.dispatchWidth == 1 &&
     geometry.issueWidth == 1 && geometry.retireWidth == 1,
     "this first hardware slice implements the Small one-wide backend only")
@@ -261,6 +262,8 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new ProductDispatch(Xlen)))
+    val warmGpr = if (enableWarmSeed)
+      Some(Input(Valid(new ProductWarmGprWrite))) else None
     val issue = Decoupled(new ProductIssue(Xlen, I, F, G))
     val fpIssue = if (enableFloating) Some(Decoupled(new ProductFpIssue(Xlen, I, F, G))) else None
     // FU state is observed independently from issue.bits; do not close a
@@ -834,10 +837,26 @@ class ProductSmallOoOBackend(val geometry: ProductCoreGeometry,
   // newly allocated tag is invalidated while its ready bit is cleared.
   prf.io.invalidate.valid := io.dispatch.fire && writesInteger
   prf.io.invalidate.bits := chosenPhysical
-  prf.io.write.valid := accepted && c.hasValue && !c.exception.valid &&
+  val regularIntegerWrite = accepted && c.hasValue && !c.exception.valid &&
     c.destinationFile === ProductRegisterFile.Integer
-  prf.io.write.bits.index := c.destination.index
-  prf.io.write.bits.value := c.value
+  val warmIntegerWrite = if (enableWarmSeed) io.warmGpr.get.valid else false.B
+  prf.io.write.valid := regularIntegerWrite || warmIntegerWrite
+  prf.io.write.bits.index := Mux(warmIntegerWrite,
+    (if (enableWarmSeed) io.warmGpr.get.bits.index else 0.U), c.destination.index)
+  prf.io.write.bits.value := Mux(warmIntegerWrite,
+    (if (enableWarmSeed) io.warmGpr.get.bits.data else 0.U), c.value)
+  if (enableWarmSeed) {
+    when(warmIntegerWrite) {
+      assert(!io.dispatch.valid && !io.completion.valid && count === 0.U &&
+        !recovering && !regularIntegerWrite,
+        "architectural XPR preload requires a fresh empty backend")
+      assert(io.warmGpr.get.bits.index =/= 0.U,
+        "architectural XPR preload may not write x0")
+      assert(committedRat(io.warmGpr.get.bits.index) ===
+        io.warmGpr.get.bits.index,
+        "architectural XPR preload requires the reset identity RAT")
+    }
+  }
   if (enableFloating) {
     fpPrf.get.io.invalidate.valid := io.dispatch.fire && writesFloating
     fpPrf.get.io.invalidate.bits := chosenPhysical

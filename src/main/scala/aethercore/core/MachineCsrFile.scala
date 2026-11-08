@@ -266,7 +266,8 @@ class MachineCsrFile(
     val isa: IsaConfig,
     val paddrBits: Int,
     val withMachineExternalInterrupt: Boolean,
-    val withSupervisorExternalInterrupt: Boolean
+    val withSupervisorExternalInterrupt: Boolean,
+    val enableWarmSeed: Boolean = false
 ) extends Module {
   def this(isa: IsaConfig) = this(isa, isa.xlen, false, false)
   def this(isa: IsaConfig, withMachineExternalInterrupt: Boolean) =
@@ -358,6 +359,7 @@ class MachineCsrFile(
     val writeEnable = Input(Bool())
     val writeAddr = Input(UInt(12.W))
     val writeData = Input(UInt(xlen.W))
+    val warmSeed = if (enableWarmSeed) Some(Input(new WarmCsrSeed(paddrBits))) else None
 
     // Exactly one architectural floating-point state update at the retiring
     // instruction boundary; speculative FU completion cannot drive this port.
@@ -427,11 +429,16 @@ class MachineCsrFile(
   val machineProvidedSupervisorTimerPending =
     if (isa.hasMachineProvidedSupervisorTimer) Some(RegInit(false.B)) else None
 
-  val pmp = Module(new PmpCsrFile(isa, paddrBits))
+  val pmp = Module(new PmpCsrFile(isa, paddrBits, enableWarmSeed = enableWarmSeed))
   pmp.io.readAddr := io.readAddr
   pmp.io.writeEnable := io.writeEnable
   pmp.io.writeAddr := io.writeAddr
   pmp.io.writeData := io.writeData
+  if (enableWarmSeed) {
+    pmp.io.warmSeed.get.valid := io.warmSeed.get.valid
+    pmp.io.warmSeed.get.config := io.warmSeed.get.pmpConfig
+    pmp.io.warmSeed.get.address := io.warmSeed.get.pmpAddress
+  }
   io.pmpConfig := pmp.io.config
   io.pmpAddress := pmp.io.pmpAddress
 
@@ -507,9 +514,13 @@ class MachineCsrFile(
   }
 
   val satp = if (isa.hasPagedVirtualMemory)
-    Some(Module(new SatpRegister(pagingGeometries)))
+    Some(Module(new SatpRegister(pagingGeometries, enableWarmSeed = enableWarmSeed)))
   else None
   if (isa.hasPagedVirtualMemory) {
+    if (enableWarmSeed) {
+      satp.get.io.warmSeed.get.valid := io.warmSeed.get.valid
+      satp.get.io.warmSeed.get.satp := io.warmSeed.get.satp
+    }
     satp.get.io.writeEnable := ordinaryWrite && io.writeAddr === SupervisorCsrAddress.Satp.U
     satp.get.io.writeData := io.writeData
     io.satpTranslationEnabled := satp.get.io.translationEnabled
@@ -974,5 +985,18 @@ class MachineCsrFile(
     }
   }.elsewhen(fpDirtyEvent) {
     mstatus := effectiveMstatusWithFp
+  }
+
+  if (enableWarmSeed) {
+    when(io.warmSeed.get.valid) {
+      assert(!io.writeEnable && !io.trapEnter && !io.trapReturn,
+        "CSR debug import must occur at a drained, held boundary")
+      assert(io.warmSeed.get.privilege === PrivilegeMode.Supervisor.U ||
+        io.warmSeed.get.privilege === PrivilegeMode.Machine.U ||
+        io.warmSeed.get.privilege === PrivilegeMode.User.U,
+        "CSR debug import may not select the reserved privilege mode")
+      privilege := io.warmSeed.get.privilege
+      mstatus := io.warmSeed.get.mstatus
+    }
   }
 }

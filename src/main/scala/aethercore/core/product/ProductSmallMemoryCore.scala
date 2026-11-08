@@ -12,7 +12,8 @@ import aethercore.memory.{AetherMemRequest, AetherMemResponse}
   * before returning memoryResolved. This module cannot fake a Sv39 walker,
   * PMP privilege check, PMA attributes or Linux boot support.
   */
-class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
+class ProductSmallMemoryCore(val config: ProductCoreConfig,
+                             val enableWarmSeed: Boolean = false) extends Module {
   private val g = config.geometry
   private val enableFloating = config.software.isa.extensions.contains('F')
   require(config.rtlElaboratable,
@@ -27,6 +28,8 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
 
   val io = IO(new Bundle {
     val dispatch = Flipped(Decoupled(new ProductDispatch(64)))
+    val warmGpr = if (enableWarmSeed)
+      Some(Input(Valid(new ProductWarmGprWrite))) else None
     // To the external translation/PMP/PMA owner: VADDR = lhs+immediate,
     // STORE data = issue.storeData. The resolver may stall arbitrarily.
     val memoryExecute = Decoupled(new ProductIssue(64, I, P, G))
@@ -66,7 +69,9 @@ class ProductSmallMemoryCore(val config: ProductCoreConfig) extends Module {
   })
 
   private val backend = Module(new ProductSmallOoOBackend(
-    g, allowSystem = true, paddrBits = PA, enableFloating = enableFloating))
+    g, allowSystem = true, paddrBits = PA, enableFloating = enableFloating,
+    enableWarmSeed = enableWarmSeed))
+  if (enableWarmSeed) backend.io.warmGpr.get := io.warmGpr.get
   private val integer = Module(new ProductIntegerBranchUnit(g, config.software.isa.hasC, PA))
   private val m = Module(new ProductMUnit(g, PA))
   // One floating execution lane shares the same ROB and completion arbiter;

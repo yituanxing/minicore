@@ -27,7 +27,8 @@ class ProductSmallPagedCore(
     val tlbEntries: Int = 8,
     val enableInstructionBackpressure: Boolean = false,
     val withMachineExternalInterrupt: Boolean = false,
-    val withSupervisorExternalInterrupt: Boolean = true
+    val withSupervisorExternalInterrupt: Boolean = true,
+    val enableWarmSeed: Boolean = false
 ) extends Module {
   private val isa = config.software.isa
   private val g = config.geometry
@@ -55,6 +56,9 @@ class ProductSmallPagedCore(
 
   val io = IO(new Bundle {
     val imem = new InstructionBusIO(PA)
+    // This port is absent from all existing production/G4/G5/SD1 elaborations.
+    val warmSeed = if (enableWarmSeed)
+      Some(Input(new ProductWarmSeedState(PA))) else None
     val imemReady = if (enableInstructionBackpressure) Some(Input(Bool())) else None
     val ptw = new PageTableReadBusIO(PA, geometry.pteBits)
 
@@ -90,9 +94,15 @@ class ProductSmallPagedCore(
     val instructionFence = Output(Bool())
   })
 
-  private val core = Module(new ProductSmallTranslatedCore(config, tlbEntries))
+  private val core = Module(new ProductSmallTranslatedCore(
+    config, tlbEntries, enableWarmSeed))
   private val csrFile = Module(new MachineCsrFile(
-    isa, PA, withMachineExternalInterrupt, withSupervisorExternalInterrupt))
+    isa, PA, withMachineExternalInterrupt, withSupervisorExternalInterrupt,
+    enableWarmSeed))
+  if (enableWarmSeed) {
+    core.io.warmGpr.get := io.warmSeed.get.gpr
+    csrFile.io.warmSeed.get := io.warmSeed.get.csr
+  }
   private val decode = Module(new SemanticDecode(isa))
   private val fetch = Module(new InstructionFetchAdapter(geometry, PA, tlbEntries))
   private val parcel = if (isa.hasC) Some(Module(new RvcParcelController(
@@ -198,7 +208,8 @@ class ProductSmallPagedCore(
   private val cleanBoundary = core.io.occupancy === 0.U && !core.io.recovering &&
     core.io.loadCount === 0.U && core.io.storeCount === 0.U &&
     core.io.outstandingTransactions === 0.U && core.io.resolverPending === 0.U
-  private val interruptTake = qualifiedInterrupt && cleanBoundary &&
+  private val warmHold = if (enableWarmSeed) io.warmSeed.get.hold else false.B
+  private val interruptTake = qualifiedInterrupt && cleanBoundary && !warmHold &&
     !privilegedRedirect && !branchRedirect
 
   // Memory evidence travels with the completing ROB lifetime (not a bus
@@ -249,8 +260,8 @@ class ProductSmallPagedCore(
   when(wfiWaiting && rawWake) { wfiWaiting := false.B }
   when(interruptTake) { wfiWaiting := false.B }
 
-  private val frontendBlocked = serialized || qualifiedInterrupt || wfiWaiting
-  private val frontendKill = redirect || qualifiedInterrupt || wfiWaiting
+  private val frontendBlocked = serialized || qualifiedInterrupt || wfiWaiting || warmHold
+  private val frontendKill = redirect || qualifiedInterrupt || wfiWaiting || warmHold
   io.halted := wfiWaiting
   io.interruptHold := qualifiedInterrupt
   io.interruptTaken := interruptTake
@@ -259,7 +270,8 @@ class ProductSmallPagedCore(
 
   fetch.io.requestValid := !frontendBlocked && !redirect
   fetch.io.kill := frontendKill || fenceIAtRetire
-  fetch.io.flush := sfenceAtRetire
+  fetch.io.flush := sfenceAtRetire ||
+    (if (enableWarmSeed) io.warmSeed.get.load else false.B)
   fetch.io.virtualAddress := (if (isa.hasC) parcel.get.io.parcelRequestAddress else pc)
   fetch.io.privilege := csrFile.io.currentPrivilege
   fetch.io.satpTranslationEnabled := csrFile.io.satpTranslationEnabled
@@ -387,6 +399,24 @@ class ProductSmallPagedCore(
         serialized := true.B
         serializedPc := pc
       }
+    }
+  }
+
+  if (enableWarmSeed) {
+    when(io.warmSeed.get.load) {
+      assert(warmHold && cleanBoundary && !retiring,
+        "direct architectural PC seed requires an empty held Product core")
+      pc := io.warmSeed.get.pc
+      serialized := false.B
+      wfiWaiting := false.B
+    }
+    when(io.warmSeed.get.gpr.valid || io.warmSeed.get.csr.valid) {
+      assert(warmHold && cleanBoundary && !retiring,
+        "direct architectural register/CSR seed requires a held Product core")
+    }
+    when(warmHold) {
+      assert(!core.io.dispatch.valid && !retiring && !interruptTake &&
+        !io.memoryRequest.valid, "architectural seed must have no guest execution")
     }
   }
 
