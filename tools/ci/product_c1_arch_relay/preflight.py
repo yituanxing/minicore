@@ -46,6 +46,12 @@ def file_sha(path):
     return h.hexdigest()
 
 
+def manifest_sha(export):
+    """Canonical evidence binding, independent of JSON whitespace/order."""
+    payload = json.dumps(export, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
 def check_file(descriptor, path, name):
     if not isinstance(descriptor, dict) or not re.fullmatch(
             r'[0-9a-f]{64}', str(descriptor.get('sha256', ''))):
@@ -108,6 +114,7 @@ def inspect(export, ram, source_paths, expected_ram_bytes=RAM_BYTES):
         reject('unexported device/RTL state must be explicitly recorded')
     return {
         'schema': 'aethercore.c1.arch-source-review.v1',
+        'source_manifest_sha256': manifest_sha(export),
         'source_ram_sha256': memory['sha256'],
         'source_pc': f'0x{pc:x}',
         'minimum_s_mode_register_subset_present': not missing,
