@@ -41,30 +41,49 @@ It does not assert device equivalence or successful restoration. The QEMU
 diagnostic source itself is not yet qualified on a real
 QEMU runner in this environment.
 
-## Isolated S-mode P0 restore ABI (implemented, not yet executable in RTL)
+## Isolated S-mode P0 restore ABI (implemented; real RTL still unqualified)
 
-`sim/product_c1_arch_restore.S` defines a 408-byte little-endian machine-state
-table (`PC`, 18 CSR slots, `x0..x31`) and an M-mode instruction sequence that
+`sim/product_c1_arch_restore.S` defines a 424-byte little-endian machine-state
+table (`PC`, 18 CSR slots, two PMP slots, `x0..x31`) and an M-mode instruction sequence that
 rebuilds GPR/selected CSR state and attempts `mret` to an S-mode resume PC.
 `tools/ci/product_c1_arch_relay/restore_abi.py` packs that table only after a
 matching SHA-verified source review and only for deliberately restricted P0
-fixtures: FS=Off, SATP=0, no enabled/pending IRQ, all PMP registers explicitly
-zero, and MSTATUS/MEPC already compatible with exact `mret` side effects.
-It is **not** suitable for normal Linux/SD1 snapshots.  Neither compilation
-with the frozen RV64 toolchain nor actual Product RTL execution has occurred.
+fixtures: FS=Off, SATP=0, no enabled/pending IRQ, **exactly one unlocked
+PMP NAPOT RWX entry** covering the fixed Product 256 MiB DDR aperture
+`[0x80000000, 0x90000000)` (`pmpaddr0=0x21ffffff`, low byte of
+`pmpcfg0=0x1f`, all other PMP slots zero), and MSTATUS/MEPC already
+compatible with exact `mret` side effects.  Product has PMP16, and a
+zeroed PMP16 denies unmatched S/U fetches and memory accesses. The assembly
+writes `pmpaddr0` before enabling `pmpcfg0`, prior to `mret`.
+It is **not** suitable for normal Linux/SD1 snapshots.  The isolated fixture
+and Host simulation entry now exist, but compilation with the frozen RV64
+toolchain and actual Product RTL execution still require the dedicated CI gate.
 
-The Host still needs to provide a reserved/overlay code+state aperture without
-mutating original guest RAM, to switch it off coherently before `fence.i`, and
-to compare resumed retirement against a source reference.
+For the isolated synthetic P0 fixture, the Host can overlay only the reserved
+first MiB, without modifying source RAM, and turn the overlay off after the
+restoring `mret` retires. The target code is outside this reserved aperture;
+the earlier `fence.i` therefore does **not** establish general Linux cache
+coherence. Actual QEMU/Linux snapshots still need a reserved-memory/DTB
+contract, WARL-aware state qualification, and a post-resume reference trace.
 
-## Next implementable experiment
+## P0 synthetic fixture and next Linux experiment
+
+The isolated P0 files are `sim/product_c1_arch_p0_main.cpp`,
+`sim/product_c1_arch_p0_overlay.h`, `sim/product_c1_arch_p0_fixture.S`,
+`sim/product_c1_arch_p0.ld` and the fixture tool under
+`tools/ci/product_c1_arch_relay/`. CI in
+`.github/workflows/product-c1-arch-p0.yml` builds a *real* G4 Product RTL
+executable on the experimental branch, then must observe MRET retirement,
+five target retirements and four matching memory markers. Its synthetic source
+is **not** a QEMU-generated Linux checkpoint, and a passing fixture still
+does not qualify cross-simulator Linux execution.
 
 1. Use existing G3/G4 real Product OpenSBI and Linux fixtures for a bounded
    comparison. Do **not** try to import QEMU virtio state directly into SD1 SPI.
-2. Add `sim/product_rv64_arch_handoff_main.cpp` around the experimental M-mode
-   restore shim to preload RAM and rebuild GPR/allowed CSR state by retired instructions.
-   Product currently has no architectural debug-load port. The boot ROM jumps
-   to DDR at 0x80000000; a host-owned shim is possible but is **not** proven.
+2. After the isolated P0 Host fixture runs in real Product RTL, adapt the
+   architecture export to a *real* QEMU/NEMU S-mode capture. Product has no
+   architectural debug-load port, so the restore shim must execute from the
+   ROM-to-DDR boot path, rebuild GPR/allowed CSR state and retire MRET.
 3. Prove original memory is restored before returning, caches/TLB are
    coherent, no MMIO/IRQ/LRSC/DMA work is in flight, and mret/WARL effects
    match reference. `mcycle`/`minstret` and some counter/config CSRs cannot

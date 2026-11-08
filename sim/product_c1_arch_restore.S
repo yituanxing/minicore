@@ -2,17 +2,19 @@
  *
  * The Host must enter here in M-mode with an independently reserved,
  * coherent backing page for this code and aether_c1_arch_state.  The host
- * must prove that the guest's original DRAM is not overwritten and that
- * any fetch overlay is removed before the final FENCE.I.  This file does
+ * must prove that the guest's original DRAM is not overwritten, the target
+ * executes outside the first-MiB overlay, and the overlay is removed after
+ * MRET retires. This file does
  * not implement a QEMU-to-RTL transport or qualify an RTL checkpoint.
  *
  * P0 restrictions: one hart, target S-mode, FS=Off, no in-flight MMIO,
- * no IRQ pending, no LR/SC reservation, no PMP policy to reconstruct,
+ * no IRQ pending, no LR/SC reservation, and exactly one P0 PMP NAPOT entry
+ * granting RWX to Product DDR [0x80000000, 0x90000000),
  * no asynchronous device activity.  The mret transition changes mstatus,
  * mepc and other machine trap state: exact architectural equivalence
  * requires a separate WARL-aware qualification, not this stub alone.
  *
- * The Host fills the little-endian 408-byte state table at the symbol below.
+ * The Host fills the little-endian 424-byte state table at the symbol below.
  * Offsets are synchronized with tools/ci/product_c1_arch_relay/restore_abi.py.
  */
 
@@ -39,7 +41,9 @@
     .equ C1_SCOUNTEREN,128
     .equ C1_MCOUNTEREN,136
     .equ C1_MIP,       144
-    .equ C1_GPR,       152
+    .equ C1_PMPADDR0,  152
+    .equ C1_PMPCFG0,   160
+    .equ C1_GPR,       168
 
     .section .text.c1_arch_restore,"ax",@progbits
     .balign 4
@@ -77,6 +81,12 @@ aether_c1_arch_restore:
     csrw scounteren, x6
     ld x6, C1_MCOUNTEREN(x5)
     csrw mcounteren, x6
+    /* P0 PMP16 is default-deny for S-mode. Restore the sole approved
+     * full-DDR NAPOT range before entering S-mode. Address before cfg. */
+    ld x6, C1_PMPADDR0(x5)
+    csrw pmpaddr0, x6
+    ld x6, C1_PMPCFG0(x5)
+    csrw pmpcfg0, x6
     ld x6, C1_SATP(x5)
     csrw satp, x6
     sfence.vma zero, zero
@@ -127,8 +137,10 @@ aether_c1_arch_restore:
     ld x30, C1_GPR+240(x5)
     ld x31, C1_GPR+248(x5)
 
-    /* On real Product I-cache, this barrier is qualified only after the
-     * Host proves its temporary boot-fetch overlay has been deactivated. */
+    /* P0 permits this barrier while the isolated boot overlay is still
+     * active: the target PC is outside its first MiB, and the Host removes
+     * the overlay on MRET retirement. This is NOT a generic Linux cache
+     * or cross-simulator coherency proof. */
     fence.i
     ld x6, C1_GPR+48(x5)
     ld x5, C1_GPR+40(x5)
@@ -139,6 +151,6 @@ aether_c1_arch_restore:
     .balign 8
     .globl aether_c1_arch_state
 aether_c1_arch_state:
-    .zero 408
+    .zero 424
 
     .option pop

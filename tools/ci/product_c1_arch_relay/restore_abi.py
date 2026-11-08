@@ -23,10 +23,15 @@ WORDS = (
     'pc', 'mstatus', 'medeleg', 'mideleg', 'mie', 'mtvec',
     'mscratch', 'mepc', 'mcause', 'mtval', 'stvec', 'sscratch',
     'sepc', 'scause', 'stval', 'satp', 'scounteren', 'mcounteren',
-    'mip',
+    'mip', 'pmpaddr0', 'pmpcfg0',
 )
 WORD_COUNT = len(WORDS) + 32
 BYTE_COUNT = WORD_COUNT * 8
+
+# One exact unlocked NAPOT RWX entry for [0x80000000, 0x90000000).
+# Product's PMP16 rejects S/U-mode accesses unmatched by any active entry.
+P0_DDR_NAPOT_ADDR0 = 0x21FFFFFF
+P0_DDR_NAPOT_CFG0 = 0x1F
 
 
 def pack_p0(export, review):
@@ -60,12 +65,15 @@ def pack_p0(export, review):
         raise ValueError('P0 MRET overwrites mepc; source mepc must equal target PC')
     if state['mie'] or state['mip'] or state['satp']:
         raise ValueError('P0 forbids interrupt enable/pending and page-table state')
-    # The actual Product S-mode PMP policy must be known.  A source GDB stub
-    # omitting even one PMP register is not evidence of an all-zero policy.
+    # A zeroed Product PMP16 is *not* permissive: unmatched S-mode instruction
+    # fetches fail.  P0 accepts only a single all-DDR RWX NAPOT entry, and
+    # requires every other architectural PMP slot to be explicitly zero.
     for name in (*[f'pmpaddr{i}' for i in range(16)],
                  *[f'pmpcfg{i}' for i in range(4)]):
-        if parse_hex(regs.get(name), name) != 0:
-            raise ValueError('P0 requires explicitly zero PMP state: ' + name)
+        permitted = (P0_DDR_NAPOT_ADDR0 if name == 'pmpaddr0' else
+                     P0_DDR_NAPOT_CFG0 if name == 'pmpcfg0' else 0)
+        if parse_hex(regs.get(name), name) != permitted:
+            raise ValueError('P0 requires exact DDR PMP NAPOT state: ' + name)
     return struct.pack('<' + 'Q' * WORD_COUNT, *(values + gpr))
 
 

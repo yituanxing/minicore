@@ -1,0 +1,213 @@
+name: Product C1 architectural handoff P0 (isolated RTL)
+
+on:
+  push:
+    branches:
+      - experiment/c1-arch-handoff-20261108
+    paths:
+      - '.github/workflows/product-c1-arch-p0.yml'
+      - 'sim/product_c1_arch_*'
+      - 'tools/ci/product_c1_arch_relay/**'
+      - 'tests_py/test_product_c1_arch_*'
+      - 'tests_cpp/product_c1_arch_*'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+      - 'src/**'
+      - 'tools/ensure_riscv64_linux_gcc_13_3.sh'
+      - 'tools/ensure_verilator_5_024.sh'
+      - 'tools/ensure_verilator_5_054.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-c1-arch-p0-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-product-rtl-p0:
+    # workflow_dispatch is normally registered on default branch; push to this
+    # isolated experiment branch is the primary real-CI trigger.
+    if: github.ref == 'refs/heads/experiment/c1-arch-handoff-20261108'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      SIM_SETTLE_MODE: reference
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      VERILATOR_THREADS: '1'
+      JOBS: '4'
+      P0_OUT: build/product-c1-arch-p0
+      P0_CYCLE_LIMIT: '100000'
+
+    steps:
+      - name: Checkout immutable experimental commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Restore Scala and Mill cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Restore pinned RV64 GCC 13.3 cache
+        id: gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 bison flex libfl-dev \
+            libgmp-dev git curl make zlib1g-dev autoconf cmake ninja-build \
+            libssl-dev libelf-dev libreadline-dev pkg-config build-essential \
+            bc device-tree-compiler dwarves xz-utils
+
+      - name: Provision and verify pinned RV64 GCC 13.3
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Save verified GCC cache if absent
+        if: steps.gcc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Provision and verify pinned Verilator 5.054
+        shell: bash
+        run: bash tools/ensure_verilator_5_054.sh
+
+      - name: Save verified Verilator cache if absent
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Check P0 restore ABI and fixture contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$P0_OUT/logs"
+          python3 -m unittest -v \
+            tests_py.test_product_c1_arch_restore_abi \
+            tests_py.test_product_c1_arch_p0_fixture \
+            2>&1 | tee "$P0_OUT/logs/python-tests.log"
+
+      - name: Check independent P0 host memory overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O2 -DAETHERCORE_GSIM_HOST_MEMORY_ONLY -Isim \
+            tests_cpp/product_c1_arch_p0_overlay_selftest.cpp \
+            -o "$P0_OUT/host-overlay-selftest"
+          "$P0_OUT/host-overlay-selftest" \
+            2>&1 | tee "$P0_OUT/logs/host-overlay-selftest.log"
+          grep -Fq 'PRODUCT_C1_P0_HOST_OVERLAY_SELFTEST_PASS' \
+            "$P0_OUT/logs/host-overlay-selftest.log"
+
+      - name: Build isolated P0 fixture (not Debian or QEMU snapshot)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_c1_arch_relay/build_p0_fixture.sh \
+            2>&1 | tee "$P0_OUT/logs/fixture-build.log"
+          test "$(stat -c %s "$P0_OUT/ram-256m.bin")" -eq 268435456
+          test "$(stat -c %s "$P0_OUT/state-424.bin")" -eq 424
+          test -s "$P0_OUT/restore-flat.bin"
+          test -s "$P0_OUT/expected.json"
+          sha256sum "$P0_OUT/ram-256m.bin" "$P0_OUT/restore-flat.bin" \
+            "$P0_OUT/state-424.bin" "$P0_OUT/guest-flat.bin" \
+            > "$P0_OUT/logs/fixture-inputs.sha256"
+
+      - name: Elaborate actual G4 Product RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$P0_OUT/rtl-seed" \
+            TOP=AetherCoreProductOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
+            JOBS=4 rtl
+          test -n "$(find "$P0_OUT/rtl-seed/rtl" -maxdepth 1 -name '*.sv' -print -quit)"
+
+      - name: Build independent P0 Product Verilator host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$P0_OUT/obj" "$P0_OUT/logs"
+          verilator --cc --exe --build -O3 -Wall -Wno-fatal \
+            --top-module AetherCoreProductOpenSbiRV64SimTop \
+            -Mdir "$P0_OUT/obj" \
+            -CFLAGS "-std=c++20 -O3 -I$GITHUB_WORKSPACE/sim" \
+            -LDFLAGS '-ldl' \
+            "$P0_OUT"/rtl-seed/rtl/*.sv \
+            "$GITHUB_WORKSPACE/sim/product_c1_arch_p0_main.cpp" \
+            -j 4 2>&1 | tee "$P0_OUT/logs/verilator-build.log"
+          test -x "$P0_OUT/obj/VAetherCoreProductOpenSbiRV64SimTop"
+
+      - name: Bounded true Product RTL synthetic handoff P0
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'source_sha=%s\nbranch=%s\nmax_cycles=%s\n' \
+            "$GITHUB_SHA" "$GITHUB_REF" "$P0_CYCLE_LIMIT" \
+            > "$P0_OUT/logs/run-identity.txt"
+          # Hard wall-clock and cycle ceilings: no hidden retries or SD1 long run.
+          timeout --signal=TERM --kill-after=10s 300s \
+            "$P0_OUT/obj/VAetherCoreProductOpenSbiRV64SimTop" \
+            "$P0_OUT/ram-256m.bin" \
+            "$P0_OUT/restore-flat.bin" \
+            "$P0_OUT/state-424.bin" \
+            0x18000 0x80100000 "$P0_CYCLE_LIMIT" \
+            2>&1 | tee "$P0_OUT/logs/product-p0-rtl-run.log"
+          grep -Fq 'PRODUCT_C1_P0_RTL_MRET_RETIRED' \
+            "$P0_OUT/logs/product-p0-rtl-run.log"
+          grep -Fq 'PRODUCT_C1_P0_RTL_SYNTHETIC_FIXTURE_PASS_NOT_QEMU_HANDOFF' \
+            "$P0_OUT/logs/product-p0-rtl-run.log"
+          printf 'PRODUCT_C1_P0_CI_SYNTHETIC_FIVE_RETIRE_MARKERS_ONLY_NOT_QEMU_OR_SD1_PASS\n' \
+            | tee "$P0_OUT/logs/proof-scope.txt"
+
+      - name: Upload text proof and diagnostics (never the 256-MiB RAM)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-arch-p0-${{ github.run_id }}
+          path: |
+            build/product-c1-arch-p0/logs/**
+            build/product-c1-arch-p0/rtl-seed/logs/**
+            build/product-c1-arch-p0/expected.json
+          if-no-files-found: warn
+          retention-days: 14
