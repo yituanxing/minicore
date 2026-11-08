@@ -21,6 +21,7 @@ jobs:
   authenticated_five_stages:
     if: >-
       github.event.label.name == 'product-sd1-migrated-4312m-to-4512m-handoff-smoke' &&
+      github.event.pull_request.head.sha == '149da8d6a8ffbc2b2309939eb802bf1771d44ea3' &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
