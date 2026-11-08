@@ -31,6 +31,7 @@ class FakeRsp:
         struct.pack_into("<I", attr, 0x44, 9)
         env = bytearray(probe.VERIFIER_ENV_SIZE)
         struct.pack_into("<I", env, 0, 72)
+        struct.pack_into("<Q", env, 8, PROG_ADDR)
         struct.pack_into("<I", env, 0x20, 1200)
         struct.pack_into("<I", env, 0x2DF8, 1)
         struct.pack_into("<I", env, 0x2E04, 19000)
@@ -118,8 +119,13 @@ class QemuBpfProbeTest(unittest.TestCase):
     def test_userspace_unreadable_uses_exact_kernel_program_copy(self):
         rsp = FakeRsp()
         rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
-        program = probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST, PROG_REF_ADDR)
-        self.assertEqual(program["bytecode_read_location"], {
+        program = probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST)
+        self.assertIsNone(program["bytecode_sha256"])
+        self.assertEqual(program["bytecode_read_location"]["source"],
+                         "PENDING_KERNEL_VERIFIER_ENV_PROG_SHA")
+        self.assertFalse(any(p.startswith(f"m{PROG_ADDR:x},") for p in rsp.requests))
+        location = probe.read_kernel_bpf_copy(rsp, PROG_ADDR, DIGEST)
+        self.assertEqual(location, {
             "source": "kernel_bpf_prog_insnsi",
             "kernel_prog_address": f"0x{PROG_ADDR:x}",
             "kernel_insnsi_offset": PROG_INSN_OFFSET,
@@ -130,20 +136,24 @@ class QemuBpfProbeTest(unittest.TestCase):
     def test_whole_probe_uses_kernel_copy_without_user_mapping(self):
         rsp = FakeRsp()
         rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        # The real QEMU probe reported an unusable bpf_check entry a0; do not
+        # rely on that argument for the later kernel-copy SHA attestation.
+        rsp.stops[0]["a0"] = 0
         result = probe.probe(rsp, FakeQmp(),
                              {"bpf_check": 0x8000, "do_check_common": 0x8100},
                              DIGEST)
         self.assertEqual(result["program"]["bytecode_read_location"]["source"],
                          "kernel_bpf_prog_insnsi")
+        self.assertEqual(result["program"]["bytecode_sha256"], DIGEST)
         self.assertTrue(result["verifier_accepted_program"])
 
     def test_kernel_copy_fallback_rejects_mismatch_or_invalid_pointer(self):
         rsp = FakeRsp()
         rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
         with self.assertRaisesRegex(probe.ProtocolError, "not comparable"):
-            probe.classify_bpf_attr(rsp, ATTR_ADDR, "0" * 64, PROG_REF_ADDR)
-        with self.assertRaisesRegex(probe.ProtocolError, "invalid bpf_check"):
-            probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST, 0)
+            probe.read_kernel_bpf_copy(rsp, PROG_ADDR, "0" * 64)
+        with self.assertRaisesRegex(probe.ProtocolError, "invalid verifier_env"):
+            probe.read_kernel_bpf_copy(rsp, 0, DIGEST)
         for index, entry in enumerate(rsp.memory):
             if entry[0] == PROG_ADDR:
                 prefix = bytearray(entry[1])
@@ -151,7 +161,33 @@ class QemuBpfProbeTest(unittest.TestCase):
                 rsp.memory[index] = (PROG_ADDR, bytes(prefix))
                 break
         with self.assertRaisesRegex(probe.ProtocolError, "type/attach/len mismatch"):
-            probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST, PROG_REF_ADDR)
+            probe.read_kernel_bpf_copy(rsp, PROG_ADDR, DIGEST)
+
+    def test_deferred_kernel_copy_rejects_invalid_env_prog_pointer(self):
+        rsp = FakeRsp()
+        memory = []
+        for base, data in rsp.memory:
+            if base == INSNS_ADDR:
+                continue
+            if base == ENV_ADDR:
+                data = bytearray(data)
+                struct.pack_into("<Q", data, 8, 0)
+                data = bytes(data)
+            memory.append((base, data))
+        rsp.memory = memory
+        with self.assertRaisesRegex(probe.ProtocolError, "invalid verifier_env"):
+            probe.probe(rsp, FakeQmp(),
+                        {"bpf_check": 0x8000, "do_check_common": 0x8100}, DIGEST)
+
+    def test_kernel_copy_accepts_other_canonical_va_mode_with_exact_sha(self):
+        rsp = FakeRsp()
+        alternate_kernel_address = 0xFF00000000002000
+        rsp.memory = [(alternate_kernel_address if base == PROG_ADDR else base, data)
+                      for base, data in rsp.memory]
+        location = probe.read_kernel_bpf_copy(rsp, alternate_kernel_address, DIGEST)
+        self.assertEqual(location["kernel_insnsi_offset"], PROG_INSN_OFFSET)
+        with self.assertRaisesRegex(probe.ProtocolError, "invalid verifier_env"):
+            probe.read_kernel_bpf_copy(rsp, alternate_kernel_address + 1, DIGEST)
 
     def test_bpf_attr_identity_rejects_foreign_program(self):
         rsp = FakeRsp()

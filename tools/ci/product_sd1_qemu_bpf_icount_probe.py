@@ -75,20 +75,19 @@ def read_memory(rsp, address, count):
     return b"".join(chunks)
 
 
-def read_kernel_bpf_copy(rsp, prog_ref_address, expected_bytecode_sha):
+def read_kernel_bpf_copy(rsp, prog_address, expected_bytecode_sha):
     """Read the already-copied BPF instructions, never userspace or guest writes.
 
-    At bpf_check(struct bpf_prog **prog, union bpf_attr *attr), *prog
-    points to the kernel-owned object with a trailing insnsi[] array.  A
-    supervisor-context GDB virtual read may reject attr.insns userspace
-    memory even though Linux has already copied it.  Validate the pinned
-    RV64 struct header, then require the complete expected insnsi SHA.
+    Linux 6.6.143 verifier_env->prog (+8) points to the kernel-owned
+    struct bpf_prog containing the trailing insnsi[] array.  This avoids
+    reliance on bpf_check entry a0 and on GDB's access to userspace pages.
+    Validate the pinned RV64 struct header and the complete insnsi SHA.
     """
-    if prog_ref_address is None or not 0xFFFFFF0000000000 <= prog_ref_address < (1 << 64):
-        raise ProtocolError("invalid bpf_check kernel prog-ref pointer")
-    prog_address = little_u64(read_memory(rsp, prog_ref_address, 8), 0)
-    if not 0xFFFFFF0000000000 <= prog_address < (1 << 64):
-        raise ProtocolError("invalid kernel bpf_prog object pointer")
+    # QEMU virt may use a different canonical VA mode from Product Sv39.
+    # Validate a bounded, aligned readable pointer and the exact BPF header
+    # and SHA below instead of assuming a particular high-kernel VA prefix.
+    if not isinstance(prog_address, int) or not 0x1000 <= prog_address < (1 << 64) or prog_address & 7:
+        raise ProtocolError(f"invalid verifier_env bpf_prog pointer: {prog_address!r}")
     header = read_memory(rsp, prog_address, 0x48)
     if (little_u32(header, 4), little_u32(header, 8), little_u32(header, 12)) != (
             PROGRAM_TYPE, ATTACH_TYPE, INSTRUCTION_COUNT):
@@ -101,7 +100,7 @@ def read_kernel_bpf_copy(rsp, prog_ref_address, expected_bytecode_sha):
             f"0x{prog_address:x}", "kernel_insnsi_offset": KERNEL_BPF_INSN_OFFSET}
 
 
-def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha, prog_ref_address=None):
+def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha):
     raw = read_memory(rsp, attr_address, 0x98)
     name = raw[0x30:0x40].split(b"\0", 1)[0].decode("ascii", "replace")
     program_type = little_u32(raw, 0)
@@ -118,20 +117,23 @@ def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha, prog_ref_address
     except ProtocolError as error:
         if "guest memory unreadable" not in str(error):
             raise
-        # QEMU's gdbstub may respect supervisor SUM permission on a user VA.
-        # The kernel copy is independently verified against the exact digest.
-        location = read_kernel_bpf_copy(rsp, prog_ref_address, expected_bytecode_sha)
+        # GDB may deny user VA reads under supervisor SUM rules.  Do not
+        # claim SHA equivalence yet.  At do_check_common entry, env->prog
+        # supplies the verifier's exact kernel-owned copy to authenticate.
+        location = {"source": "PENDING_KERNEL_VERIFIER_ENV_PROG_SHA"}
+        authenticated_sha = None
     else:
         if hashlib.sha256(bytecode).hexdigest() != expected_bytecode_sha:
             raise ProtocolError("sd_bind6 eBPF bytecode SHA differs from Product RTL: not comparable")
         location = {"source": "userspace_bpf_attr_insns"}
+        authenticated_sha = expected_bytecode_sha
     return {
         "name": name,
         "prog_type": program_type,
         "expected_attach_type": attach_type,
         "insn_count": insn_count,
         "insn_user_address": f"0x{insn_address:x}",
-        "bytecode_sha256": expected_bytecode_sha,
+        "bytecode_sha256": authenticated_sha,
         "bytecode_read_location": location,
     }
 
@@ -210,8 +212,7 @@ def probe(rsp, qmp, symbols, expected_bytecode_sha):
             attr_pointer = rsp.reg(registers["a1"])
             if attr_pointer is None:
                 raise ProtocolError("unavailable bpf_check attr pointer")
-            program = classify_bpf_attr(rsp, attr_pointer, expected_bytecode_sha,
-                                        rsp.reg(registers["a0"]))
+            program = classify_bpf_attr(rsp, attr_pointer, expected_bytecode_sha)
             if program is not None:
                 break
             seen_other += 1
@@ -237,8 +238,15 @@ def probe(rsp, qmp, symbols, expected_bytecode_sha):
         common_return_pc = rsp.reg(registers["ra"])
         if env_pointer is None or common_return_pc is None:
             raise ProtocolError("missing do_check_common env/return address")
-        if not 0xFFFFFF0000000000 <= env_pointer < (1 << 64):
-            raise ProtocolError("invalid high-kernel verifier env pointer")
+        if not 0x1000 <= env_pointer < (1 << 64) or env_pointer & 7:
+            raise ProtocolError(f"invalid aligned verifier env pointer: {env_pointer:#x}")
+        if program["bytecode_sha256"] is None:
+            prog_address = little_u64(read_memory(rsp, env_pointer + 8, 8), 0)
+            program["bytecode_read_location"] = read_kernel_bpf_copy(
+                rsp, prog_address, expected_bytecode_sha)
+            program["bytecode_sha256"] = expected_bytecode_sha
+        if program["bytecode_sha256"] != expected_bytecode_sha:
+            raise ProtocolError("sd_bind6 bytecode not authenticated: not comparable")
         bps.remove(common_pc)
         bps.add(common_return_pc)
         if bps.resume() != common_return_pc:
