@@ -32,8 +32,8 @@ jobs:
       SOURCE_ZIP_DIGEST: sha256:2af27ebad2a47c88bb10f3d1fe63064a3283c749c330a10fd11c3abc9e482ba9
       AETHERCORE_ALLOW_C1_QEMU_FAST_EXPORT: '1'
       AETHERCORE_C1_FAST_QEMU_WALL_SECONDS: '360'
-      AETHERCORE_C1_FAST_QEMU_ORACLE_RETIRE_COUNT: '64'
-      AETHERCORE_C1_FAST_QEMU_ORACLE_WALL_SECONDS: '90'
+      AETHERCORE_C1_FAST_QEMU_ORACLE_RETIRE_COUNT: '256'
+      AETHERCORE_C1_FAST_QEMU_ORACLE_WALL_SECONDS: '180'
       AETHERCORE_C1_FAST_QEMU_CPU: 'rv64,sv48=off,sv57=off,h=off'
       AETHERCORE_C1_FAST_QEMU_OUT: ${{ github.workspace }}/build/product-c1-qemu-fast-export
 
@@ -124,22 +124,22 @@ jobs:
               for block in iter(lambda: f.read(1 << 20), b''):
                   h.update(block)
           assert h.hexdigest() == manifest['memory']['sha256'] == trace['identity']['source_ram_sha256']
-          assert trace['retired_instruction_count'] == 64
+          assert trace['retired_instruction_count'] == 256
           assert trace['entries'][0]['pc_before'] == '0xffffffff808c3490'
           assert trace['entries'][0]['instruction']['opcode'] == '0x7179'
           assert trace['entries'][0]['gpr_changes']['x2'] == '0xffffffc80000be90'
           assert trace['real_product_rtl_retire_count'] == 0
           assert trace['full_device_and_memory_diff_test'] is False
           assert trace['debian_service_login_pass'] is False
-          print('PRODUCT_C1_QEMU_SAME_CAPTURED_RAM_64_STEP_SOURCE_VERIFIED_NOT_RTL_PASS ram_sha=' + h.hexdigest())
+          print('PRODUCT_C1_QEMU_SAME_CAPTURED_RAM_256_STEP_SOURCE_VERIFIED_NOT_RTL_PASS ram_sha=' + h.hexdigest())
           PY
-          echo 'QEMU-only 64-step oracle; no Product RTL retirement, no full DiffTest and no Debian service/login PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'QEMU-only 256-step oracle; no Product RTL retirement, no full DiffTest and no Debian service/login PASS' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Archive paired QEMU-only source state and trace
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: product-c1-qemu-sv39-paired-64-step-oracle-${{ github.run_id }}
+          name: product-c1-qemu-sv39-paired-256-step-oracle-${{ github.run_id }}
           retention-days: 7
           compression-level: 1
           if-no-files-found: error
@@ -163,4 +163,5 @@ jobs:
             build/product-c1-qemu-fast-export/qemu.log
             build/product-c1-qemu-fast-export/export.log
             build/product-c1-qemu-fast-export/qemu-single-step-oracle.log
+            build/product-c1-qemu-fast-export/qemu-single-step-oracle.rejected.json
             build/product-c1-qemu-fast-export/serial.log
