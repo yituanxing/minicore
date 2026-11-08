@@ -20,7 +20,7 @@ jobs:
       github.repository == 'yituanxing/minicore' &&
       github.event_name == 'pull_request' &&
       github.event.action == 'labeled' &&
-      github.event.label.name == 'product-sd1-v3-reviewed-8072-to-8092-qualify-r2' &&
+      github.event.label.name == 'product-sd1-v3-reviewed-8072-to-8092-qualify-r3' &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
-      EXPERIMENT_SOURCE_SHA: c9798628fa9a2d3d42190ed0d505320d1ef75f9b
+      EXPERIMENT_SOURCE_SHA: 651b83ad95125b121bfeb26cd57ff0f5d77c7370
       C_SOURCE_RUN: '42496075997'
       C_SOURCE_HEAD: fdd8a3867877d19a8a7b9e7cc2920b2868b323af
       C_8072_ARTIFACT_ID: 13624290218
