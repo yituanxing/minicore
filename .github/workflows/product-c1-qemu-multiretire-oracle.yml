@@ -1,0 +1,166 @@
+name: Product C1 QEMU-only paired Sv39 multi-retirement trace (not RTL)
+
+on:
+  push:
+    branches:
+      - experiment/c1-arch-handoff-20261108
+    paths:
+      - '.github/workflows/product-c1-qemu-multiretire-oracle.yml'
+      - 'tools/ci/product_g5_qemu_export/qemu_multiretire_oracle.py'
+      - 'tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh'
+      - 'tests_py/test_product_c1_qemu_multiretire_oracle.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-c1-qemu-only-multiretire-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture-paired-qemu-only-retire-sequence:
+    if: github.ref == 'refs/heads/experiment/c1-arch-handoff-20261108'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    env:
+      SOURCE_RUN: '42484457962'
+      SOURCE_SHA: f8490d3e0e1b0d7668335b50d8a8b435c76397ab
+      SOURCE_ARTIFACT_ID: '13618662668'
+      SOURCE_ARTIFACT_NAME: product-g5-qemu-icount-inputs-42484457962-1
+      SOURCE_ZIP_DIGEST: sha256:2af27ebad2a47c88bb10f3d1fe63064a3283c749c330a10fd11c3abc9e482ba9
+      AETHERCORE_ALLOW_C1_QEMU_FAST_EXPORT: '1'
+      AETHERCORE_C1_FAST_QEMU_WALL_SECONDS: '360'
+      AETHERCORE_C1_FAST_QEMU_ORACLE_RETIRE_COUNT: '64'
+      AETHERCORE_C1_FAST_QEMU_ORACLE_WALL_SECONDS: '90'
+      AETHERCORE_C1_FAST_QEMU_CPU: 'rv64,sv48=off,sv57=off,h=off'
+      AETHERCORE_C1_FAST_QEMU_OUT: ${{ github.workspace }}/build/product-c1-qemu-fast-export
+
+    steps:
+      - name: Checkout exact isolated experimental source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Install real system QEMU for one-hart Sv39 replay
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc python3
+          qemu-system-riscv64 --version | head -1
+
+      - name: Authenticate immutable D2 Product Linux firmware source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          jq -e --arg sha "$SOURCE_SHA" --argjson id "$SOURCE_RUN" '
+            .id == $id and .run_attempt == 1 and .head_sha == $sha and
+            .status == "completed" and .conclusion == "failure" and
+            .path == ".github/workflows/product-g5-qemu-d2-oracle.yml"
+          ' "$RUNNER_TEMP/source-run.json" >/dev/null
+          # The historic run deliberately failed at a later optional arch
+          # exporter; its exact QEMU D2 source stage and artifact succeeded.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          jq -e '[.jobs[] | select(.name == "debian-d2-qemu-system-oracle" and
+            .status == "completed" and .conclusion == "failure" and
+            ([.steps[] | select(.name ==
+              "Boot Product fw_payload and DTB on bounded QEMU virt CPU oracle" and
+              .conclusion == "success")] | length == 1) and
+            ([.steps[] | select(.name ==
+              "Stage exact D2 QEMU inputs and immutable SHA256 for count-only reuse" and
+              .conclusion == "success")] | length == 1) and
+            ([.steps[] | select(.name ==
+              "Upload exact Product D2 binaries for later count-only QEMU run" and
+              .conclusion == "success")] | length == 1))] | length == 1' \
+            "$RUNNER_TEMP/source-jobs.json" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID" > "$RUNNER_TEMP/source-artifact.json"
+          jq -e --arg sha "$SOURCE_SHA" --arg digest "$SOURCE_ZIP_DIGEST" \
+            --arg name "$SOURCE_ARTIFACT_NAME" --argjson id "$SOURCE_ARTIFACT_ID" \
+            --argjson run "$SOURCE_RUN" '
+            .id == $id and .name == $name and .digest == $digest and
+            .expired == false and .workflow_run.id == $run and
+            .workflow_run.head_sha == $sha
+          ' "$RUNNER_TEMP/source-artifact.json" >/dev/null
+
+      - name: Restore exact prebuilt source binaries (no Linux rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: product-g5-qemu-icount-inputs-42484457962-1
+          repository: yituanxing/minicore
+          run-id: 42484457962
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/c1-qemu-paired-source
+
+      - name: Verify bounded one-hart QEMU oracle code
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh
+          python3 tools/ci/product_g5_qemu_export/selftest.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -v \
+            tests_py.test_product_c1_qemu_multiretire_oracle \
+            tests_py.test_product_c1_sv39_source_walk
+
+      - name: Freeze authentic QEMU DDR and single-step from same live boundary
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh run \
+            "$RUNNER_TEMP/c1-qemu-paired-source"
+          grep -Fq 'PRODUCT_C1_QEMU_SINGLESTEP_ORACLE_CAPTURED_NOT_RTL_DIFFTEST' \
+            "$AETHERCORE_C1_FAST_QEMU_OUT/qemu-single-step-oracle.log"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['AETHERCORE_C1_FAST_QEMU_OUT'])
+          trace = json.loads((root / 'qemu-single-step-oracle.json').read_text())
+          ram = root / 'export/ram-0x80000000-0x10000000.bin'
+          manifest = json.loads((root / 'export/manifest.json').read_text())
+          h = hashlib.sha256()
+          with ram.open('rb') as f:
+              for block in iter(lambda: f.read(1 << 20), b''):
+                  h.update(block)
+          assert h.hexdigest() == manifest['memory']['sha256'] == trace['identity']['source_ram_sha256']
+          assert trace['retired_instruction_count'] == 64
+          assert trace['entries'][0]['pc_before'] == '0xffffffff808c3490'
+          assert trace['entries'][0]['instruction']['opcode'] == '0x7179'
+          assert trace['entries'][0]['gpr_changes']['x2'] == '0xffffffc80000be90'
+          assert trace['real_product_rtl_retire_count'] == 0
+          assert trace['full_device_and_memory_diff_test'] is False
+          assert trace['debian_service_login_pass'] is False
+          print('PRODUCT_C1_QEMU_SAME_CAPTURED_RAM_64_STEP_SOURCE_VERIFIED_NOT_RTL_PASS ram_sha=' + h.hexdigest())
+          PY
+          echo 'QEMU-only 64-step oracle; no Product RTL retirement, no full DiffTest and no Debian service/login PASS' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive paired QEMU-only source state and trace
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-qemu-sv39-paired-64-step-oracle-${{ github.run_id }}
+          retention-days: 7
+          compression-level: 1
+          if-no-files-found: error
+          path: |
+            build/product-c1-qemu-fast-export/export/ram-0x80000000-0x10000000.bin
+            build/product-c1-qemu-fast-export/export/manifest.json
+            build/product-c1-qemu-fast-export/source-insn.json
+            build/product-c1-qemu-fast-export/qemu-single-step-oracle.json
+            build/product-c1-qemu-fast-export/qemu-single-step-oracle.log
+            build/product-c1-qemu-fast-export/source-sha256sums.txt
+            build/product-c1-qemu-fast-export/result.txt
+
+      - name: Preserve failed QEMU-only diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-qemu-sv39-multiretire-diagnostic-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/product-c1-qemu-fast-export/qemu.log
+            build/product-c1-qemu-fast-export/export.log
+            build/product-c1-qemu-fast-export/qemu-single-step-oracle.log
+            build/product-c1-qemu-fast-export/serial.log

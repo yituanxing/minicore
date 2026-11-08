@@ -65,7 +65,10 @@ case "$CPU" in
   *) fail "unqualified QEMU CPU profile: $CPU" ;;
 esac
 WALL="${AETHERCORE_C1_FAST_QEMU_WALL_SECONDS:-180}"
-[[ "$WALL" =~ ^[0-9]+$ ]] && (( WALL >= 10 && WALL <= 180 )) || fail 'wall budget outside 10..180s'
+MAX_WALL=180
+[[ -z "${AETHERCORE_C1_FAST_QEMU_ORACLE_RETIRE_COUNT:-}" ]] || MAX_WALL=360
+[[ "$WALL" =~ ^[0-9]+$ ]] && (( WALL >= 10 && WALL <= MAX_WALL )) ||
+  fail "wall budget outside 10..${MAX_WALL}s"
 OUT="${AETHERCORE_C1_FAST_QEMU_OUT:-$ROOT/build/product-c1-qemu-fast-export}"
 [[ "$OUT" == /* && "$OUT" != *' '* ]] || fail 'output must be absolute and space-free'
 if [[ -e "$OUT" && -n "$(find "$OUT" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
@@ -123,6 +126,34 @@ RAM="$OUT/export/ram-0x80000000-0x10000000.bin"
   fail 'exact 256MiB QEMU physical memory absent'
 sha256sum "$FW" "$DTB" "$IMAGE" "$MAP" "$RAM" \
   "$OUT/export/manifest.json" > "$OUT/source-sha256sums.txt"
+
+# Optional separate QEMU-only architectural oracle. Execute while the SAME
+# QEMU guest remains paused at the exported PC, after the source DDR image is
+# sealed and before process cleanup. It never mutates the exported RAM file.
+# An oracle from a different QEMU invocation cannot be paired to this DDR
+# unless the two complete source-RAM hashes are independently identical.
+if [[ -n "${AETHERCORE_C1_FAST_QEMU_ORACLE_RETIRE_COUNT:-}" ]]; then
+  COUNT="$AETHERCORE_C1_FAST_QEMU_ORACLE_RETIRE_COUNT"
+  [[ "$CPU" == rv64,sv48=off,sv57=off,h=off && "$COUNT" =~ ^[0-9]+$ &&
+     "$COUNT" -ge 1 && "$COUNT" -le 256 ]] ||
+    fail 'QEMU-only retire trace requires Sv39 no-H, count 1..256'
+  python3 "$ROOT/tools/ci/product_c1_arch_relay/sv39_source_walk.py" \
+    --manifest "$OUT/export/manifest.json" --ram "$RAM" \
+    --report "$OUT/source-insn.json" || fail 'paired physical instruction walk failed'
+  python3 "$ROOT/tools/ci/product_g5_qemu_export/qemu_multiretire_oracle.py" \
+    --qmp-socket "$SOCKET_QMP" --gdb-socket "$SOCKET_GDB" \
+    --source-manifest "$OUT/export/manifest.json" --source-ram "$RAM" \
+    --source-walk "$OUT/source-insn.json" --qemu-bin "$QEMU" \
+    --cpu-profile "$CPU" --count "$COUNT" \
+    --wall-seconds "${AETHERCORE_C1_FAST_QEMU_ORACLE_WALL_SECONDS:-90}" \
+    --report "$OUT/qemu-single-step-oracle.json" \
+    > "$OUT/qemu-single-step-oracle.log" 2>&1 || {
+      tail -n 60 "$OUT/qemu-single-step-oracle.log" >&2 || true
+      fail 'paired QEMU-only retire trace rejected'
+    }
+  grep -Fq 'PRODUCT_C1_QEMU_SINGLESTEP_ORACLE_CAPTURED_NOT_RTL_DIFFTEST' \
+    "$OUT/qemu-single-step-oracle.log" || fail 'QEMU-only retirement marker missing'
+fi
 
 # The review intentionally reports incompleteness as rc=3 while still
 # preserving a JSON missing-CSR/FPR/PMP matrix. Never treat it as RTL PASS.
