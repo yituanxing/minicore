@@ -180,6 +180,7 @@ jobs:
             # returning steps: [] from the run-jobs endpoint. Never treat that
             # incomplete response as proof: wait for the original step-level
             # attestation, and fail closed if it does not become available.
+            local step_metadata_unavailable=false
             for metadata_attempt in {1..16}; do
               gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs-$run.json"
               if ! jq -e --arg job "$job" --arg mode "$mode" '
@@ -190,13 +191,52 @@ jobs:
                 break
               fi
               if [[ "$metadata_attempt" -eq 16 ]]; then
-                echo "MIGRATED_AUTORUN_REJECTED: source run $run job '$job' has no GitHub step metadata after 16 checks" >&2
-                exit 16
+                step_metadata_unavailable=true
+                break
               fi
               echo "MIGRATED_AUTORUN_STEP_METADATA_PENDING run=$run job='$job' attempt=$metadata_attempt/16"
               sleep 20
             done
-            jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
+            if [[ "$step_metadata_unavailable" == true ]]; then
+              # Narrow secondary attestation for a previous successful terminal
+              # batch whose GitHub Jobs API has still not indexed its steps.
+              # The original complete job log must contain exactly one actual
+              # terminal certificate matching all pinned checkpoint values.
+              [[ "$mode" == cross_run && "$job" == 'stage_02 / relay_five' &&
+                 "$step" == 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs' ]] || {
+                echo "MIGRATED_AUTORUN_REJECTED: no step metadata outside qualified terminal cross-run source" >&2
+                exit 16
+              }
+              local source_job_id
+              source_job_id=$(jq -er --arg job "$job" '
+                [.jobs[] | select(.name == $job and .status == "completed" and
+                  .conclusion == "success" and ((.steps // []) | length == 0))] |
+                if length == 1 then .[0].id else empty end
+              ' "$RUNNER_TEMP/jobs-$run.json") || exit 16
+              [[ "$source_job_id" =~ ^[0-9]+$ ]] || exit 16
+              curl -fsSL --proto '=https' --proto-redir '=https' \
+                --max-redirs 3 --max-time 90 \
+                -H 'Accept: application/vnd.github+json' \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$repo/actions/jobs/$source_job_id/logs" \
+                > "$RUNNER_TEMP/source-job-$run.log" || exit 16
+              local certificate certificate_count
+              certificate="PRODUCT_SD1_MIGRATED_AUTORUN_TERMINAL_AUTHENTICATED stage=${START}m artifact_id=${SOURCE_ID} host_sha=${AETHERCORE_SD1_AUTORELAY_START_HOST_SHA256} rtl_sha=${AETHERCORE_SD1_AUTORELAY_START_RTL_SHA256}"
+              certificate_count=$(awk -v expected="$certificate" '
+                /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z / {
+                  line=$0
+                  sub(/^[^ ]+ /, "", line)
+                  if (line == expected) matches++
+                }
+                END { print matches+0 }
+              ' "$RUNNER_TEMP/source-job-$run.log")
+              [[ "$certificate_count" == 1 ]] || {
+                echo "MIGRATED_AUTORUN_REJECTED: source job $source_job_id has no unique pinned terminal log certificate" >&2
+                exit 16
+              }
+              echo "MIGRATED_AUTORUN_OFFICIAL_JOB_LOG_ATTESTED run=$run job_id=$source_job_id stage=${START}m"
+            else
+              jq -e --arg job "$job" --arg step "$step" --arg mode "$mode" '
               [.jobs[] | select(.name == $job and .status == "completed" and
                 (if $mode == "post_publish_failure" then
                    .conclusion == "failure" and
@@ -210,7 +250,8 @@ jobs:
                    ([.steps[] | select((.name | startswith("Upload complete stage ")) and
                      .status == "completed" and .conclusion == "success")] | length == 5)
                  else true end))] | length == 1
-            ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+              ' "$RUNNER_TEMP/jobs-$run.json" >/dev/null || exit 16
+            fi
             if [[ "$mode" == post_publish_failure ]]; then
               jq -e '
                 [.jobs[] | select(.name == "stage_02" and .status == "completed" and
