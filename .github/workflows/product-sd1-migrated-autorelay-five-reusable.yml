@@ -233,9 +233,14 @@ jobs:
               # must already have passed the exact per-mode provenance check.
               # Never use this fallback for a failed source job or an arbitrary
               # step name, branch, run or artifact.
+              # The caller may be a multi-batch authenticated chain.  Do not
+              # assume that only stage_01 (intra-run) or stage_02 (cross-run)
+              # can be the terminal source; require an exact numbered relay
+              # job, a completed successful job, and the unique fully pinned
+              # ZIP/Host/RTL terminal certificate checked above/below.
               [[ "$step" == 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs' &&
-                 ( ( "$mode" == cross_run && "$job" == 'stage_02 / relay_five' ) ||
-                   ( "$mode" == intra_run && "$job" == 'stage_01 / relay_five' ) ||
+                 ( ( ( "$mode" == cross_run || "$mode" == intra_run ) &&
+                     "$job" =~ ^stage_0[1-8][[:space:]]/[[:space:]]relay_five$ ) ||
                    ( "$mode" == post_stage2_preflight_failure && "$job" == 'stage_01 / relay_five' ) ) ]] || {
                 echo "MIGRATED_AUTORUN_REJECTED: unqualified official-log fallback source" >&2
                 exit 16
@@ -543,7 +548,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: product-sd1-migrated-autorelay-logs-${{ github.run_id }}
+          name: product-sd1-migrated-autorelay-logs-${{ inputs.start_m }}m-${{ github.run_id }}
           retention-days: 90
           if-no-files-found: warn
           include-hidden-files: true
