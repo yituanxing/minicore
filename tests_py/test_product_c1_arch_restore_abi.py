@@ -17,7 +17,7 @@ class RestoreAbiTest(unittest.TestCase):
         self.regs.update({f'x{i}': f'0x{i:x}' for i in range(32)})
         self.regs['x0'] = '0x0'
         self.regs.update({f'pmpaddr{i}': '0x0' for i in range(16)})
-        self.regs.update({f'pmpcfg{i}': '0x0' for i in range(4)})
+        self.regs.update({f'pmpcfg{i}': '0x0' for i in (0, 2)})
         self.regs['pmpaddr0'] = hex(restore_abi.P0_DDR_NAPOT_ADDR0)
         self.regs['pmpcfg0'] = hex(restore_abi.P0_DDR_NAPOT_CFG0)
         self.regs.update({'pc': '0x80400000', 'mepc': '0x80400000',
@@ -74,7 +74,7 @@ class RestoreAbiTest(unittest.TestCase):
         for field, value in (('mie', '0x20'), ('mip', '0x20'),
                              ('satp', '0x8000000000000001'),
                              ('pmpcfg0', '0x0'), ('pmpaddr0', '0x0'),
-                             ('pmpcfg1', '0x1'), ('pmpaddr1', '0x21ffffff')):
+                             ('pmpcfg2', '0x1'), ('pmpaddr1', '0x21ffffff')):
             before = self.regs[field]
             self.regs[field] = value
             with self.subTest(field=field):
@@ -83,6 +83,23 @@ class RestoreAbiTest(unittest.TestCase):
             self.regs[field] = before
         del self.regs['pmpaddr0']
         with self.assertRaisesRegex(ValueError, 'pmpaddr0'):
+            self.pack()
+
+    def test_rv64_odd_pmpcfg_csrs_are_not_required(self):
+        # P0 is still synthetic-only; the ISA must not require nonexistent
+        # pmpcfg1/pmpcfg3 source values as part of its strict source gate.
+        self.assertNotIn('pmpcfg1', self.regs)
+        self.assertNotIn('pmpcfg3', self.regs)
+        self.assertEqual(len(self.pack()), 424)
+
+    def test_real_linux_sv39_and_interrupt_state_cannot_use_p0_restore(self):
+        self.regs['pc'] = '0xffffffff808c3490'
+        self.regs['mepc'] = self.regs['pc']
+        self.manifest['breakpoint_pc'] = self.regs['pc']
+        self.review['source_pc'] = self.regs['pc']
+        self.regs['satp'] = '0x80000000000856fe'
+        self.regs['mie'] = '0x2aa'
+        with self.assertRaisesRegex(ValueError, 'forbids interrupt.*page-table'):
             self.pack()
 
     def test_exact_pmp_256m_ddr_boundary(self):

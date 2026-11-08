@@ -68,8 +68,11 @@ def pack_p0(export, review):
     # A zeroed Product PMP16 is *not* permissive: unmatched S-mode instruction
     # fetches fail.  P0 accepts only a single all-DDR RWX NAPOT entry, and
     # requires every other architectural PMP slot to be explicitly zero.
+    # In RV64 each pmpcfg CSR configures eight PMP entries; only the even
+    # registers 0/2 are architecturally accessible.  pmpcfg1 and pmpcfg3
+    # are illegal, so demanding their presence would reject real QEMU.
     for name in (*[f'pmpaddr{i}' for i in range(16)],
-                 *[f'pmpcfg{i}' for i in range(4)]):
+                 'pmpcfg0', 'pmpcfg2'):
         permitted = (P0_DDR_NAPOT_ADDR0 if name == 'pmpaddr0' else
                      P0_DDR_NAPOT_CFG0 if name == 'pmpcfg0' else 0)
         if parse_hex(regs.get(name), name) != permitted:
