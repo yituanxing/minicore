@@ -57,6 +57,13 @@ done
 
 QEMU="$(command -v "${AETHERCORE_G5_QEMU_SYSTEM_BIN:-qemu-system-riscv64}" || true)"
 [[ -n "$QEMU" && -x "$QEMU" ]] || fail 'system QEMU missing'
+CPU="${AETHERCORE_C1_FAST_QEMU_CPU:-rv64}"
+# Sv39 variant is source-derived, retaining the exact SHA-sealed Linux,
+# OpenSBI and DTB binaries. Never accept arbitrary QEMU CPU overrides.
+case "$CPU" in
+  rv64|rv64,sv48=off,sv57=off) ;;
+  *) fail "unqualified QEMU CPU profile: $CPU" ;;
+esac
 WALL="${AETHERCORE_C1_FAST_QEMU_WALL_SECONDS:-180}"
 [[ "$WALL" =~ ^[0-9]+$ ]] && (( WALL >= 10 && WALL <= 180 )) || fail 'wall budget outside 10..180s'
 OUT="${AETHERCORE_C1_FAST_QEMU_OUT:-$ROOT/build/product-c1-qemu-fast-export}"
@@ -77,9 +84,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "PRODUCT_C1_QEMU_FAST_START source_run=$SOURCE_RUN source_sha=$SOURCE_SHA product_rtl=0 sd1=0"
+echo "PRODUCT_C1_QEMU_FAST_START source_run=$SOURCE_RUN source_sha=$SOURCE_SHA cpu=$CPU product_rtl=0 sd1=0"
 timeout --signal=TERM --kill-after=5s "${WALL}s" \
-  "$QEMU" -machine virt -cpu rv64 -smp 1 -m 256M \
+  "$QEMU" -machine virt -cpu "$CPU" -smp 1 -m 256M \
   -bios "$FW" -dtb "$DTB" \
   -device "loader,file=$DTB,addr=0x87f00000,force-raw=on" \
   -display none -monitor none -serial "file:$OUT/serial.log" \
@@ -134,6 +141,6 @@ if [[ "$review_rc" != 0 && "$review_rc" != 3 ]]; then
 fi
 [[ -s "$OUT/source-review.json" ]] || fail 'preflight failed to preserve source report'
 printf 'qualification=QEMU_ARCH_EXPORT_DIAGNOSTIC_ONLY_NOT_RTL_HANDOFF_PASS\n' > "$OUT/result.txt"
-printf 'source_run=%s\nsource_sha=%s\nreview_rc=%s\n' "$SOURCE_RUN" "$SOURCE_SHA" "$review_rc" >> "$OUT/result.txt"
+printf 'source_run=%s\nsource_sha=%s\nqemu_cpu=%s\nreview_rc=%s\n' "$SOURCE_RUN" "$SOURCE_SHA" "$CPU" "$review_rc" >> "$OUT/result.txt"
 printf 'product_rtl=0\nsd1=0\n' >> "$OUT/result.txt"
 echo "PRODUCT_C1_QEMU_FAST_CAPTURED_DIAGNOSTIC_NOT_RTL_PASS review_rc=$review_rc"

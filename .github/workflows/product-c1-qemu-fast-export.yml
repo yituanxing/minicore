@@ -13,6 +13,8 @@ on:
       - 'tools/ci/product_g5_qemu_export/qemu_arch_export.py'
       - 'tools/ci/product_g5_qemu_export/selftest.py'
       - 'tools/ci/product_c1_arch_relay/preflight.py'
+      - 'tools/ci/product_c1_arch_relay/p1_contract.py'
+      - 'tests_py/test_product_c1_p1_contract.py'
   workflow_dispatch:
 
 permissions:
@@ -26,8 +28,17 @@ concurrency:
 jobs:
   exact-binary-qemu-export:
     if: github.ref == 'refs/heads/experiment/c1-arch-handoff-20261108'
+    name: exact-binary-qemu-export / ${{ matrix.profile }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: qemu-default
+            cpu: rv64
+          - profile: sv39-forced
+            cpu: rv64,sv48=off,sv57=off
     env:
       D2_SOURCE_RUN: '42484457962'
       D2_SOURCE_ARTIFACT_ID: '13618662668'
@@ -35,6 +46,7 @@ jobs:
       D2_SOURCE_ZIP_DIGEST: 'sha256:2af27ebad2a47c88bb10f3d1fe63064a3283c749c330a10fd11c3abc9e482ba9'
       AETHERCORE_ALLOW_C1_QEMU_FAST_EXPORT: '1'
       AETHERCORE_C1_FAST_QEMU_WALL_SECONDS: '180'
+      AETHERCORE_C1_FAST_QEMU_CPU: ${{ matrix.cpu }}
       AETHERCORE_C1_FAST_QEMU_OUT: ${{ github.workspace }}/build/product-c1-qemu-fast-export
 
     steps:
@@ -94,6 +106,7 @@ jobs:
           bash -n tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh
           python3 tools/ci/product_g5_qemu_export/selftest.py
           python3 -m unittest -q tests_py.test_product_c1_arch_relay_preflight
+          python3 -m unittest -q tests_py.test_product_c1_p1_contract
 
       - name: Real D2 QEMU snapshot export from exact frozen binaries
         run: |
@@ -105,15 +118,42 @@ jobs:
           cat "$AETHERCORE_C1_FAST_QEMU_OUT/result.txt" >> "$GITHUB_STEP_SUMMARY"
           echo 'No RTL executed; no official SD1 UART service/login PASS.' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Audit XiangShan-style P1 state restore eligibility without any RTL writes
+        run: |
+          set -euo pipefail
+          source="$RUNNER_TEMP/c1-qemu-fast-stage"
+          python3 tools/ci/product_c1_arch_relay/p1_contract.py \
+            --manifest "$AETHERCORE_C1_FAST_QEMU_OUT/export/manifest.json" \
+            --ram "$AETHERCORE_C1_FAST_QEMU_OUT/export/ram-0x80000000-0x10000000.bin" \
+            --firmware "$source/build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin" \
+            --dtb "$source/build/rv64-debian-boot/aethercore-rv64-initramfs.dtb" \
+            --linux-image "$source/build/rv64-debian-linux/obj/arch/riscv/boot/Image" \
+            --system-map "$source/build/rv64-debian-linux/obj/System.map" \
+            --target-top AetherCoreProductDebianRV64SimTop \
+            --report "$AETHERCORE_C1_FAST_QEMU_OUT/p1-review.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['AETHERCORE_C1_FAST_QEMU_OUT']) / 'p1-review.json').read_text())
+          assert result['rtl_warm_resume_permitted'] is False
+          assert result['rtl_handoff_pass'] is False
+          assert result['restore_plan'] == 'NO_WRITE_DIAGNOSTIC_ONLY'
+          if os.environ['AETHERCORE_C1_FAST_QEMU_CPU'] != 'rv64':
+              assert result['satp_mode'] == 8, 'Forced Sv39 QEMU capture used wrong satp mode'
+          print('PRODUCT_C1_P1_DIAGNOSTIC_ONLY satp_mode=' + str(result['satp_mode']) +
+                ' blockers=' + str(len(result['blockers'])))
+          PY
+
       - name: Archive authentic captured RAM and source review, never RTL PASS
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: product-c1-qemu-fast-arch-source-${{ github.run_id }}
+          name: product-c1-qemu-fast-arch-source-${{ matrix.profile }}-${{ github.run_id }}
           path: |
             build/product-c1-qemu-fast-export/export/ram-0x80000000-0x10000000.bin
             build/product-c1-qemu-fast-export/export/manifest.json
             build/product-c1-qemu-fast-export/source-review.json
+            build/product-c1-qemu-fast-export/p1-review.json
             build/product-c1-qemu-fast-export/source-sha256sums.txt
             build/product-c1-qemu-fast-export/result.txt
             build/product-c1-qemu-fast-export/export.log
@@ -126,7 +166,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: product-c1-qemu-fast-failure-${{ github.run_id }}
+          name: product-c1-qemu-fast-failure-${{ matrix.profile }}-${{ github.run_id }}
           path: |
             build/product-c1-qemu-fast-export/qemu.log
             build/product-c1-qemu-fast-export/export.log
