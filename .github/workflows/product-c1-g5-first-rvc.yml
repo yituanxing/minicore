@@ -1,0 +1,217 @@
+name: Product G5 first Linux RVC opcode synthetic Sv39 RTL
+
+on:
+  push:
+    branches:
+      - experiment/c1-arch-handoff-20261108
+    paths:
+      - '.github/workflows/product-c1-g5-first-rvc.yml'
+      - 'sim/product_c1_arch_*'
+      - 'tools/ci/product_c1_arch_relay/**'
+      - 'tests_py/test_product_c1_arch_*'
+      - 'tests_py/test_product_c1_p1_rvc_fixture.py'
+      - 'tests_cpp/product_c1_arch_*'
+      - 'Makefile.l32-linux-boot'
+      - 'build.mill'
+      - 'src/**'
+      - 'tools/ensure_riscv64_linux_gcc_13_3.sh'
+      - 'tools/ensure_verilator_5_024.sh'
+      - 'tools/ensure_verilator_5_054.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-c1-g5-first-rvc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-product-rtl-p1_rvc:
+    # workflow_dispatch is normally registered on default branch; push to this
+    # isolated experiment branch is the primary real-CI trigger.
+    if: github.ref == 'refs/heads/experiment/c1-arch-handoff-20261108'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      SIM_SETTLE_MODE: reference
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      VERILATOR_THREADS: '1'
+      JOBS: '4'
+      RVC_OUT: build/product-c1-g5-first-rvc
+      RVC_CYCLE_LIMIT: '100000'
+
+    steps:
+      - name: Checkout immutable experimental commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Restore Scala and Mill cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Restore pinned RV64 GCC 13.3 cache
+        id: gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 bison flex libfl-dev \
+            libgmp-dev git curl make zlib1g-dev autoconf cmake ninja-build \
+            libssl-dev libelf-dev libreadline-dev pkg-config build-essential \
+            bc device-tree-compiler dwarves xz-utils
+
+      - name: Provision and verify pinned RV64 GCC 13.3
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Save verified GCC cache if absent
+        if: steps.gcc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Provision and verify pinned Verilator 5.054
+        shell: bash
+        run: bash tools/ensure_verilator_5_054.sh
+
+      - name: Save verified Verilator cache if absent
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Check RVC restore ABI and fixture contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RVC_OUT/logs"
+          python3 -m unittest -v \
+            tests_py.test_product_c1_arch_restore_abi \
+            tests_py.test_product_c1_p1_rvc_fixture \
+            2>&1 | tee "$RVC_OUT/logs/python-tests.log"
+
+      - name: Recheck reused P0 host memory overlay contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O2 -DAETHERCORE_GSIM_HOST_MEMORY_ONLY -Isim \
+            tests_cpp/product_c1_arch_p0_overlay_selftest.cpp \
+            -o "$RVC_OUT/host-overlay-selftest"
+          "$RVC_OUT/host-overlay-selftest" \
+            2>&1 | tee "$RVC_OUT/logs/host-overlay-selftest.log"
+          grep -Fq 'PRODUCT_C1_P0_HOST_OVERLAY_SELFTEST_PASS' \
+            "$RVC_OUT/logs/host-overlay-selftest.log"
+
+      - name: Build isolated RVC fixture (not Debian or QEMU snapshot)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_c1_arch_relay/build_p1_rvc_fixture.sh \
+            2>&1 | tee "$RVC_OUT/logs/fixture-build.log"
+          test "$(stat -c %s "$RVC_OUT/ram-256m.bin")" -eq 268435456
+          test "$(stat -c %s "$RVC_OUT/state-424.bin")" -eq 424
+          test -s "$RVC_OUT/restore-flat.bin"
+          test -s "$RVC_OUT/expected.json"
+          sha256sum "$RVC_OUT/ram-256m.bin" "$RVC_OUT/restore-flat.bin" \
+            "$RVC_OUT/state-424.bin" \
+            "$RVC_OUT/source-first-rvc-then-synthetic-sentinel.bin" \
+            > "$RVC_OUT/logs/fixture-inputs.sha256"
+
+      - name: Elaborate actual G5 Product RV64GC RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$RVC_OUT/rtl-seed" \
+            TOP=AetherCoreProductDebianRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+            JOBS=4 rtl
+          test -n "$(find "$RVC_OUT/rtl-seed/rtl" -maxdepth 1 -name '*.sv' -print -quit)"
+
+      - name: Build independent RVC Product Verilator host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RVC_OUT/obj" "$RVC_OUT/logs"
+          verilator --cc --exe --build -O3 -Wall -Wno-fatal \
+            --top-module AetherCoreProductDebianRV64SimTop \
+            -Mdir "$RVC_OUT/obj" \
+            -CFLAGS "-std=c++20 -O3 -I$GITHUB_WORKSPACE/sim" \
+            -LDFLAGS '-ldl' \
+            "$RVC_OUT"/rtl-seed/rtl/*.sv \
+            "$GITHUB_WORKSPACE/sim/product_c1_arch_p1_rvc_main.cpp" \
+            -j 4 2>&1 | tee "$RVC_OUT/logs/verilator-build.log"
+          test -x "$RVC_OUT/obj/VAetherCoreProductDebianRV64SimTop"
+
+      - name: Bounded real Product G5 RTL first source RVC opcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'source_sha=%s\nbranch=%s\nmax_cycles=%s\n' \
+            "$GITHUB_SHA" "$GITHUB_REF" "$RVC_CYCLE_LIMIT" \
+            > "$RVC_OUT/logs/run-identity.txt"
+          # Hard wall-clock and cycle ceilings: no hidden retries or SD1 long run.
+          timeout --signal=TERM --kill-after=10s 300s \
+            "$RVC_OUT/obj/VAetherCoreProductDebianRV64SimTop" \
+            "$RVC_OUT/ram-256m.bin" \
+            "$RVC_OUT/restore-flat.bin" \
+            "$RVC_OUT/state-424.bin" \
+            0x18000 0xffffffff808c3490 "$RVC_CYCLE_LIMIT" \
+            2>&1 | tee "$RVC_OUT/logs/product-g5-first-rvc-rtl-run.log"
+          grep -Fq 'PRODUCT_C1_G5_RVC_RTL_MRET_RETIRED' \
+            "$RVC_OUT/logs/product-g5-first-rvc-rtl-run.log"
+          grep -Fq 'PRODUCT_C1_G5_RVC_RTL_SOURCE_OPCODE_SP_NEXTPC_PTW_PASS_NOT_SD1' \
+            "$RVC_OUT/logs/product-g5-first-rvc-rtl-run.log"
+          grep -Fq 'PRODUCT_C1_G5_RVC_RTL_FIRST_INSTRUCTION_RETIRED' \
+            "$RVC_OUT/logs/product-g5-first-rvc-rtl-run.log"
+          printf 'PRODUCT_C1_G5_RVC_CI_SYNTHETIC_FIRST_LINUX_OPCODE_SP_PC_ONLY_NOT_QEMU_OR_SD1_PASS\n' \
+            | tee "$RVC_OUT/logs/proof-scope.txt"
+
+      - name: Upload text proof and diagnostics (never the 256-MiB RAM)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-g5-first-rvc-${{ github.run_id }}
+          path: |
+            build/product-c1-g5-first-rvc/logs/**
+            build/product-c1-g5-first-rvc/rtl-seed/logs/**
+            build/product-c1-g5-first-rvc/expected.json
+          if-no-files-found: warn
+          retention-days: 14
