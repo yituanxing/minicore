@@ -43,6 +43,8 @@ jobs:
             cpu: rv64
           - profile: sv39-forced
             cpu: rv64,sv48=off,sv57=off
+          - profile: sv39-no-h
+            cpu: rv64,sv48=off,sv57=off,h=off
     env:
       D2_SOURCE_RUN: '42484457962'
       D2_SOURCE_ARTIFACT_ID: '13618662668'
@@ -51,6 +53,7 @@ jobs:
       AETHERCORE_ALLOW_C1_QEMU_FAST_EXPORT: '1'
       AETHERCORE_C1_FAST_QEMU_WALL_SECONDS: '180'
       AETHERCORE_C1_FAST_QEMU_CPU: ${{ matrix.cpu }}
+      AETHERCORE_C1_FAST_QEMU_PROFILE: ${{ matrix.profile }}
       AETHERCORE_C1_FAST_QEMU_OUT: ${{ github.workspace }}/build/product-c1-qemu-fast-export
 
     steps:
@@ -146,12 +149,20 @@ jobs:
           assert result['restore_plan'] == 'NO_WRITE_DIAGNOSTIC_ONLY'
           if os.environ['AETHERCORE_C1_FAST_QEMU_CPU'] != 'rv64':
               assert result['satp_mode'] == 8, 'Forced Sv39 QEMU capture used wrong satp mode'
+          source = json.loads((Path(os.environ['AETHERCORE_C1_FAST_QEMU_OUT']) / 'source-review.json').read_text())
+          if os.environ['AETHERCORE_C1_FAST_QEMU_PROFILE'] == 'sv39-no-h':
+              assert source['misa_exact_match_product_g5_debian'] is True, (
+                  'QEMU h=off source still differs from Product RV64GC misa: ' +
+                  str(source['source_misa']))
+              assert source['misa_unexpected_bits'] == '0x0'
+              assert source['misa_missing_bits'] == '0x0'
           print('PRODUCT_C1_P1_DIAGNOSTIC_ONLY satp_mode=' + str(result['satp_mode']) +
-                ' blockers=' + str(len(result['blockers'])))
+                ' blockers=' + str(len(result['blockers'])) +
+                ' misa_match=' + str(source['misa_exact_match_product_g5_debian']))
           PY
 
       - name: Prove first physical Linux instruction from sealed Sv39 page tables
-        if: matrix.profile == 'sv39-forced'
+        if: matrix.profile == 'sv39-forced' || matrix.profile == 'sv39-no-h'
         run: |
           set -euo pipefail
           python3 tools/ci/product_c1_arch_relay/sv39_source_walk.py \
@@ -169,7 +180,7 @@ jobs:
           PY
 
       - name: Derive first retired Linux GPR and PC oracle without touching RTL
-        if: matrix.profile == 'sv39-forced'
+        if: matrix.profile == 'sv39-forced' || matrix.profile == 'sv39-no-h'
         run: |
           set -euo pipefail
           python3 tools/ci/product_c1_arch_relay/first_retire_oracle.py \

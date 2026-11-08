@@ -61,7 +61,7 @@ CPU="${AETHERCORE_C1_FAST_QEMU_CPU:-rv64}"
 # Sv39 variant is source-derived, retaining the exact SHA-sealed Linux,
 # OpenSBI and DTB binaries. Never accept arbitrary QEMU CPU overrides.
 case "$CPU" in
-  rv64|rv64,sv48=off,sv57=off) ;;
+  rv64|rv64,sv48=off,sv57=off|rv64,sv48=off,sv57=off,h=off) ;;
   *) fail "unqualified QEMU CPU profile: $CPU" ;;
 esac
 WALL="${AETHERCORE_C1_FAST_QEMU_WALL_SECONDS:-180}"
