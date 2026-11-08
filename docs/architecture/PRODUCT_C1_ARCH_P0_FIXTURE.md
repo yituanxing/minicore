@@ -80,6 +80,16 @@ It intentionally stops on exception retirement; no trap vector needs to run.
 The new marker is
 `PRODUCT_C1_P01_RTL_S_MODE_ILLEGAL_CSR_TRAP_PASS_NOT_QEMU`.
 
+**Verified real Product RTL P0.1 evidence:** commit
+`14b5774a45db89f9c2df4c46cff65ea583ba32a1`, Actions run
+`42484108729`, artifact `13618478367` (ZIP SHA-256
+`65bd1ff616df7139378f0050e0b92f00a244db07284f733ac4e7268088a838d4`).
+The actual RTL retired `mret` at cycle 701, matched all five normal guest
+retirements and four source-RAM markers, then retired an illegal instruction
+trap at cycle **749**: `pc=0x80100014`, raw `0x300026f3`, cause `2`,
+trap value `0x300026f3`.  This is a privilege-sensitive proof of S-mode
+execution, not a QEMU/Linux state handoff.
+
 This verifies the privilege transition in one isolated synthetic guest. It
 does not make QEMU/Linux state export compatible with the restricted P0 ABI.
 
