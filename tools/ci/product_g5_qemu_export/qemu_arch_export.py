@@ -346,10 +346,19 @@ def collect(rsp, qmp, out, pc, inputs, drive, wall):
         mmio = {"mtime": None, "mtimecmp": None}
 
     ram = out / "ram-0x80000000-0x10000000.bin"
-    hmp = f"pmemsave 0x{RAM_BASE:x} 0x{RAM_SIZE:x} {ram}"
-    qmp.command("human-monitor-command", {"command-line": hmp})
-    if not ram.is_file() or ram.stat().st_size != RAM_SIZE:
-        raise ProtocolError("QEMU physical RAM dump missing/wrong size")
+    # Use QMP's native typed physical-memory dump command, not an HMP text
+    # command whose nonempty error message would otherwise be ignored by QMP.
+    # This ensures read/write/permission failures fail closed with QMP detail.
+    qmp.command("pmemsave", {
+        "val": RAM_BASE, "size": RAM_SIZE, "filename": str(ram),
+    })
+    if not ram.is_file():
+        raise ProtocolError(f"QMP pmemsave reported success without output: {ram}")
+    actual_bytes = ram.stat().st_size
+    if actual_bytes != RAM_SIZE:
+        raise ProtocolError(
+            f"QMP pmemsave size mismatch: expected {RAM_SIZE}, "
+            f"actual {actual_bytes}, path {ram}")
 
     result = {
         "qualification": "QEMU_ARCH_EXPORT_DIAGNOSTIC_ONLY_NOT_RTL_HANDOFF_PASS",

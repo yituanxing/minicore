@@ -60,13 +60,43 @@ class StubQmp:
             return {"running": False, "status": "paused"}
         if op == "query-cpus-fast":
             return [{"cpu-index": 0, "qom-path": "/machine/unattached/device[0]"}]
-        assert op == "human-monitor-command"
-        path = Path(args["command-line"].rsplit(" ", 1)[-1])
+        assert op == "pmemsave"
+        assert args["val"] == exp.RAM_BASE
+        assert args["size"] == self.ram_size
+        path = Path(args["filename"])
         path.write_bytes(bytes(self.ram_size))
         return ""
 
 
 class ArchExporterContractTest(unittest.TestCase):
+    def test_native_qmp_physical_dump_failure_is_not_silenced(self):
+        class DeniedQmp(StubQmp):
+            def command(self, op, args=None):
+                if op == "pmemsave":
+                    raise exp.ProtocolError(
+                        "QMP pmemsave failed: Permission denied")
+                return super().command(op, args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_size = exp.RAM_SIZE
+            exp.RAM_SIZE = 1024
+            try:
+                inputs = {}
+                for name in ("firmware", "dtb", "linux_image", "system_map"):
+                    path = root / name
+                    path.write_bytes(name.encode())
+                    inputs[name] = path
+                pc = 0xFFFFFFFF80001140
+                rsp = StubRsp(pc, {"pc": pc, "x0": 0})
+                out = root / "out"
+                out.mkdir()
+                with self.assertRaisesRegex(exp.ProtocolError, "Permission denied"):
+                    exp.collect(rsp, DeniedQmp(1024), out, pc, inputs, False, 5)
+                self.assertFalse((out / "manifest.json").exists())
+            finally:
+                exp.RAM_SIZE = old_size
+
     def test_xml_annex_and_explicit_numbering(self):
         xml = {
             "target.xml": '<target xmlns:xi="http://www.w3.org/2001/XInclude">'

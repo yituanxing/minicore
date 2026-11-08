@@ -1,0 +1,136 @@
+name: Product C1 exact-binary D2 QEMU architectural source export (not RTL)
+
+# This is a separate experiment; it never builds or advances signed SD1 RTL.
+# It replays immutable D2 inputs previously certified by official QEMU CI,
+# avoiding rebuilding Linux/OpenSBI for each GDB/QMP exporter bugfix.
+on:
+  push:
+    branches:
+      - experiment/c1-arch-handoff-20261108
+    paths:
+      - '.github/workflows/product-c1-qemu-fast-export.yml'
+      - 'tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh'
+      - 'tools/ci/product_g5_qemu_export/qemu_arch_export.py'
+      - 'tools/ci/product_g5_qemu_export/selftest.py'
+      - 'tools/ci/product_c1_arch_relay/preflight.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-c1-qemu-fast-export-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  exact-binary-qemu-export:
+    if: github.ref == 'refs/heads/experiment/c1-arch-handoff-20261108'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      D2_SOURCE_RUN: '42484457962'
+      D2_SOURCE_ARTIFACT_ID: '13618662668'
+      D2_SOURCE_SHA: 'f8490d3e0e1b0d7668335b50d8a8b435c76397ab'
+      D2_SOURCE_ZIP_DIGEST: 'sha256:2af27ebad2a47c88bb10f3d1fe63064a3283c749c330a10fd11c3abc9e482ba9'
+      AETHERCORE_ALLOW_C1_QEMU_FAST_EXPORT: '1'
+      AETHERCORE_C1_FAST_QEMU_WALL_SECONDS: '180'
+      AETHERCORE_C1_FAST_QEMU_OUT: ${{ github.workspace }}/build/product-c1-qemu-fast-export
+
+    steps:
+      - name: Checkout frozen experimental exporter code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Install actual RISC-V QEMU and Python
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc python3
+          command -v qemu-system-riscv64
+
+      - name: Verify exact source GitHub artifact ID and ZIP digest before restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+          repo = os.environ['GITHUB_REPOSITORY']
+          artifact_id = os.environ['D2_SOURCE_ARTIFACT_ID']
+          url = f'https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}'
+          req = urllib.request.Request(url, headers={
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+          })
+          with urllib.request.urlopen(req, timeout=20) as response:
+              artifact = json.load(response)
+          expected_name = 'product-g5-qemu-icount-inputs-42484457962-1'
+          expected_digest = os.environ['D2_SOURCE_ZIP_DIGEST']
+          assert artifact['id'] == int(artifact_id)
+          assert artifact['name'] == expected_name
+          assert artifact['digest'] == expected_digest
+          assert artifact.get('expired') is False
+          assert artifact['workflow_run']['id'] == int(os.environ['D2_SOURCE_RUN'])
+          assert artifact['workflow_run']['head_sha'] == os.environ['D2_SOURCE_SHA']
+          print('PRODUCT_C1_QEMU_FAST_ARTIFACT_ID_DIGEST_AND_SOURCE_SHA_VERIFIED')
+          PY
+
+      - name: Download exact source-run binaries without a Linux rebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: product-g5-qemu-icount-inputs-42484457962-1
+          repository: yituanxing/minicore
+          run-id: 42484457962
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/c1-qemu-fast-stage
+
+      - name: Verify exporter and source-review offline unit tests
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh
+          python3 tools/ci/product_g5_qemu_export/selftest.py
+          python3 -m unittest -q tests_py.test_product_c1_arch_relay_preflight
+
+      - name: Real D2 QEMU snapshot export from exact frozen binaries
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_export/fast_replay_from_stage.sh run \
+            "$RUNNER_TEMP/c1-qemu-fast-stage"
+          grep -Fxq 'qualification=QEMU_ARCH_EXPORT_DIAGNOSTIC_ONLY_NOT_RTL_HANDOFF_PASS' \
+            "$AETHERCORE_C1_FAST_QEMU_OUT/result.txt"
+          cat "$AETHERCORE_C1_FAST_QEMU_OUT/result.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo 'No RTL executed; no official SD1 UART service/login PASS.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive authentic captured RAM and source review, never RTL PASS
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-qemu-fast-arch-source-${{ github.run_id }}
+          path: |
+            build/product-c1-qemu-fast-export/export/ram-0x80000000-0x10000000.bin
+            build/product-c1-qemu-fast-export/export/manifest.json
+            build/product-c1-qemu-fast-export/source-review.json
+            build/product-c1-qemu-fast-export/source-sha256sums.txt
+            build/product-c1-qemu-fast-export/result.txt
+            build/product-c1-qemu-fast-export/export.log
+            build/product-c1-qemu-fast-export/review.log
+          retention-days: 7
+          compression-level: 1
+          if-no-files-found: error
+
+      - name: Preserve QEMU and protocol failure logs without claiming success
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-c1-qemu-fast-failure-${{ github.run_id }}
+          path: |
+            build/product-c1-qemu-fast-export/qemu.log
+            build/product-c1-qemu-fast-export/export.log
+            build/product-c1-qemu-fast-export/serial.log
+            build/product-c1-qemu-fast-export/review.log
+          retention-days: 7
+          if-no-files-found: warn
