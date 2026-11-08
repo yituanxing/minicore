@@ -45,7 +45,7 @@ class V3MigrationDraftStatic(unittest.TestCase):
         self.assertIn("independent C reviewer approval", denied.stderr)
         self.assertEqual(output.exists(), preexisting)
 
-    def test_even_explicit_approval_rejects_unreviewed_C_pins(self):
+    def test_even_explicit_approval_rejects_unsealed_fake_C_sources(self):
         with tempfile.TemporaryDirectory() as scratch:
             a, b = Path(scratch) / "8072m", Path(scratch) / "8092m"
             a.mkdir()
@@ -68,7 +68,7 @@ class V3MigrationDraftStatic(unittest.TestCase):
                 env=env, cwd=ROOT, capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 16)
-            self.assertIn("SHA not independently authenticated", result.stderr)
+            self.assertIn("source seal mismatch", result.stderr)
 
     def test_host_v3_profile_separate_from_existing_v1_v2(self):
         src = HOST.read_text()
@@ -109,11 +109,16 @@ class V3MigrationDraftStatic(unittest.TestCase):
             "product_sd1_official_seed.py verify",
         ):
             self.assertIn(needle, src)
-        for m in (8072, 8092):
-            for kind in ("HOST", "RTL", "CARD"):
-                self.assertIn(
-                    f"AUTHENTIC_{m}_{kind}_SHA=UNREVIEWED_FAIL_CLOSED", src
-                )
+        authenticated = {
+            "8072_HOST": "4a80a8ce142820af18e5729053443179a01dc2c2949456dc6a4397a7e8a751c3",
+            "8072_RTL": "21a453ea346ee9d8aee8d25a152d7700e5f0814dd2f223e751b971607535f527",
+            "8072_CARD": "9ce1067ecbcb4682f9d3a2d249672fee09810b0e65d0d0cebca3e046236bc1a6",
+            "8092_HOST": "e575046e572bfe55a8bff307780c61275923f92bcb6993dc2ec397729ec02e1e",
+            "8092_RTL": "cb5125d542bb438ef73ac155b962bf9890160103d43eedbd82182fffea591d72",
+            "8092_CARD": "c1d901818898167198ef0c548a30a3882bd8e8e72f3d456f05f63b627ca293d5",
+        }
+        for name, digest in authenticated.items():
+            self.assertIn(f"AUTHENTIC_{name}_SHA={digest}", src)
 
     def test_workflow_inert_until_eleven_pins_and_C_complete(self):
         src = WORKFLOW.read_text()
