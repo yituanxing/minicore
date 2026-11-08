@@ -15,6 +15,9 @@ import product_sd1_qemu_bpf_icount_probe as probe
 ATTR_ADDR = 0x100000
 INSNS_ADDR = 0x200000
 ENV_ADDR = 0xFFFFFFD80256C000
+PROG_REF_ADDR = 0xFFFFFFD802510000
+PROG_ADDR = 0xFFFFFFD802520000
+PROG_INSN_OFFSET = 0x48
 INSTRUCTIONS = bytes(i & 0xFF for i in range(82 * 8))
 DIGEST = hashlib.sha256(INSTRUCTIONS).hexdigest()
 
@@ -34,10 +37,14 @@ class FakeRsp:
         struct.pack_into("<I", env, 0x2E0C, 6500)
         struct.pack_into("<I", env, 0x2E1C, 690)
         struct.pack_into("<I", env, 0x2E20, 900)
+        prog_header = bytearray([0xA5] * PROG_INSN_OFFSET)
+        struct.pack_into("<III", prog_header, 4, 18, 9, 82)
         self.memory = [(ATTR_ADDR, bytes(attr)), (INSNS_ADDR, INSTRUCTIONS),
-                       (ENV_ADDR, bytes(env))]
+                       (ENV_ADDR, bytes(env)),
+                       (PROG_REF_ADDR, struct.pack("<Q", PROG_ADDR)),
+                       (PROG_ADDR, bytes(prog_header) + INSTRUCTIONS)]
         self.stops = [
-            {"pc": 0x8000, "ra": 0x9000, "a0": 0, "a1": ATTR_ADDR},
+            {"pc": 0x8000, "ra": 0x9000, "a0": PROG_REF_ADDR, "a1": ATTR_ADDR},
             {"pc": 0x8100, "ra": 0x8200, "a0": ENV_ADDR, "a1": 0},
             {"pc": 0x8200, "ra": 0, "a0": 0, "a1": 0},
             {"pc": 0x9000, "ra": 0, "a0": 0, "a1": 0},
@@ -91,6 +98,7 @@ class QemuBpfProbeTest(unittest.TestCase):
         good = probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST)
         self.assertEqual(good["bytecode_sha256"], DIGEST)
         self.assertEqual(good["insn_count"], 82)
+        self.assertEqual(good["bytecode_read_location"]["source"], "userspace_bpf_attr_insns")
         with self.assertRaisesRegex(probe.ProtocolError, "not comparable"):
             probe.classify_bpf_attr(rsp, ATTR_ADDR, "0" * 64)
 
@@ -106,6 +114,44 @@ class QemuBpfProbeTest(unittest.TestCase):
         self.assertTrue(result["verifier_accepted_program"])
         self.assertNotIn("whole_boot_percentage", result)
         self.assertFalse(any(p.startswith(("M", "X")) for p in rsp.requests))
+
+    def test_userspace_unreadable_uses_exact_kernel_program_copy(self):
+        rsp = FakeRsp()
+        rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        program = probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST, PROG_REF_ADDR)
+        self.assertEqual(program["bytecode_read_location"], {
+            "source": "kernel_bpf_prog_insnsi",
+            "kernel_prog_address": f"0x{PROG_ADDR:x}",
+            "kernel_insnsi_offset": PROG_INSN_OFFSET,
+        })
+        self.assertTrue(any(p.startswith(f"m{PROG_ADDR:x},") for p in rsp.requests))
+        self.assertFalse(any(p.startswith(("M", "X")) for p in rsp.requests))
+
+    def test_whole_probe_uses_kernel_copy_without_user_mapping(self):
+        rsp = FakeRsp()
+        rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        result = probe.probe(rsp, FakeQmp(),
+                             {"bpf_check": 0x8000, "do_check_common": 0x8100},
+                             DIGEST)
+        self.assertEqual(result["program"]["bytecode_read_location"]["source"],
+                         "kernel_bpf_prog_insnsi")
+        self.assertTrue(result["verifier_accepted_program"])
+
+    def test_kernel_copy_fallback_rejects_mismatch_or_invalid_pointer(self):
+        rsp = FakeRsp()
+        rsp.memory = [entry for entry in rsp.memory if entry[0] != INSNS_ADDR]
+        with self.assertRaisesRegex(probe.ProtocolError, "not comparable"):
+            probe.classify_bpf_attr(rsp, ATTR_ADDR, "0" * 64, PROG_REF_ADDR)
+        with self.assertRaisesRegex(probe.ProtocolError, "invalid bpf_check"):
+            probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST, 0)
+        for index, entry in enumerate(rsp.memory):
+            if entry[0] == PROG_ADDR:
+                prefix = bytearray(entry[1])
+                struct.pack_into("<I", prefix, 12, 81)
+                rsp.memory[index] = (PROG_ADDR, bytes(prefix))
+                break
+        with self.assertRaisesRegex(probe.ProtocolError, "type/attach/len mismatch"):
+            probe.classify_bpf_attr(rsp, ATTR_ADDR, DIGEST, PROG_REF_ADDR)
 
     def test_bpf_attr_identity_rejects_foreign_program(self):
         rsp = FakeRsp()

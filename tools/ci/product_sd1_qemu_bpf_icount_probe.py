@@ -42,6 +42,7 @@ ATTACH_TYPE = 9    # BPF_CGROUP_INET6_BIND
 INSTRUCTION_COUNT = 82
 VERIFIER_ENV_SIZE = 0x2E24  # Linux 6.6.143, pinned struct bpf_verifier_env
 MAX_ENTRY_HITS = 256
+KERNEL_BPF_INSN_OFFSET = 0x48  # pinned Linux 6.6.143 RV64 struct bpf_prog
 
 
 def little_u32(data, offset):
@@ -74,7 +75,33 @@ def read_memory(rsp, address, count):
     return b"".join(chunks)
 
 
-def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha):
+def read_kernel_bpf_copy(rsp, prog_ref_address, expected_bytecode_sha):
+    """Read the already-copied BPF instructions, never userspace or guest writes.
+
+    At bpf_check(struct bpf_prog **prog, union bpf_attr *attr), *prog
+    points to the kernel-owned object with a trailing insnsi[] array.  A
+    supervisor-context GDB virtual read may reject attr.insns userspace
+    memory even though Linux has already copied it.  Validate the pinned
+    RV64 struct header, then require the complete expected insnsi SHA.
+    """
+    if prog_ref_address is None or not 0xFFFFFF0000000000 <= prog_ref_address < (1 << 64):
+        raise ProtocolError("invalid bpf_check kernel prog-ref pointer")
+    prog_address = little_u64(read_memory(rsp, prog_ref_address, 8), 0)
+    if not 0xFFFFFF0000000000 <= prog_address < (1 << 64):
+        raise ProtocolError("invalid kernel bpf_prog object pointer")
+    header = read_memory(rsp, prog_address, 0x48)
+    if (little_u32(header, 4), little_u32(header, 8), little_u32(header, 12)) != (
+            PROGRAM_TYPE, ATTACH_TYPE, INSTRUCTION_COUNT):
+        raise ProtocolError("kernel bpf_prog type/attach/len mismatch: not comparable")
+    insns = read_memory(rsp, prog_address + KERNEL_BPF_INSN_OFFSET,
+                        INSTRUCTION_COUNT * 8)
+    if hashlib.sha256(insns).hexdigest() != expected_bytecode_sha:
+        raise ProtocolError("kernel BPF copy SHA mismatch: not comparable")
+    return {"source": "kernel_bpf_prog_insnsi", "kernel_prog_address":
+            f"0x{prog_address:x}", "kernel_insnsi_offset": KERNEL_BPF_INSN_OFFSET}
+
+
+def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha, prog_ref_address=None):
     raw = read_memory(rsp, attr_address, 0x98)
     name = raw[0x30:0x40].split(b"\0", 1)[0].decode("ascii", "replace")
     program_type = little_u32(raw, 0)
@@ -86,17 +113,26 @@ def classify_bpf_attr(rsp, attr_address, expected_bytecode_sha):
             PROGRAM_TYPE, INSTRUCTION_COUNT, ATTACH_TYPE):
         raise ProtocolError("sd_bind6 identity/type/instruction-count mismatch")
     insn_address = little_u64(raw, 8)
-    bytecode = read_memory(rsp, insn_address, INSTRUCTION_COUNT * 8)
-    digest = hashlib.sha256(bytecode).hexdigest()
-    if digest != expected_bytecode_sha:
-        raise ProtocolError("sd_bind6 eBPF bytecode SHA differs from Product RTL: not comparable")
+    try:
+        bytecode = read_memory(rsp, insn_address, INSTRUCTION_COUNT * 8)
+    except ProtocolError as error:
+        if "guest memory unreadable" not in str(error):
+            raise
+        # QEMU's gdbstub may respect supervisor SUM permission on a user VA.
+        # The kernel copy is independently verified against the exact digest.
+        location = read_kernel_bpf_copy(rsp, prog_ref_address, expected_bytecode_sha)
+    else:
+        if hashlib.sha256(bytecode).hexdigest() != expected_bytecode_sha:
+            raise ProtocolError("sd_bind6 eBPF bytecode SHA differs from Product RTL: not comparable")
+        location = {"source": "userspace_bpf_attr_insns"}
     return {
         "name": name,
         "prog_type": program_type,
         "expected_attach_type": attach_type,
         "insn_count": insn_count,
         "insn_user_address": f"0x{insn_address:x}",
-        "bytecode_sha256": digest,
+        "bytecode_sha256": expected_bytecode_sha,
+        "bytecode_read_location": location,
     }
 
 
@@ -174,7 +210,8 @@ def probe(rsp, qmp, symbols, expected_bytecode_sha):
             attr_pointer = rsp.reg(registers["a1"])
             if attr_pointer is None:
                 raise ProtocolError("unavailable bpf_check attr pointer")
-            program = classify_bpf_attr(rsp, attr_pointer, expected_bytecode_sha)
+            program = classify_bpf_attr(rsp, attr_pointer, expected_bytecode_sha,
+                                        rsp.reg(registers["a0"]))
             if program is not None:
                 break
             seen_other += 1
