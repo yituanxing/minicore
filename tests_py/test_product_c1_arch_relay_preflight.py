@@ -55,10 +55,19 @@ class PreflightTest(unittest.TestCase):
         report = self.inspect()
         self.assertTrue(report['minimum_s_mode_register_subset_present'])
         self.assertFalse(report['pmp_registers_present'])
-        self.assertIn('pmpcfg3', report['missing_pmp_registers'])
+        self.assertIn('pmpcfg2', report['missing_pmp_registers'])
+        self.assertNotIn('pmpcfg1', report['missing_pmp_registers'])
+        self.assertNotIn('pmpcfg3', report['missing_pmp_registers'])
         self.assertFalse(report['rtl_handoff_pass'])
         self.assertFalse(report['rtl_injected'])
         self.assertEqual(report['result'], 'C1_SOURCE_REVIEWED_NOT_RTL_RESUMED')
+
+    def test_rv64_pmp_even_config_registers_are_complete(self):
+        self.regs.update({name: '0x0' for name in preflight.PMP_REGISTERS})
+        report = self.inspect()
+        self.assertTrue(report['pmp_registers_present'])
+        self.assertFalse(report['missing_pmp_registers'])
+        self.assertFalse(report['rtl_handoff_pass'])
 
     def test_missing_priv_or_satp_is_reported_not_zero_filled(self):
         del self.regs['priv']

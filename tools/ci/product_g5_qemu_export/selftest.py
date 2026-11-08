@@ -178,6 +178,17 @@ class ArchExporterContractTest(unittest.TestCase):
         self.assertEqual((reg["x0"], reg["x1"], reg["x2"], reg["f0"], reg["f10"]),
                          (0, 1, 2, 33, 34))
 
+    def test_qemu_fp_alias_maps_to_x8_and_conflicts_fail_closed(self):
+        xml = '<target><feature><reg name="fp" regnum="8"/>' \
+              '<reg name="pc" regnum="32"/></feature></target>'
+        reg = exp.registers_from_annexes(lambda _: xml)
+        self.assertEqual(reg["x8"], 8)
+        self.assertEqual(reg["fp"], 8)
+        duplicate_alias = '<target><feature><reg name="s0" regnum="8"/>' \
+                          '<reg name="fp" regnum="40"/></feature></target>'
+        with self.assertRaisesRegex(exp.ProtocolError, "conflicting GDB aliases"):
+            exp.registers_from_annexes(lambda _: duplicate_alias)
+
     def test_target_endian_and_unavailable(self):
         self.assertEqual(exp.decode_riscv_le("0100000000000000"), 1)
         self.assertEqual(exp.decode_riscv_le("ffffffffffffffff"), (1 << 64) - 1)

@@ -57,6 +57,9 @@ F_ABI_NAMES = (
     "fs4", "fs5", "fs6", "fs7", "fs8", "fs9", "fs10", "fs11", "ft8", "ft9",
     "ft10", "ft11",
 )
+# QEMU's RISC-V GDB XML has used both ``s0`` and the ABI synonym ``fp``
+# for architectural integer register x8.  Neither name is itself an xN key.
+X_ABI_ALIASES = {"fp": 8}
 
 
 class ProtocolError(RuntimeError):
@@ -154,10 +157,20 @@ def registers_from_annexes(read_annex):
                     if name:
                         assigned_numbers[next_num] = name
                         out[name] = next_num
+                        canonical = None
                         if name in X_ABI_NAMES:
-                            out[f"x{X_ABI_NAMES.index(name)}"] = next_num
-                        if name in F_ABI_NAMES:
-                            out[f"f{F_ABI_NAMES.index(name)}"] = next_num
+                            canonical = f"x{X_ABI_NAMES.index(name)}"
+                        elif name in X_ABI_ALIASES:
+                            canonical = f"x{X_ABI_ALIASES[name]}"
+                        elif name in F_ABI_NAMES:
+                            canonical = f"f{F_ABI_NAMES.index(name)}"
+                        if canonical is not None:
+                            prior = out.get(canonical)
+                            if prior is not None and prior != next_num:
+                                raise ProtocolError(
+                                    f"conflicting GDB aliases for {canonical}: "
+                                    f"register numbers {prior} and {next_num}")
+                            out[canonical] = next_num
                     next_num += 1
             seen.add(annex)
         finally:
@@ -316,7 +329,9 @@ def collect(rsp, qmp, out, pc, inputs, drive, wall):
     names.update(f"f{idx}" for idx in range(32))
     names.update(REQUIRED_CSR)
     names.update(f"pmpaddr{idx}" for idx in range(16))
-    names.update(f"pmpcfg{idx}" for idx in range(4))
+    # RV64 maps 16 PMP entries through pmpcfg0/2. Odd pmpcfg registers
+    # are reserved/illegal, unlike RV32's four consecutive pmpcfg CSRs.
+    names.update(("pmpcfg0", "pmpcfg2"))
     values = {}
     missing = []
     for name in sorted(names):
@@ -370,6 +385,7 @@ def collect(rsp, qmp, out, pc, inputs, drive, wall):
         "inputs": identities,
         "qemu_cpu_count": len(cpus),
         "qemu_gdb_registers": values,
+        "qemu_gdb_feature_register_numbers": features,
         "missing_gdb_registers": missing,
         "read_only_clint": mmio,
         "unexported_device_and_rtl_state": list(DEVICE_BLOCKERS),

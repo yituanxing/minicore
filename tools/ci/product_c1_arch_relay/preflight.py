@@ -20,8 +20,10 @@ INPUTS = ('firmware', 'dtb', 'linux_image', 'system_map')
 CSRS = ('mstatus', 'medeleg', 'mideleg', 'mie', 'mip', 'mtvec',
         'mscratch', 'mepc', 'mcause', 'mtval', 'stvec', 'sscratch',
         'sepc', 'scause', 'stval', 'satp', 'scounteren')
-PMP_REGISTERS = tuple(f'pmpaddr{i}' for i in range(16)) + tuple(
-    f'pmpcfg{i}' for i in range(4))
+# RV64: each 64-bit pmpcfg CSR holds eight 8-bit configuration entries.
+# pmpcfg1 and pmpcfg3 are not implemented/accessible on RV64.
+PMP_REGISTERS = tuple(f'pmpaddr{i}' for i in range(16)) + (
+    'pmpcfg0', 'pmpcfg2')
 COUNTER_AND_WARL_CSRS = ('mcycle', 'minstret', 'mcountinhibit', 'menvcfg')
 
 
