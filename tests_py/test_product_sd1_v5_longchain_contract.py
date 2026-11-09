@@ -222,5 +222,27 @@ class V5LongChain(unittest.TestCase):
                                           {}, "f" * 64, run, head, "v5_billion_1", "UNIT_TEST")
 
 
+    def test_postcross_arithmetic_reaches_expected_guard_not_unbound_variable(self):
+        # Regression for official V5 job #129101101296: a single `readonly`
+        # invocation expanded START before SOURCE_M had become assigned.
+        # Exit at the deliberately invalid output-root gate, before RTL.
+        with tempfile.TemporaryDirectory() as t:
+            env = dict(os.environ,
+                       AETHERCORE_SD1_V5_15B_APPROVED="QUALIFIED_V5_15B_SIGNED_9992_MODEL_MIGRATION",
+                       AETHERCORE_SD1_RELAY_CONFIRM="SD1_FULL_DEBIAN_SIGNED_RELAY_V6_MIGRATED_15B",
+                       AETHERCORE_SD1_V5_REVIEWED_MODEL_SHA="4" * 64,
+                       AETHERCORE_VERILATOR_VERSION="5.054",
+                       SIM_SETTLE_MODE="reference", VERILATOR_THREADS="1",
+                       AETHERCORE_DATA_MEM_WAIT_CYCLES="0",
+                       AETHERCORE_SD1_V5_OUT=str(Path(t)))
+            cmd = ["bash", str(ROOT / "tools/ci/product_sd1_migrated_v5_postcross_20m.sh"),
+                   "--execute-reviewed-postcross-20m", t, "10012"]
+            result = subprocess.run(cmd, cwd=ROOT, env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(result.returncode, 16)
+            self.assertIn("stage output path invalid or exists", result.stderr)
+            self.assertNotIn("unbound variable", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -36,7 +36,8 @@ fi
 readonly SOURCE="$2" TARGET_M="$3"
 [[ "$TARGET_M" =~ ^[0-9]+$ && "$TARGET_M" -ge 10012 && "$TARGET_M" -le 14992 &&
    "$(((TARGET_M-10012)%20))" -eq 0 ]] || reject 'outside strict V5 20M target lattice/15B cap'
-readonly SOURCE_M=$((TARGET_M-20)) START=$((SOURCE_M*1000000)) TARGET=$((TARGET_M*1000000))
+readonly SOURCE_M=$((TARGET_M-20))
+readonly START=$((SOURCE_M*1000000)) TARGET=$((TARGET_M*1000000))
 readonly OUT="${AETHERCORE_SD1_V5_OUT:-}"
 [[ "$OUT" == "$ROOT"/build/product-sd1-v5-chain-* && -d "$OUT" &&
    "$(realpath -e "$OUT")" == "$OUT" &&
