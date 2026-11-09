@@ -116,6 +116,10 @@ static void wait_for_release(void) {
   if (tcsetattr(input_fd, TCSANOW, &raw) != 0) die("uart_termios_set");
   if (fcntl(input_fd, F_SETFL, flags & ~O_NONBLOCK) != 0)
     die("uart_input_blocking");
+  // READY is a host release barrier, not merely an announcement that the
+  // ext4 root has not yet been mounted.  Arm the real 16550 receiver first:
+  // otherwise a fast QEMU/RTL host can send GO before the guest TTY exists.
+  say("AETHERCORE_C1_READY rootfs_unmounted=1\n");
   char command[sizeof(expected)] = {0};
   size_t position = 0;
   while (position < sizeof(expected) - 1) {
@@ -152,9 +156,8 @@ int main(void) {
   select_root_from_cmdline();
   wait_for_block_root();
 
-  // A full-clock-boundary RTL/DDR/SD checkpoint is taken while PID1 blocks
-  // here. No external Debian or Alpine filesystem has been mounted yet.
-  say("AETHERCORE_C1_READY rootfs_unmounted=1\n");
+  // A full-clock-boundary RTL/DDR/SD checkpoint is taken after the guest's
+  // serial receive path is ready, but before mounting any distro rootfs.
   wait_for_release();
   say("AETHERCORE_C1_ROOTFS_MOUNT_BEGIN\n");
   if (mount(root_device, "/newroot", "ext4", 0, NULL) != 0)
