@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# INERT. Reviewed v4 Product RTL post-8.5B continuation, five real 20M stages: 8512M->8612M.
-# First input must be an externally sealed B 8512M checkpoint; never modify B, F, G or prior artifacts.
+# INERT until an explicitly reviewed workflow selects C or D. One common
+# executor preserves the same model/SD/RTL identity across 20M continuations.
+# Never modify the imported source or any older checkpoint artifact.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -12,7 +13,27 @@ readonly MODEL_ROOT="$ROOT/build/product-sd1-model-migration-v4-10b-qualified"
 readonly MODEL="$MODEL_ROOT/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop"
 readonly QUAL="$MODEL_ROOT/qualification-manifest.txt"
 readonly C_FIRST="$ROOT/build/product-sd1-v4-c-source/8512m"
-readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-c"
+readonly D_FIRST="$ROOT/build/product-sd1-v4-d-source/8612m"
+readonly PROFILE="${AETHERCORE_SD1_V4_POSTCROSS_PROFILE:-C}"
+case "$PROFILE" in
+  C)
+    readonly FIRST="$C_FIRST" FIRST_M=8512
+    readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-c"
+    readonly STAGES='8532,8552,8572,8592,8612' INPUT='B-8512M'
+    readonly SOURCE_HOST_SHA="${AETHERCORE_SD1_V4_C_8512_HOST_SHA:-}"
+    readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_C_8512_RTL_SHA:-}"
+    readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_C_8512_CARD_SHA:-}"
+    ;;
+  D)
+    readonly FIRST="$D_FIRST" FIRST_M=8612
+    readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-d"
+    readonly STAGES='8632,8652,8672,8692,8712' INPUT='C-8612M'
+    readonly SOURCE_HOST_SHA="${AETHERCORE_SD1_V4_D_8612_HOST_SHA:-}"
+    readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_D_8612_RTL_SHA:-}"
+    readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_D_8612_CARD_SHA:-}"
+    ;;
+  *) reject 'only reviewed C or D postcross profile is permitted' ;;
+esac
 readonly V4_MODEL="${AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA:-}"
 readonly EXPECTED_V4_MODEL=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
 readonly V3_MODEL=04e671f2dfae8aa6d7c5b17a93c688cb7b30005de9a2a329f983b909f4fa1be6
@@ -27,8 +48,8 @@ readonly LINUX_SHA=522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6
 readonly ROOTFS_SHA=f2f8c6bf118c0be578b633dfd5486e0d1e1ef7becdaf093bbc4f16f62d0e474e
 
 if [[ "${1:---plan}" == --plan && $# -le 1 ]]; then
-  printf '%s\n' 'PRODUCT_SD1_V4_POSTCROSS_PLAN_ONLY no_guest_cycles=1 stages=8532,8552,8572,8592,8612; input=B-8512M'
-  printf '%s\n' 'All five stages remain prohibited until the full B 8512M real RTL upload and exact Host/RTL/card SHA are independently reviewed.'
+  printf 'PRODUCT_SD1_V4_POSTCROSS_PLAN_ONLY no_guest_cycles=1 stages=%s; input=%s\n' "$STAGES" "$INPUT"
+  printf 'All five stages remain prohibited until the full %s real RTL upload and exact Host/RTL/card SHA are independently reviewed.\n' "$INPUT"
   exit 0
 fi
 [[ $# == 3 && "$1" == --execute-reviewed-postcross-20m ]] ||
@@ -46,29 +67,32 @@ readonly MODE="$1"
   reject 'absent/noncanonical stage directory'
 readonly SOURCE="$2"
 readonly TARGET_M="$3"
-[[ "$TARGET_M" =~ ^(8532|8552|8572|8592|8612)$ ]] ||
-  reject 'only five exact 20M post-8512 real RTL stages are reviewed'
+if [[ "$PROFILE" == C ]]; then
+  [[ "$TARGET_M" =~ ^(8532|8552|8572|8592|8612)$ ]] ||
+    reject 'only five exact 20M C stages are reviewed'
+else
+  [[ "$TARGET_M" =~ ^(8632|8652|8672|8692|8712)$ ]] ||
+    reject 'only five exact 20M D stages are reviewed'
+fi
 readonly SOURCE_M=$((TARGET_M-20))
 readonly START=$((SOURCE_M*1000000))
 readonly TARGET=$((TARGET_M*1000000))
-[[ "$START" -ge 8512000000 && "$TARGET" -le 10000000000 &&
+[[ "$START" -ge $((FIRST_M*1000000)) && "$TARGET" -le 10000000000 &&
    $((TARGET-START)) -eq 20000000 && ! -e "$OUT/${TARGET_M}m" ]] ||
   reject 'unsupported postcross time segment or existing destination'
-if [[ "$SOURCE_M" == 8512 ]]; then
-  [[ "$SOURCE" == "$C_FIRST" ]] || reject 'C must start from full authenticated B-8512M artifact'
+if [[ "$SOURCE_M" -eq "$FIRST_M" ]]; then
+  [[ "$SOURCE" == "$FIRST" ]] || reject "${PROFILE} must start from full authenticated ${INPUT} artifact"
 else
-  [[ "$SOURCE" == "$OUT/${SOURCE_M}m" ]] || reject 'must follow immediately prior true RTL C checkpoint'
+  [[ "$SOURCE" == "$OUT/${SOURCE_M}m" ]] || reject 'must follow immediately prior true RTL checkpoint'
 fi
-if [[ "$SOURCE_M" == 8512 ]]; then
-  for expected in "${AETHERCORE_SD1_V4_C_8512_HOST_SHA:-}" \
-                  "${AETHERCORE_SD1_V4_C_8512_RTL_SHA:-}" \
-                  "${AETHERCORE_SD1_V4_C_8512_CARD_SHA:-}"; do
-    [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || reject 'unknown B-8512M source SHA'
+if [[ "$SOURCE_M" -eq "$FIRST_M" ]]; then
+  for expected in "$SOURCE_HOST_SHA" "$SOURCE_RTL_SHA" "$SOURCE_CARD_SHA"; do
+    [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || reject "unknown ${INPUT} source SHA"
   done
-  [[ "$(sha "$SOURCE/persistent.pre.host")" == "$AETHERCORE_SD1_V4_C_8512_HOST_SHA" &&
-     "$(sha "$SOURCE/persistent.pre.rtl")" == "$AETHERCORE_SD1_V4_C_8512_RTL_SHA" &&
-     "$(sha "$SOURCE/card-progress.json")" == "$AETHERCORE_SD1_V4_C_8512_CARD_SHA" ]] ||
-    reject 'C cannot resume without full independently audited B 8512M Host/RTL/card SHA'
+  [[ "$(sha "$SOURCE/persistent.pre.host")" == "$SOURCE_HOST_SHA" &&
+     "$(sha "$SOURCE/persistent.pre.rtl")" == "$SOURCE_RTL_SHA" &&
+     "$(sha "$SOURCE/card-progress.json")" == "$SOURCE_CARD_SHA" ]] ||
+    reject "${PROFILE} cannot resume without full independently audited ${INPUT} Host/RTL/card SHA"
 fi
 [[ -x "$MODEL" && ! -L "$MODEL" && -s "$QUAL" && ! -L "$QUAL" &&
    "$(sha "$MODEL")" == "$V4_MODEL" &&

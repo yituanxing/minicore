@@ -60,7 +60,7 @@ class V4PostcrossStatic(unittest.TestCase):
 
     def test_only_exact_five_stages_source_chain_and_no_overwrite(self):
         s = self.content
-        for check in ("8532|8552|8572|8592|8612", '"$SOURCE_M" == 8512',
+        for check in ("8532|8552|8572|8592|8612", '"$SOURCE_M" -eq "$FIRST_M"',
                       'C_FIRST="$ROOT/build/product-sd1-v4-c-source/8512m"',
                       'SOURCE" == "$OUT/${SOURCE_M}m"',
                       '! -e "$OUT/${TARGET_M}m"',
@@ -69,6 +69,36 @@ class V4PostcrossStatic(unittest.TestCase):
             self.assertIn(check, s, check)
         self.assertNotIn("--execute-reviewed-cross-20m", s)
         self.assertNotIn("verilator --cc", s)
+
+    def test_separate_d_profile_is_bounded_and_preserves_c_behavior(self):
+        env = os.environ.copy()
+        env["AETHERCORE_SD1_V4_POSTCROSS_PROFILE"] = "D"
+        plan = subprocess.run(["bash", str(SCRIPT), "--plan"], env=env,
+                              capture_output=True, text=True, check=True)
+        self.assertIn("no_guest_cycles=1", plan.stdout)
+        self.assertIn("stages=8632,8652,8672,8692,8712; input=C-8612M", plan.stdout)
+        for term in ('D_FIRST="$ROOT/build/product-sd1-v4-d-source/8612m"',
+                     'AETHERCORE_SD1_V4_D_8612_HOST_SHA',
+                     'AETHERCORE_SD1_V4_D_8612_RTL_SHA',
+                     'AETHERCORE_SD1_V4_D_8612_CARD_SHA',
+                     '8632|8652|8672|8692|8712'):
+            self.assertIn(term, self.content)
+        env.update({
+            "AETHERCORE_SD1_V4_CATCHUP_EXECUTE": "REVIEWED_V4_8292M_20M_EXACT_DIFF_AND_SOURCE_SHA_AUDITED",
+            "AETHERCORE_SD1_RELAY_CONFIRM": "SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B",
+            "AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA": "ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a",
+            "AETHERCORE_VERILATOR_VERSION": "5.054",
+            "SIM_SETTLE_MODE": "reference",
+            "VERILATOR_THREADS": "1",
+            "AETHERCORE_DATA_MEM_WAIT_CYCLES": "0",
+        })
+        for target, needle in ((8532, "only five exact 20M D stages"),
+                               (8632, "must start from full authenticated C-8612M")):
+            process = subprocess.run(["bash", str(SCRIPT),
+                                      "--execute-reviewed-postcross-20m", "/tmp", str(target)],
+                                     env=env, capture_output=True, text=True)
+            self.assertEqual(process.returncode, 16)
+            self.assertIn(needle, process.stderr)
 
     def test_exact_reviewed_b_host_rtl_card_seals(self):
         s = self.content
