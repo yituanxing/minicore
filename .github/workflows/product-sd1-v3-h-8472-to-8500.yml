@@ -103,7 +103,9 @@ jobs:
           jq -e --argjson id "$V3_ID" --argjson run "$V3_RUN"             --arg name "product-sd1-model-migrate-v3-qual-8072-8092-$V3_RUN"             --arg digest "sha256:$V3_ZIP" '
             .id==$id and .workflow_run.id==$run and .name==$name and
             .digest==$digest and .expired==false and .size_in_bytes>1000000' "$RUNNER_TEMP/v3-art.json"
-          mkdir -p build/product-sd1-v3-h-source/auth
+          # Checkout of the reviewed experiment commit cleans untracked workspace files.
+          # Keep the authenticated G ZIPs in RUNNER_TEMP across that checkout boundary.
+          mkdir -p "$RUNNER_TEMP/h-g-auth"
           for m in 8392 8412 8432 8452 8472; do
             idvar=G_${m}_ID; zipvar=G_${m}_ZIP
             id="${!idvar}"; zip="${!zipvar}"
@@ -111,8 +113,8 @@ jobs:
             jq -e --argjson id "$id" --argjson run "$G_RUN"               --arg name "product-sd1-migrated-v3-g-${m}m-$G_RUN" --arg digest "sha256:$zip" '
               .id==$id and .workflow_run.id==$run and .name==$name and
               .digest==$digest and .expired==false and .size_in_bytes>1000000' "$RUNNER_TEMP/g-${m}-art.json"
-            curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN"               "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip"               -o "build/product-sd1-v3-h-source/auth/g-${m}.zip"
-            [[ "$(sha256sum "build/product-sd1-v3-h-source/auth/g-${m}.zip" | cut -d' ' -f1)" == "$zip" ]] || exit 16
+            curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN"               "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip"               -o "$RUNNER_TEMP/h-g-auth/g-${m}.zip"
+            [[ "$(sha256sum "$RUNNER_TEMP/h-g-auth/g-${m}.zip" | cut -d' ' -f1)" == "$zip" ]] || exit 16
           done
           python3 - <<'PY'
           from hashlib import sha256
@@ -137,7 +139,7 @@ jobs:
                       digest.update(block)
               return digest.hexdigest()
           for m in milestones:
-              path=Path(f'build/product-sd1-v3-h-source/auth/g-{m}.zip')
+              path=Path(os.environ['RUNNER_TEMP'])/f'h-g-auth/g-{m}.zip'
               with zipfile.ZipFile(path) as z:
                   names=set(z.namelist())
                   required={'.migration-ready','persistent.pre.host','persistent.pre.rtl','card-progress.json'}
@@ -224,11 +226,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/product-sd1-model-migration-v3-8p5b-draft build/product-sd1-v3-h-source/8472m
+          mkdir -p build/product-sd1-model-migration-v3-8p5b-draft build/product-sd1-v3-h-source/8472m build/product-sd1-v3-h-source/auth
+          [[ "$(sha256sum "$RUNNER_TEMP/h-g-auth/g-8472.zip" | cut -d' ' -f1)" == "$G_8472_ZIP" ]] || exit 16
           curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$V3_ID/zip"             -o build/product-sd1-v3-h-source/auth/v3.zip
           [[ "$(sha256sum build/product-sd1-v3-h-source/auth/v3.zip | cut -d' ' -f1)" == "$V3_ZIP" ]] || exit 16
           unzip -qq build/product-sd1-v3-h-source/auth/v3.zip -d build/product-sd1-model-migration-v3-8p5b-draft
-          unzip -qq build/product-sd1-v3-h-source/auth/g-8472.zip -d build/product-sd1-v3-h-source/8472m
+          unzip -qq "$RUNNER_TEMP/h-g-auth/g-8472.zip" -d build/product-sd1-v3-h-source/8472m
           f=build/product-sd1-v3-h-source/8472m
           q=build/product-sd1-model-migration-v3-8p5b-draft/qualification-manifest.txt
           model=build/product-sd1-model-migration-v3-8p5b-draft/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop
