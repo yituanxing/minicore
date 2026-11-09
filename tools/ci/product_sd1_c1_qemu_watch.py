@@ -45,7 +45,11 @@ class C1Proof:
         self.failure = None
 
     def observe(self, data: bytes) -> None:
-        self.trace = (self.trace + data)[-65536:]
+        # /dev/console applies ONLCR by default: guest marker "\n" is seen
+        # on the host UART as "\r\n". Preserve raw evidence in run(); only
+        # normalize this parser window after concatenating, so a CR/LF split
+        # across socket reads also matches correctly.
+        self.trace = (self.trace + data).replace(b"\r\n", b"\n")[-65536:]
         for marker in FAILURE:
             if marker in self.trace:
                 self.failure = marker.decode("ascii")

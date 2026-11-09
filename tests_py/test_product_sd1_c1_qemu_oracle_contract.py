@@ -56,16 +56,30 @@ class C1QemuOracleContract(unittest.TestCase):
         proof = module.C1Proof()
         proof.observe(b"OpenSBI\r\nAETHERCORE_C1_REA")
         self.assertFalse(proof.ready)
-        proof.observe(b"DY rootfs_unmounted=1\n")
+        proof.observe(b"DY rootfs_unmounted=1\r")
+        self.assertFalse(proof.ready)
+        proof.observe(b"\n")
         self.assertTrue(proof.ready)
         self.assertFalse(proof.mount_started)
         proof.go_sent = True
         for part in (module.GO_RECEIVED, module.MOUNT_BEGIN, module.MOUNT_OK,
-                     module.NATIVE_EXEC, b"debian login:"):
-            proof.observe(part)
+                     module.NATIVE_EXEC):
+            proof.observe(part[:-1] + b"\r")
+            proof.observe(b"\n")
+        proof.observe(b"debian login:")
         self.assertIsNone(proof.failure)
         self.assertTrue(proof.go_received)
         self.assertTrue(proof.login)
+
+    def test_real_product_c1_qemu_artifact_ready_on_onlcr_uart(self):
+        # Run 42563223182 reached /init and emitted READY with CRLF. The
+        # former exact-LF parser never acknowledged it or transmitted GO.
+        proof = module.C1Proof()
+        proof.observe(b"[    0.332309] Run /init as init process\r\n")
+        proof.observe(b"AETHERCORE_C1_READY rootfs_unmounted=1\r\n")
+        self.assertTrue(proof.ready)
+        self.assertFalse(proof.go_sent)
+        self.assertIsNone(proof.failure)
 
     def test_host_go_must_be_acknowledged_by_guest_before_mount(self):
         proof = module.C1Proof()
