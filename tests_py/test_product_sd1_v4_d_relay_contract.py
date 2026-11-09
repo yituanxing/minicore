@@ -12,7 +12,9 @@ class ProductSd1V4DRelayContract(unittest.TestCase):
     def test_exact_c_terminal_identity_and_debian_no_pass_boundary(self):
         text = WORKFLOW.read_text()
         for clause in (
-            "product-sd1-v4-reviewed-8612-to-8712-five-stages",
+            "product-sd1-v4-reviewed-8612-to-8712-five-stages-v2",
+            "V4_D_SOURCE_SHA: 0e2cfa15db4e129fc9b9dd2fb0e5d1d726458f8a",
+            "AETHERCORE_SD1_V4_POSTCROSS_PROFILE: D",
             "C_RUN: '42549868862'",
             "C_HEAD: b410cae45bf924256ffcdffe3e54e76fbca8f155",
             "C_8612_ID: '13644949634'",

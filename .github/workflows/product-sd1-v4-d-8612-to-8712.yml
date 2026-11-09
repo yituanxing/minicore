@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.repository == 'yituanxing/minicore' &&
       github.event.action == 'labeled' &&
-      github.event.label.name == 'product-sd1-v4-reviewed-8612-to-8712-five-stages' &&
+      github.event.label.name == 'product-sd1-v4-reviewed-8612-to-8712-five-stages-v2' &&
       github.event.pull_request.number == 379 &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == github.event.repository.default_branch &&
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 165
     env:
       GH_TOKEN: ${{ github.token }}
-      V4_D_SOURCE_SHA: 47469a1f7aa9862ecc440e6e1d1dee9c13b740c0
+      V4_D_SOURCE_SHA: 0e2cfa15db4e129fc9b9dd2fb0e5d1d726458f8a
       V4_QUAL_RUN: '42545549282'
       V4_QUAL_HEAD: fed99c48bd48d55e5c3c88735957469fc05633e3
       V4_QUAL_ID: '13642643665'
@@ -42,6 +42,7 @@ jobs:
       AETHERCORE_SD1_V4_D_8612_CARD_SHA: 9bc9d9fab00a3daf605da5416d99367ef85ee9295a94716e3a98a36411c5a4a3
       AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA: ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
       AETHERCORE_SD1_V4_CATCHUP_EXECUTE: REVIEWED_V4_8292M_20M_EXACT_DIFF_AND_SOURCE_SHA_AUDITED
+      AETHERCORE_SD1_V4_POSTCROSS_PROFILE: D
       AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B
       AETHERCORE_VERILATOR_VERSION: '5.054'
       SIM_SETTLE_MODE: reference
