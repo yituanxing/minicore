@@ -7,6 +7,7 @@
 #include "VAetherCoreProductDebianSdRV64SimTop.h"
 #include "l32_opensbi_runtime.h"
 #include "l32_sd_spi_card.h"
+#include "product_sd1_cursor_query_reply.h"
 #include "verilated.h"
 #include "verilated_save.h"
 
@@ -38,6 +39,28 @@ constexpr std::uint64_t kVersion = 1;
 // Exactly the frozen signed-Debian polling runner, not an arbitrary older top.
 constexpr std::string_view kFrozenPollingModel =
     "5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc";
+// The only permitted source model for the isolated 7892M Host-only migration.
+constexpr std::string_view kFrozenMigratedV1Model =
+    "b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461";
+// Qualified Host-v2 executable from real 7892M->7912M 20M byte-equivalence.
+// The following v3 migration is deliberately scoped to the C 8072M source.
+constexpr std::string_view kFrozenMigratedV2Model =
+    "c47f6d16aab24bf83df9f4baab2b3cbbe19ced7bc3f42c1ffa96c5f35530aa70";
+// Exact qualified 8.5B Host-v3 executable; source of the isolated v4 relay.
+constexpr std::string_view kFrozenMigratedV3Model =
+    "04e671f2dfae8aa6d7c5b17a93c688cb7b30005de9a2a329f983b909f4fa1be6";
+// Exact qualified 10B Host-v4 executable. Host-v5 preserves its frozen RTL.
+constexpr std::string_view kFrozenMigratedV4Model =
+    "ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a";
+constexpr std::uint64_t kV2MigrationSourceCycles = 7892000000ULL;
+constexpr std::uint64_t kV2MigratedMaxCycles = 8100000000ULL;
+constexpr std::uint64_t kV3MigrationSourceCycles = 8072000000ULL;
+constexpr std::uint64_t kV3MigratedMaxCycles = 8500000000ULL;
+constexpr std::uint64_t kV4MigrationSourceCycles = 8272000000ULL;
+constexpr std::uint64_t kV4MigratedMaxCycles = 10000000000ULL;
+constexpr std::uint64_t kV5QualificationSourceCycles = 9972000000ULL;
+constexpr std::uint64_t kV5MigrationSourceCycles = 9992000000ULL;
+constexpr std::uint64_t kV5MigratedMaxCycles = 15000000000ULL;
 constexpr std::uint64_t kFnv = 14695981039346656037ULL;
 constexpr std::uint64_t kPrime = 1099511628211ULL;
 constexpr std::uint64_t kDtbAddress = 0x87f00000ULL;
@@ -153,6 +176,23 @@ struct Observer {
   std::array<std::uint64_t, kRecent> recentPcs{};
   std::uint64_t recentCount=0, recentIndex=0;
 };
+
+// Host-v5 cursor replies must remain compatible with every existing v4 O
+// checkpoint: its UART Policy is EMPTY, and these three observer words are
+// idle/zero under that policy.  Reuse them rather than enlarging AETSDCP1 or
+// changing the Policy identity; all other bytes remain comparable to v4.
+bool v5CursorMode(const Policy& policy) {
+  return policy.uartTrigger.empty() && policy.uartInput.empty() &&
+         policy.postInputBudget==0;
+}
+aethercore::sd1::CursorQueryReply savedCursor(const Observer& o) {
+  return {o.seipAtInputStart,o.inputCompleteCycle,o.postInputDeadline};
+}
+void storeCursor(Observer& o,const aethercore::sd1::CursorQueryReply& cursor) {
+  o.seipAtInputStart=cursor.observedQueries;
+  o.inputCompleteCycle=cursor.acceptedBytes;
+  o.postInputDeadline=cursor.matchedPrefix;
+}
 void requireC1Ready(const Observer& o) {
   if (o.uart.find(kC1Ready) == std::string::npos ||
       o.uart.find(kC1MountBegin) != std::string::npos ||
@@ -281,6 +321,9 @@ void readHost(const std::string& path, const Identity& id, const Policy& policy,
     throw std::runtime_error("SD1 DDR dataWait configuration changed");
   if (ctx.time()!=0) throw std::runtime_error("SD1 restore needs a fresh RTL context");
   o=readObserver(is);
+  if (v5CursorMode(policy) &&
+      (o.inputStarted || o.inputIndex || !savedCursor(o).valid()))
+    throw std::runtime_error("invalid v5 cursor-response checkpoint overlay");
   transport.dataWait.active=getBool(is);
   transport.dataWait.qualificationPrinted=getBool(is);
   transport.dataWait.remaining=get32(is);
@@ -431,12 +474,18 @@ void observe(Top& top, Observer& o, const Policy& policy,
                    static_cast<std::uint64_t>(top.io_exitCode)}) mix(o.traceHash,n);
   }
   if (accepted) {
-    ++o.inputIndex;
-    if (o.inputIndex==policy.uartInput.size()) {
-      o.inputCompleteCycle=index;
-      if (policy.postInputBudget) {
-        o.deadlineArmed=true;
-        o.postInputDeadline=index+policy.postInputBudget;
+    if (v5CursorMode(policy)) {
+      auto cursor=savedCursor(o);
+      cursor.accepted();
+      storeCursor(o,cursor);
+    } else {
+      ++o.inputIndex;
+      if (o.inputIndex==policy.uartInput.size()) {
+        o.inputCompleteCycle=index;
+        if (policy.postInputBudget) {
+          o.deadlineArmed=true;
+          o.postInputDeadline=index+policy.postInputBudget;
+        }
       }
     }
   }
@@ -453,6 +502,13 @@ void observe(Top& top, Observer& o, const Policy& policy,
       if (ch=='\n') std::cout.flush();
     }
     o.sawOpenSbiBanner|=endsWith(o.uart,"OpenSBI v1.6");
+    if (v5CursorMode(policy)) {
+      const bool nativeInit=o.uart.find("Run /sbin/init as init process")!=
+          std::string::npos;
+      auto cursor=savedCursor(o);
+      cursor.observeGuestTx(ch,nativeInit,o.sawLogin);
+      storeCursor(o,cursor);
+    }
     if (!o.inputStarted && !policy.uartInput.empty() &&
         endsWith(o.uart,policy.uartTrigger)) {
       o.inputStarted=true;
@@ -506,8 +562,12 @@ void observe(Top& top, Observer& o, const Policy& policy,
 void oneCycle(Top& top, VerilatedContext& ctx, Memory& mem,
               TransportRuntimeState& transport, SdSpiCard& card,
               Observer& obs, const Policy& policy, bool trace, bool emitUart) {
-  const bool inject=obs.inputStarted && obs.inputIndex<policy.uartInput.size();
-  const auto ch=inject ? static_cast<std::uint8_t>(policy.uartInput[obs.inputIndex]) : 0;
+  const bool cursorMode=v5CursorMode(policy);
+  const auto cursor=savedCursor(obs);
+  const bool inject=cursorMode ? cursor.pending() :
+      (obs.inputStarted && obs.inputIndex<policy.uartInput.size());
+  const auto ch=inject ? (cursorMode ? cursor.nextByte() :
+      static_cast<std::uint8_t>(policy.uartInput[obs.inputIndex])) : 0;
   // Pin ordering exactly matches the official SD1 Product host. Never call
   // card.observe() again for the cycle restored from disk.
   top.io_spiMiso=card.miso()?1:0;
@@ -546,21 +606,25 @@ void result(const Observer& o, const VerilatedContext& ctx, const Memory& mem,
 int main(int argc,char** argv) {
   try {
     if (argc<14)
-      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release|migrate-v1 FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migrate-v1 OLD_EXEC DEST_PREFIX]");
+      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release|migrate-v1|migrate-v2-8b|migrate-v3-8p5b|migrate-v4-10b|migrate-v5-15b FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migration OLD_EXEC DEST_PREFIX]");
     const std::string mode=argv[1],fw=argv[2],dtb=argv[3],sd=argv[4],prefix=argv[5];
     const Identity id{argv[6],argv[7],argv[8],argv[9],argv[10],argv[11]};
     id.validate();
     const bool c1Save=mode=="c1-save", c1Advance=mode=="c1-advance",
                c1Release=mode=="c1-release";
     const bool c1Mode=c1Save || c1Advance || c1Release;
-    const bool migrating=mode=="migrate-v1";
+    const bool migratingV2=mode=="migrate-v2-8b";
+    const bool migratingV3=mode=="migrate-v3-8p5b";
+    const bool migratingV4=mode=="migrate-v4-10b";
+    const bool migratingV5=mode=="migrate-v5-15b";
+    const bool migrating=mode=="migrate-v1" || migratingV2 || migratingV3 || migratingV4 || migratingV5;
     if (mode!="save" && mode!="snapshot" && mode!="restore" && mode!="advance" &&
         !c1Mode && !migrating)
       throw std::runtime_error("invalid SD1 checkpoint mode");
     const bool advancing=mode=="advance" || c1Advance;
     if (migrating) {
       if (argc!=16)
-        throw std::runtime_error("migrate-v1 needs exactly OLD_EXEC and distinct DEST_PREFIX");
+        throw std::runtime_error("model migration needs exactly OLD_EXEC and distinct DEST_PREFIX");
     } else if (c1Mode) {
       if (argc!=(c1Save?14:(c1Advance?15:18)))
         throw std::runtime_error("C1 needs exact c1-save / c1-advance DEST / c1-release NEW_SD NEW_SHA NEW_ROOTFS_SHA DEST argument count");
@@ -603,9 +667,25 @@ int main(int argc,char** argv) {
         std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY";
     const bool migratedRelay=relayConfirm &&
         std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V2_MIGRATED";
-    const std::uint64_t defaultMaxCycle=migratedRelay?8000000000ULL:
+    const bool migratedRelayV2=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V3_MIGRATED_8P1B";
+    const bool migratedRelayV3=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V4_MIGRATED_8P5B";
+    const bool migratedRelayV4=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B";
+    const bool migratedRelayV5=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V6_MIGRATED_15B";
+    const std::uint64_t defaultMaxCycle=migratedRelayV5?kV5MigratedMaxCycles:
+        migratedRelayV4?kV4MigratedMaxCycles:
+        migratedRelayV3?kV3MigratedMaxCycles:
+        migratedRelayV2?kV2MigratedMaxCycles:
+        migratedRelay?8000000000ULL:
         (longRelay?4000000000ULL:1800000000ULL);
-    const std::uint64_t maxCycle=(c1Mode || migrating)?4000000000ULL:defaultMaxCycle;
+    const std::uint64_t maxCycle=migratingV5?kV5MigratedMaxCycles:
+        migratingV4?kV4MigratedMaxCycles:
+        migratingV3?kV3MigratedMaxCycles:
+        migratingV2?kV2MigratedMaxCycles:
+        (c1Mode || migrating)?4000000000ULL:defaultMaxCycle;
     if (bootCycles<1000000 || bootCycles>maxCycle ||
         ((mode=="save" || mode=="snapshot" || c1Save) && bootCycles>20000000) ||
         (migrating ? replayCycles!=0 :
@@ -613,7 +693,7 @@ int main(int argc,char** argv) {
         ((advancing || c1Release) && bootCycles>maxCycle-replayCycles) ||
         policy.uartTrigger.size()>128 || policy.uartInput.size()>4096 ||
         policy.postInputBudget>5000000)
-      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default, signed relay <=4B, migrated signed relay <=8B, migrate-v1 zero cycles");
+      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default, signed relay <=4B, migrated v1 <=8B, explicit v2 <=8.1B, explicit v3 <=8.5B, explicit v4 <=10B, explicit v5 <=15B, migration zero cycles");
     if (!std::filesystem::is_regular_file(fw) ||
         !std::filesystem::is_regular_file(dtb) ||
         !std::filesystem::is_regular_file(sd) ||
@@ -633,12 +713,34 @@ int main(int argc,char** argv) {
         throw std::runtime_error("SD1 real executable/firmware/DTB/SD bytes changed");
     if (migrating) {
       const char* confirm=std::getenv("AETHERCORE_SD1_MODEL_MIGRATE_CONFIRM");
-      if (!(confirm && std::string_view(confirm)=="FROZEN_SIGNED_SD1_MODEL_MIGRATE_V1"))
-        throw std::runtime_error("migrate-v1 requires explicit frozen-model confirmation");
-      if (id.model!=kFrozenPollingModel || currentModelSha==id.model ||
+       const std::string_view sourceModel=migratingV5?
+           kFrozenMigratedV4Model:migratingV4?
+           kFrozenMigratedV3Model:migratingV3?
+          kFrozenMigratedV2Model:(migratingV2?kFrozenMigratedV1Model:kFrozenPollingModel);
+       const std::string_view confirmation=migratingV5?
+           (bootCycles==kV5QualificationSourceCycles?
+            "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V5_15B_DIFF_9972M":
+            "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V5_15B_9992M"):migratingV4?
+           "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V4_10B_8272M":migratingV3?
+          "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V3_8P5B_8072M":
+          (migratingV2?"FROZEN_SIGNED_SD1_MODEL_MIGRATE_V2_8B_7892M":
+                       "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V1");
+      if (!(confirm && std::string_view(confirm)==confirmation))
+         throw std::runtime_error(migratingV5?
+             "migrate-v5-15b requires exact 9972M differential or 9992M terminal confirmation":migratingV4?
+             "migrate-v4-10b requires exact E 8272M confirmation":migratingV3?
+            "migrate-v3-8p5b requires exact C 8072M confirmation":migratingV2?
+            "migrate-v2-8b requires exact 7892M confirmation":
+            "migrate-v1 requires explicit frozen-model confirmation");
+      if (id.model!=sourceModel || currentModelSha==id.model ||
           !std::filesystem::is_regular_file(argv[14]) ||
           std::filesystem::is_symlink(argv[14]) || shaFile(argv[14])!=id.model)
-        throw std::runtime_error("migrate-v1 requires the real frozen polling executable");
+         throw std::runtime_error(migratingV5?
+             "migrate-v5-15b requires exact qualified Host-v4 source executable":migratingV4?
+             "migrate-v4-10b requires exact qualified Host-v3 source executable":migratingV3?
+            "migrate-v3-8p5b requires qualified Host-v2 source executable":migratingV2?
+            "migrate-v2-8b requires exact qualified migrated-v1 source executable":
+            "migrate-v1 requires the real frozen polling executable");
       const std::filesystem::path sourcePrefix(prefix),destPrefix(argv[15]);
       if (sourcePrefix.filename()!="persistent" || destPrefix.filename()!="persistent" ||
           std::filesystem::absolute(sourcePrefix).lexically_normal()==
@@ -647,13 +749,54 @@ int main(int argc,char** argv) {
           std::filesystem::exists(std::string(argv[15])+".pre.host") ||
           std::filesystem::exists(std::string(argv[15])+".pre.rtl"))
         throw std::runtime_error("migrate-v1 requires distinct, absent destination directory");
-      const auto ready=sourcePrefix.parent_path()/".polling-ready";
+      const auto ready=sourcePrefix.parent_path()/
+           ((migratingV2 || migratingV3 || migratingV4 || migratingV5)?".migration-ready":".polling-ready");
       if (std::filesystem::is_symlink(ready) ||
           pollingReadyField(ready,"schema")!="AETSDCP1" ||
           pollingReadyField(ready,"qualification")!=
-            "PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS" ||
+             ((migratingV2 || migratingV3 || migratingV4 || migratingV5)?"PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS":
+                         "PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS") ||
           pollingReadyField(ready,"boot_cycles")!=std::to_string(bootCycles))
-        throw std::runtime_error("migrate-v1 requires authentic bounded polling source");
+         throw std::runtime_error(migratingV5?
+             "migrate-v5-15b requires authenticated O 9972M/9992M source":migratingV4?
+             "migrate-v4-10b requires authenticated E 8272M source":migratingV3?
+            "migrate-v3-8p5b requires authenticated C 8072M source":migratingV2?
+            "migrate-v2-8b requires authenticated migrated 7892M source":
+            "migrate-v1 requires authentic bounded polling source");
+      if (migratingV2 &&
+          (bootCycles!=kV2MigrationSourceCycles ||
+           sourcePrefix.parent_path().filename()!="7892m" ||
+           pollingReadyField(ready,"original_model_sha256")!=kFrozenPollingModel))
+        throw std::runtime_error("migrate-v2-8b 7892M origin/lineage mismatch");
+      if (migratingV3 &&
+          (bootCycles!=kV3MigrationSourceCycles ||
+           sourcePrefix.parent_path().filename()!="8072m" ||
+           pollingReadyField(ready,"source_cycles")!="8052000000" ||
+           pollingReadyField(ready,"previous_model_sha256")!=kFrozenMigratedV1Model ||
+           pollingReadyField(ready,"original_model_sha256")!=kFrozenPollingModel ||
+           pollingReadyField(ready,"debian_login_claim")!="0"))
+        throw std::runtime_error("migrate-v3-8p5b 8072M origin/lineage mismatch");
+      if (migratingV4 &&
+          (bootCycles!=kV4MigrationSourceCycles ||
+           sourcePrefix.parent_path().filename()!="8272m" ||
+           pollingReadyField(ready,"source_cycles")!="8252000000" ||
+           pollingReadyField(ready,"previous_model_sha256")!=kFrozenMigratedV2Model ||
+           pollingReadyField(ready,"original_model_sha256")!=kFrozenPollingModel ||
+           pollingReadyField(ready,"debian_login_claim")!="0"))
+        throw std::runtime_error("migrate-v4-10b 8272M origin/lineage mismatch");
+      if (migratingV5 &&
+          !((bootCycles==kV5QualificationSourceCycles &&
+             sourcePrefix.parent_path().filename()=="9972m" &&
+             pollingReadyField(ready,"source_cycles")=="9952000000") ||
+            (bootCycles==kV5MigrationSourceCycles &&
+             sourcePrefix.parent_path().filename()=="9992m" &&
+             pollingReadyField(ready,"source_cycles")=="9972000000")))
+        throw std::runtime_error("migrate-v5-15b exact 9972M/9992M origin mismatch");
+      if (migratingV5 &&
+          (pollingReadyField(ready,"previous_model_sha256")!=kFrozenMigratedV3Model ||
+           pollingReadyField(ready,"original_model_sha256")!=kFrozenPollingModel ||
+           pollingReadyField(ready,"debian_login_claim")!="0"))
+        throw std::runtime_error("migrate-v5-15b historical signed lineage mismatch");
       for (const auto& [key,sha] : {
           std::pair<std::string_view,std::string_view>{"model_sha256",id.model},
           {"firmware_sha256",id.firmware},{"dtb_sha256",id.dtb},
@@ -706,7 +849,11 @@ int main(int argc,char** argv) {
       // Create a private sibling directory, verify the entire frozen state,
       // then atomically publish the *directory*. No partial valid destination
       // becomes visible even if a process is killed between Host/RTL writes.
-      const std::string pattern=targetDir.string()+".migrate-v1.XXXXXX";
+      const std::string pattern=targetDir.string()+
+           (migratingV5?".migrate-v5-15b.XXXXXX":
+            migratingV4?".migrate-v4-10b.XXXXXX":
+            migratingV3?".migrate-v3-8p5b.XXXXXX":
+           migratingV2?".migrate-v2-8b.XXXXXX":".migrate-v1.XXXXXX");
       std::vector<char> pathTemplate(pattern.begin(),pattern.end());
       pathTemplate.push_back('\0');
       if (!::mkdtemp(pathTemplate.data()))
@@ -726,7 +873,11 @@ int main(int argc,char** argv) {
         std::filesystem::remove_all(stagingDir,ignored);
         throw;
       }
-      std::cout<<"PRODUCT_SD1_MODEL_MIGRATE_V1_ZERO_STEP_PASS"
+       std::cout<<(migratingV5?"PRODUCT_SD1_MODEL_MIGRATE_V5_15B_ZERO_STEP_PASS":
+                  migratingV4?"PRODUCT_SD1_MODEL_MIGRATE_V4_10B_ZERO_STEP_PASS":
+                  migratingV3?"PRODUCT_SD1_MODEL_MIGRATE_V3_8P5B_ZERO_STEP_PASS":
+                 migratingV2?"PRODUCT_SD1_MODEL_MIGRATE_V2_8B_ZERO_STEP_PASS":
+                             "PRODUCT_SD1_MODEL_MIGRATE_V1_ZERO_STEP_PASS")
                <<" cycles="<<obs.cycles<<" source_model_sha256="<<id.model
                <<" destination_model_sha256="<<nextId.model
                <<" full_host_except_model_sha_identical=1"
