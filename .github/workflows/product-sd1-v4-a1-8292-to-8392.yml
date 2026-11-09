@@ -1,6 +1,6 @@
 name: Reviewed SD1 Host-v4 A1 real RTL 8292M to 8392M catch-up
 
-# Reviewed isolated Host-v4 A1 true RTL 5-stage catch-up with exact pinned source and qualification.
+# Reviewed source-locked Host-v4 A1 true RTL 5-stage catch-up, CI-negative tests isolated.
 on:
   pull_request:
     types: [labeled]
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 155
     env:
       GH_TOKEN: ${{ github.token }}
-      V4_CATCHUP_SOURCE_SHA: b0d0badd71cad8a9d347b924a74f8002ae405681
+      V4_CATCHUP_SOURCE_SHA: 729a14482993cc101ec91d25b7017846b0e9be93
       V4_QUAL_RUN: '42545549282'
       V4_QUAL_HEAD: fed99c48bd48d55e5c3c88735957469fc05633e3
       V4_QUAL_ID: '13642643665'
