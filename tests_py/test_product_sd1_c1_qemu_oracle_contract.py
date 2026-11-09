@@ -60,11 +60,23 @@ class C1QemuOracleContract(unittest.TestCase):
         self.assertTrue(proof.ready)
         self.assertFalse(proof.mount_started)
         proof.go_sent = True
-        for part in (module.MOUNT_BEGIN, module.MOUNT_OK,
+        for part in (module.GO_RECEIVED, module.MOUNT_BEGIN, module.MOUNT_OK,
                      module.NATIVE_EXEC, b"debian login:"):
             proof.observe(part)
         self.assertIsNone(proof.failure)
+        self.assertTrue(proof.go_received)
         self.assertTrue(proof.login)
+
+    def test_host_go_must_be_acknowledged_by_guest_before_mount(self):
+        proof = module.C1Proof()
+        proof.observe(module.READY)
+        proof.go_sent = True
+        proof.observe(module.MOUNT_BEGIN)
+        self.assertIn("without READY and guest GO receipt", proof.failure)
+        proof = module.C1Proof()
+        proof.observe(module.READY)
+        proof.observe(module.GO_RECEIVED)
+        self.assertIn("before host C1 GO", proof.failure)
 
     def test_pre_go_rootfs_mount_rejected(self):
         proof = module.C1Proof()
