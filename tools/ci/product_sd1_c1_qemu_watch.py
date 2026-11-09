@@ -23,6 +23,7 @@ MOUNT_BEGIN = b"AETHERCORE_C1_ROOTFS_MOUNT_BEGIN\n"
 MOUNT_OK = b"AETHERCORE_C1_ROOTFS_MOUNT_OK\n"
 NATIVE_EXEC = b"AETHERCORE_C1_NATIVE_INIT_EXEC\n"
 RELEASE = b"AETHERCORE_C1_GO\n"
+GO_RECEIVED = b"AETHERCORE_C1_GO_RECEIVED\n"
 LOGIN = re.compile(rb"(?:^|[\r\n\s])(?:[^\r\n\s]+\s+)?login:\s*$")
 FAILURE = (
     b"AETHERCORE_C1_FAIL stage=", b"Kernel panic - not syncing",
@@ -36,6 +37,7 @@ class C1Proof:
         self.trace = b""
         self.ready = False
         self.go_sent = False
+        self.go_received = False
         self.mount_started = False
         self.mount_done = False
         self.native_exec = False
@@ -54,15 +56,19 @@ class C1Proof:
                 return
             self.ready = READY in self.trace
         if not self.go_sent:
-            if MOUNT_BEGIN in self.trace or MOUNT_OK in self.trace:
-                self.failure = "rootfs consumed before host C1 GO"
+            if GO_RECEIVED in self.trace or MOUNT_BEGIN in self.trace or MOUNT_OK in self.trace:
+                self.failure = "guest released rootfs before host C1 GO"
             return
+        received_at = self.trace.find(GO_RECEIVED)
         begin_at = self.trace.find(MOUNT_BEGIN)
         mounted_at = self.trace.find(MOUNT_OK)
         exec_at = self.trace.find(NATIVE_EXEC)
+        if received_at >= 0:
+            self.go_received = True
         if begin_at >= 0:
-            if not self.ready:
-                self.failure = "C1 rootfs mount without READY"
+            if not self.ready or not self.go_received or (
+                    received_at >= 0 and received_at > begin_at):
+                self.failure = "C1 rootfs mount without READY and guest GO receipt"
                 return
             self.mount_started = True
         if mounted_at >= 0:
@@ -172,7 +178,7 @@ def run(args: argparse.Namespace) -> None:
                         process.kill()
                         process.wait(timeout=5)
 
-    if not all((proof.ready, proof.go_sent, proof.mount_started,
+    if not all((proof.ready, proof.go_sent, proof.go_received, proof.mount_started,
                 proof.mount_done, proof.native_exec, proof.login)):
         raise ValueError("incomplete C1 rootfs handoff evidence")
     elapsed = time.monotonic() - started
@@ -183,6 +189,7 @@ def run(args: argparse.Namespace) -> None:
             "before_release=rootfs_unmounted\n"
             "root_device=/dev/vda1\n"
             "release=AETHERCORE_C1_GO\n"
+            "guest_go_receipt=AETHERCORE_C1_GO_RECEIVED\n"
             "native_pid1=/sbin/init\n"
             "login_prompt=OBSERVED_NOT_AUTHENTICATED\n"
             f"elapsed_seconds={elapsed:.3f}\n"

@@ -14,9 +14,19 @@ class ProductSd1C1GuestInitContract(unittest.TestCase):
     def test_guest_pause_is_before_root_mount_and_native_exec(self):
         text = SOURCE.read_text()
         ready = text.index('say("AETHERCORE_C1_READY rootfs_unmounted=1')
+        tty_open = text.index('open("/dev/ttyS0"')
+        tty_raw = text.index('tcsetattr(input_fd, TCSANOW, &raw)')
+        tty_blocking = text.index('fcntl(input_fd, F_SETFL, flags & ~O_NONBLOCK)')
+        tty_read = text.index('read(input_fd, &byte, 1)')
         release = text.index("wait_for_release();", ready)
         mount = text.index('mount(root_device, "/newroot", "ext4"', ready)
         exec_native = text.index('execve("/sbin/init"', ready)
+        # The first host-observed READY must guarantee that receiving GO is
+        # already armed. Otherwise host UART send can outrun guest termios.
+        self.assertLess(tty_open, tty_raw)
+        self.assertLess(tty_raw, tty_blocking)
+        self.assertLess(tty_blocking, ready)
+        self.assertLess(ready, tty_read)
         self.assertLess(ready, release)
         self.assertLess(release, mount)
         self.assertLess(mount, exec_native)
