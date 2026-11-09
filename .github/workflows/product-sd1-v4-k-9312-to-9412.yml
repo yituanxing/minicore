@@ -1,0 +1,295 @@
+name: Reviewed SD1 Host-v4 K real RTL 9312M to 9412M five 20M postcross
+
+# REVIEWED source-pinned K: J9312 checkpoint and Host/RTL/card SHA independently verified.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-host-v4-K-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  v4_postcross_five_true_rtl_stages_k:
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'product-sd1-v4-reviewed-9312-to-9412-five-stages' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 165
+    env:
+      GH_TOKEN: ${{ github.token }}
+      V4_K_SOURCE_SHA: 62c12230d09d69d99f6a57a75326c37b931941ee
+      V4_QUAL_RUN: '42545549282'
+      V4_QUAL_HEAD: fed99c48bd48d55e5c3c88735957469fc05633e3
+      V4_QUAL_ID: '13642643665'
+      V4_QUAL_ZIP: 256746ebcf7d40861fd671bf9df17d9136884fc08719861c469308ddc7b29377
+      V4_QUAL_MANIFEST: 2b82759d2dab4abe1ae213d682338c5238a0e8abf828562455036e7f7554a833
+      J_RUN: '42571103240'
+      J_HEAD: b95bc0a514fcaba79baa64e35d59e88e7b877455
+      J_9312_ID: '13653727601'
+      J_9312_ZIP: f89458a9d16e0d5628d0837d5878e1dc843db54ba718f49c743fc7ade29d4472
+      AETHERCORE_SD1_V4_K_9312_HOST_SHA: 234643cabd52aabe1f384803d656e3da802b161457659bd277c2a1e9afe64d1e
+      AETHERCORE_SD1_V4_K_9312_RTL_SHA: caea92947f481cc44fad1e1d9e789d515a704be32a2ed1c1bda7aa0572b9fe64
+      AETHERCORE_SD1_V4_K_9312_CARD_SHA: 7ab24c220ba2321694ba292fdb10017112ea51cfde1f322a0583bfc0eb6d8828
+      AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA: ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
+      AETHERCORE_SD1_V4_CATCHUP_EXECUTE: REVIEWED_V4_8292M_20M_EXACT_DIFF_AND_SOURCE_SHA_AUDITED
+      AETHERCORE_SD1_V4_POSTCROSS_PROFILE: K
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      OUT: build/product-sd1-migrated-v4-10b-postcross-k
+    steps:
+      - name: Fail closed until all five J RTL stages and exact J 9312M input are reviewed
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$V4_K_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+             "$J_RUN" =~ ^[0-9]{10,13}$ && "$J_HEAD" =~ ^[a-f0-9]{40}$ &&
+             "$J_9312_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
+          for sha in "$J_9312_ZIP" "$AETHERCORE_SD1_V4_K_9312_HOST_SHA" \
+            "$AETHERCORE_SD1_V4_K_9312_RTL_SHA" "$AETHERCORE_SD1_V4_K_9312_CARD_SHA" \
+            "$V4_QUAL_ZIP" "$V4_QUAL_MANIFEST" "$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA"; do
+            [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          done
+      - name: Authenticate full J 9212M to 9312M real RTL source and artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$V4_QUAL_RUN" > "$RUNNER_TEMP/v4-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$J_RUN" > "$RUNNER_TEMP/j-run.json"
+          jq -e --argjson id "$V4_QUAL_RUN" --arg head "$V4_QUAL_HEAD" '
+            .id==$id and .head_sha==$head and .run_attempt==1 and
+            .status=="completed" and .conclusion=="success" and
+            .path==".github/workflows/product-sd1-v4-8272-to-8292-qualification.yml"
+          ' "$RUNNER_TEMP/v4-run.json"
+          jq -e --argjson id "$J_RUN" --arg head "$J_HEAD" '
+            .id==$id and .head_sha==$head and .run_attempt==1 and
+            .status=="completed" and .conclusion=="success" and .event=="pull_request" and
+            .head_branch=="design/rv64gc-product-architecture-20261103" and
+            .path==".github/workflows/product-sd1-v4-j-9212-to-9312.yml"
+          ' "$RUNNER_TEMP/j-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$J_RUN/jobs?per_page=100" > "$RUNNER_TEMP/j-jobs.json"
+          jq -e '[.jobs[]|select(.name=="v4_postcross_five_true_rtl_stages_j" and
+            .status=="completed" and .conclusion=="success" and
+            ([.steps[]|select(.name=="Verify five complete v4 postcross real RTL checkpoints, no Debian PASS" and
+              .status=="completed" and .conclusion=="success")]|length==1))]|length==1' "$RUNNER_TEMP/j-jobs.json"
+          prev=9212
+          for m in 9232 9252 9272 9292 9312; do
+            jq -e --arg advance "Advance genuine v4 Product RTL ${prev}M to ${m}M postcross" \
+              --arg upload "Upload complete v4 ${m}M before any further guest RTL cycle" '
+              [.jobs[]|select(.name=="v4_postcross_five_true_rtl_stages_j" and
+                ([.steps[]|select(.name==$advance and .status=="completed" and .conclusion=="success")]|length==1) and
+                ([.steps[]|select(.name==$upload and .status=="completed" and .conclusion=="success")]|length==1))]|length==1
+            ' "$RUNNER_TEMP/j-jobs.json"
+            prev="$m"
+          done
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V4_QUAL_ID" > "$RUNNER_TEMP/v4-art.json"
+          jq -e --argjson id "$V4_QUAL_ID" --argjson run "$V4_QUAL_RUN" \
+            --arg name "product-sd1-model-migrate-v4-qual-8272-8292-$V4_QUAL_RUN" \
+            --arg digest "sha256:$V4_QUAL_ZIP" '
+            .id==$id and .workflow_run.id==$run and .name==$name and
+            .digest==$digest and .expired==false and .size_in_bytes>1000000
+          ' "$RUNNER_TEMP/v4-art.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$J_9312_ID" > "$RUNNER_TEMP/j-9312-art.json"
+          jq -e --argjson id "$J_9312_ID" --argjson run "$J_RUN" \
+            --arg name "product-sd1-migrated-v4-j-9312m-$J_RUN" \
+            --arg digest "sha256:$J_9312_ZIP" '
+            .id==$id and .workflow_run.id==$run and .name==$name and
+            .digest==$digest and .expired==false and .size_in_bytes>1000000
+          ' "$RUNNER_TEMP/j-9312-art.json"
+      - name: Checkout source-pinned reviewed v4 K postcross experiment
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V4_K_SOURCE_SHA }}
+          persist-credentials: false
+      - name: Static validation and zero-cycle plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V4_K_SOURCE_SHA" ]] || exit 16
+          bash -n tools/ci/product_sd1_migrated_v4_postcross_20m.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -q \
+            tests_py.test_product_sd1_migrated_v4_postcross_static \
+            tests_py.test_product_sd1_v4_e_executor_static \
+            tests_py.test_product_sd1_v4_f_executor_static \
+            tests_py.test_product_sd1_v4_g_executor_static \
+            tests_py.test_product_sd1_v4_h_executor_static \
+            tests_py.test_product_sd1_v4_i_executor_static \
+            tests_py.test_product_sd1_v4_j_executor_static \
+            tests_py.test_product_sd1_v4_k_executor_static
+          bash tools/ci/product_sd1_migrated_v4_postcross_20m.sh --plan
+      - name: Restore signed Debian seed
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Restore GPIO-CS kernel Image
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Verify frozen signed media caches
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true &&
+            ( '${{ steps.seed.outputs.cache-hit }}' == true || '${{ steps.seed.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore frozen polling firmware and DTB
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      # All artifact ZIP downloads happen AFTER actions/checkout. Never leave checkpoint
+      # ZIPs in GITHUB_WORKSPACE across checkout (checkout cleans unknown files).
+      - name: Import v4 qualified model and exact J9312 full Host RTL card checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=build/product-sd1-model-migration-v4-10b-qualified
+          first=build/product-sd1-v4-k-source/9312m
+          [[ ! -e "$out" && ! -e "$first" ]] || exit 16
+          mkdir -p "$out" "$(dirname "$first")"
+          curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$V4_QUAL_ID/zip" -o "$RUNNER_TEMP/v4-qual.zip"
+          curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$J_9312_ID/zip" -o "$RUNNER_TEMP/j-9312.zip"
+          [[ "$(sha256sum "$RUNNER_TEMP/v4-qual.zip" | cut -d' ' -f1)" == "$V4_QUAL_ZIP" &&
+             "$(sha256sum "$RUNNER_TEMP/j-9312.zip" | cut -d' ' -f1)" == "$J_9312_ZIP" ]] || exit 16
+          unzip -qq "$RUNNER_TEMP/v4-qual.zip" -d "$out"
+          unzip -qq "$RUNNER_TEMP/j-9312.zip" -d "$first"
+          [[ "$(sha256sum "$out/qualification-manifest.txt" | cut -d' ' -f1)" == "$V4_QUAL_MANIFEST" ]] || exit 16
+          exe="$out/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop"
+          chmod 755 "$exe"
+          [[ "$(sha256sum "$exe" | cut -d' ' -f1)" == "$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA" ]] || exit 16
+          for kind in host rtl; do
+            f="$first/persistent.pre.$kind"
+            if [[ "$kind" == host ]]; then expected="$AETHERCORE_SD1_V4_K_9312_HOST_SHA"
+            else expected="$AETHERCORE_SD1_V4_K_9312_RTL_SHA"; fi
+            [[ "$(sha256sum "$f" | cut -d' ' -f1)" == "$expected" ]] || exit 16
+          done
+          [[ "$(sha256sum "$first/card-progress.json" | cut -d' ' -f1)" == "$AETHERCORE_SD1_V4_K_9312_CARD_SHA" ]] || exit 16
+          for clause in 'schema=AETSDCP1' \
+            'qualification=PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS' \
+            'boot_cycles=9312000000' 'source_cycles=9292000000' 'debian_login_claim=0' \
+            "model_sha256=$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA" \
+            "snapshot_host_sha256=$AETHERCORE_SD1_V4_K_9312_HOST_SHA" \
+            "snapshot_rtl_sha256=$AETHERCORE_SD1_V4_K_9312_RTL_SHA" \
+            "card_progress_sha256=$AETHERCORE_SD1_V4_K_9312_CARD_SHA"; do
+            grep -Fxq "$clause" "$first/.migration-ready" || exit 16
+          done
+          echo 'V4_9312M_K_POSTCROSS_INPUT_AUTHENTICATED_NO_NEW_GUEST_CLOCK'
+      - name: Advance genuine v4 Product RTL 9312M to 9332M postcross
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_postcross_20m.sh --execute-reviewed-postcross-20m "$GITHUB_WORKSPACE/build/product-sd1-v4-k-source/9312m" 9332
+      - name: Upload complete v4 9332M before any further guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-k-9332m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-postcross-k/9332m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 9332M to 9352M postcross
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_postcross_20m.sh --execute-reviewed-postcross-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-postcross-k/9332m" 9352
+      - name: Upload complete v4 9352M before any further guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-k-9352m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-postcross-k/9352m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 9352M to 9372M postcross
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_postcross_20m.sh --execute-reviewed-postcross-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-postcross-k/9352m" 9372
+      - name: Upload complete v4 9372M before any further guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-k-9372m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-postcross-k/9372m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 9372M to 9392M postcross
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_postcross_20m.sh --execute-reviewed-postcross-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-postcross-k/9372m" 9392
+      - name: Upload complete v4 9392M before any further guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-k-9392m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-postcross-k/9392m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 9392M to 9412M postcross
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_postcross_20m.sh --execute-reviewed-postcross-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-postcross-k/9392m" 9412
+      - name: Upload complete v4 9412M before any further guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-k-9412m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-postcross-k/9412m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify five complete v4 postcross real RTL checkpoints, no Debian PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          prev=9312
+          for m in 9332 9352 9372 9392 9412; do
+            d="$OUT/${m}m"
+            [[ -s "$d/.migration-ready" && -s "$d/persistent.pre.host" &&
+               -s "$d/persistent.pre.rtl" && -s "$d/card-progress.json" ]] || exit 16
+            grep -Fxq "boot_cycles=${m}000000" "$d/.migration-ready"
+            grep -Fxq "source_cycles=${prev}000000" "$d/.migration-ready"
+            grep -Fxq 'debian_login_claim=0' "$d/.migration-ready"
+            for kind in host rtl; do
+              f="$d/persistent.pre.$kind"
+              sha="$(sha256sum "$f" | cut -d' ' -f1)"
+              grep -Fxq "snapshot_${kind}_sha256=$sha" "$d/.migration-ready"
+            done
+            sha="$(sha256sum "$d/card-progress.json" | cut -d' ' -f1)"
+            grep -Fxq "card_progress_sha256=$sha" "$d/.migration-ready"
+            prev="$m"
+          done
+          echo 'PRODUCT_SD1_V4_K_REAL_RTL_9412M_POSTCROSS_SAVED_NOT_DEBIAN_PASS'
+      - name: Preserve postcross diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-v4-J-diagnostics-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-postcross-k/logs/**
+          retention-days: 90
+          if-no-files-found: warn
