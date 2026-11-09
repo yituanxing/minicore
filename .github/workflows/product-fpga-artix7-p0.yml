@@ -65,6 +65,30 @@ jobs:
           echo "Cross-run RTL cache restored: ${{ steps.rtl_cache.outputs.cache-hit }}" >> "$GITHUB_STEP_SUMMARY"
           echo 'RTL export only; no Vivado mapping, routed Fmax or DDR board pass.' >> "$GITHUB_STEP_SUMMARY"
 
+      # Validate the *actual* generated CIRCT header, not an interface stub.
+      # The result travels with the exact-SHA RTL artifact.
+      - name: Verify generated Product interface against Nexys AXI bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/product-artix7-p0"
+          python3 -m unittest tests_py.test_product_nexys_axi_port_gate -v
+          python3 tools/fpga/product_nexys_axi_port_gate.py \
+            --rtl-dir "$out/rtl" \
+            --bridge tools/fpga/aether_product_nexys_axi_bridge.sv \
+            --output "$RUNNER_TEMP/nexys-axi-port-report.json"
+          jq -e '.status == "PRODUCT_NEXYS_AXIMM_PORTS_ONLY" and
+                 .mapped_product_ports == 50 and .axi_data_bits == 64 and
+                 .axi_id_bits == 4 and .product_axi_addr_bits == 28 and
+                 .smartconnect_axi_addr_bits == 29 and
+                 .vivado_bus_inference_verified == false and
+                 .ddr_calibrated == false and .debian_login == false' \
+            "$RUNNER_TEMP/nexys-axi-port-report.json"
+          # The exact-SHA RTL cache may already contain the earlier report.
+          # Recompute each run and put the freshly checked result in the artifact.
+          cp "$RUNNER_TEMP/nexys-axi-port-report.json" "$out/nexys-axi-port-report.json"
+          echo 'Current-SHA generated Product AXI/UART/SPI port contract PASS (interface only).' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Save verified Product RTL for a later exact-SHA run
         if: steps.rtl_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4

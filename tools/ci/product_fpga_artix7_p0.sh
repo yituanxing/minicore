@@ -25,6 +25,14 @@ case "$mode" in
 esac
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# HEAD is only a meaningful source identity when every Product elaboration
+# input is committed. Check this at the *producer*, not just downstream
+# candidate/board consumers, so a dirty export cannot poison exact-SHA cache.
+if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all -- \
+  src/main build.mill mill tools/ci tools/fpga)" ]]; then
+  echo 'ERROR: Product RTL source/tooling worktree is dirty; commit before exact-SHA export' >&2
+  exit 1
+fi
 command -v jq >/dev/null || { echo 'ERROR: jq is required' >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo 'ERROR: sha256sum is required' >&2; exit 2; }
 command -v cmp >/dev/null || { echo 'ERROR: cmp is required' >&2; exit 2; }
