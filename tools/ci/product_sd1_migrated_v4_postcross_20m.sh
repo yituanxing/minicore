@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# INERT until an explicitly reviewed workflow selects C, D, E, F, G, H, I, J, K, L, M, or N. One common
+# INERT until an explicitly reviewed workflow selects C, D, E, F, G, H, I, J, K, L, M, N, or O. One common
 # executor preserves the same model/SD/RTL identity across 20M continuations.
 # Never modify the imported source or any older checkpoint artifact.
 set -euo pipefail
@@ -24,6 +24,7 @@ readonly K_FIRST="$ROOT/build/product-sd1-v4-k-source/9312m"
 readonly L_FIRST="$ROOT/build/product-sd1-v4-l-source/9412m"
 readonly M_FIRST="$ROOT/build/product-sd1-v4-m-source/9512m"
 readonly N_FIRST="$ROOT/build/product-sd1-v4-n-source/9612m"
+readonly O_FIRST="$ROOT/build/product-sd1-v4-o-source/9712m"
 readonly PROFILE="${AETHERCORE_SD1_V4_POSTCROSS_PROFILE:-C}"
 case "$PROFILE" in
   C)
@@ -122,7 +123,15 @@ case "$PROFILE" in
     readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_N_9612_RTL_SHA:-}"
     readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_N_9612_CARD_SHA:-}"
     ;;
-  *) reject 'only reviewed C, D, E, F, G, H, I, J, K, L, M, or N postcross profile is permitted' ;;
+  O)
+    readonly FIRST="$O_FIRST" FIRST_M=9712
+    readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-o"
+    readonly STAGES='9732,9752,9772,9792,9812,9832,9852,9872,9892,9912,9932,9952,9972,9992' INPUT='N-9712M'
+    readonly SOURCE_HOST_SHA="${AETHERCORE_SD1_V4_O_9712_HOST_SHA:-}"
+    readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_O_9712_RTL_SHA:-}"
+    readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_O_9712_CARD_SHA:-}"
+    ;;
+  *) reject 'only reviewed C through O postcross profiles are permitted' ;;
 esac
 readonly V4_MODEL="${AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA:-}"
 readonly EXPECTED_V4_MODEL=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
@@ -139,7 +148,7 @@ readonly ROOTFS_SHA=f2f8c6bf118c0be578b633dfd5486e0d1e1ef7becdaf093bbc4f16f62d0e
 
 if [[ "${1:---plan}" == --plan && $# -le 1 ]]; then
   printf 'PRODUCT_SD1_V4_POSTCROSS_PLAN_ONLY no_guest_cycles=1 stages=%s; input=%s\n' "$STAGES" "$INPUT"
-  printf 'All five stages remain prohibited until the full %s real RTL upload and exact Host/RTL/card SHA are independently reviewed.\n' "$INPUT"
+  printf 'All stages remain prohibited until the full %s real RTL upload and exact Host/RTL/card SHA are independently reviewed.\n' "$INPUT"
   exit 0
 fi
 [[ $# == 3 && "$1" == --execute-reviewed-postcross-20m ]] ||
@@ -182,6 +191,8 @@ case "$PROFILE" in
        reject 'only five exact 20M M stages are reviewed' ;;
   N) [[ "$TARGET_M" =~ ^(9632|9652|9672|9692|9712)$ ]] ||
        reject 'only five exact 20M N stages are reviewed' ;;
+  O) [[ "$TARGET_M" =~ ^(9732|9752|9772|9792|9812|9832|9852|9872|9892|9912|9932|9952|9972|9992)$ ]] ||
+       reject 'only fourteen exact 20M O stages are reviewed' ;;
 esac
 readonly SOURCE_M=$((TARGET_M-20))
 readonly START=$((SOURCE_M*1000000))
