@@ -88,11 +88,27 @@ make -C "$C1_SOURCE" O="$OBJ" ARCH=riscv CROSS_COMPILE="$CROSS" \
   -j"$JOBS" Image > "$BUILD/build.log" 2>&1 || fail 'C1 Linux Image build failed'
 IMAGE="$OBJ/arch/riscv/boot/Image"
 [[ -s "$IMAGE" && -s "$OBJ/vmlinux" ]] || fail 'C1 Linux image absent'
-[[ -s "$OBJ/drivers/mmc/host/mmc_spi.o" &&
-   -s "$SEED/obj/drivers/mmc/host/mmc_spi.o" ]] ||
-  fail 'C1 mmc_spi objects missing for mandatory GPIO-CS differential'
-cmp -s "$OBJ/drivers/mmc/host/mmc_spi.o" "$SEED/obj/drivers/mmc/host/mmc_spi.o" &&
-  fail 'C1 still linked unpatched mmc_spi.o; unsafe physical CMD0 preamble'
+# The sealed Debian kernel may have omitted MMC_SPI entirely, so its mmc_spi.o
+# is optional.  The *new* C1 kernel must have compiled the isolated patched
+# source, and an existing old object must never be byte-identical to it.
+verify_mmc_spi_object_provenance() {
+  local new_obj="$OBJ/drivers/mmc/host/mmc_spi.o"
+  local new_cmd="$OBJ/drivers/mmc/host/.mmc_spi.o.cmd"
+  local old_obj="$SEED/obj/drivers/mmc/host/mmc_spi.o"
+  [[ -f "$new_obj" && ! -L "$new_obj" && -s "$new_obj" &&
+     -f "$new_cmd" && ! -L "$new_cmd" && -s "$new_cmd" ]] ||
+    fail 'C1 patched mmc_spi object or Kbuild source provenance missing'
+  grep -Fq "$C1_SOURCE/drivers/mmc/host/mmc_spi.c" "$new_cmd" ||
+    fail 'C1 mmc_spi object was not compiled from the isolated patched source'
+  if [[ -e "$old_obj" || -L "$old_obj" ]]; then
+    [[ -f "$old_obj" && ! -L "$old_obj" && -s "$old_obj" ]] ||
+      fail 'sealed Debian mmc_spi baseline object is invalid'
+    if cmp -s "$new_obj" "$old_obj"; then
+      fail 'C1 still linked an unpatched mmc_spi object; unsafe physical CMD0 preamble'
+    fi
+  fi
+}
+verify_mmc_spi_object_provenance
 "${CROSS}readelf" -h "$OBJ/vmlinux" | grep -q 'Machine:[[:space:]]*RISC-V' ||
   fail 'C1 kernel must be RISC-V'
 

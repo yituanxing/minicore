@@ -124,7 +124,7 @@ jobs:
             # C1 kernel correction and its exact compatibility fingerprint.
             # In particular the regular auto label can NEVER cold-reseed.
             [[ "$RESEED_LABEL" == product-sd1-c1-reviewed-gpio-cs-reseed-20261109 &&
-               "$compatibility" == dd236539b4f9bea942353cec7e435fb84ffb6c79c1eeb02f683b0caabd91e13c &&
+               "$compatibility" == 207e79b9f198111e61c891d9a4e93169808b4f84fb651778b154d0e3eb10546f &&
                -z "$source_run" ]] || {
               echo 'C1_REVIEWED_RESEED_IDENTITY_MISMATCH: refusing unexpected cold replay' >&2
               exit 19
