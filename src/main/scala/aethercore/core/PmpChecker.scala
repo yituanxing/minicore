@@ -143,7 +143,8 @@ class PmpRangeDecoder(
 /** Per-request PMP compare/priority lane over already-decoded CSR entry geometry. */
 class PmpAccessChecker(
     val entries: Int = PmpConstants.MaxEntries,
-    val paddrBits: Int
+    val paddrBits: Int,
+    val oneHotPriorityExperiment: Boolean = false
 ) extends Module {
   require(entries > 0 && entries <= PmpConstants.MaxEntries)
   private val entryIndexBits = math.max(1, log2Ceil(entries))
@@ -184,21 +185,34 @@ class PmpAccessChecker(
     entryAllows(entry) := fullyContained && (machineBypass || permission)
   }
 
-  val matched = WireDefault(false.B)
-  val matchedEntry = WireDefault(0.U(entryIndexBits.W))
-  val allowed = WireDefault(io.privilege === PrivilegeMode.Machine.U)
+  // Keep the qualified Product implementation as the default. The opt-in
+  // one-hot network is an isolated XC7 A/B probe, not a production change:
+  // its initial standalone map used 28 more LUTs than the priority chain.
+  if (oneHotPriorityExperiment) {
+    val firstHit = PriorityEncoderOH(overlaps.asUInt)
+    val matched = firstHit.orR
+    val allowedByFirstHit = (firstHit & entryAllows.asUInt).orR
+    io.matched := matched
+    io.matchedEntry := OHToUInt(firstHit)
+    io.allow := Mux(matched, allowedByFirstHit,
+      io.privilege === PrivilegeMode.Machine.U) && !invalidRange
+  } else {
+    val matched = WireDefault(false.B)
+    val matchedEntry = WireDefault(0.U(entryIndexBits.W))
+    val allowed = WireDefault(io.privilege === PrivilegeMode.Machine.U)
 
-  for (entry <- (0 until entries).reverse) {
-    when(overlaps(entry)) {
-      matched := true.B
-      matchedEntry := entry.U
-      allowed := entryAllows(entry)
+    for (entry <- (0 until entries).reverse) {
+      when(overlaps(entry)) {
+        matched := true.B
+        matchedEntry := entry.U
+        allowed := entryAllows(entry)
+      }
     }
-  }
 
-  io.matched := matched
-  io.matchedEntry := matchedEntry
-  io.allow := allowed && !invalidRange
+    io.matched := matched
+    io.matchedEntry := matchedEntry
+    io.allow := allowed && !invalidRange
+  }
 }
 
 /**

@@ -20,7 +20,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (github.event.label.name == 'product-pmp-local-xc7' || github.event.label.name == 'product-pmp-area-only'))
     name: PMP geometry, captured snapshot and standalone mapping
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    # Four isolated mappings plus two baseline Chisel builds; still opt-in.
+    timeout-minutes: 38
     env:
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
       AETHERCORE_TOOLCHAIN_JOBS: "4"
@@ -78,6 +79,7 @@ jobs:
           set -euo pipefail
           ./mill aethercore.test.testOnly \
             aethercore.PmpRangeDecoderActiveSpec \
+            aethercore.PmpAccessCheckerPrioritySpec \
             aethercore.PmpCheckerSpec \
             aethercore.ProductDataResolverSpec \
             aethercore.RV64PmpCsrSpec \
@@ -91,6 +93,15 @@ jobs:
             --target-dir "$RUNNER_TEMP/product-pmp-local-xc7/rtl" \
             2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/elaboration.log"
           test -s "$RUNNER_TEMP/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv"
+
+      - name: Elaborate standalone RV64 PA56 PMP one-hot experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.runMain aethercore.ElaboratePmpAccessCheckerOneHotRV64 \
+            --target-dir "$RUNNER_TEMP/product-pmp-local-xc7/rtl" \
+            2>&1 | tee "$RUNNER_TEMP/product-pmp-local-xc7/checker-elaboration.log"
+          test -s "$RUNNER_TEMP/product-pmp-local-xc7/rtl/PmpAccessChecker.sv"
 
       - name: Install pinned standalone XC7 mapper without apt mirrors
         run: |
@@ -118,6 +129,15 @@ jobs:
           grep -q 'PmpRangeDecoder' "$root/yosys.log"
           echo 'Local PA56 PMP XC7 logic map finished. This is not full-SoC device fit or timing signoff.' >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Map isolated PMP access checker to the same XC7 cells
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          cd "$root"
+          "$YOSYS_EXEC" -Q -T -l yosys-checker.log -p \
+            'read_verilog -sv -DSYNTHESIS rtl/PmpAccessChecker.sv; hierarchy -check -top PmpAccessChecker; synth_xilinx -family xc7 -noiopad -top PmpAccessChecker; stat -tech xilinx'
+
       - name: Build and map the exact pre-optimization decoder as A/B baseline
         shell: bash
         run: |
@@ -143,6 +163,31 @@ jobs:
           "$YOSYS_EXEC" -Q -T -l yosys-baseline.log -p \
             'read_verilog -sv -DSYNTHESIS baseline-rtl/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx'
 
+      - name: Map old priority chain at its exact parent commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          baseline=5166bfcc144d7419e1c4eeb354237a457b13680c
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git worktree add --detach "$root/checker-baseline-source" "$baseline"
+          # The parent baseline has only the original priority chain. Reuse
+          # exactly the same PA56/PMP16 geometry and lowering options.
+          install -m 0644 src/main/scala/aethercore/ElaboratePmpAccessCheckerRV64.scala \
+            "$root/checker-baseline-source/src/main/scala/aethercore/ElaboratePmpAccessCheckerRV64.scala"
+          mkdir -p "$root/checker-baseline-rtl" "$root/checker-baseline-mill-out"
+          (
+            cd "$root/checker-baseline-source"
+            chmod +x mill
+            MILL_OUTPUT_DIR="$root/checker-baseline-mill-out" \
+              ./mill aethercore.runMain aethercore.ElaboratePmpAccessCheckerRV64 \
+              --target-dir "$root/checker-baseline-rtl"
+          ) 2>&1 | tee "$root/checker-baseline-elaboration.log"
+          test -s "$root/checker-baseline-rtl/PmpAccessChecker.sv"
+          cd "$root"
+          "$YOSYS_EXEC" -Q -T -l yosys-checker-baseline.log -p \
+            'read_verilog -sv -DSYNTHESIS checker-baseline-rtl/PmpAccessChecker.sv; hierarchy -check -top PmpAccessChecker; synth_xilinx -family xc7 -noiopad -top PmpAccessChecker; stat -tech xilinx'
+
       - name: Record directly comparable old and new LUT totals
         shell: bash
         run: |
@@ -166,6 +211,28 @@ jobs:
             printf 'Identical RV64 PA56 16-entry elaborator and YoWASP Yosys 0.70.0 XC7 mapping; no P&R or Fmax claim.\n'
           } | tee "$root/lut-comparison.txt" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Record isolated PMP access priority LUT A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/product-pmp-local-xc7"
+          checker_lut_count() {
+            awk '/=== PmpAccessChecker ===/ { in_top=1; sum=0; next }
+                 in_top && $1 ~ /^LUT[1-6]$/ { sum+=$2 }
+                 in_top && $2 ~ /^LUT[1-6]$/ { sum+=$1 }
+                 in_top && /Estimated number of LCs/ { last=sum; in_top=0 }
+                 END { if (last == 0) exit 1; print last }' "$1"
+          }
+          old="$(checker_lut_count "$root/yosys-checker-baseline.log")"
+          new="$(checker_lut_count "$root/yosys-checker.log")"
+          {
+            printf 'Access checker parent SHA: %s\n' 5166bfcc144d7419e1c4eeb354237a457b13680c
+            printf 'Old priority-chain LUT1..LUT6: %s\n' "$old"
+            printf 'New one-hot LUT1..LUT6: %s\n' "$new"
+            printf 'Difference new minus old: %+d\n' "$((new - old))"
+            printf 'Identical PA56 PMP16 checker and XC7 mapper. Isolated unplaced logic only; no whole-SoC saving or Fmax claim.\n'
+          } | tee "$root/checker-lut-comparison.txt" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Preserve real tests and local area evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -176,5 +243,8 @@ jobs:
           path: |
             ${{ runner.temp }}/product-pmp-local-xc7/*.log
             ${{ runner.temp }}/product-pmp-local-xc7/lut-comparison.txt
+            ${{ runner.temp }}/product-pmp-local-xc7/checker-lut-comparison.txt
             ${{ runner.temp }}/product-pmp-local-xc7/rtl/PmpRangeDecoder.sv
+            ${{ runner.temp }}/product-pmp-local-xc7/rtl/PmpAccessChecker.sv
             ${{ runner.temp }}/product-pmp-local-xc7/baseline-rtl/PmpRangeDecoder.sv
+            ${{ runner.temp }}/product-pmp-local-xc7/checker-baseline-rtl/PmpAccessChecker.sv

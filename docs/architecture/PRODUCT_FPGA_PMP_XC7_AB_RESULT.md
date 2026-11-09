@@ -56,3 +56,39 @@ The next local area candidate is `PmpAccessChecker`'s priority selection
 network. Keep all four comparisons per entry unless a separately proven
 equivalence and old/new XC7 map justify a change; preserve lowest-index PMP
 priority, partial-overlap denial and the data-side snapshot lifecycle.
+
+## 2026-11-09: first-hit priority A/B is a negative area result
+
+The first-hit one-hot alternative has now been evaluated **in isolation**, using
+`PmpAccessChecker(16, 56)`. The original reversed `when` priority chain and the
+experimental `PriorityEncoderOH`/`OHToUInt` network were elaborated with the
+same FIRRTL lowering settings and mapped with the same
+`yowasp-yosys==0.70.0.0.post1259` XC7 flow.
+
+| Independent PA56/PMP16 checker | LUT1..LUT6 | Compared with original |
+| --- | ---: | ---: |
+| Original first-matching priority chain, source `5166bfcc144d7419e1c4eeb354237a457b13680c` | 2,583 | baseline |
+| One-hot first-hit alternative | 2,611 | **+28 (+1.08%)** |
+
+These numbers were reproduced in a **local standalone** mapping, not yet a
+published CI run or full SoC implementation. The candidate is an **area
+regression** and is **not enabled in Product**; the constructor defaults to the
+original chain. `ElaboratePmpAccessCheckerOneHotRV64` alone opts in, while
+`ElaboratePmpAccessCheckerRV64` emits the production-default baseline. The
+opt-in GitHub workflow records both SystemVerilog files, both Yosys logs and a
+`checker-lut-comparison.txt` when invoked; it is not triggered by normal PR
+updates. PA8 and PA56 random-priority reference tests are wired for both modes;
+local Scala compilation and static contracts succeeded, **but the dynamic
+ChiselSim checks have not been run locally** because Verilator is unavailable.
+
+These standalone checks cannot be multiplied by the four Product access lanes
+to assert a whole-SoC LUT delta, nor can they establish placed-and-routed Fmax.
+In particular, the `matchedEntry` output of the isolated checker may be
+optimized differently when connected to the actual CPU.
+
+The next structural candidate is to compare a CSR-update-time PMP geometry
+cache against the existing combinational range decoding, following the
+FPGA-oriented VexRiscv PMP approach. It must retain **full TOR/NA4/NAPOT,
+16 entries, PA56, locked M-mode checks and distinct live-CSR / in-flight
+snapshot ranges**. No PMP mode or security check may be removed merely to
+improve LUT counts.
