@@ -20,7 +20,8 @@ class AetherCoreProductFpgaColdBootDdrFabric(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
   private val config = AetherCoreProductSoCProfiles.selectEngineeringTarget(
@@ -57,7 +58,8 @@ class AetherCoreProductFpgaColdBootDdrFabric(
   private val cold = Module(new AetherCoreProductFpgaColdBootPins(
     implementedPaddrBits = implementedPaddrBits,
     productConfigOverride = Some(config),
-    boardDevices = boardDevices))
+    boardDevices = boardDevices,
+    cacheProfile = cacheProfile))
   private val addressMap = AetherSoCAddressMap.qualifiedLinux(config.platform)
   private val ownership = Module(new AetherProductDdrOwnershipMux(
     addrBits = implementedPaddrBits, dataBits = 64, txnIdBits = txnBits,

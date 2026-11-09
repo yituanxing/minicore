@@ -216,7 +216,8 @@ class AetherCoreProductFpgaDdrLocalWindowBoard(
     val ddrLocalAddrBits: Int = 28,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.persistentSpiSd
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.persistentSpiSd,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   require(implementedPaddrBits == 32,
     "G5-SD1 physical DDR adapter matches the frozen 32-bit board seam")
@@ -265,7 +266,8 @@ class AetherCoreProductFpgaDdrLocalWindowBoard(
   private val product = Module(new AetherCoreProductFpgaColdBootDdrStreamFabric(
     implementedPaddrBits = implementedPaddrBits,
     productConfigOverride = Some(config),
-    boardDevices = boardDevices))
+    boardDevices = boardDevices,
+    cacheProfile = cacheProfile))
   private val local = Module(new AetherProductDdrLocalAxiWindow(
     physicalAddrBits = implementedPaddrBits,
     localAddrBits = ddrLocalAddrBits,
@@ -357,7 +359,8 @@ class AetherCoreProductFpgaUartDdrBoard(
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
     val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.persistentSpiSd,
-    val uploadBaud: Long = 1_000_000L
+    val uploadBaud: Long = 1_000_000L,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   require(boardDevices.spiBusClockFrequencyHz == 50_000_000L,
     "the Product UART-upload PHY and FPGA/UI clock contract is 50 MHz")
@@ -394,7 +397,8 @@ class AetherCoreProductFpgaUartDdrBoard(
     implementedPaddrBits = implementedPaddrBits,
     ddrLocalAddrBits = ddrLocalAddrBits,
     productConfigOverride = Some(config),
-    boardDevices = boardDevices))
+    boardDevices = boardDevices,
+    cacheProfile = cacheProfile))
   private val source = Module(new AetherProductUartFirmwareUpload(
     addrBits = implementedPaddrBits,
     boardClockHz = boardDevices.spiBusClockFrequencyHz,

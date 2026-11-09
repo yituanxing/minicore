@@ -154,7 +154,8 @@ class AetherCoreProductUnifiedMemorySoC(
     // Legacy geometry selection is used only when no exact CPU target is given.
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = AetherCoreProductSoCProfiles.selectEngineeringTarget(
@@ -251,7 +252,7 @@ class AetherCoreProductUnifiedMemorySoC(
     addrBits = implementedPaddrBits,
     dataBits = DataBits,
     txnIdBits = ClientTxnBits,
-    entries = 64
+    entries = cacheProfile.dataEntries
   ))
   val ptwAdapter = Module(new AetherSoCPtwReadAdapter(
     addrBits = implementedPaddrBits,
@@ -263,7 +264,7 @@ class AetherCoreProductUnifiedMemorySoC(
     addrBits = implementedPaddrBits,
     dataBits = DataBits,
     txnIdBits = ClientTxnBits,
-    entries = 64
+    entries = cacheProfile.instructionEntries
   ))
   val hub = Module(new AetherSoCMemoryHub(
     addrBits = implementedPaddrBits,

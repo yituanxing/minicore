@@ -1,0 +1,208 @@
+name: Product SmallOoO Debian RAM cache-capacity short A/B
+
+# An explicit, bounded diagnostic. Never launch on ordinary pushes, and never
+# attach these alternative RTL models/checkpoints to the signed SD1 longrun.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-cache-capacity-short-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cache-capacity-short:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.label.name == 'product-cache-capacity-short-ab')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_ALLOW_PRODUCT_CACHE_AB: '1'
+      AETHERCORE_CACHE_AB_PROFILES: '64 256'
+      AETHERCORE_CACHE_AB_CYCLES: '5000000'
+      AETHERCORE_CACHE_AB_WALL_SECONDS: '600'
+      SIM_SETTLE_MODE: reference
+      RV64_DEBIAN_STAGE: d2
+      RV64_LINUX_JOBS: '4'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact candidate without pushing or touching SD1
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Freeze the independent short-RAM-only contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 2
+          bash -n tools/ci/product_cache_capacity_short_ab.sh
+          python3 -m unittest tests_py.test_product_cache_capacity_ab \
+            tests_py.test_product_debian_distro_contract
+          echo 'Only RAM-hosted real Product RV64GC, 64/256 cache entries, <=5M cycles per model; 512 held for follow-up, no SD1 checkpoint or login signoff.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore Scala build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned Verilator and Debian Linux toolchain caches
+        id: tool-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-cache-ab-tools-v1-${{ hashFiles('tools/ensure_verilator_5_054.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-tools-v1-
+
+      - name: Install simulator and real Debian build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 \
+            autoconf cmake ninja-build bison flex libfl-dev zlib1g-dev \
+            libgmp-dev libjemalloc-dev git curl make build-essential libssl-dev libelf-dev \
+            libreadline-dev pkg-config bc device-tree-compiler dwarves xz-utils qemu-user
+
+      - name: Provision and verify pinned Verilator 5.054 and RV64 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_054.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          test -x "$HOME/.cache/aethercore/toolchains/verilator-5.054/bin/verilator"
+
+      - name: Run exact I/D-cache behavior tests including 64/256/512 entries
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cache/aethercore/toolchains/verilator-5.054/bin:$PATH"
+          sh ./mill aethercore.test.testOnly \
+            aethercore.AetherSoCInstructionCacheSpec \
+            aethercore.AetherDirectMappedReadCacheSpec
+
+      - name: Build the unchanged real Debian D2 RAM firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          bash tools/ci/rv64_debian_linux_build.sh
+          bash tools/ci/rv64_debian_payload_build.sh
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-boot/result.txt
+          grep -Fxq 'spi_sd=0' build/rv64-debian-boot/result.txt
+          sha256sum --check --status build/rv64-debian-boot/evidence/sha256.txt
+
+      - name: Save pinned toolchain and reusable Debian build caches
+        if: success() && steps.tool-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-cache-ab-tools-v1-${{ hashFiles('tools/ensure_verilator_5_054.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Freeze native host CPU/compiler identity for independent models
+        id: host-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(c++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact two-profile Verilator model cache
+        id: native-model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-cache-capacity-short-ab/model-64
+            build/product-cache-capacity-short-ab/model-256
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-cache-ab-models-v1-${{ env.TARGET_SHA }}-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('sim/opensbi_boot_main.cpp', 'sim/product_rv64_opensbi_shim/VAetherCoreOpenSbiSimTop.h', 'tools/ci/product_sim_cache.sh', 'tools/ci/product_cache_capacity_short_ab.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Preflight/build separately and verify exact model identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_cache_capacity_short_ab.sh preflight
+          bash tools/ci/product_cache_capacity_short_ab.sh build
+          for entries in 64 256; do
+            test -x "build/product-cache-capacity-short-ab/model-$entries/obj/VAetherCoreProductDebianCacheAbRV64SimTop"
+          done
+
+      - name: Save expensive verified models before attempting guest runtime
+        if: success() && steps.native-model-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/product-cache-capacity-short-ab/model-64
+            build/product-cache-capacity-short-ab/model-256
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-cache-ab-models-v1-${{ env.TARGET_SHA }}-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('sim/opensbi_boot_main.cpp', 'sim/product_rv64_opensbi_shim/VAetherCoreOpenSbiSimTop.h', 'tools/ci/product_sim_cache.sh', 'tools/ci/product_cache_capacity_short_ab.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Run bounded identical-firmware 64/256 Debian RAM prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_cache_capacity_short_ab.sh run
+          grep -Fxq 'qualification=SHORT_PREFIX_ONLY_NO_DEBIAN_LOGIN_NO_FMAX' \
+            build/product-cache-capacity-short-ab/result.txt
+          echo '### Product SmallOoO cache capacity A/B — 5M RTL cycles, not a full Debian PASS' >> "$GITHUB_STEP_SUMMARY"
+          cat build/product-cache-capacity-short-ab/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve source, firmware, model and short-prefix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-cache-capacity-short-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/evidence/sha256.txt
+            build/product-cache-capacity-short-ab/result.txt
+            build/product-cache-capacity-short-ab/cache-*.run.log
+            build/product-cache-capacity-short-ab/model-*/logs/rtl-build.log
+            build/product-cache-capacity-short-ab/model-*/logs/verilator-build.log
+            build/product-cache-capacity-short-ab/model-*/.product-model-identity

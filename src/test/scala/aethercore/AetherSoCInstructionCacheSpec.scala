@@ -111,4 +111,58 @@ class AetherSoCInstructionCacheSpec
       }
     }
   }
+
+  it should "keep indexing, alias eviction and FENCE.I correct at every cache A/B size" in {
+    for (entries <- Seq(64, 256, 512)) {
+      withClue(s"I-cache entries=$entries: ") {
+        simulate(new AetherSoCInstructionCache(entries = entries)) { dut =>
+          val base = BigInt("80001000", 16)
+          val adjacentIndex = base + 8
+          val alias = base + entries * 8
+
+          dut.io.invalidateAll.poke(false.B)
+          dut.io.frontendValid.poke(true.B)
+          dut.io.frontendBytes.poke(4.U)
+          dut.io.request.ready.poke(true.B)
+          idleResponse(dut)
+
+          def fill(addr: BigInt, data: BigInt): Unit = {
+            dut.io.frontendAddr.poke(addr.U)
+            dut.io.request.valid.expect(true.B)
+            dut.io.request.bits.paddr.expect(addr.U)
+            dut.clock.step()
+            dut.io.response.valid.poke(true.B)
+            dut.io.response.bits.rdata.poke(data.U)
+            dut.io.frontendReady.expect(true.B)
+            dut.clock.step()
+            idleResponse(dut)
+            dut.io.frontendReady.expect(true.B)
+            dut.io.frontendInst.expect(data.U)
+          }
+
+          fill(base, BigInt("11223344", 16))
+          fill(adjacentIndex, BigInt("55667788", 16))
+          dut.io.frontendAddr.poke(base.U)
+          dut.io.request.valid.expect(false.B)
+          dut.io.frontendInst.expect("h11223344".U)
+
+          // One cache-span displacement must replace exactly this direct-
+          // mapped index, without accidentally sharing the old line tag.
+          fill(alias, BigInt("deadbeef", 16))
+          dut.io.frontendAddr.poke(base.U)
+          dut.io.frontendReady.expect(false.B)
+          dut.io.request.valid.expect(true.B)
+          dut.io.frontendAddr.poke(adjacentIndex.U)
+          dut.io.frontendReady.expect(true.B)
+          dut.io.frontendInst.expect("h55667788".U)
+
+          dut.io.invalidateAll.poke(true.B)
+          dut.io.frontendReady.expect(false.B)
+          dut.clock.step()
+          dut.io.invalidateAll.poke(false.B)
+          dut.io.request.valid.expect(true.B)
+        }
+      }
+    }
+  }
 }

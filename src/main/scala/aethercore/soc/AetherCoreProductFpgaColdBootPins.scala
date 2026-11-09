@@ -21,7 +21,8 @@ class AetherCoreProductFpgaColdBootPins(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
   private val config = AetherCoreProductSoCProfiles.selectEngineeringTarget(
@@ -71,7 +72,8 @@ class AetherCoreProductFpgaColdBootPins(
     Module(new AetherCoreProductFpgaPins(
       implementedPaddrBits = implementedPaddrBits,
       productConfigOverride = Some(config),
-      boardDevices = boardDevices))
+      boardDevices = boardDevices,
+      cacheProfile = cacheProfile))
   }
 
   private val cpuRun = handoff.io.cpuReleased

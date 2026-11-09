@@ -21,6 +21,7 @@ export_dir="$(cd "$export_dir" && pwd)"
 rtl_dir="$export_dir/rtl"
 top=AetherCoreProductFpgaUartDdrBoard
 sha="$(git -C "$repo_dir" rev-parse HEAD)"
+cache_ab_entries="${AETHERCORE_XC7_CACHE_AB_ENTRIES:-}"
 log="$output_dir/yosys.log"
 stats="$output_dir/stats.json"
 result="$output_dir/result.json"
@@ -34,12 +35,24 @@ guard="$output_dir/abort_reason.txt"
   echo 'ERROR: missing verified Product RTL; run exact-SHA Artix-7 prepare first' >&2
   exit 2
 }
-jq -e --arg sha "$sha" --arg top "$top" \
+if [[ -z "$cache_ab_entries" ]]; then
+  emitter=aethercore.soc.ElaborateProductFpgaUartDdrSpiSd1Rv64gc
+else
+  case "$cache_ab_entries" in
+    64|256|512) ;;
+    *) echo 'ERROR: unreviewed Product cache A/B mapping profile' >&2; exit 2 ;;
+  esac
+  emitter=aethercore.soc.ElaborateProductFpgaUartDdrSpiSd1CacheAbRv64gc
+fi
+jq -e --arg sha "$sha" --arg top "$top" --arg emitter "$emitter" \
+  --arg entries "$cache_ab_entries" \
   '.status == "RTL_EXPORT_PASS" and .git_sha == $sha and .top == $top and
-   .emitter == "aethercore.soc.ElaborateProductFpgaUartDdrSpiSd1Rv64gc" and
+   .emitter == $emitter and
    .isa == "rv64gc" and .abi == "lp64d" and .geometry == "small" and
-   .spi_sd_enabled == true and
-   .clock_frequency_hz == 50000000 and .vendor_ddr_phy_included == false' \
+   .spi_sd_enabled == true and .clock_frequency_hz == 50000000 and
+   .vendor_ddr_phy_included == false and
+   (if $entries == "" then (.cache_i_entries == null and .cache_d_entries == null)
+    else (.cache_i_entries == ($entries | tonumber) and .cache_d_entries == ($entries | tonumber)) end)' \
   "$export_dir/manifest.json" >/dev/null || {
     echo 'ERROR: this RTL export is not pinned to the checked-out Product Small RV64GC' >&2
     exit 2
@@ -148,9 +161,12 @@ if [[ ! -s "$stats" ]] || ! jq -e '
   exit 1
 fi
 jq -n --arg sha "$sha" --arg top "$top" --arg version "$(yosys -V)" \
+  --arg cache_entries "$cache_ab_entries" --arg emitter "$emitter" \
   --argjson rtl_files "${#svs[@]}" \
   --arg rtl_bundle "$(sha256sum "$export_dir/rtl.sha256" | cut -d' ' -f1)" \
-  '{status:"XC7_UNPLACED_MAPPING_PASS",git_sha:$sha,top:$top,
+  '{status:"XC7_UNPLACED_MAPPING_PASS",git_sha:$sha,top:$top,emitter:$emitter,
+    cache_i_entries:(if $cache_entries == "" then null else ($cache_entries | tonumber) end),
+    cache_d_entries:(if $cache_entries == "" then null else ($cache_entries | tonumber) end),
     yosys_version:$version,family:"xc7",io_pads:false,rtl_files:$rtl_files,
     rtl_file_hashes_sha256:$rtl_bundle,resource_report:"stats.json",
     device_part:null,placed:false,routed:false,physical_timing_qualified:false,

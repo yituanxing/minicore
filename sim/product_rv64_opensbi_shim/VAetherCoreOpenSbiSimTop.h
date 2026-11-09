@@ -3,6 +3,9 @@
 #ifdef AETHERCORE_PRODUCT_SPI_SD
 #include "VAetherCoreProductDebianSdRV64SimTop.h"
 using VAetherCoreOpenSbiSimTop = VAetherCoreProductDebianSdRV64SimTop;
+#elif defined(AETHERCORE_PRODUCT_CACHE_AB)
+#include "VAetherCoreProductDebianCacheAbRV64SimTop.h"
+using VAetherCoreOpenSbiSimTop = VAetherCoreProductDebianCacheAbRV64SimTop;
 #elif defined(AETHERCORE_PRODUCT_DEBIAN)
 #include "VAetherCoreProductDebianRV64SimTop.h"
 using VAetherCoreOpenSbiSimTop = VAetherCoreProductDebianRV64SimTop;

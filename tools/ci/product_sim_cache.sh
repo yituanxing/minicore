@@ -49,6 +49,12 @@ input_identity() {
     # must invalidate the exact Product Debian simulator model cache.
     model_specific_sources+=(sim/l32_g5_silence_watchdog.h)
   fi
+  if [[ "$sim_cxxflags" == *-DAETHERCORE_PRODUCT_CACHE_AB* ]]; then
+    # The opt-in A/B runner determines the exact cache geometry, compiler
+    # options and bounded workload. Changes must invalidate only its private
+    # model cache; do not rekey frozen G5 or signed SD1 models.
+    model_specific_sources+=(tools/ci/product_cache_capacity_short_ab.sh)
+  fi
   {
     printf 'top=%s\nelaborate=%s\ncompiler-flags=%s\nsettle=%s\nverilator=%s\nthreads=%s\nmodel-opt=%s\nmake-opt=%s\n' \
       "$top" "$elaborate_main" "$sim_cxxflags" "$settle_mode" \

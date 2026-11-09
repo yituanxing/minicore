@@ -2,7 +2,7 @@ package aethercore.sim
 
 import aethercore.common.{AtomicOp, CommitTrace, MemSize}
 import aethercore.memory.AetherMemOp
-import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC, AetherSoCBoardSpec, ProductSoCBoardProfiles}
+import aethercore.soc.{AetherCoreProductSoCProfiles, AetherCoreProductUnifiedMemorySoC, AetherSoCBoardSpec, ProductSoCBoardProfiles, ProductSoCCacheProfile, ProductSoCCacheProfiles}
 import aethercore.soc.phy.AetherFractionalTickGenerator
 import _root_.circt.stage.ChiselStage
 import chisel3._
@@ -21,10 +21,14 @@ import chisel3._
   */
 class AetherCoreProductUnifiedMemoryCompatSimTop(
     val debianTarget: Boolean = false,
-    val spiSdTarget: Boolean = false
+    val spiSdTarget: Boolean = false,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0,
+    val exportCacheCounters: Boolean = false
 ) extends Module {
   require(!spiSdTarget || debianTarget,
     "Product SPI-SD simulation requires the real RV64GC Debian ISA/ABI target")
+  require(!exportCacheCounters || debianTarget,
+    "Cache capacity A/B counters require the RV64GC Debian target")
   private val Xlen = 64
   private val PA = 56
   private val DataBits = 64
@@ -72,6 +76,10 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
     val dcacheHitCount = Output(UInt(64.W))
     val dcacheMissCount = Output(UInt(64.W))
     val dcacheBypassCount = Output(UInt(64.W))
+    // Present only in the opt-in cache A/B top. Existing G4/G5/SD1
+    // Verilator top-level pin sets must remain exactly unchanged.
+    val icacheHitCount = if (exportCacheCounters) Some(Output(UInt(64.W))) else None
+    val icacheMissCount = if (exportCacheCounters) Some(Output(UInt(64.W))) else None
     // The same Product target that enables F/D in the core must export its
     // floating retirement trace through the host top. The engineering IMAC
     // ABI remains unchanged; a Debian RV64GC top cannot silently discard
@@ -102,7 +110,8 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
     // become five times shorter than on the Product FPGA shell.
     externalPhysicalSeams = debianTarget,
     productConfigOverride = requestedTarget,
-    boardDevices = selectedBoardDevices))
+    boardDevices = selectedBoardDevices,
+    cacheProfile = cacheProfile))
   if (debianTarget) {
     val board = AetherSoCBoardSpec.qualifiedLinux(soc.config.platform)
     val timeTick = Module(new AetherFractionalTickGenerator(
@@ -165,6 +174,10 @@ class AetherCoreProductUnifiedMemoryCompatSimTop(
   io.dcacheHitCount := soc.io.dcacheHitCount
   io.dcacheMissCount := soc.io.dcacheMissCount
   io.dcacheBypassCount := soc.io.dcacheBypassCount
+  if (exportCacheCounters) {
+    io.icacheHitCount.get := soc.io.icacheHitCount
+    io.icacheMissCount.get := soc.io.icacheMissCount
+  }
   io.commit := soc.io.commit
   io.halted := soc.io.halted
   if (spiSdTarget) {
@@ -182,6 +195,17 @@ class AetherCoreProductOpenSbiRV64SimTop
 /** True Debian RV64GC/LP64D hardware target, not the IMAC G4 bring-up top. */
 class AetherCoreProductDebianRV64SimTop
     extends AetherCoreProductUnifiedMemoryCompatSimTop(debianTarget = true)
+
+/** Same Debian RAM/host-memory path, explicit private cache-capacity experiment.
+  * Never substitute it for the frozen G5 or physical SPI-SD model.
+  */
+class AetherCoreProductDebianCacheAbRV64SimTop(
+    instructionEntries: Int = 64,
+    dataEntries: Int = 64
+) extends AetherCoreProductUnifiedMemoryCompatSimTop(
+      debianTarget = true,
+      cacheProfile = ProductSoCCacheProfile(instructionEntries, dataEntries),
+      exportCacheCounters = true)
 
 /** SD1 Product Debian SPI-SD: no software storage shortcut or synthetic block
   * MMIO. All SD sectors travel through the Linux mmc_spi driver, OpenCores
@@ -203,6 +227,21 @@ object ElaborateProductDebianRV64SimTop extends App {
   ChiselStage.emitSystemVerilogFile(
     new AetherCoreProductDebianRV64SimTop,
     args,
+    Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
+  )
+}
+
+/** `I_ENTRIES D_ENTRIES --target-dir DIR`: matching short-Debian cache A/B. */
+object ElaborateProductDebianCacheAbRV64SimTop extends App {
+  require(args.length >= 2,
+    "Debian cache A/B requires exact I-cache and D-cache entry counts")
+  val instructionEntries = args(0).toInt
+  val dataEntries = args(1).toInt
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductDebianCacheAbRV64SimTop(
+      instructionEntries = instructionEntries,
+      dataEntries = dataEntries),
+    args.drop(2),
     Array("--lowering-options=disallowLocalVariables,disallowPackedArrays,locationInfoStyle=wrapInAtSquareBracket")
   )
 }

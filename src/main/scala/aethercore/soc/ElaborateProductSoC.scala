@@ -23,6 +23,15 @@ private object ProductSoCElaboration {
 
   def rv64gcTarget(geometry: ProductCoreGeometry): ProductCoreConfig =
     AetherCoreProductSoCProfiles.smallOpenSbiDistroTarget(32, geometry)
+
+  /** Strict opt-in: `small I_ENTRIES D_ENTRIES [ChiselStage options...]`.
+    * The existing production emitters never call this path.
+    */
+  def cacheProfile(args: Array[String]): ProductSoCCacheProfile = {
+    require(args.length >= 3,
+      "cache capacity A/B requires geometry, I-cache entries and D-cache entries")
+    ProductSoCCacheProfile(args(1).toInt, args(2).toInt)
+  }
 }
 
 /** Independent emission entrypoints; never replace the qualified V2 SoC top.
@@ -218,6 +227,43 @@ object ElaborateProductFpgaUartDdrSpiSd1Rv64gc extends App {
       productConfigOverride = Some(target),
       boardDevices = ProductSoCBoardProfiles.persistentSpiSd),
     args.tail,
+    ProductSoCElaboration.firtoolOptions
+  )
+}
+
+/** Explicit cache-capacity A/B using the *same* full Product Small RV64GC
+  * firmware->DDR->SPI-SD top. Never replace the sealed SD1 production emitter
+  * or restore its checkpoints into a different cache geometry.
+  */
+object ElaborateProductFpgaUartDdrSpiSd1CacheAbRv64gc extends App {
+  val geometry = ProductSoCElaboration.geometry(args,
+    "cache A/B FPGA emission needs small geometry", "RV64GC cache A/B")
+  val cacheProfile = ProductSoCElaboration.cacheProfile(args)
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaUartDdrBoard(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd,
+      cacheProfile = cacheProfile),
+    args.drop(3),
+    ProductSoCElaboration.firtoolOptions
+  )
+}
+
+/** Same CPU/SoC with visible I/D hit/miss counters for shorter diagnostics.
+  * This does not itself instantiate physical DDR or qualify boot.
+  */
+object ElaborateProductFpgaSoCRv64gcCacheAb extends App {
+  val geometry = ProductSoCElaboration.geometry(args,
+    "cache A/B AXI FPGA emission needs small geometry", "RV64GC cache A/B AXI")
+  val cacheProfile = ProductSoCElaboration.cacheProfile(args)
+  val target = ProductSoCElaboration.rv64gcTarget(geometry)
+  ChiselStage.emitSystemVerilogFile(
+    new AetherCoreProductFpgaSoC(implementedPaddrBits = 32,
+      productConfigOverride = Some(target),
+      boardDevices = ProductSoCBoardProfiles.persistentSpiSd,
+      cacheProfile = cacheProfile),
+    args.drop(3),
     ProductSoCElaboration.firtoolOptions
   )
 }

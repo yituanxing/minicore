@@ -12,6 +12,9 @@ using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 #if defined(AETHERCORE_PRODUCT_SPI_SD) && !defined(AETHERCORE_PRODUCT_DEBIAN)
 #error "Product SD1 requires both AETHERCORE_PRODUCT_SPI_SD and AETHERCORE_PRODUCT_DEBIAN"
 #endif
+#if defined(AETHERCORE_PRODUCT_CACHE_AB) && (!defined(AETHERCORE_PRODUCT_DEBIAN) || defined(AETHERCORE_PRODUCT_SPI_SD))
+#error "Cache capacity A/B is a distinct Debian RAM experiment, never the production SPI-SD top"
+#endif
 #ifdef AETHERCORE_PRODUCT_SPI_SD
 #include "l32_sd_spi_card.h"
 #endif
@@ -79,6 +82,27 @@ void emitAxiDataConcurrency(const Top& top) {
               << "\n";
   }
 }
+#ifdef AETHERCORE_PRODUCT_CACHE_AB
+template <typename Top>
+void emitProductCacheAbSnapshot(const Top& top, const char* phase,
+                                std::uint64_t cycles, std::uint64_t commits) {
+  static_assert(requires {
+    top.io_icacheHitCount;
+    top.io_icacheMissCount;
+    top.io_dcacheHitCount;
+    top.io_dcacheMissCount;
+    top.io_dcacheBypassCount;
+  }, "Cache capacity A/B must export actual I/D-cache counters");
+  std::cerr << std::dec << "\nPRODUCT_CACHE_AB_SNAPSHOT phase=" << phase
+            << " cycles=" << cycles << " commits=" << commits
+            << " ic-hits=" << static_cast<std::uint64_t>(top.io_icacheHitCount)
+            << " ic-misses=" << static_cast<std::uint64_t>(top.io_icacheMissCount)
+            << " dc-hits=" << static_cast<std::uint64_t>(top.io_dcacheHitCount)
+            << " dc-misses=" << static_cast<std::uint64_t>(top.io_dcacheMissCount)
+            << " dc-bypass=" << static_cast<std::uint64_t>(top.io_dcacheBypassCount)
+            << "\n";
+}
+#endif
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -278,6 +302,9 @@ int main(int argc, char** argv) {
                   << ' ' << sdCard.progress()
 #endif
                   << "\n";
+#ifdef AETHERCORE_PRODUCT_CACHE_AB
+        emitProductCacheAbSnapshot(top, "progress", cycles, commits);
+#endif
 #ifdef AETHERCORE_PRODUCT_DEBIAN
         if (lateBootWatchdog.anchored()) {
           std::cerr << "L32_G5_LATE_BOOT_PC_PROGRESS cycles=" << cycles
@@ -529,6 +556,9 @@ int main(int argc, char** argv) {
                     << " banner=" << (sawOpenSbiBanner ? 1 : 0) << "\n";
         }
         emitAxiDataConcurrency(top);
+#ifdef AETHERCORE_PRODUCT_CACHE_AB
+        emitProductCacheAbSnapshot(top, "milestone", cycles, commits);
+#endif
 
         std::cerr << "\nL32_RUNTIME_MILESTONE_PASS cycles=" << cycles
                   << " commits=" << commits
@@ -625,6 +655,9 @@ int main(int argc, char** argv) {
               << " g5-fflags-events=" << g5Retire.flagEvents;
 #endif
     std::cerr << std::dec << "\n";
+#ifdef AETHERCORE_PRODUCT_CACHE_AB
+    emitProductCacheAbSnapshot(top, "timeout", cycles, commits);
+#endif
     return 2;
   } catch (const std::exception& error) {
     std::cerr << "L32_RUNNER_ERROR: " << error.what() << "\n";

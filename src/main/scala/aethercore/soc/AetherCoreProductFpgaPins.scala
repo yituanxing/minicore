@@ -17,7 +17,8 @@ class AetherCoreProductFpgaPins(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = AetherCoreProductSoCProfiles.selectEngineeringTarget(
@@ -39,7 +40,8 @@ class AetherCoreProductFpgaPins(
   private val machine = Module(new AetherCoreProductFpgaSoC(
     implementedPaddrBits = implementedPaddrBits,
     productConfigOverride = Some(config),
-    boardDevices = boardDevices))
+    boardDevices = boardDevices,
+    cacheProfile = cacheProfile))
 
   io.axi.aw.valid := machine.io.axi.aw.valid
   io.axi.aw.bits := machine.io.axi.aw.bits

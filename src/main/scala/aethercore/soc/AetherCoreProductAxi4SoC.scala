@@ -16,7 +16,8 @@ class AetherCoreProductAxi4SoC(
     // Legacy geometry selection is used only when no exact CPU target is given.
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.existingRamOnly,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   private val enableSpiSd = boardDevices.spiSdEnabled
   val config: ProductCoreConfig = AetherCoreProductSoCProfiles.selectEngineeringTarget(
@@ -74,7 +75,8 @@ class AetherCoreProductAxi4SoC(
     externalPhysicalSeams = true,
     implementedPaddrBits = implementedPaddrBits,
     productConfigOverride = Some(config),
-    boardDevices = boardDevices
+    boardDevices = boardDevices,
+    cacheProfile = cacheProfile
   ))
   val bridge = Module(new AetherMemToAxi4Bridge(
     addrBits = implementedPaddrBits,

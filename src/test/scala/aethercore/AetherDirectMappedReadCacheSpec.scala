@@ -168,4 +168,50 @@ class AetherDirectMappedReadCacheSpec extends AnyFlatSpec with Matchers with Chi
       }
     }
   }
+
+  it should "preserve distinct indices and evict exact aliases at every A/B size" in {
+    for (entries <- Seq(64, 256, 512)) {
+      withClue(s"D-cache entries=$entries: ") {
+        simulate(new AetherDirectMappedReadCache(56, 64, 2, entries = entries)) { dut =>
+          defaults(dut)
+          val base = BigInt("80001000", 16)
+          val adjacentIndex = base + 8
+          val alias = base + entries * 8
+
+          def readFill(addr: BigInt, data: BigInt): Unit = {
+            driveRequest(dut, 0, AetherMemOp.Read, addr, MemSize.Word,
+              cacheable = true)
+            acceptForwarded(dut)
+            returnDownstream(dut, 0, data)
+          }
+
+          def readHit(addr: BigInt, data: BigInt): Unit = {
+            driveRequest(dut, 1, AetherMemOp.Read, addr, MemSize.Word,
+              cacheable = true)
+            dut.io.downstreamRequest.valid.expect(false.B)
+            dut.io.upstreamRequest.ready.expect(true.B)
+            dut.clock.step()
+            dut.io.upstreamRequest.valid.poke(false.B)
+            dut.io.upstreamResponse.valid.expect(true.B)
+            dut.io.upstreamResponse.bits.txnId.expect(1.U)
+            dut.io.upstreamResponse.bits.rdata.expect(data.U)
+            dut.clock.step()
+          }
+
+          readFill(base, BigInt("11223344", 16))
+          readFill(adjacentIndex, BigInt("55667788", 16))
+          readHit(base, BigInt("11223344", 16))
+          readFill(alias, BigInt("deadbeef", 16))
+          readHit(adjacentIndex, BigInt("55667788", 16))
+
+          // The cache span must replace the original index, while the next
+          // index remains valid. Byte ownership must not expand on eviction.
+          driveRequest(dut, 0, AetherMemOp.Read, base, MemSize.Word,
+            cacheable = true)
+          dut.io.downstreamRequest.valid.expect(true.B)
+          dut.io.missCount.peek().litValue should be >= BigInt(3)
+        }
+      }
+    }
+  }
 }

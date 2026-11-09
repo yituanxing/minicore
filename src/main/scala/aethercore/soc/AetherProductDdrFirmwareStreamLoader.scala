@@ -239,7 +239,8 @@ class AetherCoreProductFpgaColdBootDdrStreamFabric(
     val implementedPaddrBits: Int = AetherSoCBoardSpec.FpgaImplementedPaddrBits,
     val productGeometry: ProductCoreGeometry = ProductCoreProfiles.smallGeometry,
     val productConfigOverride: Option[ProductCoreConfig] = None,
-    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.persistentSpiSd
+    val boardDevices: ProductSoCBoardConfig = ProductSoCBoardProfiles.persistentSpiSd,
+    val cacheProfile: ProductSoCCacheProfile = ProductSoCCacheProfiles.productionP0
 ) extends Module {
   require(boardDevices.spiSdEnabled,
     "The persistent-root FPGA stream wrapper needs the Product SPI-SD board profile")
@@ -281,7 +282,8 @@ class AetherCoreProductFpgaColdBootDdrStreamFabric(
   private val fabric = Module(new AetherCoreProductFpgaColdBootDdrFabric(
     implementedPaddrBits = implementedPaddrBits,
     productConfigOverride = Some(config),
-    boardDevices = boardDevices))
+    boardDevices = boardDevices,
+    cacheProfile = cacheProfile))
 
   loader.io.loaderEnabled := fabric.io.loaderOwnsDdr
   loader.io.segment.valid := io.segment.valid

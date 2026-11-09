@@ -1,0 +1,99 @@
+name: Product SmallOoO XC7 cache capacity resource A/B (bounded)
+
+# Explicit, resource-only XC7 experiment. Neither this nor the RAM prefix
+# modifies the signed Debian SD1 Product RTL, checkpoint or cold-boot run.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-xc7-cache-ab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare-64-256:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.label.name == 'product-fpga-xc7-cache-ab')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+    steps:
+      - name: Checkout exact isolated cache A/B source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify mapping contracts before spending runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python3 -m unittest tests_py.test_product_fpga_xc7_cache_ab \
+            tests_py.test_product_fpga_xc7_unplaced tests_py.test_product_cache_capacity_ab -v
+          bash -n tools/ci/product_fpga_xc7_cache_ab.sh
+          bash -n tools/ci/product_fpga_xc7_unplaced.sh
+
+      - name: Restore Scala/Mill dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Install bounded XC7 mapper and Scala runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openjdk-17-jdk-headless yosys jq
+          yosys -V
+          yosys -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
+          yosys -Q -p 'help stat' | grep -q -- '-json'
+
+      - name: Map 64 then 256 sequentially (420s and 12GiB per case)
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/product-xc7-cache-ab"
+          for entries in 64 256; do
+            bash tools/ci/product_fpga_xc7_cache_ab.sh prepare "$entries" "$out/cache-$entries"
+            bash tools/ci/product_fpga_xc7_cache_ab.sh prepare "$entries" "$out/cache-$entries"
+            bash tools/ci/product_fpga_xc7_cache_ab.sh map "$entries" "$out/cache-$entries"
+            jq -e '.status == "XC7_UNPLACED_MAPPING_PASS" and .routed == false and
+              .physical_timing_qualified == false' "$out/cache-$entries/mapped/result.json"
+            jq -e '.status == "XC7_MAPPED_HIERARCHY_PARSED"' \
+              "$out/cache-$entries/mapped/hierarchy.json"
+          done
+          python3 tools/ci/product_fpga_xc7_cache_ab_compare.py "$out" "$out/comparison.json"
+          jq -e '.status == "XC7_CACHE_CAPACITY_RESOURCE_AB_ONLY" and
+            .git_sha == env.TARGET_SHA and .fmax_qualified == false' "$out/comparison.json"
+          echo '### Same-SHA Product XC7 64 vs 256 cache entries (unplaced logic only)' >> "$GITHUB_STEP_SUMMARY"
+          jq '.delta_2kib_minus_512b' "$out/comparison.json" >> "$GITHUB_STEP_SUMMARY"
+          echo 'No routed 50/200MHz, board DDR PHY or Debian boot claim.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve both mapping results, input SHA and bounded failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-xc7-cache-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/product-xc7-cache-ab/comparison.json
+            ${{ runner.temp }}/product-xc7-cache-ab/cache-*/manifest.json
+            ${{ runner.temp }}/product-xc7-cache-ab/cache-*/rtl.sha256
+            ${{ runner.temp }}/product-xc7-cache-ab/cache-*/mapped/
