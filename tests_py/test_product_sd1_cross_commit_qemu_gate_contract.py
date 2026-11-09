@@ -90,6 +90,30 @@ class ProductSd1QemuCrossCommitContract(unittest.TestCase):
         self.check(comparator(SD1.read_text()), files, True)
         self.check(comparator(C1.read_text()), files, False)
 
+    def test_c1_oracle_reused_only_across_exact_f_relay_workflow_and_contract(self):
+        # The first C1 READY->GO QEMU success predates the reviewed F relay.
+        # Its actual two-file descendant has no guest/kernel/RTL/media delta.
+        expression = comparator(C1.read_text())
+        reviewed_f = [
+            ".github/workflows/product-sd1-v4-f-8812-to-8912.yml",
+            "tests_py/test_product_sd1_v4_f_relay_contract.py",
+        ]
+        self.check(expression, reviewed_f, True)
+        for unreviewed in (
+            ".github/workflows/product-sd1-v4-f-8812-to-8913.yml",
+            ".github/workflows/product-sd1-v4-g-8912-to-9012.yml",
+            "tests_py/test_product_sd1_v4_f_relay_contract_extra.py",
+            "tools/ci/product_sd1_migrated_v4_postcross_20m.sh",
+            "software/rv64_userspace/product_sd1_c1_init.c",
+            "src/main/scala/aethercore/AetherCore.scala",
+            "sim/product_rv64_checkpoint_sd1_main.cpp",
+            "tools/ci/product_sd1_c1_qemu_watch.py",
+            "tools/ci/rv64_debian_sd1_sd_image_build.sh",
+        ):
+            self.check(expression, reviewed_f + [unreviewed], False)
+        self.check(expression, reviewed_f, False, renamed=True)
+        self.check(expression, reviewed_f, False, status="behind")
+
     def test_longrun_is_pinned_to_first_verified_rtl_and_original_pr(self):
         source = SD1.read_text()
         frozen = "a15197f96e5869e69269202a0a9caffdbe1f5255"
