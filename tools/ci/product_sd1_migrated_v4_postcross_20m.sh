@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# INERT until an explicitly reviewed workflow selects C, D, E, F, G, or H. One common
+# INERT until an explicitly reviewed workflow selects C, D, E, F, G, H, or I. One common
 # executor preserves the same model/SD/RTL identity across 20M continuations.
 # Never modify the imported source or any older checkpoint artifact.
 set -euo pipefail
@@ -18,6 +18,7 @@ readonly E_FIRST="$ROOT/build/product-sd1-v4-e-source/8712m"
 readonly F_FIRST="$ROOT/build/product-sd1-v4-f-source/8812m"
 readonly G_FIRST="$ROOT/build/product-sd1-v4-g-source/8912m"
 readonly H_FIRST="$ROOT/build/product-sd1-v4-h-source/9012m"
+readonly I_FIRST="$ROOT/build/product-sd1-v4-i-source/9112m"
 readonly PROFILE="${AETHERCORE_SD1_V4_POSTCROSS_PROFILE:-C}"
 case "$PROFILE" in
   C)
@@ -68,7 +69,15 @@ case "$PROFILE" in
     readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_H_9012_RTL_SHA:-}"
     readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_H_9012_CARD_SHA:-}"
     ;;
-  *) reject 'only reviewed C, D, E, F, G, or H postcross profile is permitted' ;;
+  I)
+    readonly FIRST="$I_FIRST" FIRST_M=9112
+    readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-i"
+    readonly STAGES='9132,9152,9172,9192,9212' INPUT='H-9112M'
+    readonly SOURCE_HOST_SHA="${AETHERCORE_SD1_V4_I_9112_HOST_SHA:-}"
+    readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_I_9112_RTL_SHA:-}"
+    readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_I_9112_CARD_SHA:-}"
+    ;;
+  *) reject 'only reviewed C, D, E, F, G, H, or I postcross profile is permitted' ;;
 esac
 readonly V4_MODEL="${AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA:-}"
 readonly EXPECTED_V4_MODEL=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
@@ -116,6 +125,8 @@ case "$PROFILE" in
        reject 'only five exact 20M G stages are reviewed' ;;
   H) [[ "$TARGET_M" =~ ^(9032|9052|9072|9092|9112)$ ]] ||
        reject 'only five exact 20M H stages are reviewed' ;;
+  I) [[ "$TARGET_M" =~ ^(9132|9152|9172|9192|9212)$ ]] ||
+       reject 'only five exact 20M I stages are reviewed' ;;
 esac
 readonly SOURCE_M=$((TARGET_M-20))
 readonly START=$((SOURCE_M*1000000))
