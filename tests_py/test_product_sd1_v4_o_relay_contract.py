@@ -35,9 +35,8 @@ class V4ORelayContract(unittest.TestCase):
         self.assertEqual(env["AETHERCORE_SD1_V4_POSTCROSS_PROFILE"], "O")
         for key, value in PINNED_N.items():
             self.assertEqual(str(env[key]), value, key)
-        self.assertIn("github.event_name == 'push'", self.raw)
-        self.assertIn("github.ref == 'refs/heads/design/rv64gc-product-architecture-20261103'", self.raw)
-        self.assertIn("'.github/workflows/product-sd1-v4-o-9712-to-9992.yml'", self.raw)
+        self.assertIn("github.event.pull_request.number == 379", self.raw)
+        self.assertIn("github.event.label.name == 'enhancement'", self.raw)
         self.assertIn('.path==".github/workflows/product-sd1-v4-n-9612-to-9712.yml"', self.raw)
         self.assertIn('.name=="v4_postcross_five_true_rtl_stages_n"', self.raw)
         self.assertIn('Verify five complete v4 postcross real RTL checkpoints, no Debian PASS', self.raw)
