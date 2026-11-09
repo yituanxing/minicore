@@ -1,0 +1,299 @@
+name: Reviewed SD1 signed V5 15B genuine RTL five chained 1B jobs
+# Do not enable until V5 15B differential qualification, exact source SHA,
+# official O9992 artifact and approval are independently reviewed.
+# Single PR-labeled event, no workflow_run/dispatch/push and no write privileges.
+'on':
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: product-sd1-v5-15b-needs-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  V5_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+  # Pin the already-reviewed predecessor B. The final release commit C may
+  # change only the three guarded workflow files, never executable scripts.
+  # Unlike a literal C SHA in its own YAML, this does not require a git
+  # cryptographic self-reference and forbids a later PR head D from rearming.
+  V5_REVIEWED_PRIOR_HEAD: 'a0480c3cfe5ae2b01b92f82e5bc3d90582a9cc4b'
+  V5_QUAL_PRIOR_HEAD: 'a0480c3cfe5ae2b01b92f82e5bc3d90582a9cc4b'
+  V5_QUAL_RUN: '42599136275'
+  V5_QUAL_ID: '13664668373'
+  V5_QUAL_HEAD: 'a0480c3cfe5ae2b01b92f82e5bc3d90582a9cc4b'
+  V5_QUAL_NAME: 'product-sd1-model-migrate-v5-qual-9972-9992-42599136275'
+  V5_QUAL_DIGEST: '55d5cf2d8ff46c93eb6c21de1b9c451ff14287da8c03f9cc424d1dd0de41ff89'
+  V5_QUAL_MANIFEST_SHA: '63766841ea96bf75b40584e1760b9e78f538d3a7dd16193a3ff71e8d4fb8c700'
+  V5_MODEL_SHA: '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'
+  AETHERCORE_SD1_V5_REVIEWED_MODEL_SHA: '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'
+  V5_9992_HOST_SHA: 'c9adbd69da55bc10f7425cb9f455be445c3f6a92b17a3760d973e51c0f0b3107'
+  V5_9992_RTL_SHA: '06f11ab3ae9fa6e29868eaa8a3170463c3e098e7bf1329270631090e3dd6f126'
+  V5_9992_CARD_SHA: '0da3a1cba75cb79f53c023da547a2892ec2600a946d797d3a4b7e10ae45ea52e'
+  AETHERCORE_SD1_V5_15B_APPROVED: QUALIFIED_V5_15B_SIGNED_9992_MODEL_MIGRATION
+  AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V6_MIGRATED_15B
+  AETHERCORE_VERILATOR_VERSION: '5.054'
+  SIM_SETTLE_MODE: reference
+  VERILATOR_THREADS: '1'
+  AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+jobs:
+  v5_billion_1:
+    name: Genuine V5 signed Product RTL 9992M to 10992M, fifty 20M saves
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'enhancement' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs:
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - name: Source-pinned checkout with zero persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V5_SOURCE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify reviewed V5 15B repo source and scripts before any guest cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V5_SOURCE_SHA" ]] || exit 16
+          bash tools/ci/product_sd1_v5_release_guard.sh
+          bash -n tools/ci/product_sd1_migrated_v5_postcross_20m.sh
+          bash -n tools/ci/product_sd1_v5_chain_prepare.sh
+          python3 -m py_compile tools/ci/product_sd1_v5_chain.py
+          bash tools/ci/product_sd1_migrated_v5_postcross_20m.sh --plan
+      - id: batch
+        uses: ./.github/actions/product-sd1-v5-batch
+        with:
+          start_m: '9992'
+          end_m: '10992'
+          source_mode: qualified
+          source_id: '0'
+          source_name: qualified
+          source_digest: '0'
+          source_host_sha: ${{ env.V5_9992_HOST_SHA }}
+          source_rtl_sha: ${{ env.V5_9992_RTL_SHA }}
+          source_card_sha: ${{ env.V5_9992_CARD_SHA }}
+
+  v5_billion_2:
+    name: Genuine V5 signed Product RTL 10992M to 11992M, fifty 20M saves
+    needs: v5_billion_1
+    if: >-
+      needs.v5_billion_1.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs:
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - name: Source-pinned checkout with zero persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V5_SOURCE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify reviewed V5 15B repo source and scripts before any guest cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V5_SOURCE_SHA" ]] || exit 16
+          bash tools/ci/product_sd1_v5_release_guard.sh
+          bash -n tools/ci/product_sd1_migrated_v5_postcross_20m.sh
+          bash -n tools/ci/product_sd1_v5_chain_prepare.sh
+          python3 -m py_compile tools/ci/product_sd1_v5_chain.py
+          bash tools/ci/product_sd1_migrated_v5_postcross_20m.sh --plan
+      - id: batch
+        uses: ./.github/actions/product-sd1-v5-batch
+        with:
+          start_m: '10992'
+          end_m: '11992'
+          source_mode: intra_run
+          source_id: ${{ needs.v5_billion_1.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v5_billion_1.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v5_billion_1.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v5_billion_1.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v5_billion_1.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v5_billion_1.outputs.terminal_card_sha }}
+
+  v5_billion_3:
+    name: Genuine V5 signed Product RTL 11992M to 12992M, fifty 20M saves
+    needs: v5_billion_2
+    if: >-
+      needs.v5_billion_2.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs:
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - name: Source-pinned checkout with zero persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V5_SOURCE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify reviewed V5 15B repo source and scripts before any guest cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V5_SOURCE_SHA" ]] || exit 16
+          bash tools/ci/product_sd1_v5_release_guard.sh
+          bash -n tools/ci/product_sd1_migrated_v5_postcross_20m.sh
+          bash -n tools/ci/product_sd1_v5_chain_prepare.sh
+          python3 -m py_compile tools/ci/product_sd1_v5_chain.py
+          bash tools/ci/product_sd1_migrated_v5_postcross_20m.sh --plan
+      - id: batch
+        uses: ./.github/actions/product-sd1-v5-batch
+        with:
+          start_m: '11992'
+          end_m: '12992'
+          source_mode: intra_run
+          source_id: ${{ needs.v5_billion_2.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v5_billion_2.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v5_billion_2.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v5_billion_2.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v5_billion_2.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v5_billion_2.outputs.terminal_card_sha }}
+
+  v5_billion_4:
+    name: Genuine V5 signed Product RTL 12992M to 13992M, fifty 20M saves
+    needs: v5_billion_3
+    if: >-
+      needs.v5_billion_3.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs:
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - name: Source-pinned checkout with zero persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V5_SOURCE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify reviewed V5 15B repo source and scripts before any guest cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V5_SOURCE_SHA" ]] || exit 16
+          bash tools/ci/product_sd1_v5_release_guard.sh
+          bash -n tools/ci/product_sd1_migrated_v5_postcross_20m.sh
+          bash -n tools/ci/product_sd1_v5_chain_prepare.sh
+          python3 -m py_compile tools/ci/product_sd1_v5_chain.py
+          bash tools/ci/product_sd1_migrated_v5_postcross_20m.sh --plan
+      - id: batch
+        uses: ./.github/actions/product-sd1-v5-batch
+        with:
+          start_m: '12992'
+          end_m: '13992'
+          source_mode: intra_run
+          source_id: ${{ needs.v5_billion_3.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v5_billion_3.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v5_billion_3.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v5_billion_3.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v5_billion_3.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v5_billion_3.outputs.terminal_card_sha }}
+
+  v5_billion_5:
+    name: Genuine V5 signed Product RTL 13992M to 14992M, fifty 20M saves
+    needs: v5_billion_4
+    if: >-
+      needs.v5_billion_4.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs:
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - name: Source-pinned checkout with zero persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V5_SOURCE_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify reviewed V5 15B repo source and scripts before any guest cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V5_SOURCE_SHA" ]] || exit 16
+          bash tools/ci/product_sd1_v5_release_guard.sh
+          bash -n tools/ci/product_sd1_migrated_v5_postcross_20m.sh
+          bash -n tools/ci/product_sd1_v5_chain_prepare.sh
+          python3 -m py_compile tools/ci/product_sd1_v5_chain.py
+          bash tools/ci/product_sd1_migrated_v5_postcross_20m.sh --plan
+      - id: batch
+        uses: ./.github/actions/product-sd1-v5-batch
+        with:
+          start_m: '13992'
+          end_m: '14992'
+          source_mode: intra_run
+          source_id: ${{ needs.v5_billion_4.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v5_billion_4.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v5_billion_4.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v5_billion_4.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v5_billion_4.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v5_billion_4.outputs.terminal_card_sha }}
+  final_genuine_rtl_proof:
+    needs: [v5_billion_1, v5_billion_2, v5_billion_3, v5_billion_4, v5_billion_5]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Fail closed unless all 5B committed or early real UART service-login proved
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            ([.[] | select(.result=="failure" or .result=="cancelled")] | length)==0 and
+            (
+              .v5_billion_5.result=="success" and
+              .v5_billion_5.outputs.terminal_m=="14992"
+              or
+              ([.[] | select(.result=="success" and .outputs.serial_login_verified=="1")] | length)>=1
+            )
+          ' <<< "$NEEDS_JSON" >/dev/null || exit 16
+          echo 'PRODUCT_SD1_V5_RELAY_FINISHED_OR_UART_LOGIN_OBSERVED_REQUIRES_INDEPENDENT_ARTIFACT_AUDIT'
