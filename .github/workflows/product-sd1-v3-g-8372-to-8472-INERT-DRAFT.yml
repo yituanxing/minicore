@@ -34,6 +34,10 @@ jobs:
       F_HOST: UNREVIEWED_FAIL_CLOSED
       F_RTL: UNREVIEWED_FAIL_CLOSED
       F_CARD: UNREVIEWED_FAIL_CLOSED
+      F_ATTEST_RUN: UNREVIEWED_FAIL_CLOSED
+      F_ATTEST_HEAD: UNREVIEWED_FAIL_CLOSED
+      F_ATTEST_ID: UNREVIEWED_FAIL_CLOSED
+      F_ATTEST_ZIP: UNREVIEWED_FAIL_CLOSED
       V3_RUN: '42498142872'
       V3_HEAD: ca71830647b424aedb4064ca85a6c07d9ec6ff1f
       V3_ID: '13623808277'
@@ -42,7 +46,7 @@ jobs:
       AETHERCORE_SD1_V3_G_8372_HOST_SHA: UNREVIEWED_FAIL_CLOSED
       AETHERCORE_SD1_V3_G_8372_RTL_SHA: UNREVIEWED_FAIL_CLOSED
       AETHERCORE_SD1_V3_G_8372_CARD_SHA: UNREVIEWED_FAIL_CLOSED
-      AETHERCORE_SD1_V3_G_RELAY_EXECUTE: REVIEWED_F_8372M_AND_V3_QUALIFIED_20M_PASS
+      AETHERCORE_SD1_V3_G_RELAY_EXECUTE: REVIEWED_F_8372M_OFFLINE_ATTESTED_AND_V3_QUALIFIED_20M_PASS
       AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V4_MIGRATED_8P5B
       AETHERCORE_VERILATOR_VERSION: '5.054'
       SIM_SETTLE_MODE: reference
@@ -58,8 +62,12 @@ jobs:
           [[ "$G_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
              "$F_RUN" =~ ^[0-9]{10,13}$ &&
              "$F_HEAD" =~ ^[a-f0-9]{40}$ &&
-             "$F_8372_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
-          for digest in "$F_8372_ZIP" "$F_HOST" "$F_RTL" "$F_CARD" \
+             "$F_8372_ID" =~ ^[0-9]{8,13}$ &&
+             "$F_ATTEST_RUN" =~ ^[0-9]{10,13}$ &&
+             "$F_ATTEST_RUN" != "$F_RUN" &&
+             "$F_ATTEST_HEAD" =~ ^[a-f0-9]{40}$ &&
+             "$F_ATTEST_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
+          for digest in "$F_8372_ZIP" "$F_HOST" "$F_RTL" "$F_CARD" "$F_ATTEST_ZIP" \
             "$AETHERCORE_SD1_V3_G_8372_HOST_SHA" \
             "$AETHERCORE_SD1_V3_G_8372_RTL_SHA" \
             "$AETHERCORE_SD1_V3_G_8372_CARD_SHA"; do
@@ -68,28 +76,40 @@ jobs:
           [[ "$F_HOST" == "$AETHERCORE_SD1_V3_G_8372_HOST_SHA" &&
              "$F_RTL" == "$AETHERCORE_SD1_V3_G_8372_RTL_SHA" &&
              "$F_CARD" == "$AETHERCORE_SD1_V3_G_8372_CARD_SHA" ]] || exit 16
-      - name: Authenticate successful five real RTL F stages and v3 qualification
+      - name: Authenticate five saved RTL F stages despite known verifier typo, independent offline attestation, and v3 qualification
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$F_RUN" > "$RUNNER_TEMP/f.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$F_ATTEST_RUN" > "$RUNNER_TEMP/f-attest-run.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$V3_RUN" > "$RUNNER_TEMP/v3.json"
           jq -e --argjson id "$F_RUN" --arg h "$F_HEAD" '
-            .id==$id and .run_attempt==1 and .status=="completed" and .conclusion=="success" and
+            .id==$id and .run_attempt==1 and .status=="completed" and .conclusion=="failure" and
             .head_sha==$h and .event=="pull_request" and
             .head_branch=="design/rv64gc-product-architecture-20261103" and
             .path==".github/workflows/product-sd1-v3-f-8272-to-8372.yml"' "$RUNNER_TEMP/f.json"
+          jq -e --argjson id "$F_ATTEST_RUN" --arg h "$F_ATTEST_HEAD" '
+            .id==$id and .run_attempt==1 and .status=="completed" and .conclusion=="success" and
+            .head_sha==$h and .event=="pull_request" and
+            .head_branch=="design/rv64gc-product-architecture-20261103" and
+            .path==".github/workflows/product-sd1-v3-f8372-offline-attest.yml"' "$RUNNER_TEMP/f-attest-run.json"
           jq -e --argjson id "$V3_RUN" --arg h "$V3_HEAD" '
             .id==$id and .run_attempt==1 and .status=="completed" and .conclusion=="success" and
             .head_sha==$h and .event=="pull_request" and
             .head_branch=="design/rv64gc-product-architecture-20261103" and
             .path==".github/workflows/product-sd1-host-v3-8p5b-qualification.yml"' "$RUNNER_TEMP/v3.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$F_RUN/jobs?per_page=100" > "$RUNNER_TEMP/f-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$F_ATTEST_RUN/jobs?per_page=100" > "$RUNNER_TEMP/f-attest-jobs.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$V3_RUN/jobs?per_page=100" > "$RUNNER_TEMP/v3-jobs.json"
           jq -e '[.jobs[] | select(.name=="F_real_product_rtl_five_stages" and
-            .status=="completed" and .conclusion=="success" and
+            .status=="completed" and .conclusion=="failure" and
+            ([.steps[]|select(.conclusion=="failure")]|length==1) and
+            ([.steps[]|select(.name=="Verify five complete F checkpoints and no false Debian PASS" and
+              .status=="completed" and .conclusion=="failure")]|length==1) and
             ([.steps[]|select((.name|startswith("Advance genuine RTL Host-v3 ")) and .conclusion=="success")]|length==5) and
             ([.steps[]|select((.name|startswith("Upload complete ")) and .conclusion=="success")]|length==5))]|length==1' "$RUNNER_TEMP/f-jobs.json"
+          jq -e '[.jobs[]|select(.name=="F8372_offline_sha_attest_no_guest" and
+            .status=="completed" and .conclusion=="success")]|length==1' "$RUNNER_TEMP/f-attest-jobs.json"
           jq -e '[.jobs[] | select(.name=="qualify_v3_host_only_8072_to_8092" and .status=="completed" and .conclusion=="success" and
             ([.steps[]|select(.name=="Zero-cycle migrate C 8072M and run one real RTL 20M exact differential" and .conclusion=="success")]|length==1))]|length==1' "$RUNNER_TEMP/v3-jobs.json"
           for v in f v3; do
@@ -100,6 +120,41 @@ jobs:
               .id==$id and .workflow_run.id==$run and .name==$name and
               .digest==$sha and .expired==false and .size_in_bytes>1000000' "$RUNNER_TEMP/$v-art.json"
           done
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$F_ATTEST_ID" > "$RUNNER_TEMP/f-attest-art.json"
+          jq -e --argjson id "$F_ATTEST_ID" --argjson run "$F_ATTEST_RUN" \
+            --arg name "product-sd1-v3-f8372-offline-attested-$F_ATTEST_RUN" \
+            --arg sha "sha256:$F_ATTEST_ZIP" '
+            .id==$id and .workflow_run.id==$run and .name==$name and
+            .digest==$sha and .expired==false and .size_in_bytes>100' "$RUNNER_TEMP/f-attest-art.json"
+          curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$F_ATTEST_ID/zip" \
+            -o "$RUNNER_TEMP/f-attest.zip"
+          [[ "$(sha256sum "$RUNNER_TEMP/f-attest.zip" | cut -d' ' -f1)" == "$F_ATTEST_ZIP" ]] || exit 16
+          mkdir -p "$RUNNER_TEMP/f-attest-bundle"
+          unzip -p "$RUNNER_TEMP/f-attest.zip" f8372-offline-attestation.json \
+            > "$RUNNER_TEMP/f-attest-bundle/f8372-offline-attestation.json"
+          unzip -p "$RUNNER_TEMP/f-attest.zip" f8372-offline-attestation.sha256 \
+            > "$RUNNER_TEMP/f-attest-bundle/f8372-offline-attestation.sha256"
+          (cd "$RUNNER_TEMP/f-attest-bundle" && sha256sum -c f8372-offline-attestation.sha256)
+          jq -e --argjson run "$F_RUN" --arg head "$F_HEAD" \
+            --argjson id "$F_8372_ID" --arg zip "$F_8372_ZIP" \
+            --arg host "$F_HOST" --arg rtl "$F_RTL" --arg card "$F_CARD" '
+            .qualification=="FIVE_REAL_PRODUCT_RTL_F_STAGES_SHA_AUDITED_KNOWN_FINAL_VERIFIER_TYPO_NOT_DEBIAN_PASS" and
+            .f_run==$run and .f_head==$head and .f_job_id==128921785366 and
+            .f_run_conclusion=="failure_due_only_to_final_e_unbound_verifier" and
+            .only_failing_step_is_known_verifier_unbound_e==true and
+            .five_advances_and_uploads_success==true and .no_guest_cycles_executed==true and
+            .debian_login_claim==false and (.stages|length)==5 and
+            [.stages[].cycles]==[8292000000,8312000000,8332000000,8352000000,8372000000] and
+            ([.stages[]|select(.artifact_id>0 and .retired_delta>0 and .uart_bytes_delta>=0 and
+              .sd_command_delta>=0 and
+              (.zip_sha256|test("^[a-f0-9]{64}$")) and
+              (.host_sha256|test("^[a-f0-9]{64}$")) and
+              (.rtl_sha256|test("^[a-f0-9]{64}$")) and
+              (.card_sha256|test("^[a-f0-9]{64}$")))]|length)==5 and
+            .stages[4].artifact_id==$id and .stages[4].zip_sha256==$zip and
+            .stages[4].host_sha256==$host and .stages[4].rtl_sha256==$rtl and
+            .stages[4].card_sha256==$card' "$RUNNER_TEMP/f-attest-bundle/f8372-offline-attestation.json"
       - name: Checkout exact reviewed G experiment source
         uses: actions/checkout@v4
         with:

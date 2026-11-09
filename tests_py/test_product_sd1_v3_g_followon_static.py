@@ -34,7 +34,7 @@ class GFollowonStatic(unittest.TestCase):
         src = SCRIPT.read_text()
         for item in ("^(8392|8412|8432|8452|8472)$",
                      "source=qualified-v3-F-8372m",
-                     "REVIEWED_F_8372M_AND_V3_QUALIFIED_20M_PASS",
+                     "REVIEWED_F_8372M_OFFLINE_ATTESTED_AND_V3_QUALIFIED_20M_PASS",
                      "AETHERCORE_SD1_V3_G_8372_HOST_SHA",
                      "AETHERCORE_SD1_V3_G_8372_RTL_SHA",
                      "AETHERCORE_SD1_V3_G_8372_CARD_SHA",
@@ -50,6 +50,7 @@ class GFollowonStatic(unittest.TestCase):
         for key in (
             "G_SOURCE_SHA", "F_RUN", "F_HEAD", "F_8372_ID",
             "F_8372_ZIP", "F_HOST", "F_RTL", "F_CARD",
+            "F_ATTEST_RUN", "F_ATTEST_HEAD", "F_ATTEST_ID", "F_ATTEST_ZIP",
             "AETHERCORE_SD1_V3_G_8372_HOST_SHA",
             "AETHERCORE_SD1_V3_G_8372_RTL_SHA",
             "AETHERCORE_SD1_V3_G_8372_CARD_SHA",
@@ -58,6 +59,13 @@ class GFollowonStatic(unittest.TestCase):
         self.assertIn("V3_RUN: '42498142872'", wf)
         self.assertIn("product-sd1-v3-reviewed-8372-to-8472-five-stages", wf)
         self.assertIn("product-sd1-v3-f-8272-to-8372.yml", wf)
+        self.assertIn("product-sd1-v3-f8372-offline-attest.yml", wf)
+        self.assertIn("F8372_offline_sha_attest_no_guest", wf)
+        self.assertIn("product-sd1-v3-f8372-offline-attested-$F_ATTEST_RUN", wf)
+        self.assertIn("f8372-offline-attestation.sha256", wf)
+        self.assertIn("sha256sum -c f8372-offline-attestation.sha256", wf)
+        self.assertIn("only_failing_step_is_known_verifier_unbound_e==true", wf)
+        self.assertIn("failure_due_only_to_final_e_unbound_verifier", wf)
         self.assertIn("G_real_product_rtl_five_stages", wf)
         self.assertIn("run_attempt==1", wf)
         self.assertIn('.conclusion=="success"', wf)
@@ -79,6 +87,32 @@ class GFollowonStatic(unittest.TestCase):
         self.assertEqual(wf.count("- name: Upload complete "), 5)
         self.assertIn("include-hidden-files: true", wf)
         self.assertIn("PRODUCT_SD1_V3_G_REAL_RTL_8472M_COMPLETE_NOT_DEBIAN_PASS", wf)
+
+    def test_offline_attestation_json_schema_contract(self):
+        """Field contract from reviewed F attester commit 4192cc92.
+
+        The F run itself is red due solely to its final shell verifier;
+        these checks must not silently accept another unsuccessful stage.
+        """
+        wf = WORKFLOW.read_text()
+        self.assertIn("FIVE_REAL_PRODUCT_RTL_F_STAGES_SHA_AUDITED_KNOWN_FINAL_VERIFIER_TYPO_NOT_DEBIAN_PASS", wf)
+        self.assertIn('failure_due_only_to_final_e_unbound_verifier', wf)
+        self.assertIn('.conclusion=="failure"', wf)
+        self.assertIn('Verify five complete F checkpoints and no false Debian PASS', wf)
+        self.assertIn('([.steps[]|select(.conclusion=="failure")]|length==1)', wf)
+        for field in (
+            'f_run', 'f_head', 'f_job_id', 'f_run_conclusion',
+            'only_failing_step_is_known_verifier_unbound_e',
+            'five_advances_and_uploads_success', 'no_guest_cycles_executed',
+            'debian_login_claim', 'stages', 'cycles', 'artifact_id',
+            'zip_sha256', 'host_sha256', 'rtl_sha256', 'card_sha256',
+            'retired_delta', 'uart_bytes_delta', 'sd_command_delta',
+        ):
+            self.assertIn(field, wf, f"G did not authenticate attestation JSON field {field}")
+        self.assertIn('f8372-offline-attestation.json', wf)
+        self.assertIn('f8372-offline-attestation.sha256', wf)
+        self.assertIn('sha256sum -c f8372-offline-attestation.sha256', wf)
+        self.assertIn('only_failing_step_is_known_verifier_unbound_e==true', wf)
 
 if __name__ == "__main__":
     unittest.main()

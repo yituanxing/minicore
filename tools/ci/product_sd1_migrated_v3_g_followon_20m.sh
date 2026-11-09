@@ -33,7 +33,7 @@ if [[ "${1:---plan}" == --plan && $# -le 1 ]]; then
 fi
 [[ $# == 3 && "$1" == --execute-reviewed-20m ]] ||
   reject 'usage: --plan | --execute-reviewed-20m ABS_SOURCE_STAGE_DIR TARGET_MILLIONS'
-[[ "${AETHERCORE_SD1_V3_G_RELAY_EXECUTE:-}" == REVIEWED_F_8372M_AND_V3_QUALIFIED_20M_PASS &&
+[[ "${AETHERCORE_SD1_V3_G_RELAY_EXECUTE:-}" == REVIEWED_F_8372M_OFFLINE_ATTESTED_AND_V3_QUALIFIED_20M_PASS &&
    "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_FULL_DEBIAN_SIGNED_RELAY_V4_MIGRATED_8P5B &&
    "$V3_MODEL" =~ ^[a-f0-9]{64}$ &&
    "$V3_MODEL" != "$V2_MODEL" &&
