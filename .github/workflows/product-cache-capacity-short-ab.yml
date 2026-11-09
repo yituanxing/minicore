@@ -1,8 +1,12 @@
 name: Product SmallOoO Debian RAM cache-capacity short A/B
 
-# An explicit, bounded diagnostic. Never launch on ordinary pushes, and never
-# attach these alternative RTL models/checkpoints to the signed SD1 longrun.
+# An explicit, bounded diagnostic. Only a change to this workflow on the
+# named isolated branch can launch the one-time A/B push experiment; never
+# attach alternative RTL models/checkpoints to the signed SD1 longrun.
 on:
+  push:
+    branches: [work/xc7-cache-ab-isolated-20261109]
+    paths: [.github/workflows/product-cache-capacity-short-ab.yml]
   workflow_dispatch:
   pull_request:
     types: [labeled]
@@ -17,6 +21,8 @@ concurrency:
 jobs:
   cache-capacity-short:
     if: >-
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/work/xc7-cache-ab-isolated-20261109') ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository &&

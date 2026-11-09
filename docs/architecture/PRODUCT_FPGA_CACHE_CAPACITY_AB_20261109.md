@@ -106,7 +106,9 @@ machine still lacks Verilator and a Debian firmware image, so **no actual
 cache performance improvement or RTL boot milestone is yet measured**.
 The separate `.github/workflows/product-cache-capacity-short-ab.yml` is an
 explicit dispatch or same-repository PR-label workflow (not a push-triggered
-longrun). Its initial bounded 64/256 comparison retains independent model
+longrun). It also has a one-time, exact-branch `push` entry limited to changes
+of **that workflow file only**, to start the isolated 5M-cycle diagnostic
+without opening a PR or rerunning the XC7 map. Its initial bounded 64/256 comparison retains independent model
 identities and logs; 512 remains a follow-up requiring an explicit selection.
 
 ## Separate XC7 unplaced full-board cache-area A/B
