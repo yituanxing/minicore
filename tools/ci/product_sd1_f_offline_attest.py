@@ -86,7 +86,8 @@ def authenticate_provenance() -> None:
             matches = [x for x in steps if x["name"] == name and x.get("conclusion") == "success"]
             must(len(matches) == 1, "RTL advance or upload missing: " + name)
     log = subprocess.check_output(
-        ["gh", "api", f"repos/{REPO}/actions/jobs/{F_JOB_ID}/logs"], text=True,
+        ["gh", "api", "--allow-escape-sequences",
+         f"repos/{REPO}/actions/jobs/{F_JOB_ID}/logs"], text=True,
     )
     must("line 4: e: unbound variable" in log, "the known shell verifier typo is unproven")
 

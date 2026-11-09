@@ -27,6 +27,7 @@ class OfflineAttestationStatic(unittest.TestCase):
             'run.get("conclusion") == "failure"',
             '"Verify five complete F checkpoints and no false Debian PASS"',
             '"line 4: e: unbound variable"',
+            '"--allow-escape-sequences"',
             "len(failure) == 1",
             "len(matches) == 1",
             "snapshot_host_sha256",
