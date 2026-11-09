@@ -121,10 +121,14 @@ jobs:
             # change produces a distinct fingerprint and forces a new seed.
             # Repository-wide artifacts can exceed one 100-item page after
             # unrelated FPGA jobs; first query ONLY the C1 relay workflow.
-            mapfile -t candidates < <(gh api \
+            candidate_lines="$(gh api \
               "repos/$GITHUB_REPOSITORY/actions/workflows/product-sd1-c1-checkpoint-relay.yml/runs" -X GET \
-              -f event=pull_request -f status=completed -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
-              --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | .id')
+              -f event=pull_request -f status=success -f branch="$GITHUB_HEAD_REF" -F per_page=100 \
+              --jq '.workflow_runs[] | select(.conclusion == "success" and .head_repository.full_name == .repository.full_name) | .id')" || {
+              echo 'C1_AUTO_SOURCE_QUERY_FAILED: refusing implicit cold seed' >&2
+              exit 17
+            }
+            mapfile -t candidates <<< "$candidate_lines"
             for candidate in "${candidates[@]}"; do
               [[ "$candidate" =~ ^[0-9]+$ ]] || continue
               expected="product-sd1-c1-state-v1-$compatibility-$candidate"
@@ -134,7 +138,17 @@ jobs:
                 break
               fi
             done
-            [[ -n "$source_run" ]] && mode=advance || mode=seed
+            if [[ -n "$source_run" ]]; then
+              mode=advance
+            elif [[ -n "$candidate_lines" ]]; then
+              # A previous successful C1 relay exists, but no intact artifact
+              # has this compatibility SHA. Never turn a repeated PR label
+              # into a surprise cold RTL seed; explicit dispatch is separate.
+              echo 'C1_AUTO_RESEED_DENIED: prior C1 success but no compatible artifact; require deliberate seed' >&2
+              exit 18
+            else
+              mode=seed
+            fi
           fi
           if [[ "$mode" == advance ]]; then
             [[ "$source_run" =~ ^[1-9][0-9]*$ && "$source_run" != "$GITHUB_RUN_ID" ]] || {
@@ -179,7 +193,7 @@ jobs:
               (.files | type == "array" and length < 300) and
               all(.files[];
                 .status != "renamed" and
-                (.filename | test("^(docs/|tests_py/test_product_fpga_[^/]+[.]py$|tools/ci/product_fpga_[^/]+[.](sh|py)$|[.]github/workflows/product-fpga-[^/]+[.]yml$|[.]github/workflows/product-sd1-(official-artifact-relay|c1-checkpoint-relay)[.]yml$|tools/ci/product_sd1_(artifact_relay|c1_artifact_relay)[.]sh$|tests_py/test_product_sd1_(artifact_relay|c1_artifact_relay)_contract[.]py$|tests_py/test_product_sd1_cross_commit_qemu_gate_contract[.]py$|[.]github/workflows/product-sd1-v4-f-8812-to-8912[.]yml$|tests_py/test_product_sd1_v4_f_relay_contract[.]py$)"))
+                (.filename | test("^(docs/|tests_py/test_product_fpga_[^/]+[.]py$|tools/ci/product_fpga_[^/]+[.](sh|py)$|[.]github/workflows/product-fpga-[^/]+[.]yml$|[.]github/workflows/product-sd1-(official-artifact-relay|c1-checkpoint-relay)[.]yml$|tools/ci/product_sd1_(artifact_relay|c1_artifact_relay)[.]sh$|tests_py/test_product_sd1_(artifact_relay|c1_artifact_relay)_contract[.]py$|tests_py/test_product_sd1_cross_commit_qemu_gate_contract[.]py$|[.]github/workflows/product-sd1-v4-f-8812-to-8912[.]yml$|tests_py/test_product_sd1_v4_f_relay_contract[.]py$|[.]github/workflows/product-sd1-v4-g-8912-to-9012[.]yml$|tests_py/test_product_sd1_v4_g_relay_contract[.]py$)"))
               )
             ' <<< "$comparison" >/dev/null
           }

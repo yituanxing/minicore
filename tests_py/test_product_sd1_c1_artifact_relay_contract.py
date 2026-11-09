@@ -82,6 +82,12 @@ class ProductC1PublicArtifactContract(unittest.TestCase):
         self.assertIn('steps.source.outputs.mode == \'seed\'', workflow)
         self.assertIn('product-sd1-native-qemu-oracle.yml product-sd1-c1-qemu-oracle.yml', workflow)
         self.assertIn("C1_RTL_LONGRUN_QEMU_ORACLE_VERIFIED", workflow)
+        self.assertIn('status=success -f branch="$GITHUB_HEAD_REF"', workflow)
+        self.assertIn('candidate_lines="$(gh api', workflow)
+        self.assertIn("C1_AUTO_SOURCE_QUERY_FAILED", workflow)
+        self.assertIn("C1_AUTO_RESEED_DENIED", workflow)
+        self.assertIn('elif [[ -n "$candidate_lines" ]]', workflow)
+        self.assertIn('mode=advance', workflow)
         self.assertNotIn("product_sd1_c1_checkpoint.sh release", workflow)
         self.assertNotEqual(QEMU, WORKFLOW)
 
