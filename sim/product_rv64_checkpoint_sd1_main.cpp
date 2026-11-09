@@ -45,10 +45,15 @@ constexpr std::string_view kFrozenMigratedV1Model =
 // The following v3 migration is deliberately scoped to the C 8072M source.
 constexpr std::string_view kFrozenMigratedV2Model =
     "c47f6d16aab24bf83df9f4baab2b3cbbe19ced7bc3f42c1ffa96c5f35530aa70";
+// Exact qualified 8.5B Host-v3 executable; source of the isolated v4 relay.
+constexpr std::string_view kFrozenMigratedV3Model =
+    "04e671f2dfae8aa6d7c5b17a93c688cb7b30005de9a2a329f983b909f4fa1be6";
 constexpr std::uint64_t kV2MigrationSourceCycles = 7892000000ULL;
 constexpr std::uint64_t kV2MigratedMaxCycles = 8100000000ULL;
 constexpr std::uint64_t kV3MigrationSourceCycles = 8072000000ULL;
 constexpr std::uint64_t kV3MigratedMaxCycles = 8500000000ULL;
+constexpr std::uint64_t kV4MigrationSourceCycles = 8272000000ULL;
+constexpr std::uint64_t kV4MigratedMaxCycles = 10000000000ULL;
 constexpr std::uint64_t kFnv = 14695981039346656037ULL;
 constexpr std::uint64_t kPrime = 1099511628211ULL;
 constexpr std::uint64_t kDtbAddress = 0x87f00000ULL;
@@ -557,7 +562,7 @@ void result(const Observer& o, const VerilatedContext& ctx, const Memory& mem,
 int main(int argc,char** argv) {
   try {
     if (argc<14)
-      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release|migrate-v1|migrate-v2-8b|migrate-v3-8p5b FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migration OLD_EXEC DEST_PREFIX]");
+      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release|migrate-v1|migrate-v2-8b|migrate-v3-8p5b|migrate-v4-10b FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migration OLD_EXEC DEST_PREFIX]");
     const std::string mode=argv[1],fw=argv[2],dtb=argv[3],sd=argv[4],prefix=argv[5];
     const Identity id{argv[6],argv[7],argv[8],argv[9],argv[10],argv[11]};
     id.validate();
@@ -566,7 +571,8 @@ int main(int argc,char** argv) {
     const bool c1Mode=c1Save || c1Advance || c1Release;
     const bool migratingV2=mode=="migrate-v2-8b";
     const bool migratingV3=mode=="migrate-v3-8p5b";
-    const bool migrating=mode=="migrate-v1" || migratingV2 || migratingV3;
+    const bool migratingV4=mode=="migrate-v4-10b";
+    const bool migrating=mode=="migrate-v1" || migratingV2 || migratingV3 || migratingV4;
     if (mode!="save" && mode!="snapshot" && mode!="restore" && mode!="advance" &&
         !c1Mode && !migrating)
       throw std::runtime_error("invalid SD1 checkpoint mode");
@@ -620,11 +626,15 @@ int main(int argc,char** argv) {
         std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V3_MIGRATED_8P1B";
     const bool migratedRelayV3=relayConfirm &&
         std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V4_MIGRATED_8P5B";
-    const std::uint64_t defaultMaxCycle=migratedRelayV3?kV3MigratedMaxCycles:
+    const bool migratedRelayV4=relayConfirm &&
+        std::string_view(relayConfirm)=="SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B";
+    const std::uint64_t defaultMaxCycle=migratedRelayV4?kV4MigratedMaxCycles:
+        migratedRelayV3?kV3MigratedMaxCycles:
         migratedRelayV2?kV2MigratedMaxCycles:
         migratedRelay?8000000000ULL:
         (longRelay?4000000000ULL:1800000000ULL);
-    const std::uint64_t maxCycle=migratingV3?kV3MigratedMaxCycles:
+    const std::uint64_t maxCycle=migratingV4?kV4MigratedMaxCycles:
+        migratingV3?kV3MigratedMaxCycles:
         migratingV2?kV2MigratedMaxCycles:
         (c1Mode || migrating)?4000000000ULL:defaultMaxCycle;
     if (bootCycles<1000000 || bootCycles>maxCycle ||
@@ -634,7 +644,7 @@ int main(int argc,char** argv) {
         ((advancing || c1Release) && bootCycles>maxCycle-replayCycles) ||
         policy.uartTrigger.size()>128 || policy.uartInput.size()>4096 ||
         policy.postInputBudget>5000000)
-      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default, signed relay <=4B, migrated v1 <=8B, explicit v2 <=8.1B, explicit v3 <=8.5B, migration zero cycles");
+      throw std::runtime_error("SD1 cold boot <=20M, staged resume <=20M/step, test replay <=5M; 1.8B default, signed relay <=4B, migrated v1 <=8B, explicit v2 <=8.1B, explicit v3 <=8.5B, explicit v4 <=10B, migration zero cycles");
     if (!std::filesystem::is_regular_file(fw) ||
         !std::filesystem::is_regular_file(dtb) ||
         !std::filesystem::is_regular_file(sd) ||
@@ -654,21 +664,25 @@ int main(int argc,char** argv) {
         throw std::runtime_error("SD1 real executable/firmware/DTB/SD bytes changed");
     if (migrating) {
       const char* confirm=std::getenv("AETHERCORE_SD1_MODEL_MIGRATE_CONFIRM");
-      const std::string_view sourceModel=migratingV3?
+       const std::string_view sourceModel=migratingV4?
+           kFrozenMigratedV3Model:migratingV3?
           kFrozenMigratedV2Model:(migratingV2?kFrozenMigratedV1Model:kFrozenPollingModel);
-      const std::string_view confirmation=migratingV3?
+       const std::string_view confirmation=migratingV4?
+           "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V4_10B_8272M":migratingV3?
           "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V3_8P5B_8072M":
           (migratingV2?"FROZEN_SIGNED_SD1_MODEL_MIGRATE_V2_8B_7892M":
                        "FROZEN_SIGNED_SD1_MODEL_MIGRATE_V1");
       if (!(confirm && std::string_view(confirm)==confirmation))
-        throw std::runtime_error(migratingV3?
+         throw std::runtime_error(migratingV4?
+             "migrate-v4-10b requires exact E 8272M confirmation":migratingV3?
             "migrate-v3-8p5b requires exact C 8072M confirmation":migratingV2?
             "migrate-v2-8b requires exact 7892M confirmation":
             "migrate-v1 requires explicit frozen-model confirmation");
       if (id.model!=sourceModel || currentModelSha==id.model ||
           !std::filesystem::is_regular_file(argv[14]) ||
           std::filesystem::is_symlink(argv[14]) || shaFile(argv[14])!=id.model)
-        throw std::runtime_error(migratingV3?
+         throw std::runtime_error(migratingV4?
+             "migrate-v4-10b requires exact qualified Host-v3 source executable":migratingV3?
             "migrate-v3-8p5b requires qualified Host-v2 source executable":migratingV2?
             "migrate-v2-8b requires exact qualified migrated-v1 source executable":
             "migrate-v1 requires the real frozen polling executable");
@@ -681,14 +695,15 @@ int main(int argc,char** argv) {
           std::filesystem::exists(std::string(argv[15])+".pre.rtl"))
         throw std::runtime_error("migrate-v1 requires distinct, absent destination directory");
       const auto ready=sourcePrefix.parent_path()/
-          ((migratingV2 || migratingV3)?".migration-ready":".polling-ready");
+           ((migratingV2 || migratingV3 || migratingV4)?".migration-ready":".polling-ready");
       if (std::filesystem::is_symlink(ready) ||
           pollingReadyField(ready,"schema")!="AETSDCP1" ||
           pollingReadyField(ready,"qualification")!=
-            ((migratingV2 || migratingV3)?"PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS":
+             ((migratingV2 || migratingV3 || migratingV4)?"PRODUCT_SD1_MIGRATED_WARM_RTL_NOT_DEBIAN_PASS":
                          "PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS") ||
           pollingReadyField(ready,"boot_cycles")!=std::to_string(bootCycles))
-        throw std::runtime_error(migratingV3?
+         throw std::runtime_error(migratingV4?
+             "migrate-v4-10b requires authenticated E 8272M source":migratingV3?
             "migrate-v3-8p5b requires authenticated C 8072M source":migratingV2?
             "migrate-v2-8b requires authenticated migrated 7892M source":
             "migrate-v1 requires authentic bounded polling source");
@@ -705,6 +720,14 @@ int main(int argc,char** argv) {
            pollingReadyField(ready,"original_model_sha256")!=kFrozenPollingModel ||
            pollingReadyField(ready,"debian_login_claim")!="0"))
         throw std::runtime_error("migrate-v3-8p5b 8072M origin/lineage mismatch");
+      if (migratingV4 &&
+          (bootCycles!=kV4MigrationSourceCycles ||
+           sourcePrefix.parent_path().filename()!="8272m" ||
+           pollingReadyField(ready,"source_cycles")!="8252000000" ||
+           pollingReadyField(ready,"previous_model_sha256")!=kFrozenMigratedV2Model ||
+           pollingReadyField(ready,"original_model_sha256")!=kFrozenPollingModel ||
+           pollingReadyField(ready,"debian_login_claim")!="0"))
+        throw std::runtime_error("migrate-v4-10b 8272M origin/lineage mismatch");
       for (const auto& [key,sha] : {
           std::pair<std::string_view,std::string_view>{"model_sha256",id.model},
           {"firmware_sha256",id.firmware},{"dtb_sha256",id.dtb},
@@ -758,7 +781,8 @@ int main(int argc,char** argv) {
       // then atomically publish the *directory*. No partial valid destination
       // becomes visible even if a process is killed between Host/RTL writes.
       const std::string pattern=targetDir.string()+
-          (migratingV3?".migrate-v3-8p5b.XXXXXX":
+           (migratingV4?".migrate-v4-10b.XXXXXX":
+            migratingV3?".migrate-v3-8p5b.XXXXXX":
            migratingV2?".migrate-v2-8b.XXXXXX":".migrate-v1.XXXXXX");
       std::vector<char> pathTemplate(pattern.begin(),pattern.end());
       pathTemplate.push_back('\0');
@@ -779,7 +803,8 @@ int main(int argc,char** argv) {
         std::filesystem::remove_all(stagingDir,ignored);
         throw;
       }
-      std::cout<<(migratingV3?"PRODUCT_SD1_MODEL_MIGRATE_V3_8P5B_ZERO_STEP_PASS":
+       std::cout<<(migratingV4?"PRODUCT_SD1_MODEL_MIGRATE_V4_10B_ZERO_STEP_PASS":
+                  migratingV3?"PRODUCT_SD1_MODEL_MIGRATE_V3_8P5B_ZERO_STEP_PASS":
                  migratingV2?"PRODUCT_SD1_MODEL_MIGRATE_V2_8B_ZERO_STEP_PASS":
                              "PRODUCT_SD1_MODEL_MIGRATE_V1_ZERO_STEP_PASS")
                <<" cycles="<<obs.cycles<<" source_model_sha256="<<id.model
