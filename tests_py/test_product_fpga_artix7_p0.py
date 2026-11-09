@@ -162,6 +162,10 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
         self.assertIn("tests_py.test_product_nexys_axi_port_gate", workflow)
         self.assertIn("nexys-axi-port-report.json", workflow)
         self.assertIn("mapped_product_ports == 50", workflow)
+        # The producer checks that source/tooling files are clean: do not
+        # mutate the tracked Mill launcher during a CI preflight.
+        self.assertNotIn("chmod +x mill", workflow)
+        self.assertEqual(workflow.count("product_fpga_artix7_p0.sh prepare"), 1)
         self.assertLess(workflow.index("product_fpga_artix7_p0.sh prepare"),
                         workflow.index("product_nexys_axi_port_gate.py"))
         self.assertNotIn("synth_ecp5", workflow)

@@ -42,7 +42,6 @@ jobs:
           python3 -m unittest tests_py.test_product_fpga_artix7_p0 -v
           bash -n tools/ci/product_fpga_artix7_p0.sh
           command -v jq
-          chmod +x mill
 
       # Unlike the Mill dependency cache, this stores the validated emitted
       # RTL itself across separate runs of the SAME exact source commit.
@@ -58,7 +57,6 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/product-artix7-p0"
-          bash tools/ci/product_fpga_artix7_p0.sh prepare "$out"
           bash tools/ci/product_fpga_artix7_p0.sh prepare "$out"
           jq -e '.status == "RTL_EXPORT_PASS" and .vendor_ddr_phy_included == false' "$out/manifest.json"
           echo "ARTIX7_P0_OUT=$out" >> "$GITHUB_ENV"
