@@ -13,6 +13,14 @@ TARGETS = (8532, 8552, 8572, 8592, 8612)
 
 
 class V4PostcrossStatic(unittest.TestCase):
+    @staticmethod
+    def c_environment():
+        # Hosted D workflows set their profile job-wide. Legacy C assertions
+        # must still exercise the default C path rather than inherit D.
+        env = os.environ.copy()
+        env.pop("AETHERCORE_SD1_V4_POSTCROSS_PROFILE", None)
+        return env
+
     @classmethod
     def setUpClass(cls):
         cls.content = SCRIPT.read_text()
@@ -22,13 +30,14 @@ class V4PostcrossStatic(unittest.TestCase):
 
     def test_shell_syntax_and_zero_guest_plan(self):
         subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
-        p = subprocess.run(["bash", str(SCRIPT), "--plan"], capture_output=True, text=True, check=True)
+        p = subprocess.run(["bash", str(SCRIPT), "--plan"], env=self.c_environment(),
+                           capture_output=True, text=True, check=True)
         self.assertIn("no_guest_cycles=1", p.stdout)
         self.assertIn("stages=8532,8552,8572,8592,8612", p.stdout)
         self.assertNotIn("REAL_RTL_STAGE_SAVED", p.stdout)
 
     def test_unreviewed_execution_fails_before_any_rtl_cycle(self):
-        env = os.environ.copy()
+        env = self.c_environment()
         for key in ("AETHERCORE_SD1_V4_CATCHUP_EXECUTE", "AETHERCORE_SD1_RELAY_CONFIRM",
                     "AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA"):
             env.pop(key, None)
@@ -39,7 +48,7 @@ class V4PostcrossStatic(unittest.TestCase):
             self.assertIn("unreviewed v4 model or timing configuration", p.stderr)
 
     def test_wrong_stage_or_source_is_rejected_even_with_auth_flags(self):
-        env = os.environ.copy()
+        env = self.c_environment()
         env.update({
             "AETHERCORE_SD1_V4_CATCHUP_EXECUTE": "REVIEWED_V4_8292M_20M_EXACT_DIFF_AND_SOURCE_SHA_AUDITED",
             "AETHERCORE_SD1_RELAY_CONFIRM": "SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B",
