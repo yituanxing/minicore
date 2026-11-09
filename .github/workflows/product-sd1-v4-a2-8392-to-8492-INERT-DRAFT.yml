@@ -1,0 +1,310 @@
+name: Reviewed SD1 Host-v4 A2 real RTL 8392M to 8492M catch-up
+
+# INERT SOURCE-PINNED DRAFT. Publication forbidden until independent review and exact experiment SHA.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-host-v4-A2-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  v4_catchup_five_true_rtl_stages_a2:
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'product-sd1-v4-reviewed-8392-to-8492-five-stages' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 155
+    env:
+      GH_TOKEN: ${{ github.token }}
+      V4_CATCHUP_SOURCE_SHA: UNREVIEWED_FAIL_CLOSED
+      V4_QUAL_RUN: '42545549282'
+      V4_QUAL_HEAD: fed99c48bd48d55e5c3c88735957469fc05633e3
+      V4_QUAL_ID: '13642643665'
+      V4_QUAL_ZIP: 256746ebcf7d40861fd671bf9df17d9136884fc08719861c469308ddc7b29377
+      V4_QUAL_MANIFEST: 2b82759d2dab4abe1ae213d682338c5238a0e8abf828562455036e7f7554a833
+      A1_RUN: UNREVIEWED_FAIL_CLOSED
+      A1_HEAD: UNREVIEWED_FAIL_CLOSED
+      A1_8312_ID: UNREVIEWED_FAIL_CLOSED
+      A1_8312_ZIP: UNREVIEWED_FAIL_CLOSED
+      A1_8332_ID: UNREVIEWED_FAIL_CLOSED
+      A1_8332_ZIP: UNREVIEWED_FAIL_CLOSED
+      A1_8352_ID: UNREVIEWED_FAIL_CLOSED
+      A1_8352_ZIP: UNREVIEWED_FAIL_CLOSED
+      A1_8372_ID: UNREVIEWED_FAIL_CLOSED
+      A1_8372_ZIP: UNREVIEWED_FAIL_CLOSED
+      A1_8392_ID: UNREVIEWED_FAIL_CLOSED
+      A1_8392_ZIP: UNREVIEWED_FAIL_CLOSED
+      AETHERCORE_SD1_V4_A2_8392_HOST_SHA: UNREVIEWED_FAIL_CLOSED
+      AETHERCORE_SD1_V4_A2_8392_RTL_SHA: UNREVIEWED_FAIL_CLOSED
+      AETHERCORE_SD1_V4_A2_8392_CARD_SHA: UNREVIEWED_FAIL_CLOSED
+      AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA: ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
+      AETHERCORE_SD1_V4_CATCHUP_8292_HOST_SHA: 5a2efcdcc748b28a3ccf05787ac949dc4e473b1c2889790b21d39d135dde3580
+      AETHERCORE_SD1_V4_CATCHUP_8292_RTL_SHA: 71b8083cb692db41759ade061b256a8107765d99fd476b7a42e96685830142f1
+      AETHERCORE_SD1_V4_CATCHUP_8292_CARD_SHA: 4b41bae42c7d858aa17a5b3379a45b32faff1edec51ed22605e949b6a273b0ae
+      AETHERCORE_SD1_V4_CATCHUP_EXECUTE: REVIEWED_V4_8292M_20M_EXACT_DIFF_AND_SOURCE_SHA_AUDITED
+      AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V5_MIGRATED_10B
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      OUT: build/product-sd1-migrated-v4-10b-catchup
+    steps:
+      - name: Fail closed without exact reviewed v4 catch-up source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$V4_CATCHUP_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+             "$A1_RUN" =~ ^[0-9]{10,13}$ && "$A1_HEAD" =~ ^[a-f0-9]{40}$ &&
+             "$A1_8312_ID" =~ ^[0-9]{8,13}$ &&
+             "$A1_8332_ID" =~ ^[0-9]{8,13}$ &&
+             "$A1_8352_ID" =~ ^[0-9]{8,13}$ &&
+             "$A1_8372_ID" =~ ^[0-9]{8,13}$ &&
+             "$A1_8392_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
+          [[ "$V4_QUAL_RUN" =~ ^[0-9]{10,13}$ && "$V4_QUAL_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
+          for sha in "$V4_QUAL_ZIP" "$V4_QUAL_MANIFEST" "$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA" \
+            "$AETHERCORE_SD1_V4_A2_8392_HOST_SHA" "$AETHERCORE_SD1_V4_A2_8392_RTL_SHA" \
+            "$AETHERCORE_SD1_V4_A2_8392_CARD_SHA" \
+            "$A1_8392_ZIP" "$AETHERCORE_SD1_V4_A2_8392_HOST_SHA" \
+            "$AETHERCORE_SD1_V4_A2_8392_RTL_SHA" "$AETHERCORE_SD1_V4_A2_8392_CARD_SHA" \
+            "$A1_8312_ZIP" "$A1_8332_ZIP" "$A1_8352_ZIP" "$A1_8372_ZIP"; do
+            [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          done
+      - name: Verify official v4 qualification overall green and actual exact 20M RTL differential
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$V4_QUAL_RUN" > "$RUNNER_TEMP/v4-run.json"
+          jq -e --argjson id "$V4_QUAL_RUN" --arg head "$V4_QUAL_HEAD" '
+            .id==$id and .head_sha==$head and .run_attempt==1 and
+            .status=="completed" and .conclusion=="success" and .event=="pull_request" and
+            .head_branch=="design/rv64gc-product-architecture-20261103" and
+            .path==".github/workflows/product-sd1-v4-8272-to-8292-qualification.yml"
+          ' "$RUNNER_TEMP/v4-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$V4_QUAL_RUN/jobs?per_page=100" > "$RUNNER_TEMP/v4-jobs.json"
+          jq -e '[.jobs[]|select(.name=="qualify_v4_host_only_8272_to_8292" and
+            .status=="completed" and .conclusion=="success" and
+            ([.steps[]|select(.name=="Zero-cycle migrate E8272 and one genuine v4 20M replay against F8292" and
+              .status=="completed" and .conclusion=="success")]|length==1) and
+            ([.steps[]|select(.name=="Upload complete v4 candidate executable and both differential states" and
+              .status=="completed" and .conclusion=="success")]|length==1))]|length==1' "$RUNNER_TEMP/v4-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V4_QUAL_ID" > "$RUNNER_TEMP/v4-art.json"
+          jq -e --argjson id "$V4_QUAL_ID" --argjson run "$V4_QUAL_RUN" \
+            --arg name "product-sd1-model-migrate-v4-qual-8272-8292-$V4_QUAL_RUN" \
+            --arg digest "sha256:$V4_QUAL_ZIP" '
+            .id==$id and .workflow_run.id==$run and .name==$name and
+            .digest==$digest and .expired==false and .size_in_bytes>1000000
+          ' "$RUNNER_TEMP/v4-art.json"
+      - name: Authenticate full five-stage A1 true RTL and precise 8392M saved artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$A1_RUN" > "$RUNNER_TEMP/a1-run.json"
+          jq -e --argjson id "$A1_RUN" --arg head "$A1_HEAD" '
+            .id==$id and .head_sha==$head and .run_attempt==1 and
+            .status=="completed" and .conclusion=="success" and .event=="pull_request" and
+            .head_branch=="design/rv64gc-product-architecture-20261103" and
+            .path==".github/workflows/product-sd1-v4-a1-8292-to-8392.yml"
+          ' "$RUNNER_TEMP/a1-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$A1_RUN/jobs?per_page=100" > "$RUNNER_TEMP/a1-jobs.json"
+          jq -e '[.jobs[]|select(.name=="v4_catchup_five_true_rtl_stages" and
+            .status=="completed" and .conclusion=="success" and
+            ([.steps[]|select((.name|startswith("Advance genuine v4 Product RTL ")) and .conclusion=="success")]|length==5) and
+            ([.steps[]|select((.name|startswith("Upload complete v4 ")) and .conclusion=="success")]|length==5))]|length==1' "$RUNNER_TEMP/a1-jobs.json"
+          for m in 8312 8332 8352 8372 8392; do
+            case "$m" in
+              8312) id="$A1_8312_ID"; zip="$A1_8312_ZIP" ;;
+              8332) id="$A1_8332_ID"; zip="$A1_8332_ZIP" ;;
+              8352) id="$A1_8352_ID"; zip="$A1_8352_ZIP" ;;
+              8372) id="$A1_8372_ID"; zip="$A1_8372_ZIP" ;;
+              8392) id="$A1_8392_ID"; zip="$A1_8392_ZIP" ;;
+            esac
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > "$RUNNER_TEMP/a1-$m-art.json"
+            jq -e --argjson id "$id" --argjson run "$A1_RUN" \
+              --arg name "product-sd1-migrated-v4-a-${m}m-$A1_RUN" \
+              --arg digest "sha256:$zip" '
+              .id==$id and .workflow_run.id==$run and .name==$name and
+              .digest==$digest and .expired==false and .size_in_bytes>1000000
+            ' "$RUNNER_TEMP/a1-$m-art.json"
+          done
+      - name: Checkout exact reviewed v4 catch-up source and no-clock preflight
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V4_CATCHUP_SOURCE_SHA }}
+          persist-credentials: false
+      - name: Validate v4 catch-up source and pure plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V4_CATCHUP_SOURCE_SHA" ]] || exit 16
+          bash -n tools/ci/product_sd1_migrated_v4_catchup_20m.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -q tests_py.test_product_sd1_migrated_v4_catchup_static
+          bash tools/ci/product_sd1_migrated_v4_catchup_20m.sh --plan
+      - name: Restore signed Debian seed
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Restore GPIO-CS kernel Image
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Verify frozen signed media caches
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true &&
+            ( '${{ steps.seed.outputs.cache-hit }}' == true || '${{ steps.seed.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore frozen polling firmware and DTB
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      - name: Import independently verified v4 model and full A1 8392M Host RTL card state
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=build/product-sd1-model-migration-v4-10b-qualified
+          first=build/product-sd1-v4-a2-source/8392m
+          [[ ! -e "$out" && ! -e "$first" ]] || exit 16
+          mkdir -p "$out" "$(dirname "$first")"
+          curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$V4_QUAL_ID/zip" -o "$RUNNER_TEMP/v4-qual.zip"
+          [[ "$(sha256sum "$RUNNER_TEMP/v4-qual.zip" | cut -d' ' -f1)" == "$V4_QUAL_ZIP" ]] || exit 16
+          unzip -qq "$RUNNER_TEMP/v4-qual.zip" -d "$out"
+          [[ "$(sha256sum "$out/qualification-manifest.txt" | cut -d' ' -f1)" == "$V4_QUAL_MANIFEST" ]] || exit 16
+          curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$A1_8392_ID/zip" -o "$RUNNER_TEMP/a1-8392.zip"
+          [[ "$(sha256sum "$RUNNER_TEMP/a1-8392.zip" | cut -d' ' -f1)" == "$A1_8392_ZIP" ]] || exit 16
+          unzip -qq "$RUNNER_TEMP/a1-8392.zip" -d "$first"
+          exe="$out/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop"
+          chmod 755 "$exe"
+          [[ "$(sha256sum "$exe" | cut -d' ' -f1)" == "$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA" ]] || exit 16
+          for kind in host rtl; do
+            f="$first/persistent.pre.$kind"
+            if [[ "$kind" == host ]]; then expected="$AETHERCORE_SD1_V4_A2_8392_HOST_SHA"
+            else expected="$AETHERCORE_SD1_V4_A2_8392_RTL_SHA"; fi
+            [[ "$(sha256sum "$f" | cut -d' ' -f1)" == "$expected" ]] || exit 16
+          done
+          [[ "$(sha256sum "$first/card-progress.json" | cut -d' ' -f1)" == "$AETHERCORE_SD1_V4_A2_8392_CARD_SHA" ]] || exit 16
+          for clause in 'boot_cycles=8392000000' 'source_cycles=8372000000' \
+            'debian_login_claim=0' \
+            "model_sha256=$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA" \
+            "snapshot_host_sha256=$AETHERCORE_SD1_V4_A2_8392_HOST_SHA" \
+            "snapshot_rtl_sha256=$AETHERCORE_SD1_V4_A2_8392_RTL_SHA" \
+            "card_progress_sha256=$AETHERCORE_SD1_V4_A2_8392_CARD_SHA"; do
+            grep -Fxq "$clause" "$first/.migration-ready" || exit 16
+          done
+          grep -Fxq 'full_rtl_identical=1' "$out/qualification-manifest.txt"
+          grep -Fxq 'full_host_except_model_sha_identical=1' "$out/qualification-manifest.txt"
+          grep -Fxq 'replay_cycles=20000000' "$out/qualification-manifest.txt"
+          grep -Fxq 'cross_8p5b_executed=0' "$out/qualification-manifest.txt"
+          echo 'V4_QUALIFIED_A1_8392M_VERIFIED_NO_NEW_GUEST_CLOCK'
+      - name: Advance genuine v4 Product RTL 8392M to 8412M
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_catchup_20m.sh --execute-reviewed-20m "$GITHUB_WORKSPACE/build/product-sd1-v4-a2-source/8392m" 8412
+      - name: Upload complete v4 8412M before next guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-a2-8412m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-catchup/8412m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 8412M to 8432M
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_catchup_20m.sh --execute-reviewed-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-catchup/8412m" 8432
+      - name: Upload complete v4 8432M before next guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-a2-8432m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-catchup/8432m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 8432M to 8452M
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_catchup_20m.sh --execute-reviewed-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-catchup/8432m" 8452
+      - name: Upload complete v4 8452M before next guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-a2-8452m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-catchup/8452m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 8452M to 8472M
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_catchup_20m.sh --execute-reviewed-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-catchup/8452m" 8472
+      - name: Upload complete v4 8472M before next guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-a2-8472m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-catchup/8472m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advance genuine v4 Product RTL 8472M to 8492M
+        timeout-minutes: 25
+        run: bash tools/ci/product_sd1_migrated_v4_catchup_20m.sh --execute-reviewed-20m "$GITHUB_WORKSPACE/build/product-sd1-migrated-v4-10b-catchup/8472m" 8492
+      - name: Upload complete v4 8492M before next guest RTL cycle
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-migrated-v4-a2-8492m-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-catchup/8492m
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify five complete A2 8392 to 8492 checkpoints without false Debian PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          for m in 8412 8432 8452 8472 8492; do
+            d="$OUT/${m}m"
+            [[ -s "$d/.migration-ready" && -s "$d/persistent.pre.host" &&
+               -s "$d/persistent.pre.rtl" && -s "$d/card-progress.json" ]] || exit 16
+            grep -Fxq 'debian_login_claim=0' "$d/.migration-ready"
+            grep -Fxq "boot_cycles=${m}000000" "$d/.migration-ready"
+          done
+          echo 'PRODUCT_SD1_V4_REAL_RTL_A2_8492M_COMPLETE_NOT_8P5B_CROSS_NOT_DEBIAN_PASS'
+      - name: Preserve v4 A diagnostics even if later stage fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-v4-A2-diagnostics-${{ github.run_id }}
+          path: build/product-sd1-migrated-v4-10b-catchup/logs/**
+          retention-days: 90
+          if-no-files-found: warn
+
+
+

@@ -1,5 +1,6 @@
 """Fail-closed static checks for isolated 8292->8492 and separate 8.5B crossing."""
 
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools/ci/product_sd1_migrated_v4_catchup_20m.sh"
 A = ROOT / ".github/workflows/product-sd1-v4-a-8292-to-8492-INERT-DRAFT.yml"
 A1 = ROOT / ".github/workflows/product-sd1-v4-a1-8292-to-8392-INERT-DRAFT.yml"
+A2 = ROOT / ".github/workflows/product-sd1-v4-a2-8392-to-8492-INERT-DRAFT.yml"
 B = ROOT / ".github/workflows/product-sd1-v4-b-8492-to-8512-INERT-DRAFT.yml"
 
 
@@ -18,7 +20,16 @@ class V4CatchupStatic(unittest.TestCase):
         self.assertIn("no_guest_cycles=1", p.stdout)
         self.assertIn("separate_cross=8512", p.stdout)
         self.assertNotIn("PRODUCT_SD1_V4_REAL_RTL_STAGE_SAVED", p.stdout)
-        p = subprocess.run(["bash", str(SCRIPT), "--execute-reviewed-20m", "/tmp", "8312"], capture_output=True, text=True)
+        # GitHub Actions exports the real relay credentials to *all* steps.
+        # Negative tests must explicitly drop them, so a CI runner cannot
+        # accidentally turn this into a different validation path.
+        isolated_env = os.environ.copy()
+        for key in ("AETHERCORE_SD1_V4_CATCHUP_EXECUTE",
+                    "AETHERCORE_SD1_RELAY_CONFIRM",
+                    "AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA"):
+            isolated_env.pop(key, None)
+        p = subprocess.run(["bash", str(SCRIPT), "--execute-reviewed-20m", "/tmp", "8312"],
+                           capture_output=True, text=True, env=isolated_env)
         self.assertEqual(p.returncode, 16)
         self.assertIn("unreviewed v4", p.stderr)
 
@@ -80,7 +91,7 @@ class V4CatchupStatic(unittest.TestCase):
         d = yaml.safe_load(B.read_text())
         j = d["jobs"]["v4_cross_8p5b_real_rtl_stage"]
         env = j["env"]
-        for key in ("A_RUN", "A_HEAD", "A_8492_ID", "A_8492_ZIP",
+        for key in ("A2_RUN", "A2_HEAD", "A2_8492_ID", "A2_8492_ZIP",
                     "AETHERCORE_SD1_V4_CROSS_8492_HOST_SHA",
                     "AETHERCORE_SD1_V4_CROSS_8492_RTL_SHA",
                     "AETHERCORE_SD1_V4_CROSS_8492_CARD_SHA"):
@@ -107,6 +118,29 @@ class V4CatchupStatic(unittest.TestCase):
         self.assertIn("8292M to 8312M", advances[0])
         self.assertIn("8372M to 8392M", advances[-1])
         self.assertLess(j["timeout-minutes"], 180)
+        for x in j["steps"]:
+            if "run" in x and "\n" in x["run"]:
+                subprocess.run(["bash", "-n"], input=x["run"], text=True, check=True)
+
+    def test_a2_five_stages_and_five_a1_artifact_metadata_seals(self):
+        import yaml
+        d = yaml.safe_load(A2.read_text())
+        j = d["jobs"]["v4_catchup_five_true_rtl_stages_a2"]
+        names = [x["name"] for x in j["steps"]]
+        advances = [n for n in names if n.startswith("Advance genuine v4 Product RTL ")]
+        uploads = [n for n in names if n.startswith("Upload complete v4 ")]
+        self.assertEqual(len(advances), 5)
+        self.assertEqual(len(uploads), 5)
+        self.assertIn("8392M to 8412M", advances[0])
+        self.assertIn("8472M to 8492M", advances[-1])
+        self.assertLess(j["timeout-minutes"], 180)
+        for m in (8312, 8332, 8352, 8372, 8392):
+            self.assertEqual(j["env"][f"A1_{m}_ID"], "UNREVIEWED_FAIL_CLOSED")
+            self.assertEqual(j["env"][f"A1_{m}_ZIP"], "UNREVIEWED_FAIL_CLOSED")
+        self.assertEqual(j["env"]["A1_RUN"], "UNREVIEWED_FAIL_CLOSED")
+        self.assertEqual(j["env"]["A1_HEAD"], "UNREVIEWED_FAIL_CLOSED")
+        self.assertIn("for m in 8312 8332 8352 8372 8392; do", A2.read_text())
+        self.assertIn("--arg digest \"sha256:$zip\"", A2.read_text())
         for x in j["steps"]:
             if "run" in x and "\n" in x["run"]:
                 subprocess.run(["bash", "-n"], input=x["run"], text=True, check=True)

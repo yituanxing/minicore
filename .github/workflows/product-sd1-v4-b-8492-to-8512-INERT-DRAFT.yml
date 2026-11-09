@@ -1,6 +1,6 @@
 name: Reviewed SD1 Host-v4 B real RTL 8492M to 8512M cross 8.5B
 
-# INERT: requires full officially authenticated A ten stages and separate v4 qualification.
+# INERT: requires full officially authenticated A2 five stages after A1, plus v4 qualification.
 on:
   pull_request:
     types: [labeled]
@@ -33,10 +33,10 @@ jobs:
       V4_QUAL_ID: '13642643665'
       V4_QUAL_ZIP: 256746ebcf7d40861fd671bf9df17d9136884fc08719861c469308ddc7b29377
       V4_QUAL_MANIFEST: 2b82759d2dab4abe1ae213d682338c5238a0e8abf828562455036e7f7554a833
-      A_RUN: UNREVIEWED_FAIL_CLOSED
-      A_HEAD: UNREVIEWED_FAIL_CLOSED
-      A_8492_ID: UNREVIEWED_FAIL_CLOSED
-      A_8492_ZIP: UNREVIEWED_FAIL_CLOSED
+      A2_RUN: UNREVIEWED_FAIL_CLOSED
+      A2_HEAD: UNREVIEWED_FAIL_CLOSED
+      A2_8492_ID: UNREVIEWED_FAIL_CLOSED
+      A2_8492_ZIP: UNREVIEWED_FAIL_CLOSED
       AETHERCORE_SD1_V4_CROSS_8492_HOST_SHA: UNREVIEWED_FAIL_CLOSED
       AETHERCORE_SD1_V4_CROSS_8492_RTL_SHA: UNREVIEWED_FAIL_CLOSED
       AETHERCORE_SD1_V4_CROSS_8492_CARD_SHA: UNREVIEWED_FAIL_CLOSED
@@ -54,40 +54,40 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$V4_CATCHUP_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
-             "$A_RUN" =~ ^[0-9]{10,13}$ && "$A_HEAD" =~ ^[a-f0-9]{40}$ &&
-             "$A_8492_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
-          for sha in "$A_8492_ZIP" "$AETHERCORE_SD1_V4_CROSS_8492_HOST_SHA" \
+             "$A2_RUN" =~ ^[0-9]{10,13}$ && "$A2_HEAD" =~ ^[a-f0-9]{40}$ &&
+             "$A2_8492_ID" =~ ^[0-9]{8,13}$ ]] || exit 16
+          for sha in "$A2_8492_ZIP" "$AETHERCORE_SD1_V4_CROSS_8492_HOST_SHA" \
             "$AETHERCORE_SD1_V4_CROSS_8492_RTL_SHA" "$AETHERCORE_SD1_V4_CROSS_8492_CARD_SHA" \
             "$V4_QUAL_ZIP" "$V4_QUAL_MANIFEST" "$AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA"; do
             [[ "$sha" =~ ^[a-f0-9]{64}$ ]] || exit 16
           done
-      - name: Verify official v4 qualification and full A ten-stage true RTL completion
+      - name: Verify official v4 qualification and full A2 five-stage true RTL completion
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$V4_QUAL_RUN" > "$RUNNER_TEMP/v4-run.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$A_RUN" > "$RUNNER_TEMP/a-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$A2_RUN" > "$RUNNER_TEMP/a-run.json"
           jq -e --argjson id "$V4_QUAL_RUN" --arg head "$V4_QUAL_HEAD" '
             .id==$id and .head_sha==$head and .run_attempt==1 and
             .status=="completed" and .conclusion=="success" and
             .path==".github/workflows/product-sd1-v4-8272-to-8292-qualification.yml"
           ' "$RUNNER_TEMP/v4-run.json"
-          jq -e --argjson id "$A_RUN" --arg head "$A_HEAD" '
+          jq -e --argjson id "$A2_RUN" --arg head "$A2_HEAD" '
             .id==$id and .head_sha==$head and .run_attempt==1 and .status=="completed" and
             .conclusion=="success" and .event=="pull_request" and
             .head_branch=="design/rv64gc-product-architecture-20261103" and
-            .path==".github/workflows/product-sd1-v4-a-8292-to-8492.yml"
+            .path==".github/workflows/product-sd1-v4-a2-8392-to-8492.yml"
           ' "$RUNNER_TEMP/a-run.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$A_RUN/jobs?per_page=100" > "$RUNNER_TEMP/a-jobs.json"
-          jq -e '[.jobs[]|select(.name=="v4_catchup_ten_true_rtl_stages" and
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$A2_RUN/jobs?per_page=100" > "$RUNNER_TEMP/a-jobs.json"
+          jq -e '[.jobs[]|select(.name=="v4_catchup_five_true_rtl_stages_a2" and
             .status=="completed" and .conclusion=="success" and
             ([.steps[]|select((.name|startswith("Advance genuine v4 Product RTL ")) and
-              .status=="completed" and .conclusion=="success")]|length==10) and
+              .status=="completed" and .conclusion=="success")]|length==5) and
             ([.steps[]|select((.name|startswith("Upload complete v4 ")) and
-              .status=="completed" and .conclusion=="success")]|length==10))]|length==1' "$RUNNER_TEMP/a-jobs.json"
+              .status=="completed" and .conclusion=="success")]|length==5))]|length==1' "$RUNNER_TEMP/a-jobs.json"
           for source in v4 a; do
             if [[ "$source" == v4 ]]; then id="$V4_QUAL_ID"; run="$V4_QUAL_RUN"; sha="$V4_QUAL_ZIP"; name="product-sd1-model-migrate-v4-qual-8272-8292-$V4_QUAL_RUN"
-            else id="$A_8492_ID"; run="$A_RUN"; sha="$A_8492_ZIP"; name="product-sd1-migrated-v4-a-8492m-$A_RUN"; fi
+            else id="$A2_8492_ID"; run="$A2_RUN"; sha="$A2_8492_ZIP"; name="product-sd1-migrated-v4-a2-8492m-$A2_RUN"; fi
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > "$RUNNER_TEMP/$source-art.json"
             jq -e --argjson id "$id" --argjson run "$run" --arg name "$name" --arg digest "sha256:$sha" '
               .id==$id and .workflow_run.id==$run and .name==$name and
@@ -158,9 +158,9 @@ jobs:
           curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$V4_QUAL_ID/zip" -o "$RUNNER_TEMP/v4-qual.zip"
           curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$A_8492_ID/zip" -o "$RUNNER_TEMP/a-8492.zip"
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$A2_8492_ID/zip" -o "$RUNNER_TEMP/a-8492.zip"
           [[ "$(sha256sum "$RUNNER_TEMP/v4-qual.zip" | cut -d' ' -f1)" == "$V4_QUAL_ZIP" &&
-             "$(sha256sum "$RUNNER_TEMP/a-8492.zip" | cut -d' ' -f1)" == "$A_8492_ZIP" ]] || exit 16
+             "$(sha256sum "$RUNNER_TEMP/a-8492.zip" | cut -d' ' -f1)" == "$A2_8492_ZIP" ]] || exit 16
           unzip -qq "$RUNNER_TEMP/v4-qual.zip" -d "$out"
           unzip -qq "$RUNNER_TEMP/a-8492.zip" -d "$cross"
           [[ "$(sha256sum "$out/qualification-manifest.txt" | cut -d' ' -f1)" == "$V4_QUAL_MANIFEST" ]] || exit 16
