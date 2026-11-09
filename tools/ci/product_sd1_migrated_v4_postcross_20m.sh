@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# INERT until an explicitly reviewed workflow selects C, D, or E. One common
+# INERT until an explicitly reviewed workflow selects C, D, E, or F. One common
 # executor preserves the same model/SD/RTL identity across 20M continuations.
 # Never modify the imported source or any older checkpoint artifact.
 set -euo pipefail
@@ -15,6 +15,7 @@ readonly QUAL="$MODEL_ROOT/qualification-manifest.txt"
 readonly C_FIRST="$ROOT/build/product-sd1-v4-c-source/8512m"
 readonly D_FIRST="$ROOT/build/product-sd1-v4-d-source/8612m"
 readonly E_FIRST="$ROOT/build/product-sd1-v4-e-source/8712m"
+readonly F_FIRST="$ROOT/build/product-sd1-v4-f-source/8812m"
 readonly PROFILE="${AETHERCORE_SD1_V4_POSTCROSS_PROFILE:-C}"
 case "$PROFILE" in
   C)
@@ -41,7 +42,15 @@ case "$PROFILE" in
     readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_E_8712_RTL_SHA:-}"
     readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_E_8712_CARD_SHA:-}"
     ;;
-  *) reject 'only reviewed C, D, or E postcross profile is permitted' ;;
+  F)
+    readonly FIRST="$F_FIRST" FIRST_M=8812
+    readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-f"
+    readonly STAGES='8832,8852,8872,8892,8912' INPUT='E-8812M'
+    readonly SOURCE_HOST_SHA="${AETHERCORE_SD1_V4_F_8812_HOST_SHA:-}"
+    readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_F_8812_RTL_SHA:-}"
+    readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_F_8812_CARD_SHA:-}"
+    ;;
+  *) reject 'only reviewed C, D, E, or F postcross profile is permitted' ;;
 esac
 readonly V4_MODEL="${AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA:-}"
 readonly EXPECTED_V4_MODEL=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
@@ -83,6 +92,8 @@ case "$PROFILE" in
        reject 'only five exact 20M D stages are reviewed' ;;
   E) [[ "$TARGET_M" =~ ^(8732|8752|8772|8792|8812)$ ]] ||
        reject 'only five exact 20M E stages are reviewed' ;;
+  F) [[ "$TARGET_M" =~ ^(8832|8852|8872|8892|8912)$ ]] ||
+       reject 'only five exact 20M F stages are reviewed' ;;
 esac
 readonly SOURCE_M=$((TARGET_M-20))
 readonly START=$((SOURCE_M*1000000))
