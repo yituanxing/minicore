@@ -244,8 +244,9 @@ jobs:
           set -euo pipefail
           for m in 8292 8312 8332 8352 8372; do
             d="$OUT/$m"m
-            [[ -s "$e/.migration-ready" && -s "$e/persistent.pre.host" && -s "$e/persistent.pre.rtl" && -s "$e/card-progress.json" ]] || exit 16
-            grep -Fxq 'debian_login_claim=0' "$e/.migration-ready"
+            [[ -s "$d/.migration-ready" && -s "$d/persistent.pre.host" && -s "$d/persistent.pre.rtl" && -s "$d/card-progress.json" ]] || exit 16
+            grep -Fxq 'debian_login_claim=0' "$d/.migration-ready"
+            grep -Fxq 'boot_cycles='"$m"'000000' "$d/.migration-ready"
           done
           echo 'PRODUCT_SD1_V3_F_REAL_RTL_8372M_COMPLETE_NOT_DEBIAN_PASS'
       - name: Preserve F diagnostics even if a later stage fails

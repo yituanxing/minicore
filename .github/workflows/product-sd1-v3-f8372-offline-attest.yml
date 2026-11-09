@@ -1,0 +1,61 @@
+name: Reviewed F8372 real RTL offline SHA chain attestation (no guest clocks)
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-f8372-offline-attest-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  F8372_offline_sha_attest_no_guest:
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'product-sd1-v3-f8372-offline-attest-reviewed' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AUDIT_SOURCE_SHA: 4192cc92d745e48f8bf5bc59648ac91edb3f0bfc
+    steps:
+      - name: Require independently reviewed offline-only audit source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$AUDIT_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 16
+      - name: Checkout exact reviewed no-clock attestation source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify source identity and no-clock plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$AUDIT_SOURCE_SHA" ]] || exit 16
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/product_sd1_f_offline_attest.py --plan
+      - name: Independently authenticate all five F RTL checkpoints without guest execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/ci/product_sd1_f_offline_attest.py \
+            --execute "$GITHUB_WORKSPACE/build/product-sd1-f8372-offline-attested"
+      - name: Upload independent F8372 proof but never claim Debian PASS
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-v3-f8372-offline-attested-${{ github.run_id }}
+          path: |
+            build/product-sd1-f8372-offline-attested/f8372-offline-attestation.json
+            build/product-sd1-f8372-offline-attested/f8372-offline-attestation.sha256
+          if-no-files-found: error
+          retention-days: 90
