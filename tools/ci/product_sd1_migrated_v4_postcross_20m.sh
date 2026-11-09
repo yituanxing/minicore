@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# INERT until an explicitly reviewed workflow selects C, D, E, F, G, H, I, J, or K. One common
+# INERT until an explicitly reviewed workflow selects C, D, E, F, G, H, I, J, K, or L. One common
 # executor preserves the same model/SD/RTL identity across 20M continuations.
 # Never modify the imported source or any older checkpoint artifact.
 set -euo pipefail
@@ -21,6 +21,7 @@ readonly H_FIRST="$ROOT/build/product-sd1-v4-h-source/9012m"
 readonly I_FIRST="$ROOT/build/product-sd1-v4-i-source/9112m"
 readonly J_FIRST="$ROOT/build/product-sd1-v4-j-source/9212m"
 readonly K_FIRST="$ROOT/build/product-sd1-v4-k-source/9312m"
+readonly L_FIRST="$ROOT/build/product-sd1-v4-l-source/9412m"
 readonly PROFILE="${AETHERCORE_SD1_V4_POSTCROSS_PROFILE:-C}"
 case "$PROFILE" in
   C)
@@ -95,7 +96,15 @@ case "$PROFILE" in
     readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_K_9312_RTL_SHA:-}"
     readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_K_9312_CARD_SHA:-}"
     ;;
-  *) reject 'only reviewed C, D, E, F, G, H, I, J, or K postcross profile is permitted' ;;
+  L)
+    readonly FIRST="$L_FIRST" FIRST_M=9412
+    readonly OUT="$ROOT/build/product-sd1-migrated-v4-10b-postcross-l"
+    readonly STAGES='9432,9452,9472,9492,9512' INPUT='K-9412M'
+    readonly SOURCE_HOST_SHA="${AETHERCORE_SD1_V4_L_9412_HOST_SHA:-}"
+    readonly SOURCE_RTL_SHA="${AETHERCORE_SD1_V4_L_9412_RTL_SHA:-}"
+    readonly SOURCE_CARD_SHA="${AETHERCORE_SD1_V4_L_9412_CARD_SHA:-}"
+    ;;
+  *) reject 'only reviewed C, D, E, F, G, H, I, J, K, or L postcross profile is permitted' ;;
 esac
 readonly V4_MODEL="${AETHERCORE_SD1_V4_REVIEWED_MODEL_SHA:-}"
 readonly EXPECTED_V4_MODEL=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
@@ -149,6 +158,8 @@ case "$PROFILE" in
        reject 'only five exact 20M J stages are reviewed' ;;
   K) [[ "$TARGET_M" =~ ^(9332|9352|9372|9392|9412)$ ]] ||
        reject 'only five exact 20M K stages are reviewed' ;;
+  L) [[ "$TARGET_M" =~ ^(9432|9452|9472|9492|9512)$ ]] ||
+       reject 'only five exact 20M L stages are reviewed' ;;
 esac
 readonly SOURCE_M=$((TARGET_M-20))
 readonly START=$((SOURCE_M*1000000))
