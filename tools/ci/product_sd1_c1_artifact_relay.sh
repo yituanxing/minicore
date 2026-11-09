@@ -40,6 +40,7 @@ compatibility_sha() {
     software/rv64/opensbi_first_exec.env
     software/rv64/product_sd1_official_seed.lock
     software/rv64_userspace/product_sd1_c1_init.c
+    tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch
     tools/ci/product_checkpoint_sd1_short.sh
     tools/ci/product_sim_cache.sh
     tools/ci/product_sim_sd1_manual.sh
