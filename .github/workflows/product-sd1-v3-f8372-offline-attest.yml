@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 35
     env:
       GH_TOKEN: ${{ github.token }}
-      AUDIT_SOURCE_SHA: 4192cc92d745e48f8bf5bc59648ac91edb3f0bfc
+      AUDIT_SOURCE_SHA: de776c04188a094cbef0fc63371e66b89da882bc
     steps:
       - name: Require independently reviewed offline-only audit source
         shell: bash
