@@ -1,0 +1,141 @@
+name: Product PMP serial predecode XC7 area A/B
+
+# Explicit opt-in only; not a Product/SD1 CI or a claimed FPGA timing signoff.
+on:
+  workflow_dispatch:
+    inputs:
+      functional_tests:
+        description: Run the focused reference simulation using pinned Verilator
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  serial-predecode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      AETHERCORE_VERILATOR_FAST_VERIFY: "1"
+      AETHERCORE_TOOLCHAIN_JOBS: "4"
+    steps:
+      - name: Checkout exact selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Restore Scala dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Prepare two independent mapping directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x mill
+          root="$RUNNER_TEMP/pmp-serial-xc7"
+          mkdir -p "$root/baseline" "$root/serial" "$root/mill-out"
+          echo "PMP_SERIAL_ROOT=$root" >> "$GITHUB_ENV"
+          echo "MILL_OUTPUT_DIR=$root/mill-out" >> "$GITHUB_ENV"
+
+      - name: Restore pinned Verilator 5.024 cache when tests are enabled
+        if: inputs.functional_tests
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.024-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh') }}
+
+      - name: Install simulator build dependencies only on cache miss
+        if: inputs.functional_tests && steps.verilator-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq autoconf cmake ninja-build libfl-dev zlib1g-dev build-essential git
+
+      - name: Build optional pinned RTL simulator
+        if: inputs.functional_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_verilator_5_024.sh
+
+      - name: Prove same geometry against 16-lane reference in simulation
+        if: inputs.functional_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.test.testOnly aethercore.PmpSerialRangePredecoderSpec \
+            2>&1 | tee "$PMP_SERIAL_ROOT/functional-test.log"
+
+      - name: Elaborate original parallel PA56/PMP16 decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.runMain aethercore.ElaboratePmpRangeDecoderRV64 \
+            --target-dir "$PMP_SERIAL_ROOT/baseline" \
+            2>&1 | tee "$PMP_SERIAL_ROOT/baseline-elaboration.log"
+          test -s "$PMP_SERIAL_ROOT/baseline/PmpRangeDecoder.sv"
+
+      - name: Elaborate serialized 16-cycle live-CSR candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mill aethercore.runMain aethercore.ElaboratePmpSerialRangePredecoderRV64 \
+            --target-dir "$PMP_SERIAL_ROOT/serial" \
+            2>&1 | tee "$PMP_SERIAL_ROOT/serial-elaboration.log"
+          test -s "$PMP_SERIAL_ROOT/serial/PmpSerialRangePredecoder.sv"
+          test -s "$PMP_SERIAL_ROOT/serial/PmpRangeDecoder.sv"
+
+      - name: Install pinned portable Xilinx 7-series mapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$PMP_SERIAL_ROOT/yosys-venv"
+          timeout --signal=TERM --kill-after=10s 120s \
+            "$PMP_SERIAL_ROOT/yosys-venv/bin/python" -m pip install \
+            --disable-pip-version-check --timeout 25 --retries 1 \
+            yowasp-yosys==0.70.0.0.post1259
+          echo "PMP_YOSYS=$PMP_SERIAL_ROOT/yosys-venv/bin/yowasp-yosys" >> "$GITHUB_ENV"
+
+      - name: Map both configurations with identical XC7 settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PMP_SERIAL_ROOT"
+          "$PMP_YOSYS" -Q -T -l baseline-yosys.log -p \
+            'read_verilog -sv -DSYNTHESIS baseline/PmpRangeDecoder.sv; hierarchy -check -top PmpRangeDecoder; synth_xilinx -family xc7 -noiopad -top PmpRangeDecoder; stat -tech xilinx'
+          "$PMP_YOSYS" -Q -T -l serial-yosys.log -p \
+            'read_verilog -sv -DSYNTHESIS serial/PmpRangeDecoder.sv serial/PmpSerialRangePredecoder.sv; hierarchy -check -top PmpSerialRangePredecoder; synth_xilinx -family xc7 -noiopad -top PmpSerialRangePredecoder; stat -tech xilinx'
+          cd "$GITHUB_WORKSPACE"
+          python3 tools/ci/product_pmp_serial_map_report.py \
+            --baseline "$PMP_SERIAL_ROOT/baseline-yosys.log" \
+            --serial "$PMP_SERIAL_ROOT/serial-yosys.log" \
+            --out "$PMP_SERIAL_ROOT/mapping-summary.json"
+          echo 'Standalone PA56/PMP16 XC7 mapping completed. No full-SoC fit, Fmax, DDR or Debian qualification.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve original SystemVerilog, map logs, and summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-pmp-serial-xc7-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/pmp-serial-xc7/*.log
+            ${{ runner.temp }}/pmp-serial-xc7/mapping-summary.json
+            ${{ runner.temp }}/pmp-serial-xc7/baseline/*.sv
+            ${{ runner.temp }}/pmp-serial-xc7/serial/*.sv
