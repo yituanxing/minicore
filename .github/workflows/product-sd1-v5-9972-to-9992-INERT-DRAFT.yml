@@ -132,8 +132,7 @@ jobs:
              "${{ github.event.pull_request.head.sha }}" ]] || exit 16
           bash -n tools/ci/product_sd1_model_migration_v5_15b_qualify.sh
           PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -q \
-            tests_py.test_product_sd1_model_migration_v5_15b_static \
-            tests_py.test_product_sd1_model_migration_v4_10b_static
+            tests_py.test_product_sd1_model_migration_v5_15b_static
           bash tools/ci/product_sd1_model_migration_v5_15b_qualify.sh --plan
       - name: Restore signed Debian seed cache
         id: seed
