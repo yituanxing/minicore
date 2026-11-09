@@ -165,6 +165,63 @@ class AetherProductDdrLocalAxiWindowSpec
     }
   }
 
+  it should "accept only the addressed byte lane for a narrow W-before-AW write" in {
+    simulate(new AetherProductDdrLocalAxiWindow(32, 28, 4)) { dut =>
+      initialize(dut)
+      dut.io.physical.w.valid.poke(true.B)
+      dut.io.physical.w.bits.strb.poke("h08".U)
+      // Independent WVALID may wait for a legal AW without becoming fatal.
+      dut.io.local.w.valid.expect(false.B)
+      dut.clock.step()
+      dut.io.stickyFatal.expect(false.B)
+
+      dut.io.physical.aw.valid.poke(true.B)
+      dut.io.physical.aw.bits.id.poke(3.U)
+      dut.io.physical.aw.bits.addr.poke((RamBase + 3).U)
+      dut.io.physical.aw.bits.size.poke(0.U)
+      dut.io.local.aw.ready.poke(false.B)
+      dut.io.local.w.valid.expect(true.B)
+      dut.io.local.w.bits.strb.expect("h08".U)
+      dut.io.physical.w.ready.expect(true.B)
+      dut.clock.step()
+
+      dut.io.physical.w.valid.poke(false.B)
+      dut.io.local.aw.ready.poke(true.B)
+      dut.io.local.aw.bits.addr.expect(3.U)
+      dut.clock.step()
+      dut.io.physical.aw.valid.poke(false.B)
+      dut.io.local.b.valid.poke(true.B)
+      dut.io.local.b.bits.id.poke(3.U)
+      dut.io.physical.b.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.stickyFatal.expect(false.B)
+    }
+  }
+
+  it should "block an illegal WSTRB both before and after an accepted narrow AW" in {
+    for (awFirst <- Seq(false, true)) {
+      simulate(new AetherProductDdrLocalAxiWindow(32, 28, 4)) { dut =>
+        initialize(dut)
+        dut.io.physical.aw.valid.poke(true.B)
+        dut.io.physical.aw.bits.id.poke(5.U)
+        dut.io.physical.aw.bits.addr.poke((RamBase + 3).U)
+        dut.io.physical.aw.bits.size.poke(0.U)
+        dut.io.local.aw.ready.poke(awFirst.B)
+        if (awFirst) {
+          dut.clock.step()
+          dut.io.physical.aw.valid.poke(false.B)
+        }
+        dut.io.physical.w.valid.poke(true.B)
+        dut.io.physical.w.bits.strb.poke("h01".U)
+        dut.io.local.w.valid.expect(false.B)
+        dut.io.physical.w.ready.expect(false.B)
+        dut.clock.step()
+        dut.io.stickyFatal.expect(true.B)
+        dut.io.local.w.valid.expect(false.B)
+      }
+    }
+  }
+
   it should "make out-of-range and malformed DDR transactions sticky-fatal" in {
     simulate(new AetherProductDdrLocalAxiWindow(32, 28, 4)) { dut =>
       initialize(dut)

@@ -77,7 +77,6 @@ class AetherProductDdrLocalAxiWindow(
 
   private val awAllowed = validAddress(io.physical.aw.bits)
   private val arAddressAllowed = validAddress(io.physical.ar.bits)
-  private val wAllowed = io.physical.w.bits.last
 
   // Concurrent Product RAM reads may complete out of order. Exactly one AR
   // per AXI ID is live; no DDR R may be forwarded unless that ID was actually
@@ -92,12 +91,6 @@ class AetherProductDdrLocalAxiWindow(
   // backpressure, not an accepted protocol fault. Only malformed addresses
   // are board-fatal; the slot ledger prevents accepting the duplicate until
   // its earlier R has retired.
-  when((io.physical.aw.valid && !awAllowed) ||
-       (io.physical.ar.valid && !arAddressAllowed) ||
-       (io.physical.w.valid && !wAllowed)) {
-    stickyFatal := true.B
-  }
-
   // AXI AW and W have *independent* READY/VALID handshakes. A vendor DDR IP
   // may legally withhold AWREADY until WVALID is asserted. Requiring AW.fire
   // before asserting WVALID would therefore deadlock otherwise valid traffic.
@@ -112,14 +105,36 @@ class AetherProductDdrLocalAxiWindow(
   private val awAccepted = RegInit(false.B)
   private val wAccepted = RegInit(false.B)
   private val writeId = RegInit(0.U(txnIdBits.W))
+  // For a narrow single-beat AXI write, WSTRB may select only the byte lanes
+  // described by AWADDR/AWSIZE. Keep the mask after AW fires so that W may
+  // legally arrive later, and use the presented AW for W-before-AW traffic.
+  // An all-zero WSTRB remains a legal AXI null write.
+  private def writeLaneMask(a: Axi4Address): UInt = {
+    val sizedMask = MuxLookup(a.size, 0.U(8.W))(Seq(
+      0.U -> "h01".U(8.W), 1.U -> "h03".U(8.W),
+      2.U -> "h0f".U(8.W), 3.U -> "hff".U(8.W)))
+    (sizedMask << a.addr(2, 0))(7, 0)
+  }
+  private val acceptedWriteLaneMask = RegInit(0.U(8.W))
   private val validAwPresented = io.physical.aw.valid && awAllowed && !stickyFatal
   private val writeDataHasLegalAddress = awAccepted || validAwPresented
+  private val legalWriteLanes = Mux(awAccepted,
+    acceptedWriteLaneMask, writeLaneMask(io.physical.aw.bits))
+  private val wLaneLegal = (io.physical.w.bits.strb & ~legalWriteLanes) === 0.U
+  private val wAllowed = io.physical.w.bits.last && wLaneLegal
+  when((io.physical.aw.valid && !awAllowed) ||
+       (io.physical.ar.valid && !arAddressAllowed) ||
+       (io.physical.w.valid && (!io.physical.w.bits.last ||
+         (writeDataHasLegalAddress && !wLaneLegal)))) {
+    stickyFatal := true.B
+  }
   io.local.aw.valid := validAwPresented && !awAccepted
   translate(io.physical.aw.bits, io.local.aw.bits)
   io.physical.aw.ready := io.local.aw.ready && awAllowed && !stickyFatal && !awAccepted
   when(io.physical.aw.fire) {
     awAccepted := true.B
     writeId := io.physical.aw.bits.id
+    acceptedWriteLaneMask := writeLaneMask(io.physical.aw.bits)
   }
 
   io.local.w.valid := io.physical.w.valid && wAllowed && !stickyFatal &&
