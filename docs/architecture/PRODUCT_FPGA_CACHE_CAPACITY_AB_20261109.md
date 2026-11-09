@@ -116,6 +116,10 @@ their production `ElaborateProductFpgaUartDdrSpiSd1Rv64gc` emitter.
 The independent opt-in `.github/workflows/product-fpga-xc7-cache-ab.yml`
 instead exports the **same full board-neutral UART-DDR-SPI-SD Product top**
 twice: 64/64 entries (512B I + 512B D) and 256/256 (2KiB + 2KiB).
+It has a one-time, tightly scoped `push` trigger matching only the isolated
+`work/xc7-cache-ab-isolated-20261109` branch **and a change to the workflow
+file itself**. Other source pushes cannot start the expensive comparison;
+no draft PR or unrelated PR-opening jobs are needed.
 Both must have the same exact committed source SHA and Yosys version, while
 each has its own source/RTL SHA256, cache geometry and mapping output.
 
