@@ -111,7 +111,7 @@ class HostV6MigrationStatic(unittest.TestCase):
         self.assertEqual(env['V6_SIGNED_ORIGIN_HEAD'],
                          '8a40835c470d059448a4871bafead04cc555bee5')
         self.assertEqual(env['V6_REVIEWED_HEAD'],
-                         '40d7be6302f767c52ef33d093f2300ca5ee934bf')
+                         '99dbb5a90849c54b8c61c00ac58765e5414e0f04')
         self.assertTrue(env['V6_MODEL_SHA'].startswith('PENDING_'))
         self.assertEqual(env['AETHERCORE_SD1_V6_20B_APPROVED'],
                          'PENDING_FORMAL_5B_AFTER_TECH_REPORT_REVIEW')
