@@ -34,7 +34,17 @@ download_verified() {
   local meta="$RUNNER_TEMP/v5-source-archives/$label.json"
   local zipped="$RUNNER_TEMP/v5-source-archives/$label.zip"
   [[ ! -e "$dest" ]] || fail "$label destination exists"
-  gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > "$meta"
+  # The preceding job's artifact upload can briefly be invisible to REST.
+  # Retry only transport/visibility; keep every digest/provenance check below.
+  local meta_ok=0 retry_wait
+  for retry_wait in 0 2 3 5 8 13 21 30; do
+    if (( retry_wait > 0 )); then sleep "$retry_wait"; fi
+    if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > "$meta"; then
+      meta_ok=1
+      break
+    fi
+  done
+  [[ "$meta_ok" -eq 1 ]] || fail "$label artifact metadata unavailable after bounded retries"
   jq -e --argjson id "$id" --argjson run "$run" --arg name "$name" \
     --arg digest "sha256:$expected" --arg head "$head" '
     .id==$id and .name==$name and .workflow_run.id==$run and
