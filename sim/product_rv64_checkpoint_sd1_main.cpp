@@ -203,6 +203,17 @@ void requireC1Ready(const Observer& o) {
       o.sawLogin || o.inputStarted || o.inputIndex)
     throw std::runtime_error("C1 boundary requires READY, untouched rootfs and no pre-release UART input");
 }
+void requireC1Unreleased(const Observer& o) {
+  // A C1 prefix is publishable even before READY. Its *cumulative* guest
+  // UART, not merely the final 20M-stage stdout, must still be pre-rootfs.
+  if (o.uart.find(kC1MountBegin) != std::string::npos ||
+      o.uart.find(kC1MountOk) != std::string::npos ||
+      o.uart.find(kC1NativeExec) != std::string::npos ||
+      o.uart.find(kC1Fail) != std::string::npos ||
+      o.uart.find("Kernel panic - not syncing") != std::string::npos ||
+      o.sawLogin || o.inputStarted || o.inputIndex)
+    throw std::runtime_error("C1 inspected prefix contains rootfs execution, failure or pre-release UART input");
+}
 bool c1HostQuiescent(const Top& top, const TransportRuntimeState& transport,
                      const SdSpiCard& card) {
   // Full RTL internal state is saved independently. These externally visible
@@ -606,13 +617,13 @@ void result(const Observer& o, const VerilatedContext& ctx, const Memory& mem,
 int main(int argc,char** argv) {
   try {
     if (argc<14)
-      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-release|migrate-v1|migrate-v2-8b|migrate-v3-8p5b|migrate-v4-10b|migrate-v5-15b FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migration OLD_EXEC DEST_PREFIX]");
+      throw std::runtime_error("usage: SD1_CHECKPOINT save|snapshot|restore|advance|c1-save|c1-advance|c1-inspect|c1-release|migrate-v1|migrate-v2-8b|migrate-v3-8p5b|migrate-v4-10b|migrate-v5-15b FW DTB OLD_SD PREFIX MODEL_SHA FW_SHA DTB_SHA OLD_SD_SHA LINUX_SHA OLD_ROOTFS_SHA START_CYCLES SEGMENT_CYCLES [strict UART policy+destination | C1 NEW_SD NEW_SD_SHA NEW_ROOTFS_SHA DEST_PREFIX | migration OLD_EXEC DEST_PREFIX]");
     const std::string mode=argv[1],fw=argv[2],dtb=argv[3],sd=argv[4],prefix=argv[5];
     const Identity id{argv[6],argv[7],argv[8],argv[9],argv[10],argv[11]};
     id.validate();
     const bool c1Save=mode=="c1-save", c1Advance=mode=="c1-advance",
-               c1Release=mode=="c1-release";
-    const bool c1Mode=c1Save || c1Advance || c1Release;
+               c1Inspect=mode=="c1-inspect", c1Release=mode=="c1-release";
+    const bool c1Mode=c1Save || c1Advance || c1Inspect || c1Release;
     const bool migratingV2=mode=="migrate-v2-8b";
     const bool migratingV3=mode=="migrate-v3-8p5b";
     const bool migratingV4=mode=="migrate-v4-10b";
@@ -626,8 +637,8 @@ int main(int argc,char** argv) {
       if (argc!=16)
         throw std::runtime_error("model migration needs exactly OLD_EXEC and distinct DEST_PREFIX");
     } else if (c1Mode) {
-      if (argc!=(c1Save?14:(c1Advance?15:18)))
-        throw std::runtime_error("C1 needs exact c1-save / c1-advance DEST / c1-release NEW_SD NEW_SHA NEW_ROOTFS_SHA DEST argument count");
+      if (argc!=((c1Save || c1Inspect)?14:(c1Advance?15:18)))
+        throw std::runtime_error("C1 needs exact c1-save / c1-inspect / c1-advance DEST / c1-release NEW_SD NEW_SHA NEW_ROOTFS_SHA DEST argument count");
     } else if ((argc!=14 && argc!=15 && argc!=17 && argc!=18) ||
                (advancing!=(argc==15 || argc==18))) {
       throw std::runtime_error("strict SD1 advance needs independent destination; other modes forbid it");
@@ -643,7 +654,7 @@ int main(int argc,char** argv) {
     const std::string newRootfsSha=c1Release?argv[16]:"";
     if (c1Release && (!validSha(newMediaSha) || !validSha(newRootfsSha)))
       throw std::runtime_error("C1 replacement requires exact media and rootfs SHA256 pins");
-    if (c1Mode) {
+    if (c1Mode && !c1Inspect) {
       const std::string& outputPrefix=(c1Save?prefix:advanceDest);
       if ((c1Advance || c1Release) &&
           std::filesystem::absolute(prefix).lexically_normal()==
@@ -688,7 +699,7 @@ int main(int argc,char** argv) {
         (c1Mode || migrating)?4000000000ULL:defaultMaxCycle;
     if (bootCycles<1000000 || bootCycles>maxCycle ||
         ((mode=="save" || mode=="snapshot" || c1Save) && bootCycles>20000000) ||
-        (migrating ? replayCycles!=0 :
+        ((migrating || c1Inspect) ? replayCycles!=0 :
           (replayCycles==0 || replayCycles>(advancing?20000000ULL:5000000ULL))) ||
         ((advancing || c1Release) && bootCycles>maxCycle-replayCycles) ||
         policy.uartTrigger.size()>128 || policy.uartInput.size()>4096 ||
@@ -925,12 +936,29 @@ int main(int argc,char** argv) {
       readRtl(prefix+".pre.rtl",top);
       if (top.reset || obs.cycles!=bootCycles || obs.commits==0)
         throw std::runtime_error("SD1 restored snapshot is not the bounded Product checkpoint");
-      if ((c1Advance || c1Release) && !card.c1RootfsBoundaryArmed())
+      if ((c1Advance || c1Inspect || c1Release) && !card.c1RootfsBoundaryArmed())
         throw std::runtime_error("C1 cannot resume a strict schema-v1 SD prefix");
       std::cout<<"PRODUCT_SD1_PERSISTENT_CHECKPOINT_RESTORED cycles="<<obs.cycles
                <<" commits="<<obs.commits<<" opensbi_banner="<<obs.sawOpenSbiBanner
                <<" login_observed="<<obs.sawLogin<<' '<<card.progress()
                <<" full_rtl_ddr_sd_card=1 no_ext4_mount_claim=1 no_pid1_claim=1\n";
+    }
+    if (c1Inspect) {
+      // Zero guest clocks and no writes: verify the *actual* SHA-pinned Host,
+      // 256MiB DDR, cumulative UART hash, read-ledger and restored RTL pins.
+      // A READY seen in an earlier segment remains visible in Observer even
+      // when warm c1-advance correctly suppresses UART stdout duplication.
+      requireC1Unreleased(obs);
+      const bool ready=c1CaptureReady(obs,top,transport,card);
+      std::cout<<"PRODUCT_SD1_C1_HOST_RTL_INSPECTED cycles="<<obs.cycles
+               <<" ready="<<ready
+               <<" uart_marker="<<(obs.uart.find(kC1Ready)!=std::string::npos)
+               <<" spi_quiescent="<<c1HostQuiescent(top,transport,card)
+               <<" host_sha256="<<shaFile(prefix+".pre.host")
+               <<" rtl_sha256="<<shaFile(prefix+".pre.rtl")
+               <<" uart_hash=0x"<<std::hex<<obs.uartHash<<std::dec
+               <<" no_guest_cycles=1 not_debian_pass=1\n";
+      return 0;
     }
     Identity continuationId=id;
     Policy continuationPolicy=policy;

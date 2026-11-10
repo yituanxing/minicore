@@ -166,13 +166,16 @@ class ProductC1PublicArtifactContract(unittest.TestCase):
             "AETHERCORE_SD1_C1_CONFIRM",
             "AETHERCORE_SD1_RELAY_CONFIRM",
             "read_ledger=SDHC_V2_IN_HOST_PRESTATE",
-            "AETHERCORE_C1_READY rootfs_unmounted=1",
-            "spi_quiescent=1",
+            "PRODUCT_SD1_C1_HOST_RTL_INSPECTED",
+            "spi_quiescent=([01])",
             "phase=armed",
         ):
             self.assertIn(required, script)
         self.assertIn("rootfs_binding=NONE", script)
         self.assertIn("bash tools/ci/product_sd1_c1_checkpoint.sh verify", script)
+        self.assertIn('bash tools/ci/product_sd1_c1_checkpoint.sh inspect "$proof"', script)
+        self.assertNotIn("grep -Fq 'AETHERCORE_C1_READY rootfs_unmounted=1'", script)
+        self.assertIn('"$marker" == 1 && "$quiet" == 1', script)
         self.assertIn("persistent.pre.host", script)
         self.assertIn("persistent.pre.rtl", script)
         self.assertIn(".savable-source-key", script)

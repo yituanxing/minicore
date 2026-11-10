@@ -85,6 +85,48 @@ gate() {
     fail 'only credential-free sealed official Debian SD media is allowed'
 }
 
+# The terminal stage's save.log is NOT a UART transcript for c1-advance: the
+# Host intentionally suppresses replayed guest stdout while accumulating all
+# UART bytes in its SHA-pinned persistent.pre.host Observer. Never trust a
+# ready=1 string in save.log without independently restoring Host + RTL and
+# checking the cumulative UART marker and quiescent SPI/read-ledger state.
+inspect_c1_ready() {
+  local proof="$1" report line pattern cycles ready marker quiet host rtl uart
+  local declared_log declared_quiet
+  require_file "$proof/save.log"
+  [[ "$(grep -Ec '^PRODUCT_SD1_C1_PREFIX_(SAVED|ADVANCED) .*ready=[01] spi_quiescent=[01] ' "$proof/save.log")" == 1 ]] ||
+    fail 'exactly one real C1 save/advance result is required'
+  declared_log="$(sed -nE 's/^PRODUCT_SD1_C1_PREFIX_(SAVED|ADVANCED) .*ready=([01]) spi_quiescent=[01] .*/\2/p' "$proof/save.log")"
+  declared_quiet="$(sed -nE 's/^PRODUCT_SD1_C1_PREFIX_(SAVED|ADVANCED) .*ready=[01] spi_quiescent=([01]) .*/\2/p' "$proof/save.log")"
+  [[ "$declared_log" =~ ^[01]$ && "$declared_quiet" =~ ^[01]$ ]] ||
+    fail 'malformed C1 stage readiness claim'
+
+  report="$(bash tools/ci/product_sd1_c1_checkpoint.sh inspect "$proof")" ||
+    fail 'authenticated zero-cycle C1 Host/RTL inspection rejected'
+  [[ "$(grep -Ec '^PRODUCT_SD1_C1_HOST_RTL_INSPECTED ' <<< "$report")" == 1 ]] ||
+    fail 'C1 inspect did not return exactly one Host/RTL evidence record'
+  line="$(grep '^PRODUCT_SD1_C1_HOST_RTL_INSPECTED ' <<< "$report")"
+  pattern='^PRODUCT_SD1_C1_HOST_RTL_INSPECTED cycles=([0-9]+) ready=([01]) uart_marker=([01]) spi_quiescent=([01]) host_sha256=([a-f0-9]{64}) rtl_sha256=([a-f0-9]{64}) uart_hash=0x([a-f0-9]+) no_guest_cycles=1 not_debian_pass=1$'
+  [[ "$line" =~ $pattern ]] || fail 'malformed C1 inspect attestation'
+  cycles="${BASH_REMATCH[1]}" ready="${BASH_REMATCH[2]}"
+  marker="${BASH_REMATCH[3]}" quiet="${BASH_REMATCH[4]}"
+  host="${BASH_REMATCH[5]}" rtl="${BASH_REMATCH[6]}" uart="${BASH_REMATCH[7]}"
+  [[ "$cycles" == "$(field cycle "$proof/.c1-ready")" &&
+     "$host" == "$(field host_sha256 "$proof/.c1-ready")" &&
+     "$rtl" == "$(field rtl_sha256 "$proof/.c1-ready")" &&
+     "$uart" =~ ^[a-f0-9]+$ ]] ||
+    fail 'C1 inspect state differs from complete Host/RTL SHA manifest'
+  [[ "$ready" == "$declared_log" && "$quiet" == "$declared_quiet" ]] ||
+    fail 'claimed C1 readiness/SPI state differs from authenticated Host/RTL'
+  [[ "$ready" == 0 || ( "$marker" == 1 && "$quiet" == 1 ) ]] ||
+    fail 'C1 READY requires cumulative guest UART marker and quiescent SPI'
+  [[ "$ready" == 1 || "$marker" == 0 || "$quiet" == 0 ]] ||
+    fail 'C1 READY marker with idle SPI must qualify as READY'
+  [[ -z "$(grep -E 'AETHERCORE_C1_FAIL|Kernel panic - not syncing|AETHERCORE_C1_MOUNT_(BEGIN|OK)|AETHERCORE_C1_NATIVE_EXEC' "$proof/save.log" || true)" ]] ||
+    fail 'rootfs-dependent guest execution/failure entered C1 stage'
+  printf '%s' "$ready"
+}
+
 [[ "$ACTION" == package || "$ACTION" == restore || "$ACTION" == fingerprint ]] || {
   echo 'usage: product_sd1_c1_artifact_relay.sh fingerprint | package CHECKPOINT_DIR EMPTY_ARTIFACT_DIR | restore ARTIFACT_DIR' >&2
   exit 2
@@ -104,17 +146,7 @@ if [[ "$ACTION" == package ]]; then
   [[ "$(field phase "$source/.c1-ready")" == armed ]] || fail 'only unmounted C1 prefix is reusable'
   [[ "$(field active_sd "$source/.c1-ready")" == "$ROOT/build/rv64-debian-sd1-sd/sd-rootfs.img" ]] ||
     fail 'C1 prefix must still use the original sealed medium'
-  require_file "$source/save.log"
-  [[ "$(grep -Ec '^PRODUCT_SD1_C1_PREFIX_(SAVED|ADVANCED) .*ready=[01] ' "$source/save.log")" == 1 ]] ||
-    fail 'real C1 save/advance READY state absent'
-  ready="$(sed -nE 's/^PRODUCT_SD1_C1_PREFIX_(SAVED|ADVANCED) .*ready=([01]) .*/\2/p' "$source/save.log")"
-  if [[ "$ready" == 1 ]]; then
-    grep -Fq 'AETHERCORE_C1_READY rootfs_unmounted=1' "$source/save.log" ||
-      fail 'C1 READY claimed without observed unmounted UART marker'
-    grep -Fq 'spi_quiescent=1' "$source/save.log" || fail 'C1 READY must be quiescent'
-  fi
-  [[ -z "$(grep -E 'AETHERCORE_C1_FAIL|Kernel panic - not syncing|AETHERCORE_C1_MOUNT_(BEGIN|OK)|AETHERCORE_C1_NATIVE_EXEC' "$source/save.log" || true)" ]] ||
-    fail 'rootfs-dependent guest execution/failure entered C1 prefix'
+  ready="$(inspect_c1_ready "$source")" || fail 'C1 authentic READY inspection failed'
 
   model='build/product-sd1-persistent-checkpoint/savable-model/obj/VAetherCoreProductDebianSdRV64SimTop'
   model_key='build/product-sd1-persistent-checkpoint/savable-model/.savable-source-key'
@@ -218,4 +250,8 @@ require_file "$manifest"
   # granted execute permissions; manifest and snapshot hashes are unchanged.
   chmod 0755 "$ROOT/$model"
   bash tools/ci/product_sd1_c1_checkpoint.sh verify "$ROOT/$source_proof" >/dev/null
+  inspected_ready="$(inspect_c1_ready "$ROOT/$source_proof")" ||
+    fail 'restored C1 Host/RTL readiness inspection failed'
+  [[ "$inspected_ready" == "$(field ready "$manifest")" ]] ||
+    fail 'restored C1 READY differs from public artifact manifest'
   echo "PRODUCT_SD1_C1_PUBLIC_ARTIFACT_RESTORED directory=$ROOT/$source_proof cycle=$(field cycle "$manifest") ready=$(field ready "$manifest") cold_cycles=0 full_rtl_ddr_spi=1"

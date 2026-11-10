@@ -54,7 +54,7 @@ class ProductSd1C1RtlCheckpointContract(unittest.TestCase):
         self.assertIn('o.uart.find(kC1MountBegin)', source)
         self.assertIn('o.uart.find(kC1NativeExec)', source)
         self.assertIn('o.inputStarted || o.inputIndex', source)
-        self.assertIn('if ((c1Advance || c1Release) && !card.c1RootfsBoundaryArmed())', source)
+        self.assertIn('if ((c1Advance || c1Inspect || c1Release) && !card.c1RootfsBoundaryArmed())', source)
         self.assertIn('if (!c1RootfsHandoffQuiescent())', card)
         self.assertIn('c1ReadTracking_ && lastCsHigh_ && !lastSclk_', card)
         self.assertIn('!commandBytes_ && output_.empty()', card)
@@ -70,7 +70,9 @@ class ProductSd1C1RtlCheckpointContract(unittest.TestCase):
         # zero-cycle v1 migration still cap at 4B.  Do not depend on an old
         # one-line spelling that predated the versioned migrations.
         max_cycle = source.split('const std::uint64_t maxCycle=', 1)[1].split(';', 1)[0]
-        for version in range(6, 1, -1):
+        # The reviewed PR#379 C1 source has migrations through V5, not the
+        # separately staged V6 Host migration of a different worktree.
+        for version in range(5, 1, -1):
             self.assertIn(
                 f'migratingV{version}?kV{version}MigratedMaxCycles:', max_cycle
             )
@@ -79,7 +81,7 @@ class ProductSd1C1RtlCheckpointContract(unittest.TestCase):
                 '(c1Mode || migrating)?4000000000ULL:defaultMaxCycle'
             ), max_cycle,
         )
-        self.assertIn('(migrating ? replayCycles!=0 :', source)
+        self.assertIn('((migrating || c1Inspect) ? replayCycles!=0 :', source)
         compiler = [
             "c++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
             "-fsyntax-only",

@@ -95,7 +95,8 @@ jobs:
           bash -n tools/ci/product_sd1_c1_artifact_relay.sh \
             tools/ci/product_sd1_c1_checkpoint.sh \
             tools/ci/product_sd1_c1_firmware_build.sh
-          python3 -m unittest tests_py.test_product_sd1_c1_artifact_relay_contract -v
+          python3 -m unittest tests_py.test_product_sd1_c1_artifact_relay_contract \
+            tests_py.test_product_sd1_c1_ready_inspection_contract -v
 
       - name: Pin conservative C1 RTL host ISA firmware and ledger compatibility
         id: compat

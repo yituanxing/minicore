@@ -8,8 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 ACTION="${1:-}"
-case "$ACTION" in save|advance|release|continue|verify) ;; *)
-  echo 'usage: product_sd1_c1_checkpoint.sh save|advance|release|continue|verify [CHECKPOINT_DIR [NEXT_CYCLE | NEW_MEDIA_RESULT]]' >&2
+case "$ACTION" in save|advance|release|continue|verify|inspect) ;; *)
+  echo 'usage: product_sd1_c1_checkpoint.sh save|advance|release|continue|verify|inspect [CHECKPOINT_DIR [NEXT_CYCLE | NEW_MEDIA_RESULT]]' >&2
   exit 2;;
 esac
 
@@ -169,14 +169,25 @@ if [[ "$ACTION" == save ]]; then
   exit 0
 fi
 
-[[ ( "$ACTION" == verify && $# == 2 ) ||
-   ( "$ACTION" != verify && $# == 3 ) ]] ||
-  reject 'verify needs checkpoint; advance/continue need checkpoint and next cycle; release needs checkpoint and new media manifest'
+[[ ( ( "$ACTION" == verify || "$ACTION" == inspect ) && $# == 2 ) ||
+   ( "$ACTION" != verify && "$ACTION" != inspect && $# == 3 ) ]] ||
+  reject 'verify/inspect need checkpoint; advance/continue need checkpoint and next cycle; release needs checkpoint and new media manifest'
 SOURCE="$(realpath "$2")"
 CURRENT="$(verify_checkpoint "$SOURCE")"
 if [[ "$ACTION" == verify ]]; then
   [[ $# == 2 ]] || reject 'verify takes one checkpoint'
   echo "PRODUCT_SD1_C1_CHECKPOINT_VERIFIED directory=$SOURCE cycle=$CURRENT"
+  exit 0
+fi
+if [[ "$ACTION" == inspect ]]; then
+  [[ "$(field phase "$SOURCE/.c1-ready")" == armed ]] ||
+    reject 'only an unreleased C1 rootfs boundary can be inspected for public reuse'
+  # Re-open the exact executable, immutable boot media and complete Host/RTL
+  # state; the inspect mode cannot step the guest or write a new checkpoint.
+  timeout --signal=TERM --kill-after=10s 120s "$SIM" c1-inspect \
+    "$FW" "$DTB" "$OLD_SD" "$SOURCE/persistent" \
+    "$MODEL_SHA" "$FW_SHA" "$DTB_SHA" "$OLD_SD_SHA" "$LINUX_SHA" "$OLD_ROOTFS_SHA" \
+    "$CURRENT" 0
   exit 0
 fi
 
