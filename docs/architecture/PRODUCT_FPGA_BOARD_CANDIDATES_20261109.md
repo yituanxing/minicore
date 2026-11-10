@@ -369,6 +369,58 @@ post-route proof. This contract is checked in to avoid losing the preparation
 while hardware/tool access is arranged; there is **no verified routed run**
 yet.
 
+### WSL2 shell -> native Windows 10 Vivado bridge (2026-11-10)
+
+`physical-product-windows` is an additional execution path for the **same**
+checked-in logical-BD, synthesis/route Tcl scripts and fail-closed report gate.
+Keep the AMD-licensed Vivado **2026.1 installed natively on Windows**; do not
+install a second copy in WSL. WSL calls `powershell.exe`, which starts Windows
+`vivado.bat` in two separate stages (logical validation, then actual route).
+The Linux and Windows entry points are independent; the existing
+`physical-product` Linux path is unchanged. The new path has not run on a
+Windows machine or produced measured timing yet.
+
+To avoid unsupported Windows UNC/WSL-ext4 project paths, put the **minicore
+checkout**, pinned `vivado-risc-v` reference checkout, generated Product RTL
+export, and *new* output directory under a Windows drive. For example, the
+WSL path `/mnt/d/fpga/minicore` is visible to Vivado as
+`D:\fpga\minicore`. Use the same mounted drive for every path; do not use
+`/home/<user>/...` for this bridge. Its output *parent* must exist, but the
+new output directory itself must **not** exist. The native PowerShell wrapper
+also needs **Git for Windows** (`git.exe` on Windows PATH), because the DDR
+Tcl verifies exact upstream Git blob hashes.
+
+From WSL, after Windows Vivado, Nexys Video board files and Git for Windows
+are installed, and both pinned checkouts have been prepared:
+
+```bash
+cd /mnt/d/fpga/minicore
+git clone https://github.com/eugene-tarassov/vivado-risc-v.git /mnt/d/fpga/vivado-risc-v
+git -C /mnt/d/fpga/vivado-risc-v checkout 1e6b86aebe5ba6675a1193ec12b417c1f7cb8bf0
+mkdir -p /mnt/d/fpga/runs
+bash tools/ci/product_fpga_artix7_p0.sh prepare /mnt/d/fpga/product-export
+bash tools/ci/product_fpga_nexys_video_ddr.sh physical-product-windows \
+  /mnt/d/fpga/vivado-risc-v /mnt/d/fpga/product-export \
+  /mnt/d/fpga/runs/nexys-route-first \
+  'C:\Xilinx\Vivado\2026.1\bin\vivado.bat'
+```
+
+The final argument is optional if Windows `vivado.bat` is on PATH; replace
+`C:\Xilinx\...` with the actual installation location. The wrapper verifies
+the pinned upstream/reference inputs and clean-commit RTL **before** Windows
+execution, then rechecks reference source, worktree, RTL SHA and AXI ports
+**after** routing. It rejects missing tools and WSL-private paths, preserves
+partial Vivado outputs on failure, never overwrites previous output, and
+requires real routed checkpoints/timing/DRC evidence before emitting
+`physical_reports/result.json`. If a stage fails, inspect its logical/physical
+Vivado logs, fix the root cause, and choose a *new* output directory for the
+next attempt. A host GitHub Actions workflow continues offline-only checks;
+no self-hosted runner is installed or started by this bridge.
+
+Even a successful Windows route is **only** `NEXYS_ROUTED_TIMING_ONLY`: it
+does not prove DDR training, a generated bitstream, a real FPGA boot, or
+signed Debian service/login. These still require separate hardware evidence.
+
 ### Real generated RTL compatibility check
 
 The preceding port gate was first checked with synthetic headers. A subsequent
