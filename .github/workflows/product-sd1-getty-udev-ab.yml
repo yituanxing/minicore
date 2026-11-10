@@ -1,0 +1,111 @@
+name: SD1 candidate udev delay A/B QEMU diagnostic
+
+# A separate, explicitly confirmed one-shot run. Uses the candidate QEMU
+# media cache from #42831310558, NEVER the signed Product RTL/V6 checkpoint.
+# No rootfs recompilation, external Debian download, or long RTL execution.
+on:
+  push:
+    branches:
+      - fix/sd1-udev-getty-timeout-20261110
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-sd1-getty-udev-ab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bounded-qemu-udev-ab:
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.ref == 'refs/heads/fix/sd1-udev-getty-timeout-20261110' &&
+      contains(github.event.head_commit.message, '[sd1-getty-udev-ab-run]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate with no write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Validate diagnostic-only scope and unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" &&
+             -z "${AETHERCORE_SD1_RELAY_CONFIRM:-}" &&
+             -z "${RV64_SD1_LOGIN_USER:-}" &&
+             -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" ]] || exit 19
+          python3 -m unittest tests_py.test_product_sd1_getty_udev_ab_contract -v
+          echo 'DIAGNOSTIC ONLY: synthetic QEMU 110s udev delay, never signed SD1 or RTL PASS' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore EXACT uncredentialed candidate QEMU kernel and SD media
+        id: media
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-sd1-sd
+            build/rv64-debian-sd1-qemu-oracle/obj/.config
+            build/rv64-debian-sd1-qemu-oracle/obj/arch/riscv/boot/Image
+            build/rv64-debian-sd1-qemu-oracle/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-getty-candidate-media-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/product_sd1_qemu_init_oracle.sh') }}-42831310558
+
+      - name: Refuse unavailable original candidate media, never rebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.media.outputs.cache-hit }}' == true ]] || {
+            echo 'CANDIDATE_UDEV_AB_CACHE_MISSING: refuse to reconstruct or substitute signed source media' >&2
+            exit 16
+          }
+          test -s build/rv64-debian-sd1-sd/sd-rootfs.img
+          test -s build/rv64-debian-sd1-sd/partition-rootfs.ext4
+          test -s build/rv64-debian-sd1-qemu-oracle/obj/arch/riscv/boot/Image
+
+      - name: Install minimal QEMU RISC-V and ext4 diagnostic tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          command -v qemu-system-riscv64 >/dev/null || missing+=(qemu-system-misc)
+          command -v debugfs >/dev/null || missing+=(e2fsprogs)
+          if (( ${#missing[@]} )); then
+            timeout --signal=TERM --kill-after=20s 5m sudo apt-get update
+            timeout --signal=TERM --kill-after=20s 8m sudo apt-get install \
+              -y --no-install-recommends "${missing[@]}"
+          fi
+          command -v qemu-system-riscv64
+          command -v debugfs
+          command -v mkfs.ext4
+          # Unlike static/mocked tests, this exercises actual ext4 mutation
+          # through the runner's debugfs before touching any candidate copy.
+          python3 -m unittest \
+            tests_py.test_product_sd1_getty_udev_ab_contract -v
+
+      - name: Run bounded offline-clone 90s versus 10min udev A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 20m \
+            python3 tools/ci/product_sd1_getty_udev_ab.py --run
+          echo 'CANDIDATE_QEMU_DELAYED_UDEV_AB_CAUSAL_PASS_NOT_RTL: inspect exact proof and hashes in artifact' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diagnostic UART and SHA evidence, never the cloned media
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd1-getty-udev-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/product-sd1-getty-udev-ab/*.txt
+            build/product-sd1-getty-udev-ab/*.json
+            build/product-sd1-getty-udev-ab/*.log
