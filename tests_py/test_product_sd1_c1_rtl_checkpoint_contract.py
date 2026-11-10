@@ -66,12 +66,18 @@ class ProductSd1C1RtlCheckpointContract(unittest.TestCase):
         source = HOST.read_text()
         self.assertIn('longRelay?4000000000ULL:1800000000ULL', source)
         self.assertIn('migratedRelay?8000000000ULL:', source)
-        # A zero-cycle v1 migration is a separate, bounded operation.  It must
-        # not inherit the 8B signed-migrated continuation ceiling, just as C1
-        # must not. Ordinary signed relays retain their selected ceiling.
-        self.assertIn(
-            'const std::uint64_t maxCycle=(c1Mode || migrating)?4000000000ULL:defaultMaxCycle',
-            source,
+        # Migration versions have their own raised ceilings, but C1 and the
+        # zero-cycle v1 migration still cap at 4B.  Do not depend on an old
+        # one-line spelling that predated the versioned migrations.
+        max_cycle = source.split('const std::uint64_t maxCycle=', 1)[1].split(';', 1)[0]
+        for version in range(6, 1, -1):
+            self.assertIn(
+                f'migratingV{version}?kV{version}MigratedMaxCycles:', max_cycle
+            )
+        self.assertTrue(
+            max_cycle.strip().endswith(
+                '(c1Mode || migrating)?4000000000ULL:defaultMaxCycle'
+            ), max_cycle,
         )
         self.assertIn('(migrating ? replayCycles!=0 :', source)
         compiler = [

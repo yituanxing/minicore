@@ -18,6 +18,7 @@ PATCH = ROOT / "tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch"
 ARTIFACT = ROOT / "tools/ci/product_sd1_c1_artifact_relay.sh"
 WORKFLOW = ROOT / ".github/workflows/product-sd1-c1-checkpoint-relay.yml"
 EXPECTED_PATCH_SHA = "ff408c203b461d504f48152840698b077f8ea948a07ad5235f4afb8436282638"
+HISTORICAL_RESEED_COMPAT_SHA = "207e79b9f198111e61c891d9a4e93169808b4f84fb651778b154d0e3eb10546f"
 
 
 class ProductC1PhysicalSdStartupContract(unittest.TestCase):
@@ -111,7 +112,16 @@ class ProductC1PhysicalSdStartupContract(unittest.TestCase):
         script = WORKFLOW.read_text()
         self.assertIn("product-sd1-c1-reviewed-gpio-cs-reseed-20261109", script)
         self.assertIn("C1_REVIEWED_RESEED_IDENTITY_MISMATCH", script)
-        self.assertIn("207e79b9f198111e61c891d9a4e93169808b4f84fb651778b154d0e3eb10546f", script)
+        # This historical pin intentionally does not follow later V5/V6 host
+        # changes. A changed fingerprint must fail closed until separately
+        # reviewed; merely updating the expected test value must not arm it.
+        self.assertIn(f'"$compatibility" == {HISTORICAL_RESEED_COMPAT_SHA} &&', script)
+        seed_gate = script.split(
+            'if [[ "$GITHUB_EVENT_NAME" == pull_request && "$mode" == seed ]]; then', 1
+        )[1].split('\n          fi', 1)[0]
+        self.assertIn('"$RESEED_LABEL" == product-sd1-c1-reviewed-gpio-cs-reseed-20261109', seed_gate)
+        self.assertIn('C1_REVIEWED_RESEED_IDENTITY_MISMATCH', seed_gate)
+        self.assertIn('exit 19', seed_gate)
         self.assertIn("C1_AUTO_RESEED_DENIED", script)
         self.assertIn("C1_RTL_LONGRUN_QEMU_ORACLE_VERIFIED", script)
         self.assertIn("github.event.label.name == 'product-sd1-c1-public-artifact-relay'", script)
@@ -121,7 +131,9 @@ class ProductC1PhysicalSdStartupContract(unittest.TestCase):
             ["bash", str(ARTIFACT), "fingerprint"], cwd=ROOT,
             text=True, capture_output=True, check=True,
         ).stdout.strip().split("=", 1)[1]
-        self.assertEqual(calculated, "207e79b9f198111e61c891d9a4e93169808b4f84fb651778b154d0e3eb10546f")
+        self.assertRegex(calculated, r'^[a-f0-9]{64}$')
+        self.assertNotEqual(calculated, HISTORICAL_RESEED_COMPAT_SHA,
+                            'new V5/V6 host identity must not inherit old reseed authorization')
 
 
 if __name__ == "__main__":
