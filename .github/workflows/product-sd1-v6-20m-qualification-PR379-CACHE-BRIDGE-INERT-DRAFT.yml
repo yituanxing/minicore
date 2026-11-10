@@ -16,8 +16,11 @@ concurrency:
   cancel-in-progress: false
 env:
   GH_TOKEN: ${{ github.token }}
-  # The actual V6 executor comes from an immutable reviewed commit, not PR379 HEAD.
-  V6_SOURCE_SHA: '6dfb8eb2ee445c730b1b5ed5dcc2f3919ebcda87'
+  # V6_SOURCE_SHA must track event HEAD because chain artifact provenance checks
+  # workflow_run.head_sha. Executed V6 CI code is separately pinned below.
+  V6_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+  V6_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  V6_EVENT_REVIEWED_PARENT_HEAD: '8a40835c470d059448a4871bafead04cc555bee5'
   V6_REVIEWED_HEAD: '6dfb8eb2ee445c730b1b5ed5dcc2f3919ebcda87'
   # Read-only V5 model-migration qualification is retained, not claimed as V6 qualification.
   V6_QUAL_RUN: '42599136275'
@@ -58,23 +61,38 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Checkout V6 qualification source without persistent credentials
+      - name: Checkout the reviewed PR379 event HEAD for artifact provenance
         uses: actions/checkout@v4
         with:
           ref: ${{ env.V6_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify checkout fixed V6 executor bytes (not mutable PR379 HEAD)
+      - name: Checkout immutable reviewed V6 executor into isolated directory
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_REVIEWED_HEAD }}
+          path: v6-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check single PR379 workflow release and import exact reviewed V6 CI blobs
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
-          [[ "$(git rev-parse "$V6_REVIEWED_HEAD^{commit}")" == "$V6_REVIEWED_HEAD" ]] || exit 16
-          git merge-base --is-ancestor "$V6_REVIEWED_HEAD" HEAD || exit 16
-          [[ "$(git rev-parse HEAD)" == "$V6_REVIEWED_HEAD" ]] || exit 16
-          # Workflow event SHA belongs to PR379, but all executed V6 code is
-          # exact immutable reviewed V6 source. The future PR379 workflow file
-          # must receive a separate single-release source identity audit.
+          [[ "$V6_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+             "$V6_EVENT_HEAD_SHA" == "$V6_SOURCE_SHA" &&
+             "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
+          [[ "$(git rev-parse HEAD^)" == "$V6_EVENT_REVIEWED_PARENT_HEAD" ]] || {
+            echo 'PR379 event HEAD is not one reviewed post-V5 bridge commit' >&2
+            exit 16
+          }
+          while IFS= read -r -d '' changed; do
+            [[ "$changed" == .github/workflows/product-sd1-v6-20m-qualification-PR379-CACHE-BRIDGE-INERT-DRAFT.yml ]] || {
+              echo "PR379 changed signed source unexpectedly: $changed" >&2
+              exit 16
+            }
+          done < <(git diff --name-only -z "$V6_EVENT_REVIEWED_PARENT_HEAD" HEAD)
+          reviewed="$GITHUB_WORKSPACE/v6-reviewed-tools"
+          [[ "$(git -C "$reviewed" rev-parse HEAD)" == "$V6_REVIEWED_HEAD" ]] || exit 16
           for path in \
             tools/ci/product_sd1_v6_chain.py \
             tools/ci/product_sd1_v6_chain_prepare.sh \
@@ -82,8 +100,13 @@ jobs:
             tools/ci/product_sd1_v6_release_guard.sh \
             .github/actions/product-sd1-v6-20m/action.yml \
             .github/actions/product-sd1-v6-batch/action.yml; do
-            [[ "$(git rev-parse "HEAD:$path")" == "$(git rev-parse "$V6_REVIEWED_HEAD:$path")" ]] || exit 16
+            [[ ! -e "$GITHUB_WORKSPACE/$path" ]] || exit 16
+            [[ "$(git -C "$reviewed" rev-parse "HEAD:$path")" == "$(git -C "$reviewed" hash-object "$path")" ]] || exit 16
+            mkdir -p "$(dirname "$GITHUB_WORKSPACE/$path")"
+            cp -- "$reviewed/$path" "$GITHUB_WORKSPACE/$path"
+            [[ "$(sha256sum "$reviewed/$path" | cut -d' ' -f1)" == "$(sha256sum "$GITHUB_WORKSPACE/$path" | cut -d' ' -f1)" ]] || exit 16
           done
+          [[ "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
           bash -n tools/ci/product_sd1_v6_postcross_20m.sh
           bash -n tools/ci/product_sd1_v6_chain_prepare.sh
           python3 -m py_compile tools/ci/product_sd1_v6_chain.py
@@ -177,7 +200,9 @@ jobs:
           {
             echo 'schema=SD1_V6_14992_15012_TECHNICAL_QUALIFICATION_V1'
             echo "reviewed_v6_head=$V6_REVIEWED_HEAD"
+            echo "pr379_reviewed_parent_head=$V6_EVENT_REVIEWED_PARENT_HEAD"
             echo "qual_source_head=$V6_SOURCE_SHA"
+            echo "event_pr379_head=$V6_EVENT_HEAD_SHA"
             echo "origin_run=$V6_ORIGIN_RUN"
             echo "origin_head=$V6_ORIGIN_HEAD"
             echo "origin_id=$V6_14992_ID"
@@ -198,6 +223,46 @@ jobs:
             echo 'debian_login_claim=0'
           } > "$report/qualification-manifest.txt"
           echo 'PRODUCT_SD1_V6_20M_TECHNICAL_STAGE_VERIFIED_NOT_DEBIAN_PASS'
+      - id: qualification_terminal
+        name: Preserve the complete authenticated 15012M Host RTL card checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-v6-qual-15012-checkpoint-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ env.V6_SOURCE_DIR }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 1
+      - name: Authenticate 90-day checkpoint archive and bind it to report
+        shell: bash
+        env:
+          ART_ID: ${{ steps.qualification_terminal.outputs.artifact-id }}
+          ART_SHA: ${{ steps.qualification_terminal.outputs.artifact-digest }}
+          ART_NAME: product-sd1-v6-qual-15012-checkpoint-${{ github.run_id }}-attempt${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          ART_SHA="${ART_SHA#sha256:}"
+          [[ "$ART_ID" =~ ^[0-9]+$ && "$ART_SHA" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          visible=0
+          for delay in 0 2 3 5 8 13 21 30; do
+            if (( delay > 0 )); then sleep "$delay"; fi
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID" > "$RUNNER_TEMP/v6-qual-terminal-artifact.json"; then
+              visible=1
+              break
+            fi
+          done
+          [[ "$visible" == 1 ]] || exit 16
+          jq -e --argjson id "$ART_ID" --argjson run "$GITHUB_RUN_ID" \
+            --arg name "$ART_NAME" --arg digest "sha256:$ART_SHA" --arg head "$V6_EVENT_HEAD_SHA" '
+              .id==$id and .name==$name and .digest==$digest and
+              .workflow_run.id==$run and .workflow_run.head_sha==$head and
+              .expired==false and .size_in_bytes>1024
+            ' "$RUNNER_TEMP/v6-qual-terminal-artifact.json" >/dev/null || exit 16
+          {
+            echo "terminal_90d_artifact_id=$ART_ID"
+            echo "terminal_90d_artifact_name=$ART_NAME"
+            echo "terminal_90d_artifact_zip_digest=$ART_SHA"
+          } >> "$RUNNER_TEMP/v6-qual-report/qualification-manifest.txt"
       - id: qualification_report
         name: Retain independent technical qualification evidence
         uses: actions/upload-artifact@v4
@@ -227,7 +292,7 @@ jobs:
           done
           [[ "$visible" == 1 ]] || exit 16
           jq -e --argjson id "$ART_ID" --argjson run "$GITHUB_RUN_ID" \
-            --arg name "$ART_NAME" --arg digest "sha256:$ART_SHA" --arg head "$V6_SOURCE_SHA" '
+            --arg name "$ART_NAME" --arg digest "sha256:$ART_SHA" --arg head "$V6_EVENT_HEAD_SHA" '
               .id==$id and .name==$name and .digest==$digest and
               .workflow_run.id==$run and .workflow_run.head_sha==$head and
               .expired==false and .size_in_bytes>1024
