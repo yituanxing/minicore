@@ -1,6 +1,8 @@
 name: INERT DRAFT signed SD1 V6 20B continuation from certified V5 14992M
-# INERT. This draft cannot run: all jobs are if:false, terminal artifact pins are placeholders.
+# INERT. Job1/final are if:false; downstream jobs skip on unmet needs.
 # Before enabling require independent signed V5 14992M artifact audit and V6 identity review.
+# Also require a genuine 14992M -> 15012M V6 technical qualification and
+# one reviewed release commit. V5's 9992M model qualification is not V6 approval.
 # Single PR-labeled event, no workflow_run/dispatch/push and no write privileges.
 'on':
   pull_request:
@@ -14,6 +16,7 @@ concurrency:
 env:
   GH_TOKEN: ${{ github.token }}
   V6_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+  V6_REVIEWED_PRIOR_HEAD: 'PENDING_INDEPENDENT_V6_DRAFT_REVIEW'
   # Read-only V5 model-migration qualification is retained, not claimed as V6 qualification.
   V6_QUAL_RUN: '42599136275'
   V6_QUAL_ID: '13664668373'
