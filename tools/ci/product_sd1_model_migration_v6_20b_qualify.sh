@@ -33,6 +33,7 @@ readonly SOURCE_14992_RTL=948ab3d2a7554566ca9cb0070c51eafbecf111eee465ec11a7ecbc
 readonly SOURCE_14992_CARD=3ef8a3c6281ca52fd2c734f7244634de55908d276208b2ef26736b355ff1c4a3
 readonly OLD_ROOT="$ROOT/build/product-sd1-model-migration-v5-15b-qualified"
 readonly OLD_MODEL_DIR="$OLD_ROOT/candidate-savable-model"
+readonly GENERATED_MODEL_DIR="$ROOT/build/product-sd1-persistent-checkpoint/savable-model"
 readonly OUT="$ROOT/build/product-sd1-model-migration-v6-20b-draft"
 
 if [[ "${1:---plan}" == --plan && $# -le 1 ]]; then
@@ -112,6 +113,16 @@ old_qual="$OLD_ROOT/qualification-manifest.txt"
 chmod 755 "$old_sim"
 [[ -x "$old_sim" && "$(sha "$old_sim")" == "$SOURCE_SHA" ]] ||
   fail 'authenticated old V5 model did not become executable'
+# The V5 qualification artifact intentionally contains ONLY the qualified
+# executable, its manifest and checkpoint. It does not include generated RTL
+# C++/headers/archives or original Host object. Recover those exact bytes from
+# the frozen PR379-scoped savable-model cache instead of assuming they exist in
+# the compact V5 qualification ZIP.
+generated_old="$GENERATED_MODEL_DIR/obj/VAetherCoreProductDebianSdRV64SimTop"
+[[ -f "$generated_old" && ! -L "$generated_old" &&
+   "$(sha "$generated_old")" == "$ORIGINAL_SHA" &&
+   -f "$GENERATED_MODEL_DIR/obj/product_rv64_checkpoint_sd1_main.o" ]] ||
+  fail 'original signed savable model and complete Host/RTL objects cache absent'
 
 mapfile -d '' manifests < <(find "$ROOT/build/product-sd1-spi-polling-import" -type f -name manifest.txt -print0)
 [[ ${#manifests[@]} == 1 ]] || fail 'polling manifest ambiguous'
@@ -136,15 +147,15 @@ generated_object_hash() {
   (cd "$1/obj" && find . -maxdepth 1 -type f \( -name 'VAetherCoreProductDebianSdRV64SimTop*.o' -o -name 'VAetherCoreProductDebianSdRV64SimTop*.a' \) -print0 |
     sort -z | xargs -0 sha256sum | sha256sum | cut -d ' ' -f1)
 }
-old_generated="$(generated_hash "$OLD_MODEL_DIR")"
-old_objects="$(generated_object_hash "$OLD_MODEL_DIR")"
+old_generated="$(generated_hash "$GENERATED_MODEL_DIR")"
+old_objects="$(generated_object_hash "$GENERATED_MODEL_DIR")"
 [[ "$old_generated" == "$(field generated_rtl_sha256 "$old_qual")" &&
    "$old_objects" == "$(field generated_rtl_objects_sha256 "$old_qual")" ]] ||
   fail 'old RTL/generated object hashes not authenticated'
 
 mkdir -p "$OUT"
 candidate="$OUT/candidate-savable-model"
-cp -a "$OLD_MODEL_DIR" "$candidate"
+cp -a "$GENERATED_MODEL_DIR" "$candidate"
 obj="$candidate/obj"
 new_sim="$obj/VAetherCoreProductDebianSdRV64SimTop"
 [[ -f "$obj/product_rv64_checkpoint_sd1_main.o" && -x "$new_sim" ]] ||
