@@ -79,6 +79,13 @@ jobs:
           } | tee "$LOG_DIR/source-shas.txt"
           test "$(git -C "$NAX_DIR" rev-parse HEAD)" = "$NAX_SHA"
 
+      - name: Restore pinned Verilator build cache
+        id: verilator_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/nax-toolchain/verilator-v4.228
+          key: nax-throughput-verilator-v4.228-ubuntu22-installed-v1
+
       - name: Build official pinned Verilator 4.228
         shell: bash
         run: |
@@ -87,11 +94,27 @@ jobs:
           start="$(date +%s)"
           timeout 900s ./ci/install-verilator.sh v4.228 "$RUNNER_TEMP/nax-toolchain" \
             2>&1 | tee "$LOG_DIR/verilator-install.log"
+          # Upstream install-verilator.sh builds in the source tree but does
+          # not run "make install". A compiled binary alone is insufficient:
+          # the generated VNaxRiscv.mk expects share/verilator/include/verilated.mk.
+          verilator_src="$RUNNER_TEMP/nax-toolchain/verilator-v4.228"
+          if [[ ! -s "$verilator_src/share/verilator/include/verilated.mk" ]]; then
+            timeout 180s make -C "$verilator_src" install -j2 \
+              2>&1 | tee "$LOG_DIR/verilator-make-install.log"
+          fi
+          test -s "$verilator_src/share/verilator/include/verilated.mk"
           verilator_bin="$RUNNER_TEMP/nax-toolchain/verilator-v4.228/bin"
           test -x "$verilator_bin/verilator"
           echo "$verilator_bin" >> "$GITHUB_PATH"
           "$verilator_bin/verilator" --version | tee -a "$LOG_DIR/tools.txt"
           echo "verilator_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+
+      - name: Save verified Verilator build cache
+        if: steps.verilator_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/nax-toolchain/verilator-v4.228
+          key: nax-throughput-verilator-v4.228-ubuntu22-installed-v1
 
       - name: Fetch official prepared Linux media for optional short run
         shell: bash
@@ -104,6 +127,13 @@ jobs:
           set -e
           echo "linux_media_exit=$media_rc" | tee -a "$LOG_DIR/outcomes.txt"
 
+      - name: Restore pinned Spike build cache
+        id: spike_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/nax-throughput/ext/riscv-isa-sim/build
+          key: nax-throughput-spike-${{ env.NAX_SHA }}-ubuntu22-v1
+
       - name: Build Spike golden model and install ELFIO headers
         shell: bash
         run: |
@@ -114,15 +144,27 @@ jobs:
           cp -R "$RUNNER_TEMP/nax-elfio/elfio" "$RISCV/include/"
           mkdir -p "$RISCV/build"
           cd "$RISCV/build"
-          timeout 900s ../configure --prefix="$RISCV" --without-boost --without-boost-asio --without-boost-regex 2>&1 | tee "$LOG_DIR/spike-configure.log"
-          start="$(date +%s)"
-          timeout 720s make -j2 2>&1 | tee "$LOG_DIR/spike-build.log"
-          echo "spike_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
-          timeout 90s g++ --shared -L. -Wl,--export-dynamic \
-            -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/lib -o package.so \
-            spike.o libspike_main.a libriscv.a libdisasm.a libsoftfloat.a \
-            libfesvr.a libfdt.a -lpthread -ldl -lboost_regex -lboost_system \
-            2>&1 | tee "$LOG_DIR/spike-package.log"
+          if [[ -s package.so && -s libriscv.a && -s libspike_main.a ]]; then
+            echo 'reuse verified pinned Spike build from Actions cache' | tee "$LOG_DIR/spike-build.log"
+            echo 'spike_build_seconds=0(cache)' | tee -a "$LOG_DIR/outcomes.txt"
+          else
+            timeout 900s ../configure --prefix="$RISCV" --without-boost --without-boost-asio --without-boost-regex 2>&1 | tee "$LOG_DIR/spike-configure.log"
+            start="$(date +%s)"
+            timeout 720s make -j2 2>&1 | tee "$LOG_DIR/spike-build.log"
+            echo "spike_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+            timeout 90s g++ --shared -L. -Wl,--export-dynamic \
+              -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/lib -o package.so \
+              spike.o libspike_main.a libriscv.a libdisasm.a libsoftfloat.a \
+              libfesvr.a libfdt.a -lpthread -ldl -lboost_regex -lboost_system \
+              2>&1 | tee "$LOG_DIR/spike-package.log"
+          fi
+
+      - name: Save verified Spike build cache
+        if: steps.spike_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/nax-throughput/ext/riscv-isa-sim/build
+          key: nax-throughput-spike-${{ env.NAX_SHA }}-ubuntu22-v1
 
       - name: Generate official RV32IMA NaxRiscv RTL
         shell: bash
