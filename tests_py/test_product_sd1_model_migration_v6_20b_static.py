@@ -61,6 +61,9 @@ class HostV6MigrationStatic(unittest.TestCase):
                        'cross_15b_executed=0',
                        'full_host_except_model_sha_identical=1',
                        'generated_rtl_objects_sha256=',
+                       'build/product-sd1-persistent-checkpoint/savable-model',
+                       '"$(sha "$generated_old")" == "$ORIGINAL_SHA"',
+                       'cp -a "$GENERATED_MODEL_DIR" "$candidate"',
                        'chmod 755 "$old_sim"',
                        'migration_origin_host_sha256=$SOURCE_14992_HOST',
                        'source_host_sha256=$SOURCE_14972_HOST',
@@ -111,7 +114,7 @@ class HostV6MigrationStatic(unittest.TestCase):
         self.assertEqual(env['V6_SIGNED_ORIGIN_HEAD'],
                          '8a40835c470d059448a4871bafead04cc555bee5')
         self.assertEqual(env['V6_REVIEWED_HEAD'],
-                         '99dbb5a90849c54b8c61c00ac58765e5414e0f04')
+                         'ffa59df56fa88611eaf727bbd96909fae748ebd2')
         self.assertTrue(env['V6_MODEL_SHA'].startswith('PENDING_'))
         self.assertEqual(env['AETHERCORE_SD1_V6_20B_APPROVED'],
                          'PENDING_FORMAL_5B_AFTER_TECH_REPORT_REVIEW')
@@ -134,6 +137,8 @@ class HostV6MigrationStatic(unittest.TestCase):
         for marker in ('V6_14952_ID: \'13739286257\'',
                        'V6_14972_ID: \'13739321621\'',
                        'V6_14992_ID: \'13738787578\'',
+                       'steps.frozen_model.outputs.cache-hit',
+                       'aethercore-Linux-X64-product-sd1-savable-portable-v1-x86_64-',
                        'PRODUCT_SD1_V6_20B_MODEL_ARCHIVE_PROVENANCE_VERIFIED',
                        'git diff --name-only -z "$V6_SIGNED_ORIGIN_HEAD" HEAD',
                        'product_sd1_model_migration_v6_20b_qualify.sh',
