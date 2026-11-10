@@ -1,7 +1,7 @@
 name: INERT DRAFT V6 14992M to 15012M signed Product RTL technical qualification
 # Only one real 20M stage. This is technical evidence, NOT a Debian login PASS.
 # Remains fail-closed pending genuine V5 14992M terminal artifact pins,
-# reviewed activation source and independent qualification approval.
+# reviewed activation source, verified portable signed media artifact, and approval.
 # PR-label-only / no workflow_dispatch, workflow_run, push, or write privilege.
 'on':
   pull_request:
@@ -27,6 +27,12 @@ env:
   AETHERCORE_SD1_V6_REVIEWED_MODEL_SHA: '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'
   V6_ORIGIN_RUN: '42600415630'
   V6_ORIGIN_HEAD: '8a40835c470d059448a4871bafead04cc555bee5'
+  V6_MEDIA_RUN: 'PENDING_TRUSTED_MEDIA_EXPORT_RUN'
+  V6_MEDIA_HEAD: 'PENDING_TRUSTED_MEDIA_EXPORT_SOURCE_HEAD'
+  V6_MEDIA_ID: 'PENDING_TRUSTED_MEDIA_ARTIFACT_ID'
+  V6_MEDIA_NAME: 'PENDING_TRUSTED_MEDIA_ARTIFACT_NAME'
+  V6_MEDIA_ZIP_SHA: 'PENDING_TRUSTED_MEDIA_ZIP_SHA'
+  V6_MEDIA_MANIFEST_SHA: 'PENDING_TRUSTED_MEDIA_FILE_MANIFEST_SHA'
   V6_14992_ID: 'PENDING_REAL_14992_ARTIFACT_ID'
   V6_14992_NAME: 'PENDING_REAL_14992_ARTIFACT_NAME'
   V6_14992_DIGEST: 'PENDING_REAL_14992_ZIP_DIGEST'
@@ -87,41 +93,101 @@ jobs:
           bash -n tools/ci/product_sd1_v6_chain_prepare.sh
           python3 -m py_compile tools/ci/product_sd1_v6_chain.py
           bash tools/ci/product_sd1_v6_postcross_20m.sh --plan
-      - id: seed
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/rv64-debian-rootfs/result.txt
-            build/rv64-debian-linux/result.txt
-            build/rv64-debian-linux/obj/.config
-            build/rv64-debian-linux/obj/arch/riscv/boot/Image
-            build/rv64-debian-boot
-            build/rv64-debian-sd1-sd
-            build/product-sd1-official-seed
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
-          restore-keys: |
-            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
-      - id: diag
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
-            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
-            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
-            build/product-sd1-gpio-cs-diagnostic/linux/evidence
-            build/product-sd1-gpio-cs-diagnostic/boot
-            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
-          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
-      - name: Require the historical signed Debian caches used by successful PR-labeled N and O
+      - name: Import only authenticated portable V5 signed Debian media archive
         shell: bash
+        env:
+          MEDIA_RUN: ${{ env.V6_MEDIA_RUN }}
+          MEDIA_HEAD: ${{ env.V6_MEDIA_HEAD }}
+          MEDIA_ID: ${{ env.V6_MEDIA_ID }}
+          MEDIA_NAME: ${{ env.V6_MEDIA_NAME }}
+          MEDIA_ZIP_SHA: ${{ env.V6_MEDIA_ZIP_SHA }}
+          MEDIA_MANIFEST_SHA: ${{ env.V6_MEDIA_MANIFEST_SHA }}
         run: |
           set -euo pipefail
-          [[ '${{ steps.diag.outputs.cache-hit }}' == true &&
-             ( '${{ steps.seed.outputs.cache-hit }}' == true ||
-               '${{ steps.seed.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
-            echo 'V6 source caches unavailable for this PR event; refuse cold reproduction' >&2
-            exit 16
-          }
+          # A different PR cannot restore PR#379-scoped Actions caches. The
+          # trusted origin runner must export its already-built media unchanged.
+          # No build, no cache fallback, no cold guest cycles.
+          [[ "$MEDIA_RUN" =~ ^[0-9]{8,13}$ && "$MEDIA_HEAD" =~ ^[a-f0-9]{40}$ &&
+             "$MEDIA_ID" =~ ^[0-9]{8,13}$ && "$MEDIA_NAME" =~ ^[A-Za-z0-9_.-]+$ &&
+             "$MEDIA_ZIP_SHA" =~ ^[a-f0-9]{64}$ &&
+             "$MEDIA_MANIFEST_SHA" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          archive_dir="$RUNNER_TEMP/v6-portable-media"
+          mkdir -p "$archive_dir"
+          metadata="$archive_dir/source.json"
+          archive="$archive_dir/source.zip"
+          visible=0
+          for delay in 0 2 3 5 8 13 21 30; do
+            if (( delay > 0 )); then sleep "$delay"; fi
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$MEDIA_ID" > "$metadata"; then
+              visible=1
+              break
+            fi
+          done
+          [[ "$visible" == 1 ]] || exit 16
+          jq -e --argjson id "$MEDIA_ID" --argjson run "$MEDIA_RUN" \
+            --arg name "$MEDIA_NAME" --arg digest "sha256:$MEDIA_ZIP_SHA" \
+            --arg head "$MEDIA_HEAD" '
+              .id==$id and .name==$name and .digest==$digest and
+              .workflow_run.id==$run and .workflow_run.head_sha==$head and
+              .expired==false and .size_in_bytes>1024
+            ' "$metadata" >/dev/null || exit 16
+          fetched=0
+          for delay in 0 2 3 5 8 13 21 30; do
+            if (( delay > 0 )); then sleep "$delay"; fi
+            if curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$MEDIA_ID/zip" -o "$archive"; then
+              fetched=1
+              break
+            fi
+          done
+          [[ "$fetched" == 1 && "$(sha256sum "$archive" | cut -d' ' -f1)" == "$MEDIA_ZIP_SHA" ]] || exit 16
+          # Reject ZIP traversal, symlinks, non-media paths and unsigned files
+          # BEFORE extracting into the ephemeral runner workspace.
+          python3 - "$archive" "$MEDIA_MANIFEST_SHA" "$GITHUB_WORKSPACE" <<'PY'
+          import hashlib,stat,sys,zipfile
+          from pathlib import PurePosixPath,Path
+          archive, expected, workspace=sys.argv[1:]
+          allowed=('build/rv64-debian-rootfs/','build/rv64-debian-linux/',
+                   'build/rv64-debian-boot/','build/rv64-debian-sd1-sd/',
+                   'build/product-sd1-official-seed/','build/product-sd1-gpio-cs-diagnostic/')
+          with zipfile.ZipFile(archive) as z:
+            members=z.infolist()
+            names=[i.filename for i in members if not i.is_dir()]
+            if names.count('portable-media-manifest.txt')!=1 or len(names)!=len(set(names)):
+              raise SystemExit('V6 portable media manifest missing or duplicate names')
+            manifest=z.read('portable-media-manifest.txt')
+            if hashlib.sha256(manifest).hexdigest()!=expected:
+              raise SystemExit('V6 portable media manifest SHA mismatch')
+            records={}
+            for line in manifest.decode('utf-8').splitlines():
+              if len(line)<67 or line[64:66]!='  ' or len(line[:64])!=64 or any(c not in '0123456789abcdef' for c in line[:64]):
+                raise SystemExit('V6 portable media malformed SHA line')
+              filename=line[66:]
+              if filename in records: raise SystemExit('duplicate file in SHA manifest')
+              records[filename]=line[:64]
+            for i in members:
+              raw=i.filename
+              path=PurePosixPath(raw)
+              mode=i.external_attr>>16
+              if (path.is_absolute() or '..' in path.parts or
+                  any(part in ('', '.') for part in raw.rstrip('/').split('/')) or
+                  '\\' in raw or stat.S_ISLNK(mode) or
+                  (raw!='portable-media-manifest.txt' and not
+                   (any(raw.startswith(p) for p in allowed) or
+                    (raw=='build/' and i.is_dir())))):
+                raise SystemExit('V6 unsafe or unapproved portable media path')
+              if not i.is_dir() and Path(workspace,raw).exists():
+                raise SystemExit('V6 portable media output path already exists')
+            if set(records)!=set(names)-{'portable-media-manifest.txt'}:
+              raise SystemExit('V6 unsigned or missing media archive member')
+          PY
+          unzip -qq "$archive" -d "$GITHUB_WORKSPACE"
+          (cd "$GITHUB_WORKSPACE" && sha256sum --status -c portable-media-manifest.txt) || exit 16
+          rm -f "$GITHUB_WORKSPACE/portable-media-manifest.txt"
+          [[ -f build/rv64-debian-rootfs/result.txt &&
+             -f build/rv64-debian-sd1-sd/sd-rootfs.img &&
+             -f build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image ]] || exit 16
+          echo 'PRODUCT_SD1_V6_SIGNED_MEDIA_PORTABLE_ARTIFACT_AND_FILE_SHA_VERIFIED'
       - uses: actions/download-artifact@v4
         with:
           run-id: 42338584047
