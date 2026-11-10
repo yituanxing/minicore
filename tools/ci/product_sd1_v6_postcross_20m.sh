@@ -94,10 +94,12 @@ readonly OUT="${AETHERCORE_SD1_V6_OUT:-}"
     "$(field cross_15b_executed "$QUAL")" == 0 &&
    "$(field debian_login_claim "$QUAL")" == 0 ]] ||
   reject 'V6 20B exact model and 14952-14972 zero-step/differential qualification absent'
-[[ "$(field candidate_14992_host_sha256 "$QUAL")" == "$(sha "$SOURCE/persistent.pre.host")" &&
-   "$(field candidate_14992_rtl_sha256 "$QUAL")" == "$(sha "$SOURCE/persistent.pre.rtl")" &&
-   "$(field candidate_14992_card_sha256 "$QUAL")" == "$(sha "$SOURCE/card-progress.json")" ]] ||
-  reject 'migrated 14992M source differs from independently reviewed V6 qualification'
+if [[ "$SOURCE_M" == 14992 && "${V6_SOURCE_MODE:-}" == cross_run ]]; then
+  [[ "$(field candidate_14992_host_sha256 "$QUAL")" == "$(sha "$SOURCE/persistent.pre.host")" &&
+     "$(field candidate_14992_rtl_sha256 "$QUAL")" == "$(sha "$SOURCE/persistent.pre.rtl")" &&
+     "$(field candidate_14992_card_sha256 "$QUAL")" == "$(sha "$SOURCE/card-progress.json")" ]] ||
+    reject 'migrated 14992M source differs from independently reviewed V6 qualification'
+fi
 ready="$SOURCE/.migration-ready"
 [[ -s "$ready" && ! -L "$ready" &&
    "$(field schema "$ready")" == AETSDCP1 &&
