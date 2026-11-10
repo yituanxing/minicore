@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from tools.ci.product_sd1_getty_udev_ab import (
     FIRST_LBA, PARTITION_OFFSET, QualificationError,
-    digest, prepare_variant, validate_media,
+    digest, has_serial_getty_dependency_failure, prepare_variant, validate_media,
 )
 
 
@@ -67,6 +67,17 @@ class GettyUdevAbTests(unittest.TestCase):
             validate_media(self.sd, self.partition, self.sd_manifest,
                            self.kernel, self.oracle_manifest)
 
+    def test_getty_failure_recognizes_full_and_ellipsized_unit(self):
+        exact = b"[DEPEND] Dependency failed for serial-getty@ttyS0.service - Serial Getty on ttyS0.\r\n"
+        abbreviated = (b"[DEPEND] Dependency failed for serial-getty\xe2\x80\xa6S0.service"
+                       b" - Serial Getty on ttyS0.\r\n")
+        self.assertTrue(has_serial_getty_dependency_failure(exact))
+        self.assertTrue(has_serial_getty_dependency_failure(abbreviated))
+        self.assertFalse(has_serial_getty_dependency_failure(b"Dependency failed for unrelated.service\r\n"))
+        self.assertFalse(has_serial_getty_dependency_failure(
+            b"Dependency failed for unrelated.service\r\n"
+            b"Started serial-getty@ttyS0.service - Serial Getty on ttyS0\r\n"))
+
     def test_clone_is_immutable_to_source_and_never_overwrites(self):
         output = self.root / "ab"
         output.mkdir()
@@ -110,6 +121,15 @@ class GettyUdevAbTests(unittest.TestCase):
         upload = workflow.split("uses: actions/upload-artifact@v4", 1)[1]
         self.assertNotIn("*.img", upload)
         self.assertNotIn("*.ext4", upload)
+
+    def test_qemu_diagnostic_disables_automatically_generated_console_getty(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  "tools/ci/product_sd1_getty_udev_ab.py").read_text()
+        # The baseline printed `login:` through console-getty even though
+        # serial-getty failed.  Suppress ONLY the auto-generated console
+        # competitor on both QEMU arms, keeping the explicitly enabled
+        # serial-getty@ttyS0 unchanged and the production rootfs untouched.
+        self.assertIn("systemd.getty_auto=no", source)
 
     @unittest.skipUnless(shutil.which("mkfs.ext4") and shutil.which("debugfs"),
                          "host needs mkfs.ext4 and debugfs for actual ext4 mutation")

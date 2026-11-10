@@ -47,7 +47,15 @@ FIRST_LBA = 2048
 PARTITION_OFFSET = SECTOR * FIRST_LBA
 BLOCK = 4 * 1024 * 1024
 DEVICE_TIMEOUT = b"Timed out waiting for device dev-ttyS0.device"
-GETTY_DEPENDENCY_FAILURE = b"Dependency failed for serial-getty@ttyS0.service"
+
+def has_serial_getty_dependency_failure(clean_serial: bytes) -> bool:
+    """Match exact or systemd-ellipsized serial-getty dependency failure."""
+    return any(
+        b"Dependency failed for" in line and
+        b"serial-getty" in line and
+        (b"serial-getty@ttyS0.service" in line or b"Serial Getty on ttyS0" in line)
+        for line in clean_serial.splitlines()
+    )
 
 
 class QualificationError(ValueError):
@@ -202,7 +210,8 @@ def qemu_probe(kernel: Path, image: Path, output: Path, *, mode: str,
         "-nographic", "-monitor", "none", "-serial", "stdio", "-bios", "default",
         "-kernel", str(kernel),
         "-append", ("earlycon=sbi console=ttyS0,115200 root=/dev/vda1 "
-                    "rootfstype=ext4 rootwait rw init=/sbin/init systemd.unit=multi-user.target"),
+                    "rootfstype=ext4 rootwait rw init=/sbin/init systemd.unit=multi-user.target "
+                    "systemd.getty_auto=no"),
         "-drive", f"file={image},format=raw,if=none,id=sd1,snapshot=on",
         "-device", "virtio-blk-device,drive=sd1", "-no-reboot",
     ]
@@ -238,7 +247,7 @@ def qemu_probe(kernel: Path, image: Path, output: Path, *, mode: str,
                     raw_tail = (raw_tail + chunk)[-32768:]
                     clean_tail = ANSI.sub(b"", raw_tail)
                     timed_out_device |= DEVICE_TIMEOUT in clean_tail
-                    getty_dependency_failed |= GETTY_DEPENDENCY_FAILURE in clean_tail
+                    getty_dependency_failed |= has_serial_getty_dependency_failure(clean_tail)
                     if proof.failure:
                         raise QualificationError(f"QEMU Linux failed: {proof.failure}")
                     if mode == "baseline" and timed_out_device and getty_dependency_failed:
@@ -270,6 +279,7 @@ def qemu_probe(kernel: Path, image: Path, output: Path, *, mode: str,
         "native_pid1": proof.pid1_executed,
         "native_login_prompt": proof.login_prompt,
         "ordered_serial_getty_login": getty_login,
+        "console_getty_started": b"Started console-getty.service" in ANSI.sub(b"", observed),
         "dev_ttyS0_device_timeout": timed_out_device,
         "serial_getty_dependency_failed": getty_dependency_failed,
         "terminal_dsr_replies": cursor.replies,
@@ -343,11 +353,15 @@ def run(argv: list[str] | None = None) -> int:
             # demonstrates the same device/getty timeout seen on real RTL.
             if not (baseline["dev_ttyS0_device_timeout"] and
                     baseline["serial_getty_dependency_failed"] and
-                    baseline["native_pid1"]):
+                    baseline["native_pid1"] and
+                    not baseline["console_getty_started"] and
+                    not baseline["native_login_prompt"] and
+                    not baseline["ordered_serial_getty_login"]):
                 raise QualificationError("INCONCLUSIVE: baseline did not reproduce ttyS0 getty timeout")
             if not (extended["native_ext4_root"] and extended["native_pid1"] and
                     extended["ordered_serial_getty_login"] and
                     extended["elapsed_seconds"] >= args.delay_seconds and
+                    not extended["console_getty_started"] and
                     not extended["serial_getty_dependency_failed"] and
                     not extended["dev_ttyS0_device_timeout"]):
                 raise QualificationError("FAIL: candidate did not reach native serial getty/login after delay")
@@ -359,7 +373,7 @@ def run(argv: list[str] | None = None) -> int:
         else:
             report["verdict"] = "PREPARED_NOT_RUN"
     except Exception as exc:
-        report["verdict"] = "UNQUALIFIED"
+        report["verdict"] = "INCONCLUSIVE" if str(exc).startswith("INCONCLUSIVE:") else "UNQUALIFIED"
         report["error"] = str(exc)
         raise
     finally:
