@@ -87,18 +87,17 @@ PY
   unzip -qq "$zipped" -d "$dest"
 }
 
-QUAL_DIR="$GITHUB_WORKSPACE/build/product-sd1-model-migration-v5-15b-qualified"
+QUAL_DIR="$GITHUB_WORKSPACE/build/product-sd1-model-migration-v6-20b-qualified"
 download_verified "$V6_QUAL_ID" "$V6_QUAL_NAME" "$V6_QUAL_RUN" "$V6_QUAL_HEAD" \
   "$V6_QUAL_DIGEST" "$QUAL_DIR" qualified
 qual="$QUAL_DIR/qualification-manifest.txt"
 [[ -s "$qual" && "$(sha "$qual")" == "$V6_QUAL_MANIFEST_SHA" ]] || fail 'V6 qualification manifest drift'
 for clause in 'full_rtl_identical=1' 'full_host_except_model_sha_identical=1' \
- 'two_path_9992_host_rtl_identical=1' 'terminal_migration_guest_cycles=0' \
- 'two_path_9992_sd_cow_body_identical=1' \
- 'differential_card_progress_official_bytes_identical=1' \
- 'cross_10b_executed=0' 'debian_login_claim=0' \
+ 'two_path_14972_host_rtl_identical=1' 'terminal_migration_guest_cycles=0' \
+ 'two_path_14972_sd_cow_body_identical=1' \
+ 'cross_15b_executed=0' 'debian_login_claim=0' \
  "candidate_model_sha256=$V6_MODEL_SHA" \
- 'previous_model_sha256=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a'; do
+ 'previous_model_sha256=4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'; do
   grep -Fxq "$clause" "$qual" || fail "V6 qualification missing $clause"
 done
 model="$QUAL_DIR/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop"
@@ -110,8 +109,46 @@ first="$GITHUB_WORKSPACE/build/product-sd1-v6-source/${V6_BATCH_START_M}m"
 mkdir -p "$(dirname "$first")"
 download_verified "$V6_SOURCE_ID" "$V6_SOURCE_NAME" "$source_run" \
   "$source_head" "$V6_SOURCE_DIGEST" "$first" predecessor
-python3 - "$first" "$V6_BATCH_START_M" "$V6_SOURCE_HOST_SHA" \
-  "$V6_SOURCE_RTL_SHA" "$V6_SOURCE_CARD_SHA" "$V6_MODEL_SHA" \
+source_dir="$first"
+source_host="$V6_SOURCE_HOST_SHA"
+source_rtl="$V6_SOURCE_RTL_SHA"
+source_card="$V6_SOURCE_CARD_SHA"
+if [[ "$V6_SOURCE_MODE" == cross_run ]]; then
+  # The original 14992M ZIP is signed V5 state, NOT a V6 state. Authenticate
+  # it first, then use the separately qualified zero-clock V5->V6 migration.
+  [[ "$(field old_14992_host_sha256 "$qual")" == "$V6_SOURCE_HOST_SHA" &&
+     "$(field candidate_14992_card_sha256 "$qual")" == "$V6_SOURCE_CARD_SHA" ]] ||
+    fail 'V6 qualification did not bind exact official V5 14992M source'
+  python3 - "$first" "$V6_SOURCE_HOST_SHA" "$V6_SOURCE_RTL_SHA" \
+    "$V6_SOURCE_CARD_SHA" <<'PY'
+import sys
+sys.path.insert(0, 'tools/ci')
+from product_sd1_v6_chain import verify_checkpoint,manifest
+folder,host,rtl,card=sys.argv[1:]
+verify_checkpoint(folder,14992000000,{'host':host,'rtl':rtl,'card':card},proof_file=True)
+if manifest(folder+'/.migration-ready').get('model_sha256') != '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be':
+    raise SystemExit('official V5 14992M model SHA drift')
+PY
+  source_dir="$QUAL_DIR/qualified/14992m"
+  source_host="$(field candidate_14992_host_sha256 "$qual")"
+  source_rtl="$(field candidate_14992_rtl_sha256 "$qual")"
+  source_card="$(field candidate_14992_card_sha256 "$qual")"
+  [[ "$source_host" =~ $hex64 && "$source_rtl" =~ $hex64 && "$source_card" == "$V6_SOURCE_CARD_SHA" &&
+     -s "$source_dir/.migration-ready" &&
+     "$(field previous_model_sha256 "$source_dir/.migration-ready")" == 4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be &&
+     "$(field source_host_sha256 "$source_dir/.migration-ready")" == "$V6_SOURCE_HOST_SHA" &&
+     "$(field source_rtl_sha256 "$source_dir/.migration-ready")" == "$V6_SOURCE_RTL_SHA" &&
+     "$(field model_sha256 "$source_dir/.migration-ready")" == "$V6_MODEL_SHA" ]] ||
+    fail 'qualified 14992M V6 model/old-V5 lineage mismatch'
+  cmp -s "$first/persistent.pre.rtl" "$source_dir/persistent.pre.rtl" ||
+    fail '14992M migration changed Product RTL bytes'
+  cmp -s -n 24 "$first/persistent.pre.host" "$source_dir/persistent.pre.host" ||
+    fail '14992M migration changed Host header'
+  cmp -s -i 88:88 "$first/persistent.pre.host" "$source_dir/persistent.pre.host" ||
+    fail '14992M migration changed Host bytes other than model SHA'
+fi
+python3 - "$source_dir" "$V6_BATCH_START_M" "$source_host" \
+  "$source_rtl" "$source_card" "$V6_MODEL_SHA" \
   "$RUNNER_TEMP/v6-source-login.flag" <<'PY'
 import sys
 from pathlib import Path
@@ -135,8 +172,8 @@ python3 tools/ci/product_sd1_official_seed.py verify >/dev/null || fail 'signed 
 # Authenticate EVERY contiguous prior-stage archive, including ZIP digest,
 # full Host/RTL/card SHA and predecessor lineage, before skipping guest cycles.
 python3 tools/ci/product_sd1_v6_chain.py recover "$stage_root" \
-  "$V6_BATCH_START_M" "$V6_BATCH_END_M" "$first" \
-  "$V6_SOURCE_HOST_SHA" "$V6_SOURCE_RTL_SHA" "$V6_SOURCE_CARD_SHA" \
+  "$V6_BATCH_START_M" "$V6_BATCH_END_M" "$source_dir" \
+  "$source_host" "$source_rtl" "$source_card" \
   "$V6_MODEL_SHA" "$GITHUB_RUN_ID" "$V6_SOURCE_SHA" "$GITHUB_JOB" \
   > "$RUNNER_TEMP/v6-recovery.json" || fail 'failed-run checkpoint recovery invalid'
 if [[ "$(cat "$RUNNER_TEMP/v6-source-login.flag")" == 1 &&
