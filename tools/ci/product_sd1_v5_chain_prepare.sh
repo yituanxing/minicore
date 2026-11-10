@@ -50,7 +50,10 @@ download_verified() {
     .id==$id and .name==$name and .workflow_run.id==$run and
     .workflow_run.head_sha==$head and .digest==$digest and
     .expired==false and .size_in_bytes>1024' "$meta" >/dev/null || fail "$label remote digest/provenance drift"
-  curl -fsSL --retry 2 -H "Authorization: Bearer $GH_TOKEN" \
+  # The archive download can lag metadata publication as well; retries
+  # never replace the subsequent local ZIP digest and path-safety checks.
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 90 \
+    -H "Authorization: Bearer $GH_TOKEN" \
     "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" -o "$zipped"
   python3 tools/ci/product_sd1_v5_chain.py verify-zip "$zipped" "$expected" >/dev/null
   # No blind unzip of remote content. Reject absolute/traversal names and symlinks.
