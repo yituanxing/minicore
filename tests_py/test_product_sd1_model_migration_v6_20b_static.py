@@ -61,6 +61,9 @@ class HostV6MigrationStatic(unittest.TestCase):
                        'cross_15b_executed=0',
                        'full_host_except_model_sha_identical=1',
                        'generated_rtl_objects_sha256=',
+                       'chmod 755 "$old_sim"',
+                       'migration_origin_host_sha256=$SOURCE_14992_HOST',
+                       'source_host_sha256=$SOURCE_14972_HOST',
                        'cmp -s -i 88:88'):
             self.assertIn(marker, script)
         self.assertIn('"$OUT"', script)
@@ -79,6 +82,7 @@ class HostV6MigrationStatic(unittest.TestCase):
         self.assertIn('cmp -s -i 88:88', prep)
         self.assertIn('source_dir="$QUAL_DIR/qualified/14992m"', prep)
         self.assertIn('source_host="$(field candidate_14992_host_sha256 "$qual")"', prep)
+        self.assertIn('field migration_origin_host_sha256 "$source_dir/.migration-ready"', prep)
         self.assertIn('product-sd1-model-migration-v6-20b-qualified', prep)
         self.assertIn('product-sd1-model-migration-v6-20b-qualified', post)
         self.assertIn('candidate_14992_host_sha256', post)
