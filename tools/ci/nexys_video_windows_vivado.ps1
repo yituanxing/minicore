@@ -2,11 +2,11 @@
 # This PowerShell entry NEVER authenticates to AMD, installs software,
 # registers GitHub runners, or claims DDR calibration/FPGA Debian login.
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('Logical', 'Physical')][string]$Phase,
+    [Parameter(Mandatory = $true)][ValidateSet('Probe', 'Logical', 'Physical')][string]$Phase,
     [Parameter(Mandatory = $true)][string]$Repository,
-    [Parameter(Mandatory = $true)][string]$Reference,
-    [Parameter(Mandatory = $true)][string]$RtlDir,
-    [Parameter(Mandatory = $true)][string]$OutputDir,
+    [string]$Reference = '',
+    [string]$RtlDir = '',
+    [string]$OutputDir = '',
     [string]$VivadoBin = ''
 )
 
@@ -14,7 +14,14 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 try {
-    foreach ($path in @($Repository, $Reference, $RtlDir)) {
+    $inputDirectories = @($Repository)
+    if ($Phase -ne 'Probe') {
+        $inputDirectories += @($Reference, $RtlDir)
+        if ($OutputDir -eq '') {
+            throw 'native Vivado logical/physical phase requires a Windows output directory'
+        }
+    }
+    foreach ($path in $inputDirectories) {
         if (-not (Test-Path -LiteralPath $path -PathType Container)) {
             throw "missing shared Windows directory: $path"
         }
@@ -34,11 +41,9 @@ try {
     }
     # Windows .bat launchers cannot use a WSL UNC working directory.
     Set-Location -LiteralPath $Repository
-    $env:NEXYS_REFERENCE_DIR = $Reference
-    $env:NEXYS_PRODUCT_RTL_DIR = $RtlDir
-    $env:NEXYS_OUTPUT_DIR = $OutputDir
-
-    if ($Phase -eq 'Logical') {
+    if ($Phase -eq 'Probe') {
+        $script = Join-Path $Repository 'tools\fpga\nexys_video_windows_probe.tcl'
+    } elseif ($Phase -eq 'Logical') {
         if (Test-Path -LiteralPath $OutputDir) {
             throw 'logical Vivado output must not exist before project creation'
         }
@@ -48,6 +53,11 @@ try {
             throw 'physical implementation requires a validated logical BD'
         }
         $script = Join-Path $Repository 'tools\fpga\nexys_video_product_physical.tcl'
+    }
+    if ($Phase -ne 'Probe') {
+        $env:NEXYS_REFERENCE_DIR = $Reference
+        $env:NEXYS_PRODUCT_RTL_DIR = $RtlDir
+        $env:NEXYS_OUTPUT_DIR = $OutputDir
     }
     if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
         throw "pinned Vivado Tcl source absent: $script"

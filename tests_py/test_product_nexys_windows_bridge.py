@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "tools/ci/product_fpga_nexys_video_ddr.sh"
 WINDOWS = ROOT / "tools/ci/nexys_video_windows_vivado.ps1"
+PROBE = ROOT / "tools/fpga/nexys_video_windows_probe.tcl"
 
 
 class NexysWindowsVivadoBridgeContract(unittest.TestCase):
@@ -18,6 +19,7 @@ class NexysWindowsVivadoBridgeContract(unittest.TestCase):
         self.assertEqual(check.returncode, 0, check.stderr)
         source = ENTRY.read_text(encoding="utf-8")
         self.assertIn("physical-product-windows", source)
+        self.assertIn("probe-windows", source)
         self.assertIn("[[ $# -eq 4 || $# -eq 5 ]]", source)
         self.assertIn("physical-product", source)
         self.assertIn("command -v vivado", source)
@@ -52,6 +54,20 @@ class NexysWindowsVivadoBridgeContract(unittest.TestCase):
             self.assertIn("output already exists", result.stderr)
             self.assertEqual(sentinel.read_text(), "keep previous evidence\n")
 
+    def test_route_only_refuses_missing_or_unvalidated_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "unvalidated"
+            output.mkdir()
+            result = subprocess.run(
+                ["bash", str(ENTRY), "route-product-windows",
+                 str(Path(tmp) / "reference"), str(Path(tmp) / "export"),
+                 str(output)], capture_output=True, text=True, cwd=ROOT,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("existing validated logical project required", result.stderr)
+            self.assertFalse((output / "physical_reports").exists())
+
     def test_windows_paths_must_be_drive_backed_and_converted(self):
         source = ENTRY.read_text(encoding="utf-8")
         self.assertIn("powershell.exe", source)
@@ -67,7 +83,7 @@ class NexysWindowsVivadoBridgeContract(unittest.TestCase):
 
     def test_windows_wrapper_runs_two_fail_closed_separate_vivado_processes(self):
         source = WINDOWS.read_text(encoding="utf-8")
-        self.assertIn("ValidateSet('Logical', 'Physical')", source)
+        self.assertIn("ValidateSet('Probe', 'Logical', 'Physical')", source)
         self.assertIn("Get-Command git.exe", source)
         self.assertIn("Get-Command vivado.bat", source)
         self.assertIn("-PathType Leaf", source)
@@ -82,12 +98,57 @@ class NexysWindowsVivadoBridgeContract(unittest.TestCase):
         self.assertNotIn("FPGA_BOARD_PASS", source)
         self.assertNotIn("DEBIAN_LOGIN_PASS", source)
 
+    def test_lightweight_probe_without_product_export_is_fail_closed(self):
+        source = ENTRY.read_text(encoding="utf-8")
+        self.assertLess(source.index('if [[ "$mode" == probe-windows ]]; then\n  for tool'),
+                        source.index('reference_report="$(python3'))
+        self.assertIn('probe_args=(-NoProfile -File', source)
+        self.assertIn('"${probe_args[@]}"', source)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                ["bash", str(ENTRY), "probe-windows", "unused", "extra"],
+                capture_output=True, text=True, cwd=tmp, check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Usage:", result.stderr)
+            # CI and this checkout are not shared Windows drive mounts;
+            # a readiness probe cannot quietly report a hardware success.
+            if not str(ROOT).startswith("/mnt/"):
+                blocked = subprocess.run(
+                    ["bash", str(ENTRY), "probe-windows"],
+                    capture_output=True, text=True, cwd=tmp, check=False,
+                )
+                self.assertEqual(blocked.returncode, 3)
+                self.assertIn("NEXYS_WINDOWS_NOT_READY", blocked.stderr)
+                self.assertNotIn("WINDOWS_VIVADO_READY_ONLY", blocked.stdout)
+        tcl = PROBE.read_text(encoding="utf-8")
+        self.assertIn("version -short", tcl)
+        self.assertIn("get_parts -quiet $part", tcl)
+        self.assertIn("get_board_parts -quiet $board_part", tcl)
+        self.assertIn("WINDOWS_VIVADO_READY_ONLY", tcl)
+        self.assertNotIn("create_project", tcl)
+        self.assertNotIn("launch_runs", tcl)
+        if subprocess.run(["which", "tclsh"], capture_output=True).returncode == 0:
+            result = subprocess.run(
+                ["tclsh"], input=f"set f [open {{{PROBE}}} r]\n"
+                "set s [read $f]\nclose $f\n"
+                "if {![info complete $s]} {exit 2}\n",
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_no_fake_pass_on_missing_or_failed_windows_route(self):
         source = ENTRY.read_text(encoding="utf-8")
+        self.assertIn("integrate-product-windows", source)
+        self.assertIn("route-product-windows", source)
+        self.assertIn('cmp -s "$output/reference-source.json"', source)
+        self.assertIn('cmp -s "$output/product-axi-ports.json"', source)
+        self.assertIn('! -e "$output/physical_reports"', source)
         self.assertIn('"$output/physical_reports/route-evidence.txt"', source)
         self.assertIn("nexys_video_physical_report_gate.py", source)
         self.assertIn("physical-vivado.log", source)
         self.assertIn("logical-vivado.log", source)
+        self.assertIn("preserved log=", source)
         self.assertIn('"$reference_root" >/dev/null', source)
         self.assertIn('prepare "$product_export_dir" >/dev/null', source)
         self.assertIn("--rtl-dir \"$product_rtl_dir\"", source)

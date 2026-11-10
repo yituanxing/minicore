@@ -8,13 +8,22 @@ usage() {
   echo "       $0 integrate-product PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR NEW_OUTPUT_DIR" >&2
   echo "       $0 physical-product PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR NEW_OUTPUT_DIR" >&2
   echo "       $0 physical-product-windows PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR NEW_OUTPUT_DIR [WINDOWS_VIVADO_BAT]" >&2
+  echo "       $0 integrate-product-windows PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR NEW_OUTPUT_DIR [WINDOWS_VIVADO_BAT]" >&2
+  echo "       $0 route-product-windows PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR VALIDATED_OUTPUT_DIR [WINDOWS_VIVADO_BAT]" >&2
+  echo "       $0 probe-windows [WINDOWS_VIVADO_BAT]" >&2
   exit 2
 }
 
 [[ $# -ge 1 ]] || usage
 mode="$1"
-if [[ "$mode" == integrate-product || "$mode" == physical-product || "$mode" == physical-product-windows ]]; then
-  if [[ "$mode" == physical-product-windows ]]; then
+if [[ "$mode" == probe-windows ]]; then
+  [[ $# -eq 1 || $# -eq 2 ]] || usage
+  windows_vivado_bin="${2:-}"
+elif [[ "$mode" == integrate-product || "$mode" == physical-product ||
+        "$mode" == physical-product-windows || "$mode" == integrate-product-windows ||
+        "$mode" == route-product-windows ]]; then
+  if [[ "$mode" == physical-product-windows || "$mode" == integrate-product-windows ||
+        "$mode" == route-product-windows ]]; then
     [[ $# -eq 4 || $# -eq 5 ]] || usage
     windows_vivado_bin="${5:-}"
   else
@@ -31,7 +40,29 @@ else
 fi
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 gate="$repo_dir/tools/fpga/nexys_video_reference_gate.py"
-case "$mode" in preflight|import-ddr|integrate-product|physical-product|physical-product-windows) ;; *) usage ;; esac
+case "$mode" in preflight|import-ddr|integrate-product|physical-product|physical-product-windows|integrate-product-windows|route-product-windows|probe-windows) ;; *) usage ;; esac
+
+# This quick native Windows Vivado readiness probe does not need Product RTL
+# or reference sources; it must never create a project or PASS artifact.
+if [[ "$mode" == probe-windows ]]; then
+  for tool in powershell.exe wslpath realpath; do
+    command -v "$tool" >/dev/null 2>&1 || {
+      echo "NEXYS_WINDOWS_NOT_READY: $tool unavailable in WSL" >&2
+      exit 3
+    }
+  done
+  probe_repo="$(realpath -m -- "$repo_dir")"
+  if [[ ! "$probe_repo" =~ ^/mnt/[a-zA-Z]/.+ ]]; then
+    echo "NEXYS_WINDOWS_NOT_READY: use a checkout on shared /mnt/<drive> for native Vivado" >&2
+    exit 3
+  fi
+  win_repo="$(wslpath -w "$probe_repo")"
+  win_script="$(wslpath -w "$repo_dir/tools/ci/nexys_video_windows_vivado.ps1")"
+  probe_args=(-NoProfile -File "$win_script" -Phase Probe -Repository "$win_repo")
+  [[ -z "$windows_vivado_bin" ]] || probe_args+=(-VivadoBin "$windows_vivado_bin")
+  powershell.exe "${probe_args[@]}"
+  exit 0
+fi
 
 if [[ "$mode" == preflight ]]; then
   exec python3 "$gate" --reference-root "$reference_root" --output "$output"
@@ -39,12 +70,23 @@ fi
 
 # Validate upstream commit, every source file's git-blob SHA, DDR ABI, XDC
 # pins and reset dependencies *before* creating a Vivado project.
-[[ ! -e "$output" ]] || {
-  echo "NEXYS_IMPORT_FAILED: output already exists: $output" >&2
-  exit 2
-}
+if [[ "$mode" == route-product-windows ]]; then
+  [[ -d "$output" && -s "$output/LOGICAL_BD_ONLY.txt" &&
+     -s "$output/aether_nexys_product.xpr" && -s "$output/logical-vivado.log" &&
+     ! -e "$output/physical_reports" ]] || {
+    echo "NEXYS_WINDOWS_PHYSICAL_FAILED: existing validated logical project required and route evidence must be new: $output" >&2
+    exit 2
+  }
+else
+  [[ ! -e "$output" ]] || {
+    echo "NEXYS_IMPORT_FAILED: output already exists: $output" >&2
+    exit 2
+  }
+fi
 reference_report="$(python3 "$gate" --reference-root "$reference_root")"
-if [[ "$mode" == integrate-product || "$mode" == physical-product || "$mode" == physical-product-windows ]]; then
+if [[ "$mode" == integrate-product || "$mode" == physical-product ||
+      "$mode" == physical-product-windows || "$mode" == integrate-product-windows ||
+      "$mode" == route-product-windows ]]; then
   if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all -- \
     src/main build.mill mill tools/ci tools/fpga)" ]]; then
     echo "PRODUCT_NEXYS_BD_FAILED: Product/board build sources are dirty; commit before exact-SHA verification" >&2
@@ -61,7 +103,8 @@ if [[ "$mode" == integrate-product || "$mode" == physical-product || "$mode" == 
     --rtl-dir "$product_rtl_dir" \
     --bridge "$repo_dir/tools/fpga/aether_product_nexys_axi_bridge.sv")"
 fi
-if [[ "$mode" == physical-product-windows ]]; then
+if [[ "$mode" == physical-product-windows || "$mode" == integrate-product-windows ||
+      "$mode" == route-product-windows ]]; then
   # Run the exact same source/RTL preflight in WSL, but pass only Windows
   # drive-backed paths to native Vivado. WSL ext4/UNC projects can be rejected
   # by Windows tools and must not silently fall back to an unverified copy.
@@ -92,16 +135,45 @@ if [[ "$mode" == physical-product-windows ]]; then
   args=(-NoProfile -File "$win_script" -Repository "$win_repo" \
     -Reference "$win_reference" -RtlDir "$win_rtl" -OutputDir "$win_output")
   [[ -z "$windows_vivado_bin" ]] || args+=(-VivadoBin "$windows_vivado_bin")
-  logical_log="$(mktemp "${output}.logical-vivado.XXXXXX.log")"
-  powershell.exe "${args[@]}" -Phase Logical 2>&1 | tee "$logical_log"
-  [[ -s "$output/LOGICAL_BD_ONLY.txt" && -s "$output/aether_nexys_product.xpr" ]] || {
-    echo "NEXYS_WINDOWS_LOGICAL_FAILED: no Vivado BD validation evidence; log=$logical_log" >&2
+  if [[ "$mode" == route-product-windows ]]; then
+    # Route a prior logical-only run without repeating MIG/BD creation.
+    # The persisted source/port evidence must match the present exact SHA.
+    cmp -s "$output/reference-source.json" <(printf '%s\n' "$reference_report") &&
+      cmp -s "$output/product-axi-ports.json" <(printf '%s\n' "$port_report") || {
+      echo 'NEXYS_WINDOWS_PHYSICAL_FAILED: logical evidence differs from current pinned reference/RTL' >&2
+      exit 2
+    }
+  else
+    logical_log="$(mktemp "${output}.logical-vivado.XXXXXX.log")"
+    if ! powershell.exe "${args[@]}" -Phase Logical 2>&1 | tee "$logical_log"; then
+      echo "NEXYS_WINDOWS_LOGICAL_FAILED: native Vivado failed; preserved log=$logical_log" >&2
+      exit 1
+    fi
+    [[ -s "$output/LOGICAL_BD_ONLY.txt" && -s "$output/aether_nexys_product.xpr" ]] || {
+      echo "NEXYS_WINDOWS_LOGICAL_FAILED: no Vivado BD validation evidence; log=$logical_log" >&2
+      exit 1
+    }
+    mv -- "$logical_log" "$output/logical-vivado.log"
+    # Even the inexpensive logical stage cannot publish evidence if the
+    # external Windows tool changed any of its pinned source inputs.
+    python3 "$gate" --reference-root "$reference_root" >/dev/null
+    [[ -z "$(git -C "$repo_dir" status --porcelain --untracked-files=all -- \
+      src/main build.mill mill tools/ci tools/fpga)" ]] || {
+      echo 'NEXYS_WINDOWS_LOGICAL_FAILED: Windows execution changed pinned source files' >&2
+      exit 1
+    }
+    bash "$repo_dir/tools/ci/product_fpga_artix7_p0.sh" prepare "$product_export_dir" >/dev/null
+    printf '%s\n' "$reference_report" > "$output/reference-source.json"
+    printf '%s\n' "$port_report" > "$output/product-axi-ports.json"
+    if [[ "$mode" == integrate-product-windows ]]; then
+      echo "PRODUCT_NEXYS_LOGICAL_BD_ONLY: $output (Windows Vivado, no P&R or FPGA boot)"
+      exit 0
+    fi
+  fi
+  if ! powershell.exe "${args[@]}" -Phase Physical 2>&1 | tee "$output/physical-vivado.log"; then
+    echo "NEXYS_WINDOWS_PHYSICAL_FAILED: native Vivado failed; preserved log=$output/physical-vivado.log" >&2
     exit 1
-  }
-  mv -- "$logical_log" "$output/logical-vivado.log"
-  printf '%s\n' "$reference_report" > "$output/reference-source.json"
-  printf '%s\n' "$port_report" > "$output/product-axi-ports.json"
-  powershell.exe "${args[@]}" -Phase Physical 2>&1 | tee "$output/physical-vivado.log"
+  fi
   [[ -s "$output/physical_reports/route-evidence.txt" ]] || {
     echo "NEXYS_WINDOWS_PHYSICAL_FAILED: no real Vivado route marker" >&2
     exit 1
