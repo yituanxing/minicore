@@ -1,0 +1,329 @@
+name: Product SD1 V6 one-billion-cycle authenticated runner
+description: Fifty 20M saved RTL stages within one runner, no cold guest replay
+inputs:
+  start_m:
+    required: true
+  end_m:
+    required: true
+  source_mode:
+    required: true
+  source_id:
+    required: true
+  source_name:
+    required: true
+  source_digest:
+    required: true
+  source_host_sha:
+    required: true
+  source_rtl_sha:
+    required: true
+  source_card_sha:
+    required: true
+outputs:
+  terminal_artifact_id:
+    value: ${{ steps.finish.outputs.artifact_id }}
+  terminal_artifact_digest:
+    value: ${{ steps.finish.outputs.artifact_digest }}
+  terminal_artifact_name:
+    value: ${{ steps.finish.outputs.artifact_name }}
+  terminal_host_sha:
+    value: ${{ steps.finish.outputs.host_sha }}
+  terminal_rtl_sha:
+    value: ${{ steps.finish.outputs.rtl_sha }}
+  terminal_card_sha:
+    value: ${{ steps.finish.outputs.card_sha }}
+  terminal_m:
+    value: ${{ steps.finish.outputs.terminal_m }}
+  serial_login_verified:
+    value: ${{ steps.finish.outputs.serial_login_verified }}
+runs:
+  using: composite
+  steps:
+    - id: seed
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          build/rv64-debian-rootfs/result.txt
+          build/rv64-debian-linux/result.txt
+          build/rv64-debian-linux/obj/.config
+          build/rv64-debian-linux/obj/arch/riscv/boot/Image
+          build/rv64-debian-boot
+          build/rv64-debian-sd1-sd
+          build/product-sd1-official-seed
+        key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+        restore-keys: |
+          aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+    - id: diag
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+          build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+          build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+          build/product-sd1-gpio-cs-diagnostic/linux/evidence
+          build/product-sd1-gpio-cs-diagnostic/boot
+          build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+        key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+    - name: Require the historical signed Debian caches used by successful PR-labeled N and O
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ '${{ steps.diag.outputs.cache-hit }}' == true &&
+           ( '${{ steps.seed.outputs.cache-hit }}' == true ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+          echo 'V6 source caches unavailable for this PR event; refuse cold reproduction' >&2
+          exit 16
+        }
+    - uses: actions/download-artifact@v4
+      with:
+        run-id: 42338584047
+        name: product-sd1-spi-polling-build-42338584047
+        github-token: ${{ github.token }}
+        path: build/product-sd1-spi-polling-import
+    - name: Import and authenticate qualified V6 model and exact source checkpoint
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        V6_BATCH_START_M: ${{ inputs.start_m }}
+        V6_BATCH_END_M: ${{ inputs.end_m }}
+        V6_SOURCE_MODE: ${{ inputs.source_mode }}
+        V6_SOURCE_ID: ${{ inputs.source_id }}
+        V6_SOURCE_NAME: ${{ inputs.source_name }}
+        V6_SOURCE_DIGEST: ${{ inputs.source_digest }}
+        V6_SOURCE_HOST_SHA: ${{ inputs.source_host_sha }}
+        V6_SOURCE_RTL_SHA: ${{ inputs.source_rtl_sha }}
+        V6_SOURCE_CARD_SHA: ${{ inputs.source_card_sha }}
+      run: |
+        set -euo pipefail
+        export V6_BATCH_START_M V6_BATCH_END_M V6_SOURCE_MODE V6_SOURCE_ID
+        export V6_SOURCE_NAME V6_SOURCE_DIGEST V6_SOURCE_HOST_SHA
+        export V6_SOURCE_RTL_SHA V6_SOURCE_CARD_SHA
+        bash tools/ci/product_sd1_v6_chain_prepare.sh
+        {
+          echo "V6_BATCH_START_M=$V6_BATCH_START_M"
+          echo "V6_BATCH_END_M=$V6_BATCH_END_M"
+        } >> "$GITHUB_ENV"
+    - name: Genuine RTL 20M stage 1 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '1'
+    - name: Genuine RTL 20M stage 2 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '2'
+    - name: Genuine RTL 20M stage 3 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '3'
+    - name: Genuine RTL 20M stage 4 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '4'
+    - name: Genuine RTL 20M stage 5 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '5'
+    - name: Genuine RTL 20M stage 6 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '6'
+    - name: Genuine RTL 20M stage 7 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '7'
+    - name: Genuine RTL 20M stage 8 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '8'
+    - name: Genuine RTL 20M stage 9 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '9'
+    - name: Genuine RTL 20M stage 10 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '10'
+    - name: Genuine RTL 20M stage 11 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '11'
+    - name: Genuine RTL 20M stage 12 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '12'
+    - name: Genuine RTL 20M stage 13 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '13'
+    - name: Genuine RTL 20M stage 14 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '14'
+    - name: Genuine RTL 20M stage 15 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '15'
+    - name: Genuine RTL 20M stage 16 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '16'
+    - name: Genuine RTL 20M stage 17 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '17'
+    - name: Genuine RTL 20M stage 18 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '18'
+    - name: Genuine RTL 20M stage 19 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '19'
+    - name: Genuine RTL 20M stage 20 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '20'
+    - name: Genuine RTL 20M stage 21 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '21'
+    - name: Genuine RTL 20M stage 22 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '22'
+    - name: Genuine RTL 20M stage 23 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '23'
+    - name: Genuine RTL 20M stage 24 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '24'
+    - name: Genuine RTL 20M stage 25 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '25'
+    - name: Genuine RTL 20M stage 26 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '26'
+    - name: Genuine RTL 20M stage 27 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '27'
+    - name: Genuine RTL 20M stage 28 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '28'
+    - name: Genuine RTL 20M stage 29 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '29'
+    - name: Genuine RTL 20M stage 30 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '30'
+    - name: Genuine RTL 20M stage 31 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '31'
+    - name: Genuine RTL 20M stage 32 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '32'
+    - name: Genuine RTL 20M stage 33 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '33'
+    - name: Genuine RTL 20M stage 34 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '34'
+    - name: Genuine RTL 20M stage 35 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '35'
+    - name: Genuine RTL 20M stage 36 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '36'
+    - name: Genuine RTL 20M stage 37 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '37'
+    - name: Genuine RTL 20M stage 38 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '38'
+    - name: Genuine RTL 20M stage 39 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '39'
+    - name: Genuine RTL 20M stage 40 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '40'
+    - name: Genuine RTL 20M stage 41 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '41'
+    - name: Genuine RTL 20M stage 42 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '42'
+    - name: Genuine RTL 20M stage 43 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '43'
+    - name: Genuine RTL 20M stage 44 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '44'
+    - name: Genuine RTL 20M stage 45 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '45'
+    - name: Genuine RTL 20M stage 46 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '46'
+    - name: Genuine RTL 20M stage 47 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '47'
+    - name: Genuine RTL 20M stage 48 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '48'
+    - name: Genuine RTL 20M stage 49 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '49'
+    - name: Genuine RTL 20M stage 50 of 50
+      uses: ./.github/actions/product-sd1-v6-20m
+      with:
+        ordinal: '50'
+    - id: finish
+      name: Confirm terminal 1B or genuine RTL serial service-login early stop
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ -n "${V6_LAST_ARTIFACT_ID:-}" && -n "${V6_LAST_ARTIFACT_DIGEST:-}" &&
+           -n "${V6_LAST_ARTIFACT_NAME:-}" && -n "${V6_LAST_HOST_SHA:-}" &&
+           -n "${V6_LAST_RTL_SHA:-}" && -n "${V6_LAST_CARD_SHA:-}" ]] || exit 16
+        [[ "$V6_CURRENT_M" == "$V6_BATCH_END_M" || "${V6_STOP:-0}" == 1 ]] || exit 16
+        if [[ "${V6_STOP:-0}" == 1 ]]; then
+          [[ -f "$V6_SOURCE_DIR/serial-proof.json" ]] || exit 16
+          jq -e '.ordered_service_login_verified==true and .debian_login_claim==false' "$V6_SOURCE_DIR/serial-proof.json" >/dev/null
+        fi
+        {
+          echo "artifact_id=$V6_LAST_ARTIFACT_ID"
+          echo "artifact_digest=$V6_LAST_ARTIFACT_DIGEST"
+          echo "artifact_name=$V6_LAST_ARTIFACT_NAME"
+          echo "host_sha=$V6_LAST_HOST_SHA"
+          echo "rtl_sha=$V6_LAST_RTL_SHA"
+          echo "card_sha=$V6_LAST_CARD_SHA"
+          echo "terminal_m=$V6_CURRENT_M"
+          echo "serial_login_verified=${V6_STOP:-0}"
+        } >> "$GITHUB_OUTPUT"
+        echo 'PRODUCT_SD1_V6_AUTHENTICATED_BATCH_TERMINAL_NOT_AUTOMATIC_DEBIAN_PASS'
