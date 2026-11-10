@@ -1,4 +1,4 @@
-name: NaxRiscv isolated Verilator throughput
+name: NaxRiscv isolated full Buildroot RTL acceptance
 
 # This workflow exists only on the dedicated experiment branch. Never attach
 # pull_request, workflow_run, or any SD1 relay trigger to this experiment.
@@ -19,7 +19,7 @@ concurrency:
 jobs:
   measure:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       NAX_SHA: 9f452d50560d02fb391bc8039f5453c54e0911af
       NAX_DIR: ${{ github.workspace }}/nax-throughput
@@ -190,58 +190,71 @@ jobs:
           echo "rtl_model_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
           test -x obj_dir/VNaxRiscv
 
-      - name: Real RTL benchmark (bare-metal then bounded Linux)
+      - name: Official full Buildroot RTL-to-shell and userspace acceptance
         shell: bash
         run: |
           set -euo pipefail
           cd "$NAX_DIR/src/test/cpp/naxriscv"
-          set +e
-          dhrystone="$NAX_DIR/ext/NaxSoftware/baremetal/dhrystone/build/rv32ima/dhrystone.elf"
-          if [[ -s "$dhrystone" ]]; then
-            timeout --signal=INT --kill-after=10s 120s \
-              stdbuf -oL -eL ./obj_dir/VNaxRiscv \
-              --progress=1 --stats-print \
-              --load-elf "$dhrystone" \
-              --pass-symbol=pass \
-              > "$LOG_DIR/dhrystone-rtl.log" 2>&1
-            bare_rc=$?
-          else
-            bare_rc=125
-            echo 'skipped: upstream prebuilt ELF absent' > "$LOG_DIR/dhrystone-rtl.log"
-          fi
-          set -e
-          echo "baremetal_exit=$bare_rc" | tee -a "$LOG_DIR/outcomes.txt"
-          tail -n 40 "$LOG_DIR/dhrystone-rtl.log"
-
-          # The upstream release supplies ready-built Buildroot initramfs media;
-          # the following test deliberately stops after a bounded short window.
           images="$NAX_DIR/ext/NaxSoftware/buildroot/images/rv32ima"
-          if [[ -f "$images/fw_jump.bin" && -f "$images/Image" && \
-                -f "$images/linux.dtb" && -f "$images/rootfs.cpio" ]]; then
-            set +e
-            timeout --signal=INT --kill-after=10s 180s \
-              stdbuf -oL -eL ./obj_dir/VNaxRiscv \
-              --progress=1 --no-stdin --stats-print --timeout=24000000 \
+          for media in fw_jump.bin Image linux.dtb rootfs.cpio; do
+            test -s "$images/$media" || { echo "FAIL: missing official $media"; exit 1; }
+          done
+          mkdir -p "$LOG_DIR/full_state"
+          # This is the pinned upstream testsGen.py Linux contract, including
+          # login, shell commands and MicroPython.  --success is reached only
+          # after all directed interactions complete.  The RTL driver counts
+          # half cycles for --timeout (1.4B => ~700M RTL cycles maximum).
+          start="$(date +%s)"
+          set +e
+          timeout --signal=INT --kill-after=15s 4200s \
+            stdbuf -oL -eL ./obj_dir/VNaxRiscv \
+              --name nax_buildroot_full \
+              --output-dir "$LOG_DIR/full_state" \
+              --progress=15 --no-stdin --no-putc-flush --stats-print \
+              --timeout=1400000000 \
               --load-bin "$images/fw_jump.bin",0x80000000 \
               --load-bin "$images/linux.dtb",0x80F80000 \
               --load-bin "$images/Image",0x80400000 \
               --load-bin "$images/rootfs.cpio",0x81000000 \
-              > "$LOG_DIR/linux-12m-rtl.log" 2>&1
-            linux_rc=$?
-            set -e
-            echo "linux_short_exit=$linux_rc" | tee -a "$LOG_DIR/outcomes.txt"
-            tail -n 50 "$LOG_DIR/linux-12m-rtl.log"
-          else
-            echo 'linux_short=skipped_no_complete_official_media' | tee -a "$LOG_DIR/outcomes.txt"
-          fi
-          # A non-zero exit at the finite cycle budget is expected. Require
-          # actual progress emitted by Nax C++ RTL driver, not just a log file.
-          touch "$LOG_DIR/linux-12m-rtl.log"
-          if ! grep -Eq '^\[PROGRESS\] [0-9]+ cycles [0-9]+ KHz' \
-            "$LOG_DIR/dhrystone-rtl.log" "$LOG_DIR/linux-12m-rtl.log"; then
-            echo "FAIL: no measured RTL speed was recorded" | tee -a "$LOG_DIR/outcomes.txt"
+              --getc 'buildroot login' \
+              --putc 'root' \
+              --getc '#' \
+              --putc 'cat /proc/cpuinfo' \
+              --getc '#' \
+              --putc 'echo 1+2+3*4 | bc' \
+              --getc '#' \
+              --putc 'micropython' \
+              --getc '>>> ' \
+              --putc 'import math' \
+              --getc '>>> ' \
+              --putc 'math.sin(math.pi/4)' \
+              --getc '>>> ' \
+              --putc 'from sys import exit' \
+              --getc '>>> ' \
+              --putc 'exit()' \
+              --getc '#' \
+              --putc 'ls /' \
+              --getc '#' \
+              --success \
+              2>&1 | tee "$LOG_DIR/linux-full-rtl.log"
+          linux_rc="${PIPESTATUS[0]}"
+          set -e
+          elapsed="$(($(date +%s)-start))"
+          {
+            echo "linux_full_exit=$linux_rc"
+            echo "linux_full_wall_seconds=$elapsed"
+            grep -A 11 '^STATS :' "$LOG_DIR/linux-full-rtl.log" || true
+          } | tee -a "$LOG_DIR/outcomes.txt"
+          if [[ "$linux_rc" != 0 ]] || \
+             [[ ! -s "$LOG_DIR/full_state/PASS" ]] || \
+             ! grep -q '^SUCCESS nax_buildroot_full' "$LOG_DIR/linux-full-rtl.log" || \
+             ! grep -q 'buildroot login' "$LOG_DIR/linux-full-rtl.log" || \
+             ! grep -q 'MicroPython' "$LOG_DIR/linux-full-rtl.log" || \
+             ! grep -q '^STATS :' "$LOG_DIR/linux-full-rtl.log"; then
+            echo 'FAIL: full upstream userspace contract did not finish' | tee -a "$LOG_DIR/outcomes.txt"
             exit 1
           fi
+          echo 'OFFICIAL_NAX_BUILDROOT_FULL_USERSPACE_PASS=1' | tee -a "$LOG_DIR/outcomes.txt"
 
       - name: Summarize observed evidence
         if: always()
@@ -253,8 +266,14 @@ jobs:
             echo ''
             echo "- Pinned Nax commit: \`$NAX_SHA\`"
             echo '- Model: official generated RV32IMA RTL, Spike lockstep, no FST waveform'
-            echo '- Linux rootfs: optional short official Buildroot initramfs; **not Debian**'
-            echo '- Finite Linux cutoff: ~12 million RTL cycles (intentional, not Linux PASS)'
+            echo '- Linux rootfs: official RV32IMA Buildroot initramfs; **not Debian**'
+            echo '- Acceptance: official upstream scripted root login, shell, bc and MicroPython checks'
+            echo '- Hard guards: 1.4B half-cycle RTL limit and 4200-second host wall limit'
+            echo ''
+            echo '### Verdict and wall time'
+            echo '```text'
+            cat "$LOG_DIR/outcomes.txt" 2>/dev/null || true
+            echo '```'
             echo ''
             echo '### Recorded simulator progress / counters'
             echo '```text'
