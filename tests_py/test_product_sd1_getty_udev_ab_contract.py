@@ -83,17 +83,23 @@ class GettyUdevAbTests(unittest.TestCase):
         output.mkdir()
         source_sha = digest(self.sd)
         partition_sha = digest(self.partition)
-        state = {"timeout_removed": False, "delay_written": False}
+        state = {"timeout_removed": False, "delay_written": False, "console_masked": False}
 
         def fake_debugfs(partition: Path, command: str, *, write=False):
             if command.startswith("cat /etc/systemd/system.conf.d/"):
                 return b"" if state["timeout_removed"] else b"[Manager]\nDefaultDeviceTimeoutSec=10min\n"
             if command.startswith("cat /etc/systemd/system/systemd-udev-trigger.service.d/"):
                 return b"ExecStartPre=/usr/bin/sleep 110" if state["delay_written"] else b""
+            if command == "stat /etc/systemd/system/console-getty.service":
+                return b'Type: symlink Fast link dest: "/dev/null"' if state["console_masked"] else b""
+            if command == "stat /etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service":
+                return b'Fast link dest: "/usr/lib/systemd/system/serial-getty@.service"'
             if command.startswith("rm /etc/systemd/system.conf.d/"):
                 state["timeout_removed"] = True
             if command.startswith("write "):
                 state["delay_written"] = True
+            if command == "symlink /etc/systemd/system/console-getty.service /dev/null":
+                state["console_masked"] = True
             return b""
 
         with patch("tools.ci.product_sd1_getty_udev_ab.debugfs", side_effect=fake_debugfs):
@@ -104,6 +110,7 @@ class GettyUdevAbTests(unittest.TestCase):
                              self.sd.stat().st_size)
             self.assertEqual(digest(self.sd), source_sha)
             self.assertEqual(digest(self.partition), partition_sha)
+            self.assertEqual(report["baseline_console_getty_mask"], "CLONE_ONLY_SYMLINK_TO_DEV_NULL")
             with self.assertRaises(FileExistsError):
                 prepare_variant(self.sd, self.partition, output,
                                 delay_seconds=110, baseline=True)
@@ -161,6 +168,12 @@ class GettyUdevAbTests(unittest.TestCase):
         destination = f"{dropin_dir}/90-sd1-ab-delay.conf"
         debugfs(filesystem, f"write {delay} {destination}", write=True)
         self.assertIn(b"ExecStartPre=/usr/bin/sleep 110", debugfs(filesystem, f"cat {destination}"))
+        console_mask = "/etc/systemd/system/console-getty.service"
+        self.assertFalse(debugfs(filesystem, f"stat {console_mask}").strip())
+        debugfs(filesystem, f"symlink {console_mask} /dev/null", write=True)
+        mask_stat = debugfs(filesystem, f"stat {console_mask}")
+        self.assertIn(b"symlink", mask_stat)
+        self.assertIn(b"/dev/null", mask_stat)
 
 
 if __name__ == "__main__":

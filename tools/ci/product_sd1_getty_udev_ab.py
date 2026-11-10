@@ -42,6 +42,8 @@ OUTPUT_DIR = ROOT / "build/product-sd1-getty-udev-ab"
 TIMEOUT_CONFIG = "/etc/systemd/system.conf.d/90-sd1-device-coldplug.conf"
 DELAY_DIR = "/etc/systemd/system/systemd-udev-trigger.service.d"
 DELAY_CONFIG = f"{DELAY_DIR}/90-sd1-ab-delay.conf"
+CONSOLE_GETTY_MASK = "/etc/systemd/system/console-getty.service"
+SERIAL_GETTY_ENABLE = "/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 SECTOR = 512
 FIRST_LBA = 2048
 PARTITION_OFFSET = SECTOR * FIRST_LBA
@@ -179,6 +181,21 @@ def prepare_variant(source: Path, partition: Path, output: Path,
     debugfs(part_clone, f"write {delay_conf} {DELAY_CONFIG}", write=True)
     if f"ExecStartPre=/usr/bin/sleep {delay_seconds}".encode() not in debugfs(part_clone, f"cat {DELAY_CONFIG}"):
         raise QualificationError("injected udev delay missing from cloned ext4")
+    # The third QEMU A/B showed that kernel getty_auto/mask arguments did not
+    # prevent the exported container rootfs from starting console-getty.  Mask
+    # the competing unit on BOTH independent diagnostic clones so a ttyS0
+    # login prompt cannot come from console-getty.  Never alter input media.
+    if debugfs(part_clone, f"stat {CONSOLE_GETTY_MASK}").strip():
+        raise QualificationError("diagnostic console-getty mask path already occupied")
+    enabled_serial = debugfs(part_clone, f"stat {SERIAL_GETTY_ENABLE}")
+    if b"serial-getty@.service" not in enabled_serial:
+        raise QualificationError("native serial-getty target.wants symlink is missing")
+    debugfs(part_clone, f"symlink {CONSOLE_GETTY_MASK} /dev/null", write=True)
+    masked = debugfs(part_clone, f"stat {CONSOLE_GETTY_MASK}")
+    if b"symlink" not in masked or b"/dev/null" not in masked:
+        raise QualificationError("offline console-getty unit mask not verified in cloned ext4")
+    if b"serial-getty@.service" not in debugfs(part_clone, f"stat {SERIAL_GETTY_ENABLE}"):
+        raise QualificationError("mask unexpectedly disturbed native serial-getty enablement")
     # Fresh raw disk, preserving exactly the original 1MiB MBR/padding prefix.
     # Never sparse-overlay a nonzero pre-existing partition: zeroed extents
     # would otherwise leave stale bytes behind.
@@ -195,6 +212,7 @@ def prepare_variant(source: Path, partition: Path, output: Path,
         f"{name}_sd_sha256": digest(raw_clone),
         f"{name}_partition_sha256": digest(part_clone),
         f"{name}_injected_delay_sha256": digest(delay_conf),
+        f"{name}_console_getty_mask": "CLONE_ONLY_SYMLINK_TO_DEV_NULL",
     }
 
 

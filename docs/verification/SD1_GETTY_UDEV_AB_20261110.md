@@ -77,10 +77,13 @@ appears, but `console-getty` also starts, leaving provider provenance open.
 
 ## Safe next step
 
-If strict login provider provenance is needed, apply a real systemd unit mask
-`/etc/systemd/system/console-getty.service -> /dev/null` **only to both cloned
-QEMU diagnostic ext4 partitions** (after proving the symlink exists), then
-repeat the bounded A/B.  Do not change the original candidate/signed media
+For a fourth strict login-provider experiment, the isolated A/B preparer now
+creates and verifies a **clone-only** systemd unit mask
+`/etc/systemd/system/console-getty.service -> /dev/null` in **both** diagnostic
+ext4 partitions, then checks that the separately enabled serial-getty symlink
+remains present.  The next bounded A/B must actually prove this mask took
+effect in UART before claiming that the login source was isolated.  The
+three earlier CI verdicts remain red and unchanged.  Do not change the original candidate/signed media
 or weaken the validation merely to turn CI green.  A qualified independent
 Product RTL run with the *new* SD identity remains necessary for final SD1
 service/login acceptance.  Existing signed V6 checkpoints have bound SD,
