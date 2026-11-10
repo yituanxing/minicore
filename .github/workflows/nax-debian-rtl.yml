@@ -1,0 +1,332 @@
+name: NaxRiscv RV64GC native Debian initramfs RTL benchmark
+
+# Isolated experiment: no PR triggers, no SD1 artifacts/checkpoints touched.
+on:
+  push:
+    branches:
+      - experiment/nax-debian-rtl-20261110
+    paths:
+      - .github/workflows/nax-debian-rtl.yml
+      - tools/ci/nax_debian_init.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nax-debian-rtl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 165
+    env:
+      NAX_SHA: 9f452d50560d02fb391bc8039f5453c54e0911af
+      NAX_DIR: ${{ github.workspace }}/nax-debian
+      LOG_DIR: ${{ github.workspace }}/nax-debian-logs
+      RISCV: ${{ github.workspace }}/nax-debian/ext/riscv-isa-sim
+      THREAD_COUNT: '2'
+      SBT_OPTS: '-Xmx3G -Xss2M -Duser.timezone=GMT'
+      DEBIAN_IMAGE: debian:trixie-20261027-slim
+    steps:
+      - name: Fetch only this experiment branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record runner, toolchain, and test boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_DIR"
+          {
+            echo "nax_sha=$NAX_SHA"
+            echo "debian_oci=$DEBIAN_IMAGE"
+            echo 'workload=official Nax RV64GC RTL + genuine Debian riscv64 userland'
+            echo 'storage=guest initramfs preloaded in simulator DDR, no SPI/SD'
+            echo 'scope=experimental branch only; official AetherCore SD1 unchanged'
+            uname -a
+            lscpu
+            free -h
+            df -h "$RUNNER_TEMP"
+          } | tee "$LOG_DIR/runner.txt"
+
+      - name: Install pinned build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            git make autoconf automake g++ flex bison libfl-dev \
+            libboost-all-dev libasio-dev device-tree-compiler libsdl2-dev \
+            pkg-config wget unzip zlib1g-dev cpio binutils
+
+      - name: JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: SBT launcher
+        uses: sbt/setup-sbt@v1
+
+      - name: Clone pinned upstream NaxRiscv
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/SpinalHDL/NaxRiscv.git "$NAX_DIR"
+          git -C "$NAX_DIR" checkout --detach "$NAX_SHA"
+          git -C "$NAX_DIR" submodule update --init --recursive --jobs 2
+          git -C "$NAX_DIR" rev-parse HEAD | tee "$LOG_DIR/source-shas.txt"
+          git -C "$NAX_DIR" submodule status | tee -a "$LOG_DIR/source-shas.txt"
+          test "$(git -C "$NAX_DIR" rev-parse HEAD)" = "$NAX_SHA"
+
+      - name: Restore Verilator v4.228
+        id: verilator_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/nax-toolchain/verilator-v4.228
+          key: nax-throughput-verilator-v4.228-ubuntu22-installed-v1
+
+      - name: Verify or compile upstream Verilator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR"
+          timeout 900s ./ci/install-verilator.sh v4.228 "$RUNNER_TEMP/nax-toolchain" \
+            2>&1 | tee "$LOG_DIR/verilator-install.log"
+          verilator_src="$RUNNER_TEMP/nax-toolchain/verilator-v4.228"
+          test -s "$verilator_src/include/verilated.mk"
+          test -x "$verilator_src/bin/verilator"
+          echo "VERILATOR_ROOT=$verilator_src" >> "$GITHUB_ENV"
+          echo "$verilator_src/bin" >> "$GITHUB_PATH"
+          "$verilator_src/bin/verilator" --version | tee "$LOG_DIR/verilator-version.txt"
+
+      - name: Save Verilator cache if needed
+        if: steps.verilator_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/nax-toolchain/verilator-v4.228
+          key: nax-throughput-verilator-v4.228-ubuntu22-installed-v1
+
+      - name: Obtain upstream prepared RV64 Linux firmware and kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR/ext/NaxSoftware"
+          timeout 180s ./init.sh 2>&1 | tee "$LOG_DIR/media-fetch.log"
+          find buildroot/images -maxdepth 2 -type f -printf '%p %s bytes\n' \
+            | sort | tee "$LOG_DIR/linux-media-inventory.txt"
+          images="$NAX_DIR/ext/NaxSoftware/buildroot/images/rv64imafdc"
+          for part in fw_jump.bin Image linux.dtb rootfs.cpio; do
+            test -s "$images/$part" || {
+              echo "BLOCKED: no upstream RV64IMAFDC $part at $images" \
+                | tee -a "$LOG_DIR/outcomes.txt"
+              exit 1
+            }
+          done
+          sha256sum "$images"/* | tee "$LOG_DIR/media-shas.txt"
+
+      - name: Restore pinned Spike model
+        id: spike_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/nax-debian/ext/riscv-isa-sim/build
+          key: nax-throughput-spike-${{ env.NAX_SHA }}-ubuntu22-v1
+
+      - name: Compile or reuse Spike lockstep golden model
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/serge1/ELFIO.git "$RUNNER_TEMP/nax-elfio"
+          git -C "$RUNNER_TEMP/nax-elfio" checkout --detach d251da09a07dff40af0b63b8f6c8ae71d2d1938d
+          mkdir -p "$RISCV/include"
+          cp -R "$RUNNER_TEMP/nax-elfio/elfio" "$RISCV/include/"
+          mkdir -p "$RISCV/build" "$RISCV/lib"
+          cd "$RISCV/build"
+          if [[ -s package.so && -s libriscv.a && -s libspike_main.a ]]; then
+            echo 'reused pinned Spike cache' | tee "$LOG_DIR/spike-build.log"
+          else
+            timeout 900s ../configure --prefix="$RISCV" --without-boost \
+              --without-boost-asio --without-boost-regex \
+              2>&1 | tee "$LOG_DIR/spike-configure.log"
+            timeout 720s make -j2 2>&1 | tee "$LOG_DIR/spike-build.log"
+            timeout 90s g++ --shared -L. -Wl,--export-dynamic \
+              -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/lib -o package.so \
+              spike.o libspike_main.a libriscv.a libdisasm.a libsoftfloat.a \
+              libfesvr.a libfdt.a -lpthread -ldl -lboost_regex -lboost_system \
+              2>&1 | tee "$LOG_DIR/spike-package.log"
+          fi
+
+      - name: Save Spike model cache if needed
+        if: steps.spike_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/nax-debian/ext/riscv-isa-sim/build
+          key: nax-throughput-spike-${{ env.NAX_SHA }}-ubuntu22-v1
+
+      - name: Generate official RV64GC RTL and build Verilator executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR"
+          start="$(date +%s)"
+          timeout 900s sbt 'runMain naxriscv.Gen64 --withRvc --withFloat --withDouble' \
+            2>&1 | tee "$LOG_DIR/gen64gc.log"
+          test -s NaxRiscv.v
+          test -s nax.h
+          grep -E 'XLEN|FPU|FLOAT' nax.h | tee "$LOG_DIR/rv64-rtl-config.txt" || true
+          echo "rtl_generate_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+          cd "$NAX_DIR/src/test/cpp/naxriscv"
+          timeout 1200s make compile TRACE=no THREAD_COUNT=2 \
+            2>&1 | tee "$LOG_DIR/verilator-build.log"
+          test -x obj_dir/VNaxRiscv
+          echo "rtl_compiled=1" | tee -a "$LOG_DIR/outcomes.txt"
+
+      - name: Assemble genuine Debian riscv64 userland initramfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          start="$(date +%s)"
+          docker pull --platform linux/riscv64 "$DEBIAN_IMAGE" \
+            2>&1 | tee "$LOG_DIR/debian-pull.log"
+          architecture="$(docker image inspect --format '{{.Architecture}}' "$DEBIAN_IMAGE")"
+          test "$architecture" = riscv64
+          docker image inspect --format '{{index .RepoDigests 0}}' "$DEBIAN_IMAGE" \
+            | tee "$LOG_DIR/debian-oci-digest.txt"
+          container_id="$(docker create --platform linux/riscv64 "$DEBIAN_IMAGE" /bin/true)"
+          mkdir -p "$RUNNER_TEMP/nax-debian-rootfs"
+          docker export "$container_id" | tar -x -C "$RUNNER_TEMP/nax-debian-rootfs" --no-same-owner
+          docker rm "$container_id"
+          rootfs="$RUNNER_TEMP/nax-debian-rootfs"
+          test -x "$rootfs/bin/sh"
+          test -x "$rootfs/usr/bin/dpkg"
+          test -r "$rootfs/etc/debian_version"
+          readelf -h "$rootfs/bin/sh" | tee "$LOG_DIR/debian-shell-elf.txt"
+          grep -q 'Class:.*ELF64' "$LOG_DIR/debian-shell-elf.txt"
+          grep -q 'Machine:.*RISC-V' "$LOG_DIR/debian-shell-elf.txt"
+          install -m 0755 "$GITHUB_WORKSPACE/tools/ci/nax_debian_init.sh" "$rootfs/init"
+          mkdir -p "$rootfs/proc" "$rootfs/sys" "$rootfs/dev"
+          if [[ ! -c "$rootfs/dev/console" ]]; then
+            sudo rm -f -- "$rootfs/dev/console"
+            sudo mknod -m 600 "$rootfs/dev/console" c 5 1
+          fi
+          if [[ ! -c "$rootfs/dev/null" ]]; then
+            sudo rm -f -- "$rootfs/dev/null"
+            sudo mknod -m 666 "$rootfs/dev/null" c 1 3
+          fi
+          mkdir -p "$RUNNER_TEMP/nax-debian-media"
+          (
+            cd "$rootfs"
+            sudo find . -print0 | sudo cpio --null --format=newc --create --quiet \
+              > "$RUNNER_TEMP/nax-debian-media/debian.cpio"
+          )
+          archive="$RUNNER_TEMP/nax-debian-media/debian.cpio"
+          test -s "$archive"
+          printf 'debian_cpio_bytes=%s\n' "$(stat -c %s "$archive")" \
+            | tee -a "$LOG_DIR/outcomes.txt"
+          sha256sum "$archive" | tee "$LOG_DIR/debian-cpio-sha.txt"
+          echo "debian_prepare_seconds=$(($(date +%s)-start))" \
+            | tee -a "$LOG_DIR/outcomes.txt"
+
+      - name: Patch upstream RV64 device tree for in-memory Debian rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          images="$NAX_DIR/ext/NaxSoftware/buildroot/images/rv64imafdc"
+          media="$RUNNER_TEMP/nax-debian-media"
+          cp "$images/linux.dtb" "$media/debian.dtb"
+          initrd_start=$((0x84000000))
+          initrd_size="$(stat -c %s "$media/debian.cpio")"
+          initrd_end=$((initrd_start+initrd_size))
+          if ((initrd_end >= 0xa0000000)); then
+            echo 'BLOCKED: Debian initramfs exceeds 512 MiB Nax simulation RAM' \
+              | tee -a "$LOG_DIR/outcomes.txt"
+            exit 1
+          fi
+          fdtput -t x "$media/debian.dtb" /chosen linux,initrd-start "$(printf '%x' "$initrd_start")"
+          fdtput -t x "$media/debian.dtb" /chosen linux,initrd-end "$(printf '%x' "$initrd_end")"
+          fdtput -t s "$media/debian.dtb" /chosen bootargs \
+            'console=hvc0 earlycon=sbi rdinit=/init panic=-1 loglevel=4'
+          {
+            fdtget -t s "$media/debian.dtb" /chosen bootargs
+            fdtget -t x "$media/debian.dtb" /chosen linux,initrd-start
+            fdtget -t x "$media/debian.dtb" /chosen linux,initrd-end
+            fdtdump "$media/debian.dtb"
+          } > "$LOG_DIR/debian-device-tree.txt" 2>&1
+          sha256sum "$media/debian.dtb" >> "$LOG_DIR/debian-cpio-sha.txt"
+
+      - name: Execute Debian native userspace on real RV64GC RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR/src/test/cpp/naxriscv"
+          images="$NAX_DIR/ext/NaxSoftware/buildroot/images/rv64imafdc"
+          media="$RUNNER_TEMP/nax-debian-media"
+          mkdir -p "$LOG_DIR/debian_state"
+          start="$(date +%s)"
+          set +e
+          timeout --signal=INT --kill-after=15s 5400s \
+            stdbuf -oL -eL ./obj_dir/VNaxRiscv \
+              --name nax_debian_native \
+              --output-dir "$LOG_DIR/debian_state" \
+              --progress=15 --no-stdin --no-putc-flush --stats-print \
+              --timeout=2000000000 \
+              --load-bin "$images/fw_jump.bin",0x80000000 \
+              --load-bin "$media/debian.dtb",0x80F80000 \
+              --load-bin "$images/Image",0x80400000 \
+              --load-bin "$media/debian.cpio",0x84000000 \
+              --getc NAX_DEBIAN_INIT_READY \
+              --getc '#' \
+              --putc 'cat /etc/debian_version' \
+              --getc '#' \
+              --putc 'dpkg --print-architecture' \
+              --getc '#' \
+              --putc 'uname -m' \
+              --getc '#' \
+              --success \
+              2>&1 | tee "$LOG_DIR/debian-native-rtl.log"
+          sim_rc="${PIPESTATUS[0]}"
+          set -e
+          {
+            echo "debian_native_rtl_exit=$sim_rc"
+            echo "debian_native_wall_seconds=$(($(date +%s)-start))"
+            grep -A 11 '^STATS :' "$LOG_DIR/debian-native-rtl.log" || true
+          } | tee -a "$LOG_DIR/outcomes.txt"
+          if [[ "$sim_rc" != 0 ]] || [[ ! -s "$LOG_DIR/debian_state/PASS" ]] || \
+             ! grep -q 'SUCCESS nax_debian_native' "$LOG_DIR/debian-native-rtl.log" || \
+             ! grep -q 'NAX_DEBIAN_INIT_READY' "$LOG_DIR/debian-native-rtl.log" || \
+             ! grep -q 'NAX_DEBIAN_ARCH=riscv64' "$LOG_DIR/debian-native-rtl.log"; then
+            echo 'DEBIAN_RV64_RTL_PASS=0' | tee -a "$LOG_DIR/outcomes.txt"
+            exit 1
+          fi
+          echo 'DEBIAN_RV64_RTL_PASS=1' | tee -a "$LOG_DIR/outcomes.txt"
+
+      - name: Report results without conflating userland with full systemd
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$LOG_DIR"
+          {
+            echo '## NaxRiscv isolated Debian RV64GC RTL benchmark'
+            echo ''
+            echo '- Genuine official NaxRiscv RTL and Spike model; not QEMU.'
+            echo '- Native Debian riscv64 OCI userland, not Buildroot.'
+            echo '- Direct memory-backed initramfs, deliberately no SD/SPI.'
+            echo '- This first baseline is **not** a full Debian systemd/services boot.'
+            echo '- Bound: 5400 seconds host wall and 1 billion RTL cycles.'
+            echo ''
+            echo '```text'
+            sed -n '1,140p' "$LOG_DIR/outcomes.txt" 2>/dev/null || true
+            echo '```'
+            echo 'Full raw logs and pass/fail files are uploaded as artifacts.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve logs and observable PASS or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nax-debian-rv64gc-rtl-evidence
+          path: ${{ github.workspace }}/nax-debian-logs/
+          if-no-files-found: warn
+          retention-days: 14
