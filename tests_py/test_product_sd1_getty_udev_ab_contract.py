@@ -130,6 +130,10 @@ class GettyUdevAbTests(unittest.TestCase):
         # competitor on both QEMU arms, keeping the explicitly enabled
         # serial-getty@ttyS0 unchanged and the production rootfs untouched.
         self.assertIn("systemd.getty_auto=no", source)
+        # Exported Docker rootfs can retain an independently enabled
+        # console-getty even with auto-generation disabled.  Explicitly mask
+        # it in *both* diagnostic QEMU variants to prove ttyS0 provenance.
+        self.assertIn("systemd.mask=console-getty.service", source)
 
     @unittest.skipUnless(shutil.which("mkfs.ext4") and shutil.which("debugfs"),
                          "host needs mkfs.ext4 and debugfs for actual ext4 mutation")

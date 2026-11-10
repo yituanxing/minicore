@@ -211,7 +211,7 @@ def qemu_probe(kernel: Path, image: Path, output: Path, *, mode: str,
         "-kernel", str(kernel),
         "-append", ("earlycon=sbi console=ttyS0,115200 root=/dev/vda1 "
                     "rootfstype=ext4 rootwait rw init=/sbin/init systemd.unit=multi-user.target "
-                    "systemd.getty_auto=no"),
+                    "systemd.getty_auto=no systemd.mask=console-getty.service"),
         "-drive", f"file={image},format=raw,if=none,id=sd1,snapshot=on",
         "-device", "virtio-blk-device,drive=sd1", "-no-reboot",
     ]
