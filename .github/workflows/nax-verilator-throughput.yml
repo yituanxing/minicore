@@ -22,9 +22,9 @@ jobs:
     timeout-minutes: 45
     env:
       NAX_SHA: 9f452d50560d02fb391bc8039f5453c54e0911af
-      NAX_DIR: ${{ runner.temp }}/nax-throughput
-      LOG_DIR: ${{ runner.temp }}/nax-throughput-logs
-      RISCV: ${{ runner.temp }}/nax-throughput/ext/riscv-isa-sim
+      NAX_DIR: ${{ github.workspace }}/nax-throughput
+      LOG_DIR: ${{ github.workspace }}/nax-throughput-logs
+      RISCV: ${{ github.workspace }}/nax-throughput/ext/riscv-isa-sim
       THREAD_COUNT: '2'
       SBT_OPTS: '-Xmx3G -Xss2M -Duser.timezone=GMT'
     steps:
@@ -224,6 +224,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nax-verilator-isolated-evidence
-          path: ${{ runner.temp }}/nax-throughput-logs/
+          path: ${{ github.workspace }}/nax-throughput-logs/
           if-no-files-found: warn
           retention-days: 14
