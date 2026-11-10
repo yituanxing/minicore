@@ -2,7 +2,7 @@
 
 ## What is established (and what is not)
 
-Three independent, cached-media QEMU A/B executions reproduced the same
+Four independent, cached-media QEMU A/B executions reproduced the same
 device/getty service behavior.  Each used **110 seconds of guest udev-trigger
 delay** in both arms.  The control removed the SD1-only systemd
 `DefaultDeviceTimeoutSec=10min` drop-in, reverting to the normal 90-second
@@ -17,14 +17,21 @@ treatment found the device and started `serial-getty@ttyS0.service`.  This is
 evidence that increasing the systemd device deadline fixes **that getty
 dependency failure under this synthetic delay**.
 
+**Qualified narrower finding:** the fourth diagnostic successfully masked
+`console-getty.service` *only on the two disposable QEMU ext4 clones*.
+Its 90-second control recorded a ttyS0 device timeout and serial-getty
+dependency failure, with no login. Its 10-minute treatment recorded the
+actual `Started serial-getty@ttyS0.service` followed by `localhost login:`,
+without `console-getty` starting.  The GitHub workflow verdict is
+`QEMU_DELAYED_UDEV_AB_PASS_NOT_PRODUCT_RTL`.
+
 **Unqualified findings:** this does not prove Product RTL/SPI-SD boot, nor an
-authenticated login.  A visible `localhost login:` line alone also does not
-prove its provider: the Debian-derived image starts `console-getty.service`
-alongside `serial-getty@ttyS0.service`.  Even the third diagnostic's QEMU
-kernel command line `systemd.getty_auto=no systemd.mask=console-getty.service`
-did not prevent the guest from starting `console-getty.service`.  The strict
-service/login **provider-provenance gate remains FAIL**.  Do not call any of
-these red Actions jobs a complete SD1 PASS.
+authenticated login. The first three experiments had a competing
+`console-getty.service`, and even the third experiment's QEMU kernel arguments
+`systemd.getty_auto=no systemd.mask=console-getty.service` did not suppress
+it. The fourth experiment resolved that ambiguity with an actual offline
+systemd symlink mask in both isolated ext4 clones. The earlier red GitHub
+Actions verdicts remain red; they are not complete SD1 PASS results.
 
 ## Reproducible GitHub evidence
 
@@ -33,6 +40,7 @@ these red Actions jobs a complete SD1 PASS.
 | [42835612436](https://github.com/yituanxing/minicore/actions/runs/42835612436) | yes / yes (service name ellipsized; initial parser missed it) | yes | 132.119s / 131.761s | `a5ce6738636d631e6e2d150c64db8dcb7963014b28a3c523c0585c8a18abd8b2` |
 | [42837398493](https://github.com/yituanxing/minicore/actions/runs/42837398493) | yes / yes | yes | 93.890s / 129.882s | `fb4cdc0f32f1aeada59555ba538b1699324f43ddd38ee0c657044d33110f8829` |
 | [42839402970](https://github.com/yituanxing/minicore/actions/runs/42839402970) | yes / yes | yes | 94.143s / 132.215s | `4bcdad3078713f69837e8f75bfbfa56be78b27b91ca22677f7a642b55a740895` |
+| **[42841812112](https://github.com/yituanxing/minicore/actions/runs/42841812112) PASS (QEMU only)** | **yes / yes, no control login** | **yes; no console-getty, serial-getty before login** | **94.056s / 128.810s** | `3229292381f11ead0e2e02c44a1b76766d6954b5859dcf8a8a3413de169d4710` |
 
 Use the artifact ZIPs from these runs, not a screenshot or the green status
 of a different job.  Each artifact includes `result.json`,
@@ -75,15 +83,15 @@ In the third control, startup stops at the 90-second dependency failure
 without a login.  In the third treatment, serial-getty starts and login
 appears, but `console-getty` also starts, leaving provider provenance open.
 
-## Safe next step
+## Completed diagnostic and safe next step
 
-For a fourth strict login-provider experiment, the isolated A/B preparer now
+The fourth strict login-provider experiment has now passed. The preparer
 creates and verifies a **clone-only** systemd unit mask
 `/etc/systemd/system/console-getty.service -> /dev/null` in **both** diagnostic
 ext4 partitions, then checks that the separately enabled serial-getty symlink
-remains present.  The next bounded A/B must actually prove this mask took
-effect in UART before claiming that the login source was isolated.  The
-three earlier CI verdicts remain red and unchanged.  Do not change the original candidate/signed media
+remains present. The fourth UART confirms this mask took effect and the
+serial-getty service preceded the lone login prompt. The three earlier CI
+verdicts remain red and unchanged. Do not change the original candidate/signed media
 or weaken the validation merely to turn CI green.  A qualified independent
 Product RTL run with the *new* SD identity remains necessary for final SD1
 service/login acceptance.  Existing signed V6 checkpoints have bound SD,
