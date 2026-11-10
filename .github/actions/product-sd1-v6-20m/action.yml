@@ -36,7 +36,7 @@ runs:
         # The final checkpoint of each 1B job, or any authenticated real
         # service/login early-stop checkpoint, stays available for long-term
         # provenance. Intermediate retry checkpoints expire after one week.
-        if [[ "$ordinal" -eq 50 ]] ||
+        if [[ "$target_m" -eq "$V6_BATCH_END_M" ]] ||
            jq -e '.proof.ordered_service_login_verified == true' <<< "$verified_stage" >/dev/null; then
           retention_days=90
         else

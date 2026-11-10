@@ -1,6 +1,10 @@
 name: Product SD1 V6 one-billion-cycle authenticated runner
 description: Fifty 20M saved RTL stages within one runner, no cold guest replay
 inputs:
+  stage_count:
+    description: Authenticated 20M stages in this batch (49 only for 15012-to-15992, otherwise 50)
+    required: false
+    default: '50'
   start_m:
     required: true
   end_m:
@@ -68,6 +72,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        [[ '${{ inputs.stage_count }}' == 50 ||
+           ( '${{ inputs.stage_count }}' == 49 &&
+             '${{ inputs.start_m }}' == 15012 &&
+             '${{ inputs.end_m }}' == 15992 ) ]] || exit 16
         [[ '${{ steps.diag.outputs.cache-hit }}' == true &&
            ( '${{ steps.seed.outputs.cache-hit }}' == true ||
              '${{ steps.seed.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
@@ -300,6 +308,7 @@ runs:
       with:
         ordinal: '49'
     - name: Genuine RTL 20M stage 50 of 50
+      if: inputs.stage_count == '50'
       uses: ./.github/actions/product-sd1-v6-20m
       with:
         ordinal: '50'

@@ -11,11 +11,15 @@ hex64='^[a-f0-9]{64}$'
    "$V6_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
    "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || fail 'reviewed PR source identity changed'
 [[ "$V6_BATCH_START_M" =~ ^[0-9]+$ && "$V6_BATCH_END_M" =~ ^[0-9]+$ &&
-   "$V6_BATCH_START_M" -ge 14992 && "$V6_BATCH_END_M" -le 19992 &&
-   "$((V6_BATCH_END_M-V6_BATCH_START_M))" -eq 1000 &&
-   "$((V6_BATCH_START_M-14992))" -ge 0 &&
-   "$(((V6_BATCH_START_M-14992)%1000))" -eq 0 ]] || fail 'outside separately reviewed V6 five 1B batches'
-[[ "$V6_SOURCE_MODE" == cross_run || "$V6_SOURCE_MODE" == intra_run ]] || fail 'source mode not reviewed'
+   "$V6_BATCH_END_M" -le 19992 &&
+   ( ( "$V6_BATCH_START_M" == 14992 && "$V6_BATCH_END_M" == 15992 ) ||
+     ( "$V6_BATCH_START_M" == 15012 && "$V6_BATCH_END_M" == 15992 ) ||
+     ( "$V6_BATCH_START_M" -ge 15992 &&
+       "$((V6_BATCH_END_M-V6_BATCH_START_M))" -eq 1000 &&
+       "$(((V6_BATCH_START_M-15992)%1000))" -eq 0 ) ) ]] ||
+  fail 'outside separately reviewed V6 remaining 249-by-20M formal batches'
+[[ "$V6_SOURCE_MODE" == cross_run || "$V6_SOURCE_MODE" == technical_terminal ||
+   "$V6_SOURCE_MODE" == intra_run ]] || fail 'source mode not reviewed'
 for var in V6_QUAL_DIGEST V6_QUAL_MANIFEST_SHA V6_MODEL_SHA V6_SOURCE_HOST_SHA V6_SOURCE_RTL_SHA V6_SOURCE_CARD_SHA; do
   [[ "${!var}" =~ $hex64 ]] || fail "$var not qualified SHA"
 done
@@ -33,8 +37,24 @@ if [[ "$V6_SOURCE_MODE" == cross_run ]]; then
        fail 'V5 terminal 14992M cross-run source is not explicitly authenticated'
   source_run="$V6_ORIGIN_RUN"
   source_head="$V6_ORIGIN_HEAD"
+elif [[ "$V6_SOURCE_MODE" == technical_terminal ]]; then
+  [[ "$V6_BATCH_START_M" == 15012 && "$V6_BATCH_END_M" == 15992 &&
+     "${V6_TECH_QUAL_RUN:-}" == 42772805117 &&
+     "${V6_TECH_QUAL_PR379_HEAD:-}" == d1a13ac76b09e00b0298e69bb95217e5197d235f &&
+     "${V6_TECH_TERMINAL_ID:-}" == 13742384494 &&
+     "${V6_TECH_TERMINAL_DIGEST:-}" == 2e0c038afd89c693c68c3442cbcba3db5d36eacf4b31fc721dc0a96dfbe9d969 &&
+     "$V6_SOURCE_ID" == "$V6_TECH_TERMINAL_ID" &&
+     "$V6_SOURCE_NAME" == product-sd1-v6-qual-15012-checkpoint-42772805117-attempt1 &&
+     "$V6_SOURCE_DIGEST" == "$V6_TECH_TERMINAL_DIGEST" &&
+     "$V6_SOURCE_HOST_SHA" == 5928695d9637e5e54a3b394f4e2aac7669e86063cbe0018578981d3c07336f62 &&
+     "$V6_SOURCE_RTL_SHA" == 28501616ad4ff83ec93565a6cc43d4793403ce978a17d07964d679d6da23392a &&
+     "$V6_SOURCE_CARD_SHA" == 1f04938348893282bab7771e2cd5b013b749b18a825089827996f0add7a2d18f &&
+     "${V6_TECH_QUAL_REPORT_VERIFIED:-}" == 1 ]] ||
+    fail '15012M sealed technical terminal or reviewed qualification report not authenticated'
+  source_run="$V6_TECH_QUAL_RUN"
+  source_head="$V6_TECH_QUAL_PR379_HEAD"
 else
-  [[ "$V6_SOURCE_NAME" =~ ^product-sd1-v6-20b- && "$V6_BATCH_START_M" -gt 14992 ]] ||
+  [[ "$V6_SOURCE_NAME" =~ ^product-sd1-v6-20b- && "$V6_BATCH_START_M" -ge 15992 ]] ||
     fail 'intra-run predecessor not pinned'
   source_run="$GITHUB_RUN_ID"
   source_head="$V6_SOURCE_SHA"
@@ -146,6 +166,14 @@ PY
     fail '14992M migration changed Host header'
   cmp -s -i 88:88 "$first/persistent.pre.host" "$source_dir/persistent.pre.host" ||
     fail '14992M migration changed Host bytes other than model SHA'
+fi
+if [[ "$V6_SOURCE_MODE" == technical_terminal ]]; then
+  [[ "$(field source_cycles "$first/.migration-ready")" == 14992000000 &&
+     "$(field previous_model_sha256 "$first/.migration-ready")" == 4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be &&
+     "$(field source_host_sha256 "$first/.migration-ready")" == d95d7559e947ba5e888b818ebdb52898db677423966af0cc044f5f6a2dbc34ef &&
+     "$(field source_rtl_sha256 "$first/.migration-ready")" == 948ab3d2a7554566ca9cb0070c51eafbecf111eee465ec11a7ecbcb354c57ed9 &&
+     "$(field model_sha256 "$first/.migration-ready")" == "$V6_MODEL_SHA" ]] ||
+    fail '15012M technical terminal has changed 14992M V5/V6 lineage'
 fi
 python3 - "$source_dir" "$V6_BATCH_START_M" "$source_host" \
   "$source_rtl" "$source_card" "$V6_MODEL_SHA" \
