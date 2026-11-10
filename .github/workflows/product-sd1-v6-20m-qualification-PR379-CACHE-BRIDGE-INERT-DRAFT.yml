@@ -1,0 +1,303 @@
+name: PR379-cache-scope V6 14992M to 15012M signed RTL technical qualification
+# Only one real 20M stage. This is technical evidence, NOT a Debian login PASS.
+# Qualified and bounded to one true RTL 20M trial from immutable V5 14992M.
+# Formal long-run remains independently gated and disabled.
+# Must be separately reviewed and installed in PR#379 only AFTER official V5 finishes.
+# Reuses PR#379-scoped original seed/diag cache; never uploads password-bearing SD.
+# PR-label-only / no workflow_dispatch, workflow_run, push, or write privilege.
+'on':
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: sd1-v6-qual-20m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  # V6_SOURCE_SHA must track event HEAD because chain artifact provenance checks
+  # workflow_run.head_sha. Executed V6 CI code is separately pinned below.
+  V6_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+  V6_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  V6_EVENT_REVIEWED_PARENT_HEAD: '8a40835c470d059448a4871bafead04cc555bee5'
+  V6_REVIEWED_HEAD: 'f9795c522d7da472379dc12229a888521e3bddb3'
+  # Read-only V5 model-migration qualification is retained, not claimed as V6 qualification.
+  V6_QUAL_RUN: '42599136275'
+  V6_QUAL_ID: '13664668373'
+  V6_QUAL_HEAD: 'a0480c3cfe5ae2b01b92f82e5bc3d90582a9cc4b'
+  V6_QUAL_NAME: 'product-sd1-model-migrate-v5-qual-9972-9992-42599136275'
+  V6_QUAL_DIGEST: '55d5cf2d8ff46c93eb6c21de1b9c451ff14287da8c03f9cc424d1dd0de41ff89'
+  V6_QUAL_MANIFEST_SHA: '63766841ea96bf75b40584e1760b9e78f538d3a7dd16193a3ff71e8d4fb8c700'
+  V6_MODEL_SHA: '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'
+  AETHERCORE_SD1_V6_REVIEWED_MODEL_SHA: '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'
+  V6_ORIGIN_RUN: '42600415630'
+  V6_ORIGIN_HEAD: '8a40835c470d059448a4871bafead04cc555bee5'
+  V6_14992_ID: '13738787578'
+  V6_14992_NAME: 'product-sd1-v5-15b-42600415630-attempt7-v5_billion_5-14992m'
+  V6_14992_DIGEST: 'b235fb53f493b274aae9217ae09fafe3a1a16813bde4e38adf50ac048cedd31b'
+  V6_14992_HOST_SHA: 'ba7e2161c5917f522a6854eb5457e9cff703492bb0ef1c5485cb13f6500a01cb'
+  V6_14992_RTL_SHA: '948ab3d2a7554566ca9cb0070c51eafbecf111eee465ec11a7ecbcb354c57ed9'
+  V6_14992_CARD_SHA: '3ef8a3c6281ca52fd2c734f7244634de55908d276208b2ef26736b355ff1c4a3'
+  # One 20M trial is never the formal 5B qualification.
+  V6_20M_TECH_TRIAL_AUTHORIZED: SIGNED_V6_ONLY_14992_TO_15012_20M_TECH_TRIAL
+  AETHERCORE_SD1_V6_20B_APPROVED: PENDING_FORMAL_5B_AFTER_TECH_REPORT_REVIEW
+  # Only the exact V6 20M technical trial is armed; formal V6 5B remains locked.
+  AETHERCORE_SD1_RELAY_CONFIRM: SD1_SIGNED_V6_14992_TO_15012_TECH_TRIAL_ONLY
+  AETHERCORE_VERILATOR_VERSION: '5.054'
+  SIM_SETTLE_MODE: reference
+  VERILATOR_THREADS: '1'
+  AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+jobs:
+  v6_billion_1:
+    name: PR379 in-scope cache V6 technical qualification 14992M to 15012M
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'sd1-v6-qual-approved' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout the reviewed PR379 event HEAD for artifact provenance
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout immutable reviewed V6 executor into isolated directory
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_REVIEWED_HEAD }}
+          path: v6-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check single PR379 workflow release and import exact reviewed V6 CI blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$V6_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+             "$V6_EVENT_HEAD_SHA" == "$V6_SOURCE_SHA" &&
+             "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
+          [[ "$(git rev-parse HEAD^)" == "$V6_EVENT_REVIEWED_PARENT_HEAD" ]] || {
+            echo 'PR379 event HEAD is not one reviewed post-V5 bridge commit' >&2
+            exit 16
+          }
+          while IFS= read -r -d '' changed; do
+            [[ "$changed" == .github/workflows/product-sd1-v6-20m-qualification-PR379-CACHE-BRIDGE-INERT-DRAFT.yml ]] || {
+              echo "PR379 changed signed source unexpectedly: $changed" >&2
+              exit 16
+            }
+          done < <(git diff --name-only -z "$V6_EVENT_REVIEWED_PARENT_HEAD" HEAD)
+          reviewed="$GITHUB_WORKSPACE/v6-reviewed-tools"
+          [[ "$(git -C "$reviewed" rev-parse HEAD)" == "$V6_REVIEWED_HEAD" ]] || exit 16
+          for path in \
+            tools/ci/product_sd1_v6_chain.py \
+            tools/ci/product_sd1_v6_chain_prepare.sh \
+            tools/ci/product_sd1_v6_postcross_20m.sh \
+            tools/ci/product_sd1_v6_release_guard.sh \
+            .github/actions/product-sd1-v6-20m/action.yml \
+            .github/actions/product-sd1-v6-batch/action.yml; do
+            [[ ! -e "$GITHUB_WORKSPACE/$path" ]] || exit 16
+            [[ "$(git -C "$reviewed" rev-parse "HEAD:$path")" == "$(git -C "$reviewed" hash-object "$path")" ]] || exit 16
+            mkdir -p "$(dirname "$GITHUB_WORKSPACE/$path")"
+            cp -- "$reviewed/$path" "$GITHUB_WORKSPACE/$path"
+            [[ "$(sha256sum "$reviewed/$path" | cut -d' ' -f1)" == "$(sha256sum "$GITHUB_WORKSPACE/$path" | cut -d' ' -f1)" ]] || exit 16
+          done
+          [[ "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
+          bash -n tools/ci/product_sd1_v6_postcross_20m.sh
+          bash -n tools/ci/product_sd1_v6_chain_prepare.sh
+          python3 -m py_compile tools/ci/product_sd1_v6_chain.py
+          bash tools/ci/product_sd1_v6_postcross_20m.sh --plan
+      - id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Require the historical signed Debian caches used by successful PR-labeled N and O
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true &&
+             ( '${{ steps.seed.outputs.cache-hit }}' == true ||
+               '${{ steps.seed.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+            echo 'V6 source caches unavailable for this PR event; refuse cold reproduction' >&2
+            exit 16
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      - name: Import and authenticate qualified V6 model and exact source checkpoint
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V6_BATCH_START_M: '14992'
+          V6_BATCH_END_M: '15992'
+          V6_SOURCE_MODE: 'cross_run'
+          V6_SOURCE_ID: ${{ env.V6_14992_ID }}
+          V6_SOURCE_NAME: ${{ env.V6_14992_NAME }}
+          V6_SOURCE_DIGEST: ${{ env.V6_14992_DIGEST }}
+          V6_SOURCE_HOST_SHA: ${{ env.V6_14992_HOST_SHA }}
+          V6_SOURCE_RTL_SHA: ${{ env.V6_14992_RTL_SHA }}
+          V6_SOURCE_CARD_SHA: ${{ env.V6_14992_CARD_SHA }}
+        run: |
+          set -euo pipefail
+          export V6_BATCH_START_M V6_BATCH_END_M V6_SOURCE_MODE V6_SOURCE_ID
+          export V6_SOURCE_NAME V6_SOURCE_DIGEST V6_SOURCE_HOST_SHA
+          export V6_SOURCE_RTL_SHA V6_SOURCE_CARD_SHA
+          bash tools/ci/product_sd1_v6_chain_prepare.sh
+          {
+            echo "V6_BATCH_START_M=$V6_BATCH_START_M"
+            echo "V6_BATCH_END_M=$V6_BATCH_END_M"
+            echo "V6_SOURCE_MODE=$V6_SOURCE_MODE"
+          } >> "$GITHUB_ENV"
+      - name: Qualify genuine RTL 14992M to 15012M (exactly one 20M stage)
+        uses: ./.github/actions/product-sd1-v6-20m
+        with:
+          ordinal: '1'
+      - name: Require exact signed 15012M result and save qualification evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${V6_CURRENT_M:-}" == 15012 && "${V6_STOP:-0}" =~ ^[01]$ ]] || exit 16
+          [[ -n "${V6_LAST_ARTIFACT_ID:-}" && -n "${V6_LAST_ARTIFACT_DIGEST:-}" &&
+             -n "${V6_LAST_ARTIFACT_NAME:-}" ]] || exit 16
+          [[ "$(sed -n 's/^source_cycles=//p' "$V6_SOURCE_DIR/.migration-ready")" == 14992000000 ]] || exit 16
+          [[ "$(sed -n 's/^source_host_sha256=//p' "$V6_SOURCE_DIR/.migration-ready")" == "$V6_14992_HOST_SHA" &&
+             "$(sed -n 's/^source_rtl_sha256=//p' "$V6_SOURCE_DIR/.migration-ready")" == "$V6_14992_RTL_SHA" ]] || exit 16
+          python3 tools/ci/product_sd1_v6_chain.py verify-stage "$V6_SOURCE_DIR" 15012000000 > "$RUNNER_TEMP/v6-qual-stage-verified.json"
+          jq -e '.cycles==15012000000 and .source_cycles=="14992000000" and .proof.debian_login_claim==false' \
+            "$RUNNER_TEMP/v6-qual-stage-verified.json" >/dev/null || exit 16
+          report="$RUNNER_TEMP/v6-qual-report"
+          mkdir -p "$report"
+          cp "$RUNNER_TEMP/v6-qual-stage-verified.json" "$report/verified-stage.json"
+          cp "$V6_SOURCE_DIR/serial-proof.json" "$report/serial-proof.json"
+          cp "$V6_SOURCE_DIR/.migration-ready" "$report/migration-ready.txt"
+          {
+            echo 'schema=SD1_V6_14992_15012_TECHNICAL_QUALIFICATION_V1'
+            echo "reviewed_v6_head=$V6_REVIEWED_HEAD"
+            echo "pr379_reviewed_parent_head=$V6_EVENT_REVIEWED_PARENT_HEAD"
+            echo "qual_source_head=$V6_SOURCE_SHA"
+            echo "event_pr379_head=$V6_EVENT_HEAD_SHA"
+            echo "origin_run=$V6_ORIGIN_RUN"
+            echo "origin_head=$V6_ORIGIN_HEAD"
+            echo "origin_id=$V6_14992_ID"
+            echo "origin_name=$V6_14992_NAME"
+            echo "origin_zip_digest=$V6_14992_DIGEST"
+            echo "origin_host_sha=$V6_14992_HOST_SHA"
+            echo "origin_rtl_sha=$V6_14992_RTL_SHA"
+            echo "origin_card_sha=$V6_14992_CARD_SHA"
+            echo "stage_artifact_id=$V6_LAST_ARTIFACT_ID"
+            echo "stage_artifact_name=$V6_LAST_ARTIFACT_NAME"
+            echo "stage_artifact_zip_digest=$V6_LAST_ARTIFACT_DIGEST"
+            echo "stage_host_sha=$V6_LAST_HOST_SHA"
+            echo "stage_rtl_sha=$V6_LAST_RTL_SHA"
+            echo "stage_card_sha=$V6_LAST_CARD_SHA"
+            echo "stage_serial_proof_sha=$(sha256sum "$V6_SOURCE_DIR/serial-proof.json" | cut -d' ' -f1)"
+            echo "model_sha=$V6_MODEL_SHA"
+            echo 'signed_no_cold_boot=1'
+            echo 'debian_login_claim=0'
+          } > "$report/qualification-manifest.txt"
+          echo 'PRODUCT_SD1_V6_20M_TECHNICAL_STAGE_VERIFIED_NOT_DEBIAN_PASS'
+      - id: qualification_terminal
+        name: Preserve the complete authenticated 15012M Host RTL card checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-v6-qual-15012-checkpoint-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ env.V6_SOURCE_DIR }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 1
+      - name: Authenticate 90-day checkpoint archive and bind it to report
+        shell: bash
+        env:
+          ART_ID: ${{ steps.qualification_terminal.outputs.artifact-id }}
+          ART_SHA: ${{ steps.qualification_terminal.outputs.artifact-digest }}
+          ART_NAME: product-sd1-v6-qual-15012-checkpoint-${{ github.run_id }}-attempt${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          ART_SHA="${ART_SHA#sha256:}"
+          [[ "$ART_ID" =~ ^[0-9]+$ && "$ART_SHA" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          visible=0
+          for delay in 0 2 3 5 8 13 21 30; do
+            if (( delay > 0 )); then sleep "$delay"; fi
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID" > "$RUNNER_TEMP/v6-qual-terminal-artifact.json"; then
+              visible=1
+              break
+            fi
+          done
+          [[ "$visible" == 1 ]] || exit 16
+          jq -e --argjson id "$ART_ID" --argjson run "$GITHUB_RUN_ID" \
+            --arg name "$ART_NAME" --arg digest "sha256:$ART_SHA" --arg head "$V6_EVENT_HEAD_SHA" '
+              .id==$id and .name==$name and .digest==$digest and
+              .workflow_run.id==$run and .workflow_run.head_sha==$head and
+              .expired==false and .size_in_bytes>1024
+            ' "$RUNNER_TEMP/v6-qual-terminal-artifact.json" >/dev/null || exit 16
+          {
+            echo "terminal_90d_artifact_id=$ART_ID"
+            echo "terminal_90d_artifact_name=$ART_NAME"
+            echo "terminal_90d_artifact_zip_digest=$ART_SHA"
+          } >> "$RUNNER_TEMP/v6-qual-report/qualification-manifest.txt"
+      - id: qualification_report
+        name: Retain independent technical qualification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-v6-qual-14992-15012-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v6-qual-report
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+      - name: Authenticate uploaded V6 qualification report
+        shell: bash
+        env:
+          ART_ID: ${{ steps.qualification_report.outputs.artifact-id }}
+          ART_SHA: ${{ steps.qualification_report.outputs.artifact-digest }}
+          ART_NAME: product-sd1-v6-qual-14992-15012-${{ github.run_id }}-attempt${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          ART_SHA="${ART_SHA#sha256:}"
+          [[ "$ART_ID" =~ ^[0-9]+$ && "$ART_SHA" =~ ^[a-f0-9]{64}$ ]] || exit 16
+          visible=0
+          for delay in 0 2 3 5 8 13 21 30; do
+            if (( delay > 0 )); then sleep "$delay"; fi
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID" > "$RUNNER_TEMP/v6-qual-report-artifact.json"; then
+              visible=1
+              break
+            fi
+          done
+          [[ "$visible" == 1 ]] || exit 16
+          jq -e --argjson id "$ART_ID" --argjson run "$GITHUB_RUN_ID" \
+            --arg name "$ART_NAME" --arg digest "sha256:$ART_SHA" --arg head "$V6_EVENT_HEAD_SHA" '
+              .id==$id and .name==$name and .digest==$digest and
+              .workflow_run.id==$run and .workflow_run.head_sha==$head and
+              .expired==false and .size_in_bytes>1024
+            ' "$RUNNER_TEMP/v6-qual-report-artifact.json" >/dev/null || exit 16
+          echo 'PRODUCT_SD1_V6_20M_TECH_QUAL_ARTIFACT_PROVENANCE_VERIFIED_NOT_DEBIAN_PASS'
