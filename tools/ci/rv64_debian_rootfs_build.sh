@@ -313,6 +313,19 @@ case "${STAGE}" in
         'sysfs /sys sysfs nosuid,nodev,noexec 0 0' \
         'devpts /dev/pts devpts defaults 0 0' | \
         sudo tee "${ROOTFS_DIR}/etc/fstab" >/dev/null
+      # Authentic Product RTL can take longer than systemd's default 90s
+      # device-job deadline to finish native udev coldplug.  The kernel has
+      # already registered ttyS0 and mounted devtmpfs, yet an early
+      # dev-ttyS0.device timeout permanently fails serial-getty@ttyS0.
+      # Keep the stock Debian getty and udev dependency; grant the slow
+      # hardware path enough guest time to publish its device unit.
+      # This is a new derived SD1 media identity, NOT a change to a running
+      # signed checkpoint.  Real RTL UART login still decides acceptance.
+      sudo mkdir -p "${ROOTFS_DIR}/etc/systemd/system.conf.d"
+      printf '%s\n' \
+        '[Manager]' \
+        'DefaultDeviceTimeoutSec=10min' | \
+        sudo tee "${ROOTFS_DIR}/etc/systemd/system.conf.d/90-sd1-device-coldplug.conf" >/dev/null
     fi
     ;;
 esac
