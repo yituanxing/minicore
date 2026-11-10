@@ -14,6 +14,18 @@ reject() { echo "PRODUCT_SD1_V6_RELEASE_GATE_REJECTED: $*" >&2; exit 16; }
 [[ "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || reject 'PR HEAD changed'
 git merge-base --is-ancestor "$V6_ORIGIN_HEAD" HEAD ||
   reject 'V6 source does not descend from official V5 identity'
+# Independent V6 qualification must fix the reviewed draft as the release
+# commit's *immediate* parent. This prevents rearming after later CI edits.
+[[ "${V6_REVIEWED_PRIOR_HEAD:-}" =~ ^[a-f0-9]{40}$ &&
+   "$(git rev-parse HEAD^)" == "$V6_REVIEWED_PRIOR_HEAD" ]] ||
+  reject 'missing V6 reviewed prior HEAD or more than one release commit'
+# The single release commit may ONLY fill V6 pins/approval in the workflow.
+# The executor, artifact verifier and signed model path must stay byte-identical
+# to the independently reviewed V6 draft.
+while IFS= read -r -d '' release_change; do
+  [[ "$release_change" == .github/workflows/product-sd1-v6-20b-needs-14992-to-19992-INERT-DRAFT.yml ]] ||
+    reject "reviewed V6 release code drift: $release_change"
+done < <(git diff --name-only -z "$V6_REVIEWED_PRIOR_HEAD" HEAD)
 # Changes relative to official signed source must be *only* newly added V6 CI.
 # No changes to RTL, compiler, signed media, V5 helpers or V5 workflows.
 while IFS= read -r -d '' changed; do
