@@ -3,7 +3,12 @@
 No GitHub event is sent and no Product RTL guest cycle is executed here.
 """
 from pathlib import Path
+import json
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 import yaml
@@ -65,11 +70,107 @@ class V6FormalInertContract(unittest.TestCase):
         assert "stage_count:" in batch_action
         for i in range(1, 6):
             steps = self.data['jobs'][f'v6_billion_{i}']['steps']
-            self.assertEqual(steps[1]['with']['ref'], '${{ env.V6_FORMAL_EXECUTOR_HEAD }}')
-            imported = steps[2]['run']
+            reviewed = [s for s in steps if s.get('with', {}).get('path') == 'v6-formal-reviewed-tools']
+            self.assertEqual(len(reviewed), 1)
+            self.assertEqual(reviewed[0]['with']['ref'], '${{ env.V6_FORMAL_EXECUTOR_HEAD }}')
+            imported_steps = [s for s in steps if s.get('name', '').startswith('Import immutable')]
+            self.assertEqual(len(imported_steps), 1)
+            imported = imported_steps[0]['run']
             self.assertIn('product_sd1_v6_formal_pr379_guard.sh', imported)
             self.assertIn('git -C "$reviewed" rev-parse "HEAD:$path"', imported)
             self.assertIn('bash tools/ci/product_sd1_v6_formal_pr379_guard.sh', imported)
+
+    def test_duplicate_formal_run_guard_with_mocked_github_history(self):
+        first = self.data['jobs']['v6_billion_1']['steps']
+        self.assertEqual(first[0]['name'], 'Reject duplicate formal RTL runs before guest execution')
+        guard = first[0]['run']
+        self.assertIn('gh api --paginate', guard)
+        self.assertIn('jobs?filter=all&per_page=100', guard)
+        self.assertIn('prior formal guest run', guard)
+        self.assertIn('PRODUCT_SD1_V6_FORMAL_FIRST_RUN_ONLY_VERIFIED', guard)
+        self.assertIn('github.token', first[0]['env']['GH_TOKEN'])
+        for i in range(2, 6):
+            self.assertFalse(any('duplicate formal RTL' in s.get('name', '')
+                                 for s in self.data['jobs'][f'v6_billion_{i}']['steps']))
+
+        fake_gh = textwrap.dedent('''\
+            #!/usr/bin/env python3
+            import json, os, sys
+            url = sys.argv[-1]
+            case = os.environ.get('V6_GH_MOCK_CASE')
+            head = 'a' * 40
+            if case == 'api_fail':
+                sys.exit(1)
+            if url.endswith('/actions/runs/999'):
+                data = dict(id=999, workflow_id=42,
+                            run_number=11 if case == 'self_mismatch' else 12,
+                            event='pull_request', head_sha=head)
+            elif '/actions/workflows/42/runs?' in url:
+                current = dict(id=999, workflow_id=42,
+                               run_number=12, head_sha=head)
+                runs = [] if case in ('history_empty', 'self_missing') else [current]
+                if case == 'self_duplicate':
+                    runs.append(current.copy())
+                if case not in ('fresh', 'same_run_attempt', 'history_empty',
+                                'self_duplicate'):
+                    runs.append(dict(id=998, workflow_id=42, run_number=11,
+                                     head_sha='b' * 40 if case == 'other_head' else head))
+                data = dict(total_count=len(runs), workflow_runs=runs)
+                if case == 'history_incomplete':
+                    data['total_count'] += 1
+            elif '/actions/runs/998/jobs?' in url:
+                if 'filter=all&per_page=100' not in url:
+                    sys.exit(3)
+                status = 'in_progress' if case == 'duplicate_running' else 'completed'
+                conclusions = dict(duplicate_success='success',
+                                   duplicate_failed='failure',
+                                   duplicate_cancelled='cancelled',
+                                   duplicate_running=None,
+                                   missing_jobs='skipped')
+                name = ('Wrong job' if case == 'missing_jobs' else
+                        'Genuine RTL 15012 to 15992M, 49 previously unexecuted 20M stages')
+                data = dict(jobs=[dict(name=name, status=status,
+                                       conclusion=conclusions.get(case, 'skipped'))])
+                if case in ('earlier_success_latest_skipped',
+                            'earlier_failed_latest_skipped', 'all_skipped_attempts'):
+                    old = ('success' if case == 'earlier_success_latest_skipped' else
+                           'failure' if case == 'earlier_failed_latest_skipped' else 'skipped')
+                    data['jobs'] = [dict(name=name, status='completed', conclusion=old),
+                                    dict(name=name, status='completed', conclusion='skipped')]
+                data['total_count'] = len(data['jobs'])
+                if case == 'jobs_incomplete':
+                    data['total_count'] += 1
+            else:
+                sys.exit(2)
+            print(json.dumps(data))
+        ''')
+        with tempfile.TemporaryDirectory() as temp:
+            mock = Path(temp) / 'gh'
+            mock.write_text(fake_gh)
+            mock.chmod(0o755)
+            env = dict(os.environ, PATH=f"{temp}:{os.environ['PATH']}",
+                       GITHUB_REPOSITORY='yituanxing/minicore',
+                       GITHUB_EVENT_NAME='pull_request',
+                       GITHUB_RUN_ID='999', GITHUB_RUN_NUMBER='12',
+                       V6_SOURCE_SHA='a' * 40)
+            for case, accepted in (
+                ('fresh', True), ('skipped', True), ('other_head', True),
+                ('same_run_attempt', True), ('all_skipped_attempts', True),
+                ('duplicate_success', False), ('duplicate_failed', False),
+                ('earlier_success_latest_skipped', False),
+                ('earlier_failed_latest_skipped', False),
+                ('duplicate_cancelled', False), ('duplicate_running', False),
+                ('missing_jobs', False), ('history_incomplete', False),
+                ('history_empty', False), ('self_missing', False),
+                ('self_duplicate', False), ('jobs_incomplete', False),
+                ('self_mismatch', False), ('api_fail', False),
+            ):
+                result = subprocess.run(['bash', '-c', guard],
+                                        env=dict(env, V6_GH_MOCK_CASE=case),
+                                        text=True, capture_output=True,
+                                        timeout=30, check=False)
+                self.assertEqual(result.returncode == 0, accepted,
+                                 (case, result.stdout, result.stderr))
 
     def test_guard_does_not_collapse_executor_and_parent(self):
         guard = (ROOT / 'tools/ci/product_sd1_v6_formal_pr379_guard.sh').read_text()
@@ -89,6 +190,51 @@ class V6FormalInertContract(unittest.TestCase):
         self.assertIn('15012M technical terminal has changed 14992M V5/V6 lineage', prepare)
         self.assertIn('13742384494', prepare)
         self.assertIn('V6_TECH_QUAL_REPORT_VERIFIED', prepare)
+
+    def test_final_proof_is_inert_and_handles_early_skipped_needs(self):
+        final = self.data['jobs']['final_genuine_rtl_proof']
+        # The release must remove only `false &&`: a status function avoids
+        # implicit success(), and !cancelled() respects an aborted workflow.
+        self.assertEqual(final['if'].strip(), 'false && !cancelled()')
+        self.assertEqual(
+            final['needs'],
+            [f'v6_billion_{i}' for i in range(1, 6)],
+        )
+        script = final['steps'][0]['run']
+        proof = re.search(r"jq -e '\s*(.*?)\s*'\s*<<<", script, re.S)
+        self.assertIsNotNone(proof)
+
+        def job(result, login='0', terminal=''):
+            return {
+                'result': result,
+                'outputs': {'serial_login_verified': login, 'terminal_m': terminal},
+            }
+
+        early = {
+            'v6_billion_1': job('success', login='1', terminal='15032'),
+            **{f'v6_billion_{i}': job('skipped') for i in range(2, 6)},
+        }
+        complete = {
+            f'v6_billion_{i}': job('success', terminal=str(14992 + 1000 * i))
+            for i in range(1, 6)
+        }
+        complete['v6_billion_5']['outputs']['terminal_m'] = '19992'
+        failed = dict(early)
+        failed['v6_billion_2'] = job('failure')
+        cancelled = dict(early)
+        cancelled['v6_billion_2'] = job('cancelled')
+        no_login = dict(early)
+        no_login['v6_billion_1'] = job('success', terminal='15992')
+
+        for case, accepted in ((early, True), (complete, True),
+                               (failed, False), (cancelled, False),
+                               (no_login, False)):
+            result = subprocess.run(
+                ['jq', '-e', proof.group(1)],
+                input=json.dumps(case), text=True, capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode == 0, accepted, case)
 
 
 if __name__ == '__main__':

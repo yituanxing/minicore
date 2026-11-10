@@ -78,6 +78,80 @@ jobs:
       terminal_m: ${{ steps.batch.outputs.terminal_m }}
       serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
     steps:
+      - name: Reject duplicate formal RTL runs before guest execution
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reject() { echo "PRODUCT_SD1_V6_FORMAL_DUPLICATE_GUARD_REJECTED: $*" >&2; exit 16; }
+          [[ "$GITHUB_REPOSITORY" == yituanxing/minicore &&
+             "$GITHUB_EVENT_NAME" == pull_request &&
+             "$GITHUB_RUN_ID" =~ ^[0-9]+$ &&
+             "$GITHUB_RUN_NUMBER" =~ ^[0-9]+$ &&
+             "$V6_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || reject 'untrusted event identity'
+          self="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")" ||
+            reject 'cannot authenticate current GitHub run'
+          workflow_id="$(jq -er --argjson run "$GITHUB_RUN_ID" \
+              --argjson number "$GITHUB_RUN_NUMBER" --arg head "$V6_SOURCE_SHA" '
+            select(.id == $run and .run_number == $number and
+                   .event == "pull_request" and .head_sha == $head and
+                   (.workflow_id | type) == "number" and .workflow_id > 0)
+            | .workflow_id
+          ' <<< "$self")" || reject 'current run identity mismatch'
+          # Always inspect every prior run of this exact workflow. Earlier
+          # unrelated PR labels are safe only if the first guest job is
+          # explicitly recorded as skipped. A previous started guest job
+          # must be resumed by rerunning its OWN run_id, never by relabeling.
+          runs="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=pull_request&per_page=100")" ||
+            reject 'workflow run history inaccessible'
+          jq -se --argjson run "$GITHUB_RUN_ID" \
+              --argjson workflow "$workflow_id" \
+              --argjson number "$GITHUB_RUN_NUMBER" \
+              --arg head "$V6_SOURCE_SHA" '
+            length > 0 and all(.[];
+              (.total_count | type) == "number" and .total_count >= 0 and
+              (.workflow_runs | type) == "array" and
+              all(.workflow_runs[];
+                (.id | type) == "number" and
+                (.workflow_id | type) == "number" and
+                (.run_number | type) == "number" and
+                (.head_sha | type) == "string")) and
+            ([.[].workflow_runs[]] | length) == .[0].total_count and
+            # A successful history lookup must include the current run exactly
+            # once. If GitHub indexing is stale, refuse instead of mistaking an
+            # empty/partial listing for the absence of a prior 5B launch.
+            ([.[].workflow_runs[] | select(.id == $run and
+               .workflow_id == $workflow and .run_number == $number and
+               .head_sha == $head)] | length) == 1
+          ' \
+            <<< "$runs" > /dev/null || reject 'incomplete workflow run history'
+          prior_ids="$(jq -sr --argjson workflow "$workflow_id" \
+              --argjson number "$GITHUB_RUN_NUMBER" --argjson run "$GITHUB_RUN_ID" \
+              --arg head "$V6_SOURCE_SHA" '
+            [.[].workflow_runs[]? | select(.workflow_id == $workflow and
+               .run_number < $number and .id != $run and .head_sha == $head)]
+            | .[].id
+          ' <<< "$runs")" || reject 'malformed prior run identity'
+          while IFS= read -r prior; do
+            [[ -n "$prior" ]] || continue
+            [[ "$prior" =~ ^[0-9]+$ ]] || reject 'malformed prior run number'
+            jobs="$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$prior/jobs?filter=all&per_page=100")" ||
+              reject 'prior run jobs inaccessible'
+            jq -se --arg first 'Genuine RTL 15012 to 15992M, 49 previously unexecuted 20M stages' '
+              length > 0 and all(.[];
+                (.total_count | type) == "number" and .total_count >= 0 and
+                (.jobs | type) == "array") and
+              ([.[].jobs[]] | length) == .[0].total_count and
+              [.[].jobs[]? | select(.name == $first)] as $matches
+              | ($matches | length) >= 1 and
+                all($matches[]; .status == "completed" and .conclusion == "skipped")
+            ' <<< "$jobs" > /dev/null ||
+              reject "some attempt of prior formal guest run $prior was not conclusively skipped"
+          done <<< "$prior_ids"
+          echo 'PRODUCT_SD1_V6_FORMAL_FIRST_RUN_ONLY_VERIFIED'
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.V6_SOURCE_SHA }}
@@ -291,7 +365,12 @@ jobs:
 
   final_genuine_rtl_proof:
     needs: [v6_billion_1, v6_billion_2, v6_billion_3, v6_billion_4, v6_billion_5]
-    if: false
+    # Without an explicit status function, GitHub implicitly applies success()
+    # and skips this proof when genuine UART login stops downstream jobs early.
+    # !cancelled() allows those skipped needs while respecting run cancellation.
+    # The unconditional false remains until a separately reviewed release.
+    if: >-
+      false && !cancelled()
     runs-on: ubuntu-24.04
     steps:
       - name: Fail closed unless full 19992M, or verified UART service-login
