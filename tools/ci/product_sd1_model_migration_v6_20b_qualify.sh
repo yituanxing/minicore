@@ -94,7 +94,7 @@ verify_source "$SOURCE_14992" 14992 "$TERMINAL" "$TO" "$SOURCE_14992_HOST" "$SOU
 
 old_sim="$OLD_MODEL_DIR/obj/VAetherCoreProductDebianSdRV64SimTop"
 old_qual="$OLD_ROOT/qualification-manifest.txt"
-[[ -x "$old_sim" && ! -L "$old_sim" && "$(sha "$old_sim")" == "$SOURCE_SHA" &&
+[[ -f "$old_sim" && ! -L "$old_sim" && "$(sha "$old_sim")" == "$SOURCE_SHA" &&
    "$(field candidate_model_sha256 "$old_qual")" == "$SOURCE_SHA" &&
    "$(field previous_model_sha256 "$old_qual")" == "$PREVIOUS_SHA" &&
    "$(field replay_cycles "$old_qual")" == 20000000 &&
@@ -106,6 +106,12 @@ old_qual="$OLD_ROOT/qualification-manifest.txt"
    "$(field cross_10b_executed "$old_qual")" == 0 &&
    "$(field debian_login_claim "$old_qual")" == 0 ]] ||
   fail 'old V5 9972->9992 qualification absent'
+# GitHub artifact extraction does not preserve executable mode reliably.
+# Validate the precise signed bytes and regular-file status BEFORE restoring
+# only the permission bit; chmod changes neither the model nor its digest.
+chmod 755 "$old_sim"
+[[ -x "$old_sim" && "$(sha "$old_sim")" == "$SOURCE_SHA" ]] ||
+  fail 'authenticated old V5 model did not become executable'
 
 mapfile -d '' manifests < <(find "$ROOT/build/product-sd1-spi-polling-import" -type f -name manifest.txt -print0)
 [[ ${#manifests[@]} == 1 ]] || fail 'polling manifest ambiguous'
@@ -236,8 +242,14 @@ ready="$OUT/qualified/14992m/.migration-ready"
   echo "rootfs_result_sha256=$ROOTFS_SHA"
   echo "snapshot_host_sha256=$(sha "$OUT/qualified/14992m/persistent.pre.host")"
   echo "snapshot_rtl_sha256=$(sha "$OUT/qualified/14992m/persistent.pre.rtl")"
-  echo "source_host_sha256=$SOURCE_14992_HOST"
-  echo "source_rtl_sha256=$SOURCE_14992_RTL"
+  # The prior 20M guest stage is still V5 14972M -> 14992M.
+  # The separate zero-clock Host model migration at 14992M is recorded with
+  # distinct fields rather than falsely naming the same-cycle V5 checkpoint
+  # as if it had been the prior guest-cycle stage.
+  echo "source_host_sha256=$SOURCE_14972_HOST"
+  echo "source_rtl_sha256=$SOURCE_14972_RTL"
+  echo "migration_origin_host_sha256=$SOURCE_14992_HOST"
+  echo "migration_origin_rtl_sha256=$SOURCE_14992_RTL"
   echo "card_progress_sha256=$SOURCE_14992_CARD"
   echo 'debian_login_claim=0'
 } > "$ready"
