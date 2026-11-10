@@ -277,6 +277,8 @@ bash tools/ci/product_fpga_nexys_video_ddr.sh import-ddr /tmp/vivado-risc-v /tmp
 # After explicitly preparing a commit-/SHA-pinned smallGeometry Product export:
 bash tools/ci/product_fpga_artix7_p0.sh prepare /path/to/product-export
 bash tools/ci/product_fpga_nexys_video_ddr.sh integrate-product /tmp/vivado-risc-v /path/to/product-export /tmp/aether-nexys-product
+# In an independent, unused output path, run actual synthesis and routing:
+bash tools/ci/product_fpga_nexys_video_ddr.sh physical-product /tmp/vivado-risc-v /path/to/product-export /tmp/aether-nexys-routed
 ```
 
 `preflight` proves **source provenance only**; the generated JSON explicitly
@@ -333,6 +335,39 @@ the `M_AXI` bundle, assigns the lower-256MiB address segment and validates
 the BD. It does not claim a bitstream or boot. Nexys Video SD card-detect
 and unused DAT1/DAT2 remain an explicit hardware integration check; they
 must be reviewed with the board schematic before hardware sign-off.
+
+### Separate physical implementation and timing evidence (2026-11-10)
+
+`physical-product` extends the exact same `integrate-product` entry only when
+the pinned upstream source, a **clean current-commit** Product RTL export,
+Vivado **2026.1**, and the Digilent Nexys Video board part are all present.
+The original `nexys_video_product_bd.tcl` remains a strictly logical-only
+import and verification path. A separate Vivado process opens its saved
+`.xpr`, generates the BD/IP outputs and top wrapper, then runs project-mode
+`synth_1` followed by `impl_1` through `route_design`. The script writes
+synthesis/route checkpoints, utilization, routed clock, DRC, route status,
+setup/hold timing and `check_timing` reports. Negative constrained setup or
+hold slack, missing timing paths/clocks, DRC violations, missing reports, an
+incorrect part/version, and changed source provenance cause a hard failure.
+
+Only after all those checks does the local validator publish
+`physical_reports/result.json` with status `NEXYS_ROUTED_TIMING_ONLY`, a
+source SHA, 2026.1 version, device, and measured setup/hold slacks. This
+status **never** means a board PASS: incomplete external I/O timing, generated
+bitstream, hardware DDR calibration, and a real signed Debian serial
+service/login are separately required. The physical script does not create a
+bitstream, program FPGA hardware, or certify a maximum Fmax from one 50 MHz
+timing point.
+
+The companion GitHub-hosted runner workflow
+`product-fpga-nexys-physical-contract.yml` exercises **offline negative
+contracts only**; it explicitly cannot claim Vivado physical execution.
+The free hosted runner does not provide AMD Vivado, and the authenticated AMD
+web installer cannot be treated as a public toolchain artifact. A licensed
+and board-file-equipped Vivado 2026.1 environment must supply the first real
+post-route proof. This contract is checked in to avoid losing the preparation
+while hardware/tool access is arranged; there is **no verified routed run**
+yet.
 
 ### Real generated RTL compatibility check
 

@@ -6,12 +6,13 @@ usage() {
   echo "Usage: $0 preflight PINNED_REFERENCE_CHECKOUT RESULT_JSON" >&2
   echo "       $0 import-ddr PINNED_REFERENCE_CHECKOUT NEW_OUTPUT_DIR" >&2
   echo "       $0 integrate-product PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR NEW_OUTPUT_DIR" >&2
+  echo "       $0 physical-product PINNED_REFERENCE_CHECKOUT PINNED_PRODUCT_EXPORT_DIR NEW_OUTPUT_DIR" >&2
   exit 2
 }
 
 [[ $# -ge 1 ]] || usage
 mode="$1"
-if [[ "$mode" == integrate-product ]]; then
+if [[ "$mode" == integrate-product || "$mode" == physical-product ]]; then
   [[ $# -eq 4 ]] || usage
   reference_root="$2"
   product_export_dir="$3"
@@ -24,7 +25,7 @@ else
 fi
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 gate="$repo_dir/tools/fpga/nexys_video_reference_gate.py"
-case "$mode" in preflight|import-ddr|integrate-product) ;; *) usage ;; esac
+case "$mode" in preflight|import-ddr|integrate-product|physical-product) ;; *) usage ;; esac
 
 if [[ "$mode" == preflight ]]; then
   exec python3 "$gate" --reference-root "$reference_root" --output "$output"
@@ -37,7 +38,7 @@ fi
   exit 2
 }
 reference_report="$(python3 "$gate" --reference-root "$reference_root")"
-if [[ "$mode" == integrate-product ]]; then
+if [[ "$mode" == integrate-product || "$mode" == physical-product ]]; then
   if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all -- \
     src/main build.mill mill tools/ci tools/fpga)" ]]; then
     echo "PRODUCT_NEXYS_BD_FAILED: Product/board build sources are dirty; commit before exact-SHA verification" >&2
@@ -81,4 +82,15 @@ else
   printf '%s\n' "$reference_report" > "$output/reference-source.json"
   printf '%s\n' "$port_report" > "$output/product-axi-ports.json"
   echo "PRODUCT_NEXYS_LOGICAL_BD_ONLY: $output (no P&R, DDR calibration or Debian login)"
+  if [[ "$mode" == physical-product ]]; then
+    # A separate Vivado session opens the exact project created above. The
+    # logical-only script and its established contract remain unchanged.
+    vivado -mode batch -nojournal -nolog \
+      -source "$repo_dir/tools/fpga/nexys_video_product_physical.tcl" \
+      2>&1 | tee "$output/physical-vivado.log"
+    python3 "$repo_dir/tools/fpga/nexys_video_physical_report_gate.py" \
+      --output-dir "$output" --repository "$repo_dir" \
+      --product-export-dir "$product_export_dir"
+    echo "NEXYS_ROUTED_TIMING_ONLY: $output (no bitstream, actual DDR calibration or FPGA Linux boot)"
+  fi
 fi
