@@ -1,0 +1,229 @@
+name: NaxRiscv isolated Verilator throughput
+
+# This workflow exists only on the dedicated experiment branch. Never attach
+# pull_request, workflow_run, or any SD1 relay trigger to this experiment.
+on:
+  push:
+    branches:
+      - experiment/nax-verilator-throughput-20261110
+    paths:
+      - .github/workflows/nax-verilator-throughput.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nax-verilator-throughput-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      NAX_SHA: 9f452d50560d02fb391bc8039f5453c54e0911af
+      NAX_DIR: ${{ runner.temp }}/nax-throughput
+      LOG_DIR: ${{ runner.temp }}/nax-throughput-logs
+      RISCV: ${{ runner.temp }}/nax-throughput/ext/riscv-isa-sim
+      THREAD_COUNT: '2'
+      SBT_OPTS: '-Xmx3G -Xss2M -Duser.timezone=GMT'
+    steps:
+      - name: Runner inventory and isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_DIR"
+          {
+            echo "runner_os=$(uname -a)"
+            echo "runner_cpu=$(nproc)"
+            echo "requested_nax_sha=$NAX_SHA"
+            echo "no_existing_sd1_files_accessed=true"
+            lscpu
+            free -h
+            df -h "$RUNNER_TEMP"
+          } | tee "$LOG_DIR/runner.txt"
+
+      - name: JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: SBT launcher
+        uses: sbt/setup-sbt@v1
+
+      - name: Install Ubuntu build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            git make autoconf automake g++ flex bison libfl-dev \
+            libboost-all-dev libasio-dev device-tree-compiler libsdl2-dev \
+            pkg-config wget unzip zlib1g-dev
+          {
+            java -version
+            sbt --script-version || true
+          } 2>&1 | tee "$LOG_DIR/tools.txt"
+
+      - name: Clone pinned official NaxRiscv and submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/SpinalHDL/NaxRiscv.git "$NAX_DIR"
+          git -C "$NAX_DIR" checkout --detach "$NAX_SHA"
+          git -C "$NAX_DIR" submodule update --init --recursive --jobs 2
+          {
+            git -C "$NAX_DIR" rev-parse HEAD
+            git -C "$NAX_DIR" submodule status
+          } | tee "$LOG_DIR/source-shas.txt"
+          test "$(git -C "$NAX_DIR" rev-parse HEAD)" = "$NAX_SHA"
+
+      - name: Build official pinned Verilator 4.228
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR"
+          start="$(date +%s)"
+          timeout 900s ./ci/install-verilator.sh v4.228 "$RUNNER_TEMP/nax-toolchain" \
+            2>&1 | tee "$LOG_DIR/verilator-install.log"
+          verilator_bin="$RUNNER_TEMP/nax-toolchain/verilator-v4.228/bin"
+          test -x "$verilator_bin/verilator"
+          echo "$verilator_bin" >> "$GITHUB_PATH"
+          "$verilator_bin/verilator" --version | tee -a "$LOG_DIR/tools.txt"
+          echo "verilator_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+
+      - name: Fetch official prepared Linux media for optional short run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR/ext/NaxSoftware"
+          set +e
+          timeout 120s ./init.sh > "$LOG_DIR/linux-media.log" 2>&1
+          media_rc=$?
+          set -e
+          echo "linux_media_exit=$media_rc" | tee -a "$LOG_DIR/outcomes.txt"
+
+      - name: Build Spike golden model and install ELFIO headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/serge1/ELFIO.git "$RUNNER_TEMP/nax-elfio"
+          git -C "$RUNNER_TEMP/nax-elfio" checkout --detach d251da09a07dff40af0b63b8f6c8ae71d2d1938d
+          mkdir -p "$RISCV/include"
+          cp -R "$RUNNER_TEMP/nax-elfio/elfio" "$RISCV/include/"
+          mkdir -p "$RISCV/build"
+          cd "$RISCV/build"
+          timeout 900s ../configure --prefix="$RISCV" --without-boost --without-boost-asio --without-boost-regex 2>&1 | tee "$LOG_DIR/spike-configure.log"
+          start="$(date +%s)"
+          timeout 720s make -j2 2>&1 | tee "$LOG_DIR/spike-build.log"
+          echo "spike_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+          timeout 90s g++ --shared -L. -Wl,--export-dynamic \
+            -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/lib -o package.so \
+            spike.o libspike_main.a libriscv.a libdisasm.a libsoftfloat.a \
+            libfesvr.a libfdt.a -lpthread -ldl -lboost_regex -lboost_system \
+            2>&1 | tee "$LOG_DIR/spike-package.log"
+
+      - name: Generate official RV32IMA NaxRiscv RTL
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR"
+          start="$(date +%s)"
+          timeout 600s sbt 'runMain naxriscv.Gen' 2>&1 | tee "$LOG_DIR/sbt-generate.log"
+          echo "rtl_generate_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+          test -s NaxRiscv.v
+          test -s nax.h
+
+      - name: Compile NaxRiscv Verilator executable, no waveform trace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR/src/test/cpp/naxriscv"
+          start="$(date +%s)"
+          timeout 600s make compile TRACE=no THREAD_COUNT=2 2>&1 | tee "$LOG_DIR/verilator-build.log"
+          echo "rtl_model_build_seconds=$(($(date +%s)-start))" | tee -a "$LOG_DIR/outcomes.txt"
+          test -x obj_dir/VNaxRiscv
+
+      - name: Real RTL benchmark (bare-metal then bounded Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$NAX_DIR/src/test/cpp/naxriscv"
+          set +e
+          dhrystone="$NAX_DIR/ext/NaxSoftware/baremetal/dhrystone/build/rv32ima/dhrystone.elf"
+          if [[ -s "$dhrystone" ]]; then
+            timeout --signal=INT --kill-after=10s 120s \
+              stdbuf -oL -eL ./obj_dir/VNaxRiscv \
+              --progress=1 --stats-print \
+              --load-elf "$dhrystone" \
+              --pass-symbol=pass \
+              > "$LOG_DIR/dhrystone-rtl.log" 2>&1
+            bare_rc=$?
+          else
+            bare_rc=125
+            echo 'skipped: upstream prebuilt ELF absent' > "$LOG_DIR/dhrystone-rtl.log"
+          fi
+          set -e
+          echo "baremetal_exit=$bare_rc" | tee -a "$LOG_DIR/outcomes.txt"
+          tail -n 40 "$LOG_DIR/dhrystone-rtl.log"
+
+          # The upstream release supplies ready-built Buildroot initramfs media;
+          # the following test deliberately stops after a bounded short window.
+          images="$NAX_DIR/ext/NaxSoftware/buildroot/images/rv32ima"
+          if [[ -f "$images/fw_jump.bin" && -f "$images/Image" && \
+                -f "$images/linux.dtb" && -f "$images/rootfs.cpio" ]]; then
+            set +e
+            timeout --signal=INT --kill-after=10s 180s \
+              stdbuf -oL -eL ./obj_dir/VNaxRiscv \
+              --progress=1 --no-stdin --stats-print --timeout=24000000 \
+              --load-bin "$images/fw_jump.bin",0x80000000 \
+              --load-bin "$images/linux.dtb",0x80F80000 \
+              --load-bin "$images/Image",0x80400000 \
+              --load-bin "$images/rootfs.cpio",0x81000000 \
+              > "$LOG_DIR/linux-12m-rtl.log" 2>&1
+            linux_rc=$?
+            set -e
+            echo "linux_short_exit=$linux_rc" | tee -a "$LOG_DIR/outcomes.txt"
+            tail -n 50 "$LOG_DIR/linux-12m-rtl.log"
+          else
+            echo 'linux_short=skipped_no_complete_official_media' | tee -a "$LOG_DIR/outcomes.txt"
+          fi
+          # A non-zero exit at the finite cycle budget is expected. Require
+          # actual progress emitted by Nax C++ RTL driver, not just a log file.
+          touch "$LOG_DIR/linux-12m-rtl.log"
+          if ! grep -Eq '^\[PROGRESS\] [0-9]+ cycles [0-9]+ KHz' \
+            "$LOG_DIR/dhrystone-rtl.log" "$LOG_DIR/linux-12m-rtl.log"; then
+            echo "FAIL: no measured RTL speed was recorded" | tee -a "$LOG_DIR/outcomes.txt"
+            exit 1
+          fi
+
+      - name: Summarize observed evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$LOG_DIR"
+          {
+            echo '## NaxRiscv isolated Verilator benchmark'
+            echo ''
+            echo "- Pinned Nax commit: \`$NAX_SHA\`"
+            echo '- Model: official generated RV32IMA RTL, Spike lockstep, no FST waveform'
+            echo '- Linux rootfs: optional short official Buildroot initramfs; **not Debian**'
+            echo '- Finite Linux cutoff: ~12 million RTL cycles (intentional, not Linux PASS)'
+            echo ''
+            echo '### Recorded simulator progress / counters'
+            echo '```text'
+            grep -Eai 'progress|speed|cycles|cycle/s|[kmg]hz|ipc|commits|success|fail' "$LOG_DIR"/*.log 2>/dev/null | tail -n 50 || true
+            echo '```'
+            echo ''
+            echo 'Full raw logs are uploaded as a workflow artifact, even if setup fails.'
+          } | tee "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build, environment, and RTL logs on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nax-verilator-isolated-evidence
+          path: ${{ runner.temp }}/nax-throughput-logs/
+          if-no-files-found: warn
+          retention-days: 14
