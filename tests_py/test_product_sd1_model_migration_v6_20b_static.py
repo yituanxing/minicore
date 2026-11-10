@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import unittest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CPP = ROOT / 'sim/product_rv64_checkpoint_sd1_main.cpp'
@@ -17,6 +18,7 @@ POST = ROOT / 'tools/ci/product_sd1_v6_postcross_20m.sh'
 PREP = ROOT / 'tools/ci/product_sd1_v6_chain_prepare.sh'
 GUARD = ROOT / 'tools/ci/product_sd1_v6_release_guard.sh'
 FORMAL = ROOT / '.github/workflows/product-sd1-v6-20b-needs-14992-to-19992-INERT-DRAFT.yml'
+BRIDGE = ROOT / '.github/workflows/product-sd1-v6-20m-qualification-PR379-CACHE-BRIDGE-INERT-DRAFT.yml'
 V5 = '4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be'
 
 
@@ -94,6 +96,51 @@ class HostV6MigrationStatic(unittest.TestCase):
         self.assertIn('sim/product_rv64_checkpoint_sd1_main.cpp', guard)
         self.assertIn('model digest not independently approved', guard)
         self.assertIn('V6_TECH_QUAL_REPORT_VERIFIED=1', guard)
+
+    def test_new_pr379_cache_bridge_is_inert_and_qualifies_model_first(self):
+        bridge = yaml.safe_load(BRIDGE.read_text())
+        self.assertEqual(bridge['on']['pull_request']['types'], ['labeled'])
+        self.assertEqual(bridge['permissions'], {'contents': 'read', 'actions': 'read'})
+        env = bridge['env']
+        self.assertEqual(env['V6_EVENT_REVIEWED_PARENT_HEAD'],
+                         '367ce462c9fcc1a7da80db9ae8f67b642893717c')
+        self.assertEqual(env['V6_SIGNED_ORIGIN_HEAD'],
+                         '8a40835c470d059448a4871bafead04cc555bee5')
+        self.assertEqual(env['V6_REVIEWED_HEAD'],
+                         '40d7be6302f767c52ef33d093f2300ca5ee934bf')
+        self.assertTrue(env['V6_MODEL_SHA'].startswith('PENDING_'))
+        self.assertEqual(env['AETHERCORE_SD1_V6_20B_APPROVED'],
+                         'PENDING_FORMAL_5B_AFTER_TECH_REPORT_REVIEW')
+        job = bridge['jobs']['v6_billion_1']
+        self.assertTrue(job['if'].strip().startswith('false &&'))
+        steps = job['steps']
+        names = [step.get('name', '') for step in steps]
+        qualifier = next(i for i, name in enumerate(names)
+                         if 'Qualify independently rebuilt V6 Host model' in name)
+        uploader = next(i for i, name in enumerate(names)
+                        if 'Retain newly qualified V6 20B model' in name)
+        model_auth = next(i for i, name in enumerate(names)
+                          if 'Authenticate uploaded V6 Host qualification' in name)
+        advance = next(i for i, name in enumerate(names)
+                       if 'Qualify genuine RTL 14992M to 15012M' in name)
+        self.assertLess(qualifier, uploader)
+        self.assertLess(uploader, model_auth)
+        self.assertLess(model_auth, advance)
+        text = BRIDGE.read_text()
+        for marker in ('V6_14952_ID: \'13739286257\'',
+                       'V6_14972_ID: \'13739321621\'',
+                       'V6_14992_ID: \'13738787578\'',
+                       'PRODUCT_SD1_V6_20B_MODEL_ARCHIVE_PROVENANCE_VERIFIED',
+                       'git diff --name-only -z "$V6_SIGNED_ORIGIN_HEAD" HEAD',
+                       'product_sd1_model_migration_v6_20b_qualify.sh',
+                       'sim/product_rv64_checkpoint_sd1_main.cpp',
+                       'candidate_14992_host_sha256',
+                       'host_model_diff_14952_to_14972_20m_verified=1'):
+            self.assertIn(marker, text)
+        for step in steps:
+            if 'run' in step:
+                subprocess.run(['bash', '-n'], input=step['run'], cwd=ROOT,
+                               text=True, check=True)
 
 
 if __name__ == '__main__':
