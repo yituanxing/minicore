@@ -71,6 +71,15 @@ class HostV6MigrationStatic(unittest.TestCase):
             self.assertIn(marker, script)
         self.assertIn('"$OUT"', script)
         self.assertIn('[[ ! -e "$OUT" ]]', script)
+        # The reviewed V5 qualification ZIP is intentionally a compact 6-file
+        # archive. Rebuilding from its executable-only directory is invalid:
+        # the generated Verilator C++/H/MK/O/A must come from the separately
+        # SHA-attested original savable-model cache.
+        self.assertNotIn('cp -a "$OLD_MODEL_DIR" "$candidate"', script)
+        self.assertIn('cp -a "$GENERATED_MODEL_DIR" "$candidate"', script)
+        self.assertIn('"$(sha "$generated_old")" == "$ORIGINAL_SHA"', script)
+        self.assertIn('"$old_generated" == "$(field generated_rtl_sha256 "$old_qual")"', script)
+        self.assertIn('"$old_objects" == "$(field generated_rtl_objects_sha256 "$old_qual")"', script)
         result = subprocess.run(['bash', str(QUAL), '--plan'], cwd=ROOT,
                                 text=True, capture_output=True, check=True)
         self.assertIn('no_guest_cycles=1', result.stdout)
