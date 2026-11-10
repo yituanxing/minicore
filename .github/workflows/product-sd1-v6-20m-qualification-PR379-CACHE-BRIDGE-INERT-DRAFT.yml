@@ -24,7 +24,7 @@ env:
   V6_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   V6_EVENT_REVIEWED_PARENT_HEAD: '367ce462c9fcc1a7da80db9ae8f67b642893717c'
   V6_SIGNED_ORIGIN_HEAD: '8a40835c470d059448a4871bafead04cc555bee5'
-  V6_REVIEWED_HEAD: '99dbb5a90849c54b8c61c00ac58765e5414e0f04'
+  V6_REVIEWED_HEAD: 'ffa59df56fa88611eaf727bbd96909fae748ebd2'
   # Runtime-only pins are emitted AFTER the genuine independent V6 Host-only
   # 20M differential and uploaded 90-day qualification archive are verified.
   V6_QUAL_RUN: 'PENDING_RUNTIME_V6_20B_QUAL_RUN'
@@ -184,12 +184,23 @@ jobs:
             ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
             ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
           key: aethercore-Linux-X64-verilator-product-gsim-g3-v1-0d5cab64c9f95f1a19e38d7220450b5555d6a853d6ac53283fab6b1ca779c1d8
+      - name: Restore full original signed savable Product RTL generated objects
+        id: frozen_model
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-Linux-X64-product-sd1-savable-portable-v1-x86_64-89e4c31da3dafc5a664e-b1ea68eed0a37532d6ec1feb08d5e5061e99336b8b8e17accbdbb000997895b9
       - name: Require exact cached Verilator before rebuilding any Host model
         shell: bash
         run: |
           set -euo pipefail
+          original=build/product-sd1-persistent-checkpoint/savable-model/obj/VAetherCoreProductDebianSdRV64SimTop
           [[ '${{ steps.verilator.outputs.cache-hit }}' == true &&
-             -x "$HOME/.cache/aethercore/toolchains/verilator-5.054/bin/verilator" ]] || exit 16
+             '${{ steps.frozen_model.outputs.cache-hit }}' == true &&
+             -x "$HOME/.cache/aethercore/toolchains/verilator-5.054/bin/verilator" &&
+             -f "$original" && ! -L "$original" &&
+             "$(sha256sum "$original" | cut -d' ' -f1)" == 5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc &&
+             -f build/product-sd1-persistent-checkpoint/savable-model/obj/product_rv64_checkpoint_sd1_main.o ]] || exit 16
       - uses: actions/download-artifact@v4
         with:
           run-id: 42338584047
