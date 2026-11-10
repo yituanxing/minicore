@@ -7,11 +7,11 @@ cd "$ROOT"
 reject() { echo "PRODUCT_SD1_V6_POSTCROSS_REJECTED: $*" >&2; exit 16; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 field() { sed -n "s/^$1=//p" "$2" | head -1; }
-readonly MODEL_ROOT="$ROOT/build/product-sd1-model-migration-v5-15b-qualified"
+readonly MODEL_ROOT="$ROOT/build/product-sd1-model-migration-v6-20b-qualified"
 readonly MODEL="$MODEL_ROOT/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop"
 readonly QUAL="$MODEL_ROOT/qualification-manifest.txt"
 readonly V6_MODEL="${AETHERCORE_SD1_V6_REVIEWED_MODEL_SHA:-}"
-readonly V4_MODEL=ffe4b434df00c3736e3bad6de36bae74444ea84addb8f4c2554e468fb392784a
+readonly V5_MODEL=4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be
 readonly ORIGINAL_MODEL=5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc
 readonly FW_SHA=4c9b6ed61950094e2551bda780fbea9c79ded65fab433f13b06e2eb64817e5be
 readonly DTB_SHA=72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1c
@@ -32,7 +32,7 @@ if [[ "${1:---plan}" == --plan && $# -le 1 ]]; then
 fi
 [[ $# == 3 && "$1" == --execute-reviewed-postcross-20m ]] ||
   reject 'usage: --plan | --execute-reviewed-postcross-20m ABS_STAGE_DIR TARGET_M'
-[[ "$V6_MODEL" =~ ^[a-f0-9]{64}$ && "$V6_MODEL" != "$V4_MODEL" &&
+[[ "$V6_MODEL" =~ ^[a-f0-9]{64}$ && "$V6_MODEL" != "$V5_MODEL" &&
    "${AETHERCORE_VERILATOR_VERSION:-}" == 5.054 &&
    "${SIM_SETTLE_MODE:-}" == reference &&
    "${VERILATOR_THREADS:-}" == 1 &&
@@ -84,23 +84,26 @@ readonly OUT="${AETHERCORE_SD1_V6_OUT:-}"
 [[ -x "$MODEL" && ! -L "$MODEL" && -s "$QUAL" && ! -L "$QUAL" &&
    "$(sha "$MODEL")" == "$V6_MODEL" &&
    "$(field candidate_model_sha256 "$QUAL")" == "$V6_MODEL" &&
-   "$(field previous_model_sha256 "$QUAL")" == "$V4_MODEL" &&
+    "$(field previous_model_sha256 "$QUAL")" == "$V5_MODEL" &&
    "$(field replay_cycles "$QUAL")" == 20000000 &&
    "$(field full_rtl_identical "$QUAL")" == 1 &&
    "$(field full_host_except_model_sha_identical "$QUAL")" == 1 &&
-   "$(field two_path_9992_host_rtl_identical "$QUAL")" == 1 &&
-   "$(field two_path_9992_sd_cow_body_identical "$QUAL")" == 1 &&
-   "$(field differential_card_progress_official_bytes_identical "$QUAL")" == 1 &&
+    "$(field two_path_14972_host_rtl_identical "$QUAL")" == 1 &&
+    "$(field two_path_14972_sd_cow_body_identical "$QUAL")" == 1 &&
    "$(field terminal_migration_guest_cycles "$QUAL")" == 0 &&
-   "$(field cross_10b_executed "$QUAL")" == 0 &&
+    "$(field cross_15b_executed "$QUAL")" == 0 &&
    "$(field debian_login_claim "$QUAL")" == 0 ]] ||
-  reject 'V6 exact model and zero-step/differential qualification absent'
+  reject 'V6 20B exact model and 14952-14972 zero-step/differential qualification absent'
+[[ "$(field candidate_14992_host_sha256 "$QUAL")" == "$(sha "$SOURCE/persistent.pre.host")" &&
+   "$(field candidate_14992_rtl_sha256 "$QUAL")" == "$(sha "$SOURCE/persistent.pre.rtl")" &&
+   "$(field candidate_14992_card_sha256 "$QUAL")" == "$(sha "$SOURCE/card-progress.json")" ]] ||
+  reject 'migrated 14992M source differs from independently reviewed V6 qualification'
 ready="$SOURCE/.migration-ready"
 [[ -s "$ready" && ! -L "$ready" &&
    "$(field schema "$ready")" == AETSDCP1 &&
    "$(field boot_cycles "$ready")" == "$START" &&
    "$(field model_sha256 "$ready")" == "$V6_MODEL" &&
-   "$(field previous_model_sha256 "$ready")" == "$V4_MODEL" &&
+    "$(field previous_model_sha256 "$ready")" == "$V5_MODEL" &&
    "$(field original_model_sha256 "$ready")" == "$ORIGINAL_MODEL" &&
    "$(field firmware_sha256 "$ready")" == "$FW_SHA" &&
    "$(field dtb_sha256 "$ready")" == "$DTB_SHA" &&
@@ -136,10 +139,15 @@ mkdir -p "$OUT/logs"
 stage="$(mktemp -d "$OUT/.stage-${TARGET_M}m.XXXXXXXX")"
 log="$OUT/logs/advance-${TARGET_M}m.log"
 started="$(date -u +%s)"
-timeout --signal=TERM --kill-after=12s 20m \
+if ! timeout --signal=TERM --kill-after=12s 20m \
   "$MODEL" advance "$fw" "$dtb" "$sd" "$SOURCE/persistent" \
   "$V6_MODEL" "$FW_SHA" "$DTB_SHA" "$SD_SHA" "$LINUX_SHA" "$ROOTFS_SHA" \
-  "$START" 20000000 "$stage/persistent" > "$log" 2>&1 || reject 'true V6 RTL advance failed'
+  "$START" 20000000 "$stage/persistent" > "$log" 2>&1; then
+  # Diagnostic is an allowlisted host rejection line only. Never print guest
+  # UART, SD-sector contents or any potentially sensitive full replay log.
+  grep -E '^PRODUCT_SD1_PERSISTENT_CHECKPOINT_REJECTED:' "$log" | tail -1 >&2 || true
+  reject 'true V6 RTL advance failed (see authenticated host error above)'
+fi
 grep -Fq "PRODUCT_SD1_PERSISTENT_STAGE_ADVANCED old_cycles=$START new_cycles=$TARGET delta=20000000 " "$log" ||
   reject 'true RTL 20M completion absent'
 [[ -s "$stage/persistent.pre.host" && -s "$stage/persistent.pre.rtl" ]] || reject 'savable state missing'
@@ -183,7 +191,7 @@ PY
   echo "boot_cycles=$TARGET"
   echo "source_cycles=$START"
   echo "model_sha256=$V6_MODEL"
-  echo "previous_model_sha256=$V4_MODEL"
+  echo "previous_model_sha256=$V5_MODEL"
   echo "original_model_sha256=$ORIGINAL_MODEL"
   echo "firmware_sha256=$FW_SHA"
   echo "dtb_sha256=$DTB_SHA"
