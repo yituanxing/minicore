@@ -7,16 +7,22 @@ FOUNDATION = ROOT / "src/main/scala/aethercore/core/v2/FoundationTypes.scala"
 ROB = ROOT / "src/main/scala/aethercore/core/v2/TinyRobCommit.scala"
 DEPENDENCY = ROOT / "src/main/scala/aethercore/core/v2/TinyDependency.scala"
 PRIVILEGED = ROOT / "src/main/scala/aethercore/core/v2/TinyPrivileged.scala"
+SYSTEM_SEMANTICS = ROOT / "src/main/scala/aethercore/core/semantic/SystemSemanticEvaluator.scala"
 
 
 class V2F5PrivilegedContractTest(unittest.TestCase):
     def test_pending_effect_is_not_architectural_state(self):
-        text = FOUNDATION.read_text()
-        self.assertIn("class PendingPrivilegedEffect", text)
-        self.assertIn("val privileged = new PendingPrivilegedEffect", text)
-        self.assertIn("pending", text.lower())
-        self.assertNotIn("new MachineCsrFile", text)
-        self.assertNotIn("csrFile.io.", text)
+        transport = FOUNDATION.read_text()
+        semantics = SYSTEM_SEMANTICS.read_text()
+        # The pending-effect record is shared by Tiny and Product. Moving its
+        # definition out of the Tiny backend must not make it CSR state.
+        self.assertIn("class PendingPrivilegedEffect", semantics)
+        self.assertIn("val privileged = new PendingPrivilegedEffect", transport)
+        self.assertIn("val privileged = new PendingPrivilegedEffect", semantics)
+        self.assertIn("pending", semantics.lower())
+        for text in (transport, semantics):
+            self.assertNotIn("new MachineCsrFile", text)
+            self.assertNotIn("csrFile.io.", text)
 
     def test_rob_remains_full_identity_and_recovery_authority(self):
         text = ROB.read_text()
@@ -59,13 +65,20 @@ class V2F5PrivilegedContractTest(unittest.TestCase):
 
     def test_system_completion_is_side_effect_free(self):
         text = PRIVILEGED.read_text()
+        semantics = SYSTEM_SEMANTICS.read_text()
         system_body = text.split("class TinySystemCompletion", 1)[1].split("class TinyPrivilegedBackend", 1)[0]
         self.assertNotIn("new MachineCsrFile", system_body)
         self.assertNotIn("csrFile.io.", system_body)
         self.assertNotIn("writeEnable :=", system_body)
         self.assertIn("val completion = Decoupled(new ExecutionResponse", system_body)
-        self.assertIn("freshCompletion.bits.privileged.csrWriteValid", system_body)
-        self.assertIn("freshCompletion.bits.privileged.trapReturn", system_body)
+        self.assertIn("new SystemSemanticEvaluator", system_body)
+        self.assertIn("freshCompletion.bits.privileged := evaluator.io.result.privileged", system_body)
+        # Exact CSR/xRET effects belong to the shared combinational evaluator;
+        # Tiny merely transports the pending effects until retirement.
+        self.assertIn("io.result.privileged.csrWriteValid := csrWriteIntent", semantics)
+        self.assertIn("io.result.privileged.trapReturn := true.B", semantics)
+        self.assertNotIn("new MachineCsrFile", semantics)
+        self.assertNotIn("csrFile.io.", semantics)
         self.assertIn("when(io.completion.fire)", system_body)
         self.assertIn("heldValid", system_body)
 

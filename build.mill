@@ -6,7 +6,9 @@ import mill.scalalib._
 
 object aethercore extends SbtModule {
   def scalaVersion = "2.13.18"
-  def chiselVersion = "7.7.0"
+  // HardFloat 0.1.1 is published against Chisel 7.8.0; keep the runtime
+  // and compiler plugin on the same version to avoid binary incompatibility.
+  def chiselVersion = "7.8.0"
   def moduleDir = super.moduleDir / os.up
 
   override def scalacOptions = Seq(
@@ -19,7 +21,8 @@ object aethercore extends SbtModule {
   )
 
   override def mvnDeps = Seq(
-    mvn"org.chipsalliance::chisel:$chiselVersion"
+    mvn"org.chipsalliance::chisel:$chiselVersion",
+    mvn"io.github.ucb-substrate::hardfloat:0.1.1"
   )
 
   override def scalacPluginMvnDeps = Seq(

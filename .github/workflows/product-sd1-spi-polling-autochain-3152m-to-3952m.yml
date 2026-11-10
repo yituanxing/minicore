@@ -1,0 +1,204 @@
+name: Product SD1 polling 3152M-to-3952M authenticated four-job relay
+
+# Reuse the ten completed RTL intervals from source run #42372517109.
+# That caller failed on its NEXT workflow_call input type, after stage_01
+# completed SUCCESS and saved the 3152M full Host/RTL/DDR/SD checkpoint.
+# This new caller validates the exact source, then executes only new cycles.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-spi-polling-autochain-3152m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  gate_3152_source:
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-advance-3952m-from-3152m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Authenticate exact 3152M source run and all ten real RTL intervals
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          source_sha=aa24c907695b248f42818a33dbe352ba552c7c23
+          source_run=42372517109
+          source_workflow=410314878
+          run_json="$RUNNER_TEMP/sd1-3152-run.json"
+          jobs_json="$RUNNER_TEMP/sd1-3152-jobs.json"
+          artifacts_json="$RUNNER_TEMP/sd1-3152-artifacts.json"
+          gh api "repos/$repo/actions/runs/$source_run" > "$run_json"
+          jq -e --arg repo "$repo" --arg sha "$source_sha" \
+            --arg branch 'design/rv64gc-product-architecture-20261103' \
+            --argjson run "$source_run" --argjson workflow "$source_workflow" '
+              .id == $run and .workflow_id == $workflow and .run_attempt == 1 and
+              .event == "pull_request" and .repository.full_name == $repo and
+              .head_repository.full_name == $repo and .head_branch == $branch and
+              .head_sha == $sha and .status == "completed" and .conclusion == "failure"
+            ' "$run_json" >/dev/null || {
+              echo 'SD1_3152_SOURCE_REJECTED: run identity or expected terminal status mismatch' >&2
+              exit 16
+            }
+          gh api "repos/$repo/actions/runs/$source_run/jobs?per_page=100" > "$jobs_json"
+          jq -e '
+            [.jobs[] | select(.name == "stage_01 / polling-segment" and
+              .status == "completed" and .conclusion == "success")] | length == 1
+          ' "$jobs_json" >/dev/null || {
+            echo 'SD1_3152_SOURCE_REJECTED: source stage_01 not a unique full success' >&2
+            exit 16
+          }
+          for n in $(seq 1 10); do
+            source_m="$((2952 + (n-1)*20))"
+            target_m="$((source_m+20))"
+            execute="Execute authentic polling Product RTL stage $n of 10"
+            upload="Upload authenticated stage $n full RTL-DDR-SD checkpoint BEFORE next interval"
+            for step_name in "$execute" "$upload"; do
+              jq -e --arg name "$step_name" '
+                [.jobs[] | select(.name == "stage_01 / polling-segment") |
+                  .steps[] | select(.name == $name and
+                    .status == "completed" and .conclusion == "success")] | length == 1
+              ' "$jobs_json" >/dev/null || {
+                echo "SD1_3152_SOURCE_REJECTED: missing authentic success step $step_name" >&2
+                exit 16
+              }
+            done
+          done
+          gh api "repos/$repo/actions/runs/$source_run/artifacts?per_page=100" > "$artifacts_json"
+          for n in $(seq 1 10); do
+            target_m="$((2952 + n*20))"
+            artifact="product-sd1-spi-polling-${target_m}m-${source_run}"
+            jq -e --arg name "$artifact" --arg sha "$source_sha" --argjson run "$source_run" '
+              [.artifacts[] | select(
+                .name == $name and .expired == false and
+                .size_in_bytes > 1000000 and
+                ((.digest // "") | test("^sha256:[0-9a-f]{64}$")) and
+                .workflow_run.id == $run and .workflow_run.head_sha == $sha
+              )] | length == 1
+            ' "$artifacts_json" >/dev/null || {
+              echo "SD1_3152_SOURCE_REJECTED: absent unique full checkpoint artifact $artifact" >&2
+              exit 16
+            }
+          done
+          jq -e '
+            [.artifacts[] | select(
+              .name == "product-sd1-spi-polling-3152m-42372517109" and
+              .digest == "sha256:6c40b2c6dba373ceb02b264c1bf1c46bea55d76657736cecd43d3db898e567bf"
+            )] | length == 1
+          ' "$artifacts_json" >/dev/null || {
+            echo 'SD1_3152_SOURCE_REJECTED: exact terminal ZIP digest changed' >&2
+            exit 16
+          }
+          echo 'SD1_3152_SOURCE: stage_01 10/10 RTL successes and 10/10 immutable ZIP metadata verified'
+      - name: Download independent 3132M source for host-continuity audit
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42372517109
+          name: product-sd1-spi-polling-3132m-42372517109
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/sd1-3152-gate/3132
+      - name: Download exact 3152M full Host-RTL-DDR-SD state
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42372517109
+          name: product-sd1-spi-polling-3152m-42372517109
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/sd1-3152-gate/3152
+      - name: Validate terminal full state and immutable media identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/sd1-3152-gate"
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          field() { sed -n "s/^$1=//p" "$2" | head -1; }
+          require() { "$@" || { echo "SD1_3152_SOURCE_REJECTED: $*" >&2; exit 16; }; }
+          for m in 3132 3152; do
+            dir="$root/$m"
+            ready="$dir/.polling-ready"
+            [[ -s "$ready" && ! -L "$ready" ]] || { echo "missing $ready" >&2; exit 16; }
+            require grep -Fxq 'schema=AETSDCP1' "$ready"
+            require grep -Fxq 'qualification=PRODUCT_SD1_SPI_POLLING_WARM_NOT_DEBIAN_PASS' "$ready"
+            require grep -Fxq "boot_cycles=$((m*1000000))" "$ready"
+            require grep -Fxq 'model_sha256=5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc' "$ready"
+            require grep -Fxq 'firmware_sha256=4c9b6ed61950094e2551bda780fbea9c79ded65fab433f13b06e2eb64817e5be' "$ready"
+            require grep -Fxq 'dtb_sha256=72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1c' "$ready"
+            require grep -Fxq 'sd_image_sha256=6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7' "$ready"
+            require grep -Fxq 'linux_image_sha256=522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393' "$ready"
+            for kind in host rtl; do
+              blob="$dir/persistent.pre.$kind"
+              [[ -s "$blob" && ! -L "$blob" ]] || { echo "missing $blob" >&2; exit 16; }
+              [[ "$(field "snapshot_${kind}_sha256" "$ready")" == "$(sha "$blob")" ]] || {
+                echo "SD1_3152_SOURCE_REJECTED: $m $kind SHA mismatch" >&2; exit 16;
+              }
+            done
+            progress="$dir/card-progress.json"
+            [[ -s "$progress" && ! -L "$progress" ]] || { echo "missing $progress" >&2; exit 16; }
+            [[ "$(field card_progress_sha256 "$ready")" == "$(sha "$progress")" ]] || {
+              echo "SD1_3152_SOURCE_REJECTED: $m progress SHA mismatch" >&2; exit 16;
+            }
+            jq -e --argjson to "$((m*1000000))" '
+              .qualification == "POLLING_REAL_PRODUCT_RTL_NOT_DEBIAN_PASS" and
+              .to_cycles == $to and .from_cycles == ($to - 20000000) and
+              (.guest_failure == null or .guest_failure == false) and .retired_delta > 0
+            ' "$progress" >/dev/null || {
+              echo "SD1_3152_SOURCE_REJECTED: $m progress schema/guest activity" >&2; exit 16;
+            }
+          done
+          [[ "$(field source_host_sha256 "$root/3152/.polling-ready")" == "$(sha "$root/3132/persistent.pre.host")" ]] || {
+            echo 'SD1_3152_SOURCE_REJECTED: non-contiguous Host state' >&2; exit 16;
+          }
+          [[ "$(field rootfs_result_sha256 "$root/3152/.polling-ready")" == "$(field rootfs_result_sha256 "$root/3132/.polling-ready")" ]] || {
+            echo 'SD1_3152_SOURCE_REJECTED: inconsistent rootfs identity' >&2; exit 16;
+          }
+          [[ "$(field rootfs_result_sha256 "$root/3152/.polling-ready")" =~ ^[0-9a-f]{64}$ ]] || exit 16
+          echo 'SD1_3152_SOURCE_PASS: authenticated terminal 3152M and 3132M Host continuity'
+  stage_01:
+    needs: gate_3152_source
+    if: >-
+      github.event.label.name == 'product-sd1-spi-polling-advance-3952m-from-3152m' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: 42372517109
+      source_artifact_name: product-sd1-spi-polling-3152m-42372517109
+      source_boot_m: 3152
+      terminal_boot_m: 3352
+  stage_02:
+    needs: stage_01
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ fromJSON(github.run_id) }}
+      source_artifact_name: product-sd1-spi-polling-3352m-${{ github.run_id }}
+      source_boot_m: 3352
+      terminal_boot_m: 3552
+  stage_03:
+    needs: stage_02
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ fromJSON(github.run_id) }}
+      source_artifact_name: product-sd1-spi-polling-3552m-${{ github.run_id }}
+      source_boot_m: 3552
+      terminal_boot_m: 3752
+  stage_04:
+    needs: stage_03
+    uses: ./.github/workflows/product-sd1-spi-polling-tenstage-reusable.yml
+    with:
+      source_run_id: ${{ fromJSON(github.run_id) }}
+      source_artifact_name: product-sd1-spi-polling-3752m-${{ github.run_id }}
+      source_boot_m: 3752
+      terminal_boot_m: 3952

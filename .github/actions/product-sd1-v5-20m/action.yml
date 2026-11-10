@@ -1,0 +1,103 @@
+name: Product SD1 V5 one authentic 20M stage and artifact
+description: Fail-closed advancement, real UART proof, publish, only then local prune
+inputs:
+  ordinal:
+    description: Stage ordinal within one contiguous 1B batch (1..50)
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: advance
+      shell: bash
+      run: |
+        set -euo pipefail
+        ordinal='${{ inputs.ordinal }}'
+        [[ "$ordinal" =~ ^[0-9]+$ && "$ordinal" -ge 1 && "$ordinal" -le 50 ]] || exit 16
+        target_m=$((V5_BATCH_START_M + ordinal * 20))
+        [[ "$target_m" -le 14992 ]] || exit 16
+        if [[ "${V5_STOP:-0}" == 1 || "$V5_CURRENT_M" -ge "$target_m" ]]; then
+          echo 'should_upload=0' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        [[ "$V5_CURRENT_M" -eq $((target_m - 20)) ]] || exit 16
+        [[ -f "$V5_SOURCE_DIR/.migration-ready" &&
+           -f "$V5_SOURCE_DIR/persistent.pre.host" &&
+           -f "$V5_SOURCE_DIR/persistent.pre.rtl" ]] || exit 16
+        [[ -x tools/ci/product_sd1_migrated_v5_postcross_20m.sh ||
+           -f tools/ci/product_sd1_migrated_v5_postcross_20m.sh ]] || {
+          echo 'V5 reviewed continuation executor not installed: fail closed' >&2
+          exit 16
+        }
+        export AETHERCORE_SD1_V5_OUT="$V5_STAGE_ROOT"
+        bash tools/ci/product_sd1_migrated_v5_postcross_20m.sh \
+          --execute-reviewed-postcross-20m "$V5_SOURCE_DIR" "$target_m"
+        dir="$V5_STAGE_ROOT/${target_m}m"
+        verified_stage="$(python3 tools/ci/product_sd1_v5_chain.py verify-stage "$dir" "$((target_m * 1000000))")"
+        # The final checkpoint of each 1B job, or any authenticated real
+        # service/login early-stop checkpoint, stays available for long-term
+        # provenance. Intermediate retry checkpoints expire after one week.
+        if [[ "$ordinal" -eq 50 ]] ||
+           jq -e '.proof.ordered_service_login_verified == true' <<< "$verified_stage" >/dev/null; then
+          retention_days=90
+        else
+          retention_days=7
+        fi
+        echo "should_upload=1" >> "$GITHUB_OUTPUT"
+        echo "stage_dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "stage_m=$target_m" >> "$GITHUB_OUTPUT"
+        echo "retention_days=$retention_days" >> "$GITHUB_OUTPUT"
+    - id: upload
+      if: steps.advance.outputs.should_upload == '1'
+      uses: actions/upload-artifact@v4
+      with:
+        name: product-sd1-v5-15b-${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ github.job }}-${{ steps.advance.outputs.stage_m }}m
+        path: ${{ steps.advance.outputs.stage_dir }}
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: ${{ steps.advance.outputs.retention_days }}
+        compression-level: 1
+    - if: steps.advance.outputs.should_upload == '1'
+      shell: bash
+      env:
+        ART_ID: ${{ steps.upload.outputs.artifact-id }}
+        ART_SHA: ${{ steps.upload.outputs.artifact-digest }}
+        ART_NAME: product-sd1-v5-15b-${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ github.job }}-${{ steps.advance.outputs.stage_m }}m
+        STAGE_DIR: ${{ steps.advance.outputs.stage_dir }}
+        STAGE_M: ${{ steps.advance.outputs.stage_m }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        # Upload action versions expose either hex or sha256:hex; use one
+        # canonical 64-hex digest for both REST and next-job provenance.
+        ART_SHA="${ART_SHA#sha256:}"
+        [[ "$ART_ID" =~ ^[0-9]+$ && "$ART_SHA" =~ ^[a-f0-9]{64}$ ]] || exit 16
+        gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID" > "$RUNNER_TEMP/v5-art-$ART_ID.json"
+        python3 tools/ci/product_sd1_v5_chain.py verify-artifact \
+          "$RUNNER_TEMP/v5-art-$ART_ID.json" "$ART_ID" "$ART_NAME" "$ART_SHA" \
+          "$GITHUB_RUN_ID" "$V5_SOURCE_SHA"
+        python3 tools/ci/product_sd1_v5_chain.py verify-stage "$STAGE_DIR" "$((STAGE_M * 1000000))" > /dev/null
+        [[ "$(sed -n 's/^source_cycles=//p' "$STAGE_DIR/.migration-ready")" == "${V5_CURRENT_M}000000" ]] || exit 16
+        if [[ "${V5_CURRENT_M}" != "$V5_BATCH_START_M" ]]; then
+          [[ "$(sed -n 's/^source_host_sha256=//p' "$STAGE_DIR/.migration-ready")" == "$V5_LAST_HOST_SHA" &&
+             "$(sed -n 's/^source_rtl_sha256=//p' "$STAGE_DIR/.migration-ready")" == "$V5_LAST_RTL_SHA" ]] || exit 16
+        fi
+        host_sha="$(sha256sum "$STAGE_DIR/persistent.pre.host" | cut -d' ' -f1)"
+        rtl_sha="$(sha256sum "$STAGE_DIR/persistent.pre.rtl" | cut -d' ' -f1)"
+        card_sha="$(sha256sum "$STAGE_DIR/card-progress.json" | cut -d' ' -f1)"
+        if jq -e '.ordered_service_login_verified == true' "$STAGE_DIR/serial-proof.json" >/dev/null; then
+          echo 'V5_STOP=1' >> "$GITHUB_ENV"
+        fi
+        old="$V5_SOURCE_DIR"
+        {
+          echo "V5_SOURCE_DIR=$STAGE_DIR"
+          echo "V5_CURRENT_M=$STAGE_M"
+          echo "V5_LAST_ARTIFACT_ID=$ART_ID"
+          echo "V5_LAST_ARTIFACT_DIGEST=$ART_SHA"
+          echo "V5_LAST_ARTIFACT_NAME=$ART_NAME"
+          echo "V5_LAST_HOST_SHA=$host_sha"
+          echo "V5_LAST_RTL_SHA=$rtl_sha"
+          echo "V5_LAST_CARD_SHA=$card_sha"
+        } >> "$GITHUB_ENV"
+        if [[ "$(dirname "$old")" == "$V5_STAGE_ROOT" ]]; then
+          python3 tools/ci/product_sd1_v5_chain.py prune "$old" "$V5_STAGE_ROOT" "$STAGE_DIR"
+        fi

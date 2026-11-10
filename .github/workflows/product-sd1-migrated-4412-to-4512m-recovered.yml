@@ -1,0 +1,47 @@
+name: Product signed SD1 migrated RTL 4412M to 4512M recovered five-stage relay
+
+# The existing handoff-smoke label is safely reused after disabling the
+# prior caller on later commits, so no new repository label is required.
+# The previous run executed and uploaded all five stages through 4412M, then
+# failed solely at the terminal digest-output step. Validate that exact failed
+# step and the authenticated completed stage rather than replaying 4312M.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-migrated-4412-4512m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated_five_stages:
+    if: >-
+      github.event.label.name == 'product-sd1-migrated-4312m-to-4512m-handoff-smoke' &&
+      github.event.pull_request.head.sha == '149da8d6a8ffbc2b2309939eb802bf1771d44ea3' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '4412'
+      stage1: '4432'
+      stage2: '4452'
+      stage3: '4472'
+      stage4: '4492'
+      stage5: '4512'
+      source_mode: post_publish_failure
+      source_run: '42390234019'
+      source_head_sha: '3a0459929bbe82c9858bfafe83921a88acf1f546'
+      source_workflow_path: '.github/workflows/product-sd1-migrated-4312-to-4512m-handoff-smoke.yml'
+      source_job: 'stage_01 / relay_five'
+      source_completed_step: 'Upload complete stage five before completion'
+      source_artifact_id: '13581472527'
+      source_artifact_name: 'product-sd1-migrated-4412m-42390234019'
+      source_artifact_digest: '6fbeb0935ddbd2d005e0b2d74173d305b8b8d2d61e53874b1c6b6ce002483d4d'
+      source_host_sha: 'f415df7bb3fc3c8dafd0a1d41a59e9caa63ce451fd76eff6bde4cb53d4aa1b14'
+      source_rtl_sha: '93e08261c3c71e699d86458790ef863c43e5b6c5308c802478aeb18a58248d1e'

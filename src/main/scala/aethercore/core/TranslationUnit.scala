@@ -5,6 +5,23 @@ import aethercore.config.PageTableGeometry
 import chisel3._
 import chisel3.util._
 
+/** A read-only probe of an already-cached translation. A miss cannot allocate
+  * the walker or issue PTE traffic. The request and response are combinational
+  * and do not own an independent transaction lifetime.
+  */
+class TranslationHitProbe(val geometry: PageTableGeometry) extends Bundle {
+  val requestValid = Input(Bool())
+  val virtualAddress = Input(UInt(geometry.xlen.W))
+  val rootPpn = Input(UInt(geometry.ppnBits.W))
+  val privilege = Input(UInt(2.W))
+  val write = Input(Bool())
+  val translationEnabled = Input(Bool())
+  val sum = Input(Bool())
+  val mxr = Input(Bool())
+  val hit = Output(Bool())
+  val physicalAddress = Output(UInt(geometry.architecturalPhysicalAddressBits.W))
+}
+
 /**
   * Correctness-first translation-unit composition shared by one paged VM mode.
   *
@@ -24,7 +41,8 @@ class TranslationUnit(
     val geometry: PageTableGeometry,
     val tlbEntries: Int = 8,
     val externalWalkGate: Boolean = false,
-    val implementedPaddrBits: Int = -1
+    val implementedPaddrBits: Int = -1,
+    val withHitProbe: Boolean = false
 ) extends Module {
   private val Xlen = geometry.xlen
   private val PaddrBits = geometry.architecturalPhysicalAddressBits
@@ -46,6 +64,7 @@ class TranslationUnit(
     val sum = Input(Bool())
     val mxr = Input(Bool())
     val walkAllowed = if (externalWalkGate) Some(Input(Bool())) else None
+    val hitProbe = if (withHitProbe) Some(new TranslationHitProbe(geometry)) else None
 
     val pteValid = Output(Bool())
     val pteAddress = Output(UInt(PaddrBits.W))
@@ -87,16 +106,42 @@ class TranslationUnit(
   val translationRequired =
     io.satpTranslationEnabled && io.privilege =/= PrivilegeMode.Machine.U
   val lookupActive = state === idle && io.requestValid && translationRequired && !abort
+  // The single TLB lookup port can serve a younger hit while the sole PTW
+  // waits on PTE traffic. A walker response/refill always has priority; no
+  // speculative miss can take over the walker or its original context.
+  val probeActive = if (withHitProbe) {
+    val probe = io.hitProbe.get
+    state === walking && !walker.io.responseValid && !abort &&
+      probe.requestValid && probe.translationEnabled &&
+      probe.privilege =/= PrivilegeMode.Machine.U
+  } else false.B
 
-  tlb.io.lookupValid := lookupActive
-  tlb.io.virtualAddress := io.virtualAddress
-  tlb.io.rootPpn := io.satpRootPpn
-  tlb.io.privilege := io.privilege
-  tlb.io.write := io.write
-  tlb.io.execute := io.execute
-  tlb.io.sum := io.sum
-  tlb.io.mxr := io.mxr
+  tlb.io.lookupValid := lookupActive || probeActive
+  tlb.io.virtualAddress := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.virtualAddress, io.virtualAddress)
+  } else io.virtualAddress)
+  tlb.io.rootPpn := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.rootPpn, io.satpRootPpn)
+  } else io.satpRootPpn)
+  tlb.io.privilege := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.privilege, io.privilege)
+  } else io.privilege)
+  tlb.io.write := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.write, io.write)
+  } else io.write)
+  tlb.io.execute := Mux(probeActive, false.B, io.execute)
+  tlb.io.sum := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.sum, io.sum)
+  } else io.sum)
+  tlb.io.mxr := (if (withHitProbe) {
+    Mux(probeActive, io.hitProbe.get.mxr, io.mxr)
+  } else io.mxr)
   tlb.io.flush := io.flush
+  if (withHitProbe) {
+    io.hitProbe.get.hit := probeActive && tlb.io.hit
+    io.hitProbe.get.physicalAddress :=
+      Mux(io.hitProbe.get.hit, tlb.io.physicalAddress, 0.U)
+  }
 
   val refill = state === walking && walker.io.responseValid && io.responseReady &&
     !walker.io.pageFault && !walker.io.accessFault && !abort

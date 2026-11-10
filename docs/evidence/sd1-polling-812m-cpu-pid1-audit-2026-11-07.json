@@ -1,0 +1,77 @@
+{
+  "qualification": "VALIDATED_REAL_RTL_HOST_CPU_OBSERVER_NOT_PID1_OR_SYSTEMD_LOGIN_PASS",
+  "repo": "yituanxing/minicore",
+  "pr": 379,
+  "source_run_id": 42344795877,
+  "audit_run_id": 42345677464,
+  "audit_artifact_id": 13563960274,
+  "sources": [
+    {
+      "cycle": 772000000,
+      "artifact_id": 13563725446,
+      "artifact_name": "product-sd1-spi-polling-772m-42344795877",
+      "host_sha256": "02262ad818bc7807c653e1ce2a731d81d51234f64b88cfc91a4a2f5f46c99a1e",
+      "rtl_sha256": "c6a1f263252883c4815e30e5c0881c4d5e0b9358553aea3e66549cea8d53bd5a",
+      "exceptions": 7841,
+      "retired": 187582643,
+      "timer_interrupts": 3517,
+      "last_exception_cause": 8,
+      "last_exception_pc": "0x3f88c9b9de"
+    },
+    {
+      "cycle": 792000000,
+      "artifact_id": 13562804743,
+      "artifact_name": "product-sd1-spi-polling-792m-42344795877",
+      "host_sha256": "b32dd8a906917fe5ff0bec21a98d2cb36c1ca045633c2eb82955a010aaf279f9",
+      "rtl_sha256": "00cb394256677756f1bd1a34f1bd1672abcf813b649b1f9c97a041708c257ed8",
+      "exceptions": 7949,
+      "retired": 192279806,
+      "timer_interrupts": 3617,
+      "last_exception_cause": 9,
+      "last_exception_pc": "0xffffffff80006d9c"
+    },
+    {
+      "cycle": 812000000,
+      "artifact_id": 13563326885,
+      "artifact_name": "product-sd1-spi-polling-812m-42344795877",
+      "host_sha256": "bc6b4ea790a57907f197ea89d93c0ab59cdb052efd265bf5264141ee7eaf34e8",
+      "rtl_sha256": "d13c7d332e8fe5a0350122041561f59629db23ab683f5da79c07d7fc370e0f3c",
+      "exceptions": 8070,
+      "retired": 196978686,
+      "timer_interrupts": 3717,
+      "last_exception_cause": 9,
+      "last_exception_pc": "0xffffffff80006d9c"
+    }
+  ],
+  "cpu_delta_772m_to_812m": {
+    "retired": 9396043,
+    "exceptions": 229,
+    "interrupts": 400,
+    "timer_interrupts": 200,
+    "external_interrupts": 0,
+    "uart_bytes": 0
+  },
+  "uart": {
+    "bytes": 12830,
+    "fnv64": "06c59a5d2f742345",
+    "last_cycle": 457740975,
+    "at_812m_age_cycles": 354259025
+  },
+  "verified": {
+    "sha256_host": true,
+    "sha256_rtl": true,
+    "sha256_card_progress": true,
+    "model_media_firmware_identity": true,
+    "authentic_versioned_host_observer": true,
+    "unit_tests_passed": 4
+  },
+  "guest_status": {
+    "root_ext4_mounted": true,
+    "kernel_exec_init_marker": true,
+    "login_observed": false,
+    "systemd_banner_observed": false
+  },
+  "interpretation": "772M latest exception was RISC-V U-mode ecall cause 8, proving a userspace environment call was observed at or before that checkpoint. It does not identify PID1 or certify systemd. CPU retirement/interrupts advanced as UART remained silent from 772M to 812M. Do not claim deadlock, login, or QEMU equivalence.",
+  "new_readonly_tool": "tools/ci/product_sd1_cpu_observer_audit.py",
+  "source_commit": "027620830e621d33e199e8f8de2aba639c50934e"
+}

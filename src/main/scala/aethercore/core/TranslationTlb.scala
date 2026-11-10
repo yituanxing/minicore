@@ -91,6 +91,16 @@ class TranslationTlb(
   val replacement = RegInit(0.U(IndexBits.W))
 
   val lookupVpn = io.virtualAddress(geometry.vaBits - 1, geometry.pageOffsetBits)
+  // Matching only the low VPN would alias an invalid Sv39/Sv48 address to a
+  // cached canonical translation.  A page walk already validates sign
+  // extension; the hit path must enforce the same architectural constraint.
+  val canonicalLookup = if (geometry.vaBits == Xlen) {
+    true.B
+  } else {
+    val sign = io.virtualAddress(geometry.vaBits - 1)
+    val upper = io.virtualAddress(Xlen - 1, geometry.vaBits)
+    Mux(sign, upper.andR, !upper.orR)
+  }
   val matches = Wire(Vec(entries, Bool()))
 
   for (i <- 0 until entries) {
@@ -108,7 +118,7 @@ class TranslationTlb(
       }
     }
 
-    matches(i) := io.lookupValid && entry.valid &&
+    matches(i) := io.lookupValid && canonicalLookup && entry.valid &&
       entry.rootPpn === io.rootPpn && vpnMatch &&
       entry.privilege === io.privilege &&
       entry.write === io.write && entry.execute === io.execute &&

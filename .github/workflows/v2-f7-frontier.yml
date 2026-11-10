@@ -4,6 +4,32 @@ on:
   pull_request:
     paths:
       - 'src/main/scala/aethercore/core/v2/**'
+      - 'src/main/scala/aethercore/core/semantic/**'
+      - 'src/main/scala/aethercore/core/isa/FpExtensionDecode.scala'
+      - 'src/main/scala/aethercore/core/Rv32CDecompressor.scala'
+      - 'src/main/scala/aethercore/core/Rv32CParcelController.scala'
+      - 'src/main/scala/aethercore/core/product/**'
+      - 'src/main/scala/aethercore/core/arith/**'
+      - 'src/test/scala/aethercore/ProductMUnitSpec.scala'
+      - 'src/test/scala/aethercore/ProductPhysicalLsqSpec.scala'
+      - 'src/test/scala/aethercore/ProductSmallMemoryCoreSpec.scala'
+      - 'src/test/scala/aethercore/ProductDataResolverSpec.scala'
+      - 'src/test/scala/aethercore/ProductPhysicalStorageSpec.scala'
+      - 'src/test/scala/aethercore/ProductSmallTranslatedCoreSpec.scala'
+      - 'src/test/scala/aethercore/ProductAtomicCoreSpec.scala'
+      - 'src/main/scala/aethercore/core/ALU.scala'
+      - 'src/test/scala/aethercore/ProductSmallIntegerCoreSpec.scala'
+      - 'src/test/scala/aethercore/ProductCoreConfigSpec.scala'
+      - 'src/test/scala/aethercore/ProductSmallOoOBackendSpec.scala'
+      - 'src/test/scala/aethercore/ProductPhysicalValueStoreSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpUnitSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpArithmeticSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpArithmeticRecoverySpec.scala'
+      - 'src/test/scala/aethercore/ProductFpBackendSpec.scala'
+      - 'src/test/scala/aethercore/ProductFpMemoryIntegrationSpec.scala'
+      - 'src/test/scala/aethercore/FpSemanticDecodeSpec.scala'
+      - 'src/test/scala/aethercore/SharedSemanticDecodeSpec.scala'
+      - 'src/test/scala/aethercore/V2FoundationTypesSpec.scala'
       - 'src/main/scala/aethercore/sim/AetherCoreV2OpenSbiRV64SimTop.scala'
       - 'src/main/scala/aethercore/memory/AetherDirectMappedReadCache.scala'
       - 'src/main/scala/aethercore/ElaborateV2OpenSbiRV64.scala'
@@ -23,7 +49,10 @@ jobs:
   f7-frontier:
     name: F7 semantic/frontend frontier
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    # Full HardFloat F32/F64 arithmetic plus the pre-existing F7 Verilator
+    # suites ran with zero observed assertion failures but hit 18 minutes
+    # before all 28 test classes finished. Keep every correctness suite.
+    timeout-minutes: 32
     env:
       AETHERCORE_VERILATOR_FAST_VERIFY: "1"
       AETHERCORE_TOOLCHAIN_JOBS: "4"
@@ -104,6 +133,28 @@ jobs:
         run: |
           ./mill aethercore.test.testOnly \
             aethercore.V2F7SemanticDecodeSpec \
+            aethercore.SharedSemanticDecodeSpec \
+            aethercore.FpSemanticDecodeSpec \
+            aethercore.ProductCoreConfigSpec \
+            aethercore.ProductSmallOoOBackendSpec \
+            aethercore.ProductPhysicalValueStoreSpec \
+            aethercore.ProductSmallIntegerCoreSpec \
+            aethercore.ProductMUnitSpec \
+            aethercore.ProductFpUnitSpec \
+            aethercore.ProductFpArithmeticSpec \
+            aethercore.ProductFpArithmeticRecoverySpec \
+            aethercore.ProductFpBackendSpec \
+            aethercore.ProductFpMemoryIntegrationSpec \
+            aethercore.ProductPhysicalLsqSpec \
+            aethercore.ProductSmallMemoryCoreSpec \
+            aethercore.ProductDataResolverSpec \
+            aethercore.ProductPhysicalStorageSpec \
+            aethercore.ProductSmallTranslatedCoreSpec \
+            aethercore.ProductAtomicCoreSpec \
+            aethercore.V2F3ExecutionSpec \
+            aethercore.ALUSpec \
+            aethercore.RV64MALUSpec \
+            aethercore.V2FoundationTypesSpec \
             aethercore.V2F7BareCoreSpec \
             aethercore.V2F7PagedCoreSpec \
             aethercore.V2F7AsyncInterruptSpec \

@@ -49,7 +49,8 @@ class V2SoCBootRomSourceContract(unittest.TestCase):
             unified,
         )
         self.assertIn("responseArbiter.io.in(0) <> bootRom.io.response", unified)
-        self.assertIn("hub.io.downstreamResponse <> responseArbiter.io.out", unified)
+        self.assertIn("responseSkid.io.enq <> responseArbiter.io.out", unified)
+        self.assertIn("hub.io.downstreamResponse <> responseSkid.io.deq", unified)
 
         self.assertNotIn("package aethercore.sim", rom)
 

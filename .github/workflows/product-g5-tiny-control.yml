@@ -1,0 +1,227 @@
+name: AetherCore G5 same-kernel Tiny rootfs control
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Deliberately one-shot: an ordinary PR synchronization must never start
+    # another billion-cycle run.  The first step checks an explicit head
+    # commit marker; subsequent commits cost only a fast skipped job.
+    types: [synchronize]
+    paths:
+      - 'tools/ci/product_g5_tiny_control_build.sh'
+      - '.github/workflows/product-g5-tiny-control.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-g5-tiny-control-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  same-kernel-control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+      RV64_DEBIAN_STAGE: d2
+      SIM_SETTLE_MODE: reference
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Require explicit one-shot expensive run
+        id: selected
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ github.event_name }}' == workflow_dispatch ]] ||
+             [[ "$(git log -1 --format=%s)" == *'[g5-tiny-run]'* ]]; then
+            echo 'run=1' >> "$GITHUB_OUTPUT"
+            echo 'PRODUCT_G5_TINY_EXPLICIT_RUN: G5 D2 same-kernel control'
+          else
+            echo 'run=0' >> "$GITHUB_OUTPUT"
+            echo 'PRODUCT_G5_TINY_SKIPPED: no explicit one-shot head commit marker'
+          fi
+
+      - name: Install pinned RTL and Linux build dependencies
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential libreadline-dev \
+            pkg-config curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves qemu-user
+          docker version
+
+      - name: Restore pinned Verilator 5.054
+        if: steps.selected.outputs.run == '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.054-v2-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-5.054-v2-
+
+      - name: Restore pinned RV64 Linux GCC
+        if: steps.selected.outputs.run == '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore Scala and pinned upstream Linux/OpenSBI
+        if: steps.selected.outputs.run == '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified Linux and OpenSBI source/build cache
+        if: steps.selected.outputs.run == '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Provision exactly the G5 D2 toolchain
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          bash tools/ensure_verilator_5_054.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.054/bin/verilator"
+          test -x "$bin"
+          test "$(< "${bin%/bin/verilator}/.aethercore-source-revision")" = bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          echo "PRODUCT_VERILATOR_BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Build official G5 D2 and single-config Tiny control
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          bash tools/ci/rv64_debian_linux_build.sh
+          RV64_DEBIAN_INITCALL_TRACE=1 bash tools/ci/rv64_debian_payload_build.sh
+          bash tools/ci/product_g5_tiny_control_build.sh
+          grep -Fxq 'PRODUCT_G5_TINY_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/product-g5-tiny-control/boot/result.txt
+          echo 'PRODUCT_G5_TINY_KERNEL_CONFIG_IDENTICAL_EXCEPT_CPIO_PASS' >> "$GITHUB_STEP_SUMMARY"
+          sed -n '1,30p' build/product-g5-tiny-control/linux/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore compiled real Product G5 RTL model
+        if: steps.selected.outputs.run == '1'
+        id: model-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          key="$(bash tools/ci/product_sim_cache.sh fingerprint \
+            "$RUNNER_TEMP/aethercore-product-g5-debian/model" \
+            AetherCoreProductDebianRV64SimTop \
+            aethercore.sim.ElaborateProductDebianRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the exact Product G5 RTL model
+        if: steps.selected.outputs.run == '1'
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-${{ steps.model-key.outputs.key }}
+
+      - name: Prepare verified Product G5 5.054 model
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          if [[ -x "$build/obj/VAetherCoreProductDebianRV64SimTop" ]]; then
+            bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
+          else
+            make -f Makefile.l32-linux-boot BUILD_DIR="$build" \
+              TOP=AetherCoreProductDebianRV64SimTop \
+              ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+              JOBS=4 VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" \
+              SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" sim
+            bash tools/ci/product_sim_cache.sh record "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
+          fi
+
+      - name: Save newly compiled RTL model
+        if: steps.selected.outputs.run == '1' && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g5-debian/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
+
+      - name: Run real G5 RV64GC with tiny PID1 and report exact cycles
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g5-debian/model"
+          flags="-std=c++20 -O3 -march=native -DAETHERCORE_PRODUCT_DEBIAN -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductDebianRV64SimTop aethercore.sim.ElaborateProductDebianRV64SimTop "$flags"
+          make -f Makefile.l32-linux-boot BUILD_DIR="$build" \
+            TOP=AetherCoreProductDebianRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductDebianRV64SimTop \
+            FW_BIN=build/product-g5-tiny-control/boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS=4 MAX_CYCLES=1200000000 \
+            MILESTONE='RV64 USER UART IRQ OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            REQUIRE_LAYERED_COMPRESSED=1 PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" \
+            SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" run-existing
+          log="$build/logs/boot-probe.log"
+          grep -Fq 'Linux version 6.6.143' "$log"
+          grep -Fq 'RV64 USER UART IRQ OK' "$log"
+          grep -q '^L32_RUNTIME_MILESTONE_PASS ' "$log"
+          echo 'PRODUCT_G5_TINY_REAL_RTL_PID1_CONTROL_PASS: this is not Debian userland acceptance' | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -E '^L32_(UART_MILESTONE|RUNTIME_MILESTONE_PASS) ' "$log" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve same-kernel identity and bounded runtime evidence
+        if: always() && steps.selected.outputs.run == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-tiny-rootfs-control-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 6
+          path: |
+            build/product-g5-tiny-control/linux/result.txt
+            build/product-g5-tiny-control/boot/result.txt
+            build/product-g5-tiny-control/evidence/*.txt
+            build/product-g5-tiny-control/init/initramfs.list
+            build/product-g5-tiny-control/boot/opensbi/platform/generic/firmware/fw_payload.bin
+            ${{ runner.temp }}/aethercore-product-g5-debian/model/logs/*.log

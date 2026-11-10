@@ -1,0 +1,21 @@
+diff --git a/drivers/mmc/host/mmc_spi.c b/drivers/mmc/host/mmc_spi.c
+--- a/drivers/mmc/host/mmc_spi.c
++++ b/drivers/mmc/host/mmc_spi.c
+@@ -985,5 +985,17 @@ static void mmc_spi_initsequence(struct mmc_spi_host *host)
+ 	mmc_spi_wait_unbusy(host, msecs_to_jiffies(MMC_SPI_INIT_TIMEOUT_MS));
+ 	mmc_spi_readbytes(host, 10);
+ 
++	/*
++	 * SPI core GPIO chip selects use the transfer's assertion state,
++	 * not SPI_CS_HIGH, to drive the GPIO.  Clock the idle bus with CS
++	 * deasserted before CMD0 when this card uses a GPIO chip select.
++	 */
++	if (spi_get_csgpiod(host->spi, 0)) {
++		host->status.cs_off = 1;
++		mmc_spi_readbytes(host, 18);
++		host->status.cs_off = 0;
++		return;
++	}
++
+ 	/*
+ 	 * Do a burst with chipselect active-high.  We need to do this to

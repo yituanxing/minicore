@@ -1,0 +1,302 @@
+name: AetherCore Product G5 D2 native Debian QEMU system oracle
+
+# Human opt-in only; this job has NO Verilator, GSIM, Product RTL or SD1 longrun.
+# First boot the exact D2 Image on QEMU's independent generic OpenSBI/DTB;
+# then independently boot the exact Product fw_payload/DTB on QEMU virt.
+# Both are QEMU CPU tests, never Product RTL or an FPGA qualification.
+# A SECOND explicit label, product-g5-qemu-export, adds a diagnostic QEMU
+# pre-PID1 architectural export after both Product-fw QEMU D2 oracles PASS.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-g5-qemu-d2-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  debian-d2-qemu-system-oracle:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       (github.event.label.name == 'product-g5-qemu-d2-oracle' ||
+        github.event.label.name == 'product-g5-qemu-export'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RV64_DEBIAN_STAGE: d2
+      RV64_LINUX_JOBS: '4'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      AETHERCORE_ALLOW_G5_QEMU_SYSTEM_ORACLE: '1'
+      AETHERCORE_ALLOW_G5_QEMU_PRODUCT_FIRMWARE: '1'
+      AETHERCORE_G5_QEMU_WALL_SECONDS: '180'
+
+    steps:
+      - name: Checkout exact Product D2 commit without mutating other branches
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Validate explicit QEMU-system-only scope and log parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ "$RV64_DEBIAN_STAGE" == d2 &&
+             -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 2
+          bash -n tools/ci/product_g5_qemu_oracle.sh tools/ci/product_g5_qemu_oracle_selftest.sh \
+            tools/ci/product_g5_qemu_product_firmware_oracle.sh \
+            tools/ci/product_g5_qemu_product_firmware_oracle_selftest.sh
+          bash tools/ci/product_g5_qemu_oracle_selftest.sh
+          bash tools/ci/product_g5_qemu_product_firmware_oracle_selftest.sh
+          echo 'D2 native Debian QEMU **system** only; Product RTL/FPGA/SD1 timing remain unqualified' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore frozen RV64 GCC 13.3 toolchain from G4/G5
+        id: gcc-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore upstream Linux 6.6.143 source and baseline build
+        id: linux-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Install native Debian, kernel and QEMU system emulator dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 device-tree-compiler dwarves \
+            qemu-system-misc openjdk-17-jdk-headless
+          command -v qemu-system-riscv64
+          qemu-system-riscv64 --version | head -1
+          docker version
+
+      - name: Provision frozen RISC-V cross compiler (no Verilator)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build and verify unchanged RV64 Linux baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -Fxq 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' build/rv64-linux-early/result.txt
+
+      - name: Cache frozen RV64 compiler for next oracle
+        if: success() && steps.gcc-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: ${{ steps.gcc-cache.outputs.cache-primary-key }}
+
+      - name: Cache unchanged Linux 6.6.143 source and objects
+        if: success() && steps.linux-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: ${{ steps.linux-cache.outputs.cache-primary-key }}
+
+      - name: Restore Scala emitter dependencies for Product DTB
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Stage exact native Debian riscv64 D2 rootfs and F/D probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -Fxq 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' build/rv64-debian-rootfs/result.txt
+          grep -Fxq 'stage=d2' build/rv64-debian-rootfs/result.txt
+
+      - name: Compile identical D2 Linux Image with embedded native rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_debian_linux_build.sh
+          grep -Fxq 'RV64_DEBIAN_LINUX_BUILD_RESULT: status=PASS' build/rv64-debian-linux/result.txt
+          grep -Fxq 'stage=d2' build/rv64-debian-linux/result.txt
+          sha256sum --check --status build/rv64-debian-linux/evidence/sha256.txt
+
+      - name: Run bounded 180-second RISC-V virt native Debian PID1 oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_oracle.sh run
+          grep -Fxq 'qualification=QEMU_SYSTEM_DEBIAN_D2_ORACLE_NOT_PRODUCT_RTL_PASS' \
+            build/product-g5-qemu-system-oracle/result.txt
+          cat build/product-g5-qemu-system-oracle/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and qualify exact G5 Product OpenSBI firmware and 52-source DTB
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mill
+          bash tools/ci/rv64_debian_payload_build.sh
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-boot/result.txt
+          grep -Fq 'riscv,ndev = <52>;' build/rv64-debian-boot/aethersoc-v0-initramfs.dts
+
+      - name: Boot Product fw_payload and DTB on bounded QEMU virt CPU oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_product_firmware_oracle.sh run
+          grep -Fxq 'qualification=QEMU_SYSTEM_PRODUCT_FW_DTB_D2_ORACLE_NOT_PRODUCT_RTL_PASS' \
+            build/product-g5-qemu-product-fw-dtb/result.txt
+          cat build/product-g5-qemu-product-fw-dtb/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stage exact D2 QEMU inputs and immutable SHA256 for count-only reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/g5-icount-stage"
+          [[ ! -e "$stage" ]] || { echo 'staging directory already exists' >&2; exit 51; }
+          files=(
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-linux/obj/System.map
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/aethercore-rv64-initramfs.dtb
+            build/rv64-debian-boot/opensbi/platform/generic/firmware/fw_payload.bin
+            build/product-g5-qemu-product-fw-dtb/result.txt
+          )
+          mkdir -p "$stage"
+          for path in "${files[@]}"; do
+            [[ -s "$path" ]] || { echo "missing exact D2 input: $path" >&2; exit 52; }
+            install -D -m 0644 -- "$path" "$stage/$path"
+          done
+          {
+            printf 'source_run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'source_run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_workflow=.github/workflows/product-g5-qemu-d2-oracle.yml\n'
+          } > "$stage/ORIGIN.txt"
+          (cd "$stage" && sha256sum "${files[@]}" > SHA256SUMS)
+          (cd "$stage" && sha256sum --check --strict --status SHA256SUMS)
+          echo "Exact D2 QEMU inputs staged at source commit $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact Product D2 binaries for later count-only QEMU run
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-icount-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          compression-level: 1
+          if-no-files-found: error
+          path: ${{ runner.temp }}/g5-icount-stage/
+
+      - name: Validate optional pre-PID1 architectural export helper
+        if: github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_g5_qemu_arch_export.sh
+          python3 -m py_compile tools/ci/product_g5_qemu_export/qemu_arch_export.py \
+            tools/ci/product_g5_qemu_export/selftest.py
+          python3 tools/ci/product_g5_qemu_export/selftest.py
+
+      - name: Freeze pre-PID1 QEMU Product-fw CPU and export architectural checkpoint
+        if: github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        shell: bash
+        timeout-minutes: 4
+        env:
+          AETHERCORE_ALLOW_G5_QEMU_PRODUCT_EXPORT: '1'
+          AETHERCORE_G5_EXPORT_WALL_SECONDS: '180'
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_qemu_arch_export.sh run
+          grep -Fxq 'qualification=QEMU_ARCH_EXPORT_DIAGNOSTIC_ONLY_NOT_RTL_HANDOFF_PASS' \
+            build/product-g5-qemu-export/result.txt
+          cat build/product-g5-qemu-export/result.txt >> "$GITHUB_STEP_SUMMARY"
+          echo 'QEMU export only; no Product G5 RTL state was injected or executed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload opt-in pre-PID1 QEMU RAM and architectural manifest for RTL handoff work
+        if: success() && github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-architectural-export-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 1
+          path: |
+            build/product-g5-qemu-export/export/ram-0x80000000-0x10000000.bin
+            build/product-g5-qemu-export/export/manifest.json
+            build/product-g5-qemu-export/result.txt
+            build/product-g5-qemu-export/sha256sums.txt
+            build/product-g5-qemu-export/serial.log
+            build/product-g5-qemu-export/export.log
+
+      - name: Upload optional export failure diagnostics without implying qualification
+        if: failure() && github.event_name == 'pull_request' && github.event.label.name == 'product-g5-qemu-export'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-export-failure-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/product-g5-qemu-export/qemu.log
+            build/product-g5-qemu-export/export.log
+            build/product-g5-qemu-export/serial.log
+
+      - name: Preserve kernel SHA, native rootfs identity, QEMU firmware boundary and serial trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-qemu-d2-oracle-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-rootfs/evidence/sha256.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/evidence/sha256.txt
+            build/rv64-debian-linux/evidence/resolved.config
+            build/product-g5-qemu-system-oracle/d2-serial.log
+            build/product-g5-qemu-system-oracle/result.txt
+            build/rv64-debian-boot/result.txt
+            build/rv64-debian-boot/evidence/sha256.txt
+            build/rv64-debian-boot/evidence/inputs.txt
+            build/rv64-debian-boot/evidence/aethersoc-rv64-initramfs-dts.txt
+            build/product-g5-qemu-product-fw-dtb/serial.log
+            build/product-g5-qemu-product-fw-dtb/result.txt

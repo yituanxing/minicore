@@ -1,0 +1,351 @@
+name: AetherCore Product G4 Real Linux PID1 and IRQ Gate
+
+# Full Linux userspace/interrupt qualification is manual-only. Source changes
+# must never enqueue this billion-cycle cold-start gate.
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostic_initcalls:
+        description: Log each upstream Linux initcall without modifying the kernel Image
+        required: false
+        default: false
+        type: boolean
+      verilator_version:
+        description: Pinned simulator version (5.054 requires Product A/B qualification)
+        required: true
+        type: choice
+        options: ['5.024', '5.054']
+        default: '5.024'
+      settle_mode:
+        description: Fixed reference or Product-qualified adaptive memory settle
+        required: true
+        type: choice
+        options: [reference, adaptive]
+        default: reference
+  # Explicit PR label is required while this workflow is absent from main;
+  # regular PR synchronize/push events never start the expensive gate.
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g4-pid1-${{ github.event.pull_request.number || github.ref }}
+  # Only the operator decides whether to cancel a long-running qualification.
+  cancel-in-progress: false
+
+jobs:
+  product-linux-pid1:
+    name: Product SmallOoO real Linux 6.6.143 PID1, STIP and SEIP
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g4-longrun')
+    runs-on: ubuntu-24.04
+    # The former 850M-cycle signoff budget was shorter than proven 1.02B boot.
+    # Keep the wall-clock ceiling bounded even if host throughput regresses.
+    timeout-minutes: 150
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_VERILATOR_VERSION: ${{ inputs.verilator_version || '5.024' }}
+      SIM_SETTLE_MODE: ${{ inputs.settle_mode || 'reference' }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Reject unqualified Product simulator accelerations before heavy setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 5.054/adaptive are candidates from a separate short A/B study,
+          # not qualified for Product G4/Linux. Never cache or execute a
+          # different binary while recording a 5.024/reference identity.
+          [[ "$AETHERCORE_VERILATOR_VERSION" == 5.024 &&
+             "$SIM_SETTLE_MODE" == reference ]] || {
+            echo 'Product G4 requires 5.024/reference until same-cycle Product A/B qualification is recorded' >&2
+            exit 20
+          }
+
+      - name: Install pinned tool build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake ninja-build libfl-dev zlib1g-dev bison flex bc \
+            libssl-dev libelf-dev build-essential libreadline-dev pkg-config \
+            curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves
+
+      - name: Restore selected pinned Verilator cache
+        id: verilator-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-${{ env.AETHERCORE_VERILATOR_VERSION }}-v2-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-${{ env.AETHERCORE_VERILATOR_VERSION }}-v2-
+
+      - name: Restore fixed RV64 GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-
+
+      - name: Restore Scala dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore qualified RV64 Linux source and build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Verify Product host and pinned tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          chmod +x ./mill tools/ensure_verilator_5_024.sh tools/ensure_verilator_5_054.sh \
+            tools/ensure_riscv64_linux_gcc_13_3.sh
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          verilator_bin="${AETHERCORE_TOOLCHAIN_CACHE:-$HOME/.cache/aethercore/toolchains}/verilator-5.024/bin/verilator"
+          [[ -x "$verilator_bin" ]] || { echo 'Pinned Verilator 5.024 executable missing' >&2; exit 21; }
+          [[ "$("$verilator_bin" --version)" == 'Verilator 5.024'* ]] || {
+            echo 'Pinned Product G4 Verilator version mismatch' >&2
+            exit 22
+          }
+          echo "PRODUCT_VERILATOR_BIN=$verilator_bin" >> "$GITHUB_ENV"
+          test -f sim/product_rv64_opensbi_shim/VAetherCoreOpenSbiSimTop.h
+          test -f src/main/scala/aethercore/sim/AetherCoreProductUnifiedMemoryCompatSimTop.scala
+
+      - name: Save selected Verilator toolchain for future Product runs
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.024
+            ~/.cache/aethercore/toolchains/src/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/build/verilator-522bead374d6b7b2adb316304126e5361b18bcf1
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: ${{ steps.verilator-cache.outputs.cache-primary-key }}
+
+      - name: Build unchanged Linux 6.6.143 image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          grep -q '^RV64_LINUX_EARLY_BUILD_RESULT: status=PASS$' build/rv64-linux-early/result.txt
+
+      - name: Build unchanged deterministic initramfs and OpenSBI payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_minimal_initramfs_build.sh
+          # Only an explicit manual opt-in exercises the diagnostic path. It
+          # modifies only DTB bootargs through an existing builder override.
+          if [[ '${{ inputs.diagnostic_initcalls }}' == 'true' ]]; then
+            source software/rv64/linux_early.env
+            # initcall_debug prints KERN_DEBUG (level 7). Without an explicit
+            # console loglevel, the serial transcript hides the call/return
+            # messages and a multi-hour diagnosis yields no initcall evidence.
+            export RV64_PAYLOAD_BOOTARGS="${RV64_LINUX_BOOTARGS} rdinit=/init initcall_debug loglevel=8"
+            echo "PRODUCT_G4_INITCALL_DIAGNOSTIC_ONLY: bootargs=$RV64_PAYLOAD_BOOTARGS"
+          fi
+          timeout --signal=TERM --kill-after=10s 180s \
+            bash tools/ci/rv64_minimal_init_payload_build.sh
+          test -s build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          payload=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin
+          bytes="$(stat -c%s "$payload")"
+          if (( bytes > 268435456 )); then
+            echo "G4 firmware payload ${bytes} exceeds simulator's fixed 256MiB RAM" >&2
+            exit 34
+          fi
+
+      - name: Fingerprint exact Product G4 RTL and simulator inputs
+        id: model-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          key="$(bash tools/ci/product_sim_cache.sh fingerprint "$RUNNER_TEMP/aethercore-product-g4-pid1/model" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags")"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore identical compiled Product G4 RTL model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g4-pid1/model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g4-${{ steps.model-key.outputs.key }}
+
+      - name: Prepare or verify exact Product G4 RTL simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g4-pid1/model"
+          mkdir -p "$build"
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          cache_args=("$build" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags")
+          if [[ '${{ steps.model-cache.outputs.cache-hit }}' == 'true' ]]; then
+            bash tools/ci/product_sim_cache.sh verify "${cache_args[@]}"
+          else
+            make -f Makefile.l32-linux-boot BUILD_DIR="$build" \
+              TOP=AetherCoreProductOpenSbiRV64SimTop \
+              ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
+              VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" JOBS=4 \
+              SIM_SETTLE_MODE=reference SIM_CXXFLAGS="$flags" sim
+            bash tools/ci/product_sim_cache.sh record "${cache_args[@]}"
+          fi
+
+      - name: Save qualified compiled Product G4 model before slow execution
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-product-g4-pid1/model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
+
+      - name: Boot real Linux PID1 on Product SmallOoO with STIP and SEIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/aethercore-product-g4-pid1/model"
+          flags="-std=c++20 -O3 -march=native -I$GITHUB_WORKSPACE/sim/product_rv64_opensbi_shim -I$GITHUB_WORKSPACE/sim"
+          bash tools/ci/product_sim_cache.sh verify "$build" AetherCoreProductOpenSbiRV64SimTop aethercore.sim.ElaborateProductOpenSbiRV64SimTop "$flags"
+          # The documented diagnostic run passed after 1.02B cycles. Budget
+          # the unchanged normal payload above that observed lower bound.
+          max_cycles=1200000000
+          if [[ '${{ inputs.diagnostic_initcalls }}' == 'true' ]]; then
+            max_cycles=1800000000
+          fi
+          echo "PRODUCT_G4_CYCLE_BUDGET: max_cycles=$max_cycles diagnostic=${{ inputs.diagnostic_initcalls }}"
+          make -f Makefile.l32-linux-boot \
+            BUILD_DIR="$build" \
+            TOP=AetherCoreProductOpenSbiRV64SimTop \
+            ELABORATE_MAIN=aethercore.sim.ElaborateProductOpenSbiRV64SimTop \
+            FW_BIN=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.bin \
+            JOBS=4 \
+            MAX_CYCLES="$max_cycles" \
+            MILESTONE='RV64 USER UART IRQ OK' \
+            MIN_INTERRUPTS=1 MIN_STIP=1 MIN_SEIP=1 \
+            PROGRESS_INTERVAL_CYCLES=10000000 \
+            VERILATOR="$PRODUCT_VERILATOR_BIN -LDFLAGS -ldl" SIM_SETTLE_MODE=reference \
+            SIM_CXXFLAGS="$flags" run-existing
+          log="$build/logs/boot-probe.log"
+          grep -Eq '^L32_OPENSBI_BANNER cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          grep -Fq 'Linux version 6.6.143' "$log"
+          grep -Fq 'RV64 USER UART IRQ OK' "$log"
+          grep -q '^L32_FIRST_INTERRUPT ' "$log"
+          grep -q '^L32_FIRST_SUPERVISOR_TIMER_INTERRUPT ' "$log"
+          grep -q '^L32_FIRST_SUPERVISOR_EXTERNAL_INTERRUPT ' "$log"
+          grep -Eq '^L32_RUNTIME_MILESTONE_PASS cycles=[0-9]+ commits=[1-9][0-9]*' "$log"
+          if [[ '${{ inputs.diagnostic_initcalls }}' == 'true' ]]; then
+            echo 'PRODUCT_G4_LINUX_PID1_DIAGNOSTIC_PASS: initcall_debug payload, NOT final image identity/signoff'
+          else
+            echo 'PRODUCT_G4_LINUX_PID1_PASS: unchanged kernel, initramfs PID1, STIP and SEIP ran through Product SmallOoO'
+          fi
+
+      - name: Symbolize the last kernel and SBI PCs on all outcomes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/aethercore-product-g4-pid1/model/logs/boot-probe.log"
+          symbols="$RUNNER_TEMP/aethercore-product-g4-pid1/model/logs/kernel-pc-symbolization.log"
+          vmlinux=build/rv64-linux-initramfs/obj/vmlinux
+          firmware=build/rv64-minimal-init-boot/opensbi/platform/generic/firmware/fw_payload.elf
+          if [[ ! -s "$log" || ! -s "$vmlinux" ]]; then
+            echo 'Kernel/simulator evidence not yet available for symbolization.'
+            exit 0
+          fi
+          pc="$(sed -n 's/.*last-exception-pc=\(0x[[:xdigit:]]*\).*/\1/p' "$log" | tail -1)"
+          recent="$(sed -n 's/.*recent-pcs=\([^ ]*\).*/\1/p' "$log" | tail -1)"
+          addr2line="${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}addr2line"
+          {
+            echo "source_sha=$TARGET_SHA"
+            echo "kernel_vmlinux_sha256=$(sha256sum "$vmlinux" | awk '{print $1}')"
+            echo "last_exception_pc=${pc:-not-observed}"
+            echo "recent_pcs=${recent:-not-observed}"
+            if [[ -n "$pc" || -n "$recent" ]] && command -v "$addr2line" >/dev/null; then
+              echo 'Function/source below may lack debug line info:'
+              IFS=, read -ra sampled <<< "${pc:+$pc,}$recent"
+              for sampled_pc in "${sampled[@]}"; do
+                if [[ "$sampled_pc" == 0xffffffff* ]]; then
+                  image="$vmlinux"
+                  owner=linux
+                elif [[ -s "$firmware" ]]; then
+                  image="$firmware"
+                  owner=opensbi
+                else
+                  echo "sampled_pc=$sampled_pc owner=opensbi image-unavailable"
+                  continue
+                fi
+                echo "sampled_pc=$sampled_pc owner=$owner"
+                "$addr2line" -f -C -e "$image" "$sampled_pc"
+              done
+            fi
+          } > "$symbols"
+          cat "$symbols"
+
+      - name: State exact qualification mode
+        if: always()
+        shell: bash
+        run: |
+          echo "Source: $TARGET_SHA" >> "$GITHUB_STEP_SUMMARY"
+          if [[ '${{ inputs.diagnostic_initcalls }}' == 'true' ]]; then
+            echo 'G4 diagnostic only: DTB bootargs include initcall_debug loglevel=8; 1.8B-cycle cap; not final frozen-payload signoff.' | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'G4 frozen normal payload: pass only with real PID1/SEIP marker.' | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          log="$RUNNER_TEMP/aethercore-product-g4-pid1/model/logs/boot-probe.log"
+          if [[ -s "$log" ]]; then
+            {
+              echo '```text'
+              grep '^L32_SIM_PROGRESS ' "$log" | tail -1 || true
+              grep -E '^L32_(OPENSBI_TIMEOUT|RUNTIME_MILESTONE_PASS|UART_MILESTONE|FIRST_SUPERVISOR_EXTERNAL_INTERRUPT) ' "$log" | tail -4 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preserve Product Linux PID1 and interrupt evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aethercore-product-g4-linux-pid1-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-linux-early/result.txt
+            build/rv64-linux-initramfs/result.txt
+            build/rv64-minimal-init-boot/result.txt
+            ${{ runner.temp }}/aethercore-product-g4-pid1/model/logs/*.log

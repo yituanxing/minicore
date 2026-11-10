@@ -1,0 +1,8 @@
+PRODUCT_SD1_QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL
+qualification=QEMU_VIRTIO_BLOCK_ONLY_NOT_PRODUCT_SPI_RTL
+bootargs_root=/dev/vda1
+root_mounted=ext4
+native_pid1=/sbin/init
+login_prompt=OBSERVED_NOT_AUTHENTICATED
+elapsed_seconds=22.581
+uart_bytes=23689

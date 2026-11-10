@@ -13,7 +13,7 @@ import chisel3.util.Cat
   * instruction length. The same parcel lifetime contract is used at RV32 and
   * RV64; only compressed semantic expansion is XLEN-dependent.
   */
-class RvcParcelController(val xlen: Int = 32) extends Module {
+class RvcParcelController(val xlen: Int = 32, val withDouble: Boolean = false) extends Module {
   require(Set(32, 64).contains(xlen), s"compressed parcel control requires XLEN 32 or 64, got $xlen")
 
   val io = IO(new Bundle {
@@ -41,7 +41,7 @@ class RvcParcelController(val xlen: Int = 32) extends Module {
   val secondParcelPending = RegInit(false.B)
   val firstParcel = RegInit(0.U(16.W))
 
-  val decompressor = Module(new RvcDecompressor(xlen))
+  val decompressor = Module(new RvcDecompressor(xlen, withDouble))
   decompressor.io.raw := io.parcelBits
 
   val parcelFault = io.parcelPageFault || io.parcelAccessFault

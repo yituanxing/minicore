@@ -1,0 +1,162 @@
+name: AetherCore Product G5 Debian persistent checkpoint short
+
+# Real Debian Product RTL, but intentionally bounded to 100M Linux-prefix
+# cycles and two 500k-cycle cross-process replays. This is NOT a Debian PID1
+# qualification and must never run the 1.8B-cycle long workflow implicitly.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-g5-persistent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  persistent-g5-short:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g5-persistent-short')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RV64_DEBIAN_STAGE: d2
+      AETHERCORE_ALLOW_PRODUCT_G5_PERSISTENT_CHECKPOINT: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      SIM_SETTLE_MODE: reference
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      RV64_LINUX_JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product G5 source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+
+      - name: Reject unrelated Debian/SD1 long-run and verify checkpoint guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}"
+          test -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}"
+          bash tools/ci/product_checkpoint_g5_selftest.sh
+          bash -n tools/ci/product_checkpoint_g5_short.sh
+          echo 'PRODUCT_G5_PERSISTENT_SCOPE: D2 real Debian Product RAM-initramfs top; 100M+500k only; no PID1/SD1 claim'
+
+      - name: Restore Scala and Linux object caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-g5-persistent-linux-v1-${{ hashFiles('build.mill', 'mill', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-g5-persistent-linux-v1-
+            aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-
+
+      - name: Restore pinned Verilator and RV64 GCC toolchains
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-g5-persistent-tools-v1-${{ hashFiles('tools/ensure_verilator_5_054.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-verilator-product-gsim-g3-v1-
+
+      - name: Install host build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake ninja-build libfl-dev zlib1g-dev \
+            bison flex bc libssl-dev libelf-dev build-essential libreadline-dev \
+            pkg-config curl xz-utils git python3 openjdk-17-jdk-headless \
+            device-tree-compiler dwarves qemu-user
+          chmod +x ./mill
+          bash tools/ensure_verilator_5_024.sh
+          bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build only bounded native Debian D2 Linux and OpenSBI inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          bash tools/ci/rv64_debian_linux_build.sh
+          bash tools/ci/rv64_debian_payload_build.sh
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-debian-boot/result.txt
+          grep -Fxq 'stage=d2' build/rv64-debian-rootfs/result.txt
+          grep -Fxq 'spi_sd=0' build/rv64-debian-boot/result.txt
+          echo 'PRODUCT_G5_PERSISTENT_INPUTS_READY: official native Debian D2 rootfs + Linux 6.6.143 + OpenSBI, short RTL only'
+
+      - name: Fingerprint native host ABI for exact savable model reuse
+        id: abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(g++ --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=${cpu}-${compiler}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact G5 --savable Product model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-g5-persistent-checkpoint/savable-model
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-g5-savable-v1-${{ steps.abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/**/*.h', 'sim/**/*.cpp', 'tools/ci/product_checkpoint_g5_short.sh', 'tools/ci/product_sim_cache.sh') }}
+
+      - name: Build or revalidate real Debian --savable RTL and checkpoint runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_checkpoint_g5_short.sh build
+          test -x build/product-g5-persistent-checkpoint/product-g5-checkpoint
+
+      - name: Save G5 --savable model before guest execution
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-g5-persistent-checkpoint/savable-model
+          key: ${{ steps.model-cache.outputs.cache-primary-key }}
+
+      - name: Run 100M Debian Linux prefix and two independent 500k restores
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_checkpoint_g5_short.sh run | tee build/product-g5-persistent-checkpoint/run-summary.log
+          proof="$(sed -n 's/^PRODUCT_G5_PERSISTENT_PROOF_DIR=//p' build/product-g5-persistent-checkpoint/run-summary.log | tail -1)"
+          test -n "$proof"
+          bash tools/ci/product_checkpoint_g5_short.sh verify-proof "$proof"
+          echo 'G5 real Debian Product RTL 100M prefix + 500k cross-process deterministic replay PASS; NOT PID1/Debian login' >> "$GITHUB_STEP_SUMMARY"
+          cat "$proof/qualification.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload small proof logs only, never 256MiB RAM checkpoints
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-persistent-short-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-boot/result.txt
+            build/product-g5-persistent-checkpoint/run-summary.log
+            build/product-g5-persistent-checkpoint/logs/*.log
+            build/product-g5-persistent-checkpoint/persist-G5.*/qualification.txt
+            build/product-g5-persistent-checkpoint/persist-G5.*/save.log
+            build/product-g5-persistent-checkpoint/persist-G5.*/restore.log
+            build/product-g5-persistent-checkpoint/persist-G5.*/.complete

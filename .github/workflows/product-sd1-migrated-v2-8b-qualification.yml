@@ -1,0 +1,294 @@
+name: Independent PR379 label SD1 v2 Host-only 7892M to 7912M differential
+
+# The ONLY change to official PR379 will be this separate workflow shim. Apply
+# a unique label manually after code and SHA review; checkout uses the exact
+# pinned experiment commit, not official PR Host/runner. No 8B guest crossing.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-host-v2-A-qual-only-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  v2_host_only_qualify_7892_to_7912:
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'product-sd1-host-v2-7892-to-7912-qualify' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    env:
+      # Must be replaced by the exactly reviewed SHA after v2 source is
+      # committed to experiment/sd1-host-v2-8b-20261108; fail closed until then.
+      EXPERIMENT_SOURCE_SHA: 49477c38a8c825d6c218ecf48fbd1df6ea42c48e
+      AETHERCORE_SD1_MODEL_MIGRATE_CONFIRM: FROZEN_SIGNED_SD1_MODEL_MIGRATE_V2_8B_7892M
+      AETHERCORE_SD1_V2_QUALIFICATION_EXECUTE: HOST_ONLY_7892_TO_7912_REAL_RTL_REVIEWED
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+      AETHERCORE_SD1_V2_SOURCE_7892_DIR: ${{ github.workspace }}/build/product-sd1-migration-v2-source/7892m
+      AETHERCORE_SD1_V2_SOURCE_7912_DIR: ${{ github.workspace }}/build/product-sd1-migration-v2-source/7912m
+    steps:
+      - name: Authenticate exact 7892M and 7912M original Product RTL artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: '42490269438'
+          SOURCE_HEAD: 'e7bbd704dea0dd924355599efc35958947ac8062'
+          SOURCE_WORKFLOW: '.github/workflows/product-sd1-migrated-7812-to-7912m-autorelay.yml'
+          SOURCE_JOB: 'stage_01 / relay_five'
+          ART_7892_ID: '13620623868'
+          ART_7892_ZIP_SHA: '2e1fd3dc9462c097007039fd9d0cbdcbb0ca610baeca9d8b537d3b5fa4ee5b5f'
+          AUTHENTIC_7892_HOST_SHA: 'e56979117362737e4803e008acd9a47389596e7a70d82775dc5e024b060d57e3'
+          AUTHENTIC_7892_RTL_SHA: '4fab764965598b0da80dda02cc8661b5cde7f874c5117c8893ba0f02df207bab'
+          AUTHENTIC_7892_CARD_SHA: 'c02d2a3a354ac729b505aa71577c1d7ae9b9cbe6c6f7b33b2bff4596f4171936'
+          ART_7912_ID: '13621890399'
+          ART_7912_ZIP_SHA: '5b37fe21a1cd82b462efbf034da7152d7dc9203773deb7831f2a06253a05897a'
+          AUTHENTIC_7912_HOST_SHA: 'd12da91d3bdeff9f803eb14220a07e9b5e0078bdd02ced4d1f45112885a45b60'
+          AUTHENTIC_7912_RTL_SHA: '8097af2264d1b15c31589b28d1d534547d0b8edb8c754ab78eb2a7dc752a1041'
+          AUTHENTIC_7912_CARD_SHA: '56235070cf2090a56cf4b94ddf900455abb154027153cc0dbeb2f3958eb2c0ff'
+        run: |
+          set -euo pipefail
+          [[ "$EXPERIMENT_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || {
+            echo 'V2_A_REJECTED: experiment code commit SHA not yet independently pinned' >&2
+            exit 16
+          }
+          repo='yituanxing/minicore'
+          gh api "repos/$repo/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          jq -e --argjson run "$SOURCE_RUN" --arg head "$SOURCE_HEAD" \
+            --arg workflow "$SOURCE_WORKFLOW" --arg repo "$repo" '
+            .id == $run and .run_attempt == 1 and
+            .status == "completed" and .conclusion == "success" and
+            .event == "pull_request" and
+            .repository.full_name == $repo and .head_repository.full_name == $repo and
+            .head_branch == "design/rv64gc-product-architecture-20261103" and
+            .head_sha == $head and (.path | contains($workflow))
+          ' "$RUNNER_TEMP/source-run.json" >/dev/null
+          gh api "repos/$repo/actions/runs/$SOURCE_RUN/jobs?per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          jq -e --arg job "$SOURCE_JOB" '
+            [.jobs[] | select(.name == $job and .status == "completed" and
+              .conclusion == "success" and
+              ([.steps[] | select(.name ==
+                "Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs"
+                and .conclusion == "success")] | length == 1) and
+              ([.steps[] | select((.name | startswith("Advance genuine RTL segment "))
+                and .conclusion == "success")] | length == 5))] | length == 1
+          ' "$RUNNER_TEMP/source-jobs.json" >/dev/null
+          gh api "repos/$repo/actions/runs/$SOURCE_RUN/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
+          for milestone in 7892 7912; do
+            case "$milestone" in
+              7892) id="$ART_7892_ID"; digest="$ART_7892_ZIP_SHA" ;;
+              7912) id="$ART_7912_ID"; digest="$ART_7912_ZIP_SHA" ;;
+            esac
+            jq -e --argjson id "$id" --arg name "product-sd1-migrated-${milestone}m-${SOURCE_RUN}" \
+              --arg digest "sha256:$digest" '
+              [.artifacts[] | select(.id == $id and .name == $name and
+                .digest == $digest and .workflow_run.head_sha ==
+                  "e7bbd704dea0dd924355599efc35958947ac8062" and
+                .expired == false and .size_in_bytes > 1000000)] | length == 1
+            ' "$RUNNER_TEMP/source-artifacts.json" >/dev/null
+          done
+          gh api 'repos/yituanxing/minicore/actions/runs/42384463475' > "$RUNNER_TEMP/v1-run.json"
+          jq -e '.id == 42384463475 and .run_attempt == 1 and
+            .head_sha == "dc8ab72669000c19e0494afbd0e28d4f82ee3374" and
+            .status == "completed" and .conclusion == "success" and
+            (.path | contains(".github/workflows/product-sd1-model-migrate-v1-differential.yml"))' \
+            "$RUNNER_TEMP/v1-run.json" >/dev/null
+          gh api 'repos/yituanxing/minicore/actions/runs/42384463475/artifacts?per_page=100' > "$RUNNER_TEMP/v1-artifacts.json"
+          jq -e '[.artifacts[] | select(.id == 13578644295 and
+            .name == "product-sd1-model-migrate-v1-qualified-42384463475" and
+            .digest == "sha256:e511af2854a110bc0998a0c8a6de7e36378e8a1a68d90568e811577c931e7ee9" and
+            .expired == false and .size_in_bytes > 1000000)] | length == 1' \
+            "$RUNNER_TEMP/v1-artifacts.json" >/dev/null
+          echo 'V2_DRAFT_SOURCE_PROVENANCE_METADATA_VALIDATED_NOT_20M_QUALIFIED'
+
+      - name: Checkout exact reviewed experiment code by immutable commit SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPERIMENT_SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Static qualification contract before any guest clock
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXPERIMENT_SOURCE_SHA" ]] || exit 16
+          bash -n tools/ci/product_sd1_model_migration_v2_qualify.sh
+          bash -n tools/ci/product_sd1_migrated_v2_relay_20m.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest -v \
+            tests_py.test_product_sd1_model_migration_v1 \
+            tests_py.test_product_sd1_model_migration_v2_static
+          bash tools/ci/product_sd1_model_migration_v2_qualify.sh --plan
+
+      - name: Restore immutable signed Debian seed
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Restore pinned GPIO-CS Linux Image
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+
+      - name: Restore frozen Verilator 5.054 for Host-only relink
+        id: verilator
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-Linux-X64-verilator-product-gsim-g3-v1-0d5cab64c9f95f1a19e38d7220450b5555d6a853d6ac53283fab6b1ca779c1d8
+
+      - name: Restore complete frozen original savable RTL model objects
+        id: model
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          key: aethercore-Linux-X64-product-sd1-savable-portable-v1-x86_64-89e4c31da3dafc5a664e-b1ea68eed0a37532d6ec1feb08d5e5061e99336b8b8e17accbdbb000997895b9
+
+      - name: Abort if any immutable toolchain or media cache was not restored
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.verilator.outputs.cache-hit }}' == true &&
+             '${{ steps.model.outputs.cache-hit }}' == true &&
+             '${{ steps.diag.outputs.cache-hit }}' == true &&
+             ( '${{ steps.seed.outputs.cache-hit }}' == true ||
+               '${{ steps.seed.outputs.cache-matched-key }}' == \
+                 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          [[ "$(sha256sum build/product-sd1-persistent-checkpoint/savable-model/obj/VAetherCoreProductDebianSdRV64SimTop | cut -d' ' -f1)" == \
+            5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc ]] || exit 16
+
+      - name: Import signed original polling firmware/DTB
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+
+      - name: Import authenticated original 7892M checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42490269438
+          name: product-sd1-migrated-7892m-42490269438
+          github-token: ${{ github.token }}
+          path: build/product-sd1-migration-v2-source/7892m
+
+      - name: Import authenticated original 7912M checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42490269438
+          name: product-sd1-migrated-7912m-42490269438
+          github-token: ${{ github.token }}
+          path: build/product-sd1-migration-v2-source/7912m
+
+      - name: Import independently qualified old v1 executable and manifest
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42384463475
+          name: product-sd1-model-migrate-v1-qualified-42384463475
+          github-token: ${{ github.token }}
+          path: build/product-sd1-model-migration-v1-import
+
+      - name: Reconstruct exact b9 source Host on original frozen generated RTL model
+        shell: bash
+        run: |
+          set -euo pipefail
+          old=build/product-sd1-model-migration-v1-import
+          source=build/product-sd1-persistent-checkpoint/savable-model
+          target=build/product-sd1-model-migration-v1
+          exec=VAetherCoreProductDebianSdRV64SimTop
+          [[ ! -e "$target" ]] || exit 16
+          [[ "$(sha256sum "$old/candidate-savable-model/obj/$exec" | cut -d' ' -f1)" == \
+            b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 ]] || exit 16
+          mkdir -p "$target"
+          cp -a "$source" "$target/candidate-savable-model"
+          cp -a "$old/qualification-manifest.txt" "$target/qualification-manifest.txt"
+          cp -- "$old/candidate-savable-model/obj/$exec" "$target/candidate-savable-model/obj/$exec"
+          chmod 755 "$target/candidate-savable-model/obj/$exec"
+          [[ "$(sha256sum "$target/candidate-savable-model/obj/$exec" | cut -d' ' -f1)" == \
+            b9a651a3ba3aa50c7e0b15405d24a3d3ab56dd25fa2df7fb20f5654cdda80461 ]] || exit 16
+          # Original polling generated objects are byte-identical to v1; the
+          # old Host .o is discarded by the v2 qualifier, never executed.
+          grep -Fxq 'PRODUCT_SD1_MODEL_MIGRATION_V1: status=QUALIFIED_UNDER_4B_ONLY' \
+            "$target/qualification-manifest.txt"
+
+      - name: Zero-cycle Host-only v2 and independent real RTL 20M differential
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 42m \
+            bash tools/ci/product_sd1_model_migration_v2_qualify.sh --execute-qualified-diff
+          grep -Fxq 'PRODUCT_SD1_MODEL_MIGRATION_V2: status=QUALIFIED_HOST_ONLY_7892_TO_7912_20M_DIFF_NOT_8B_CROSS' \
+            build/product-sd1-model-migration-v2-draft/qualification-manifest.txt
+          cat build/product-sd1-model-migration-v2-draft/qualification-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+          echo 'No 8B crossing has occurred. No Debian service/login PASS is claimed.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive independent 7892M to 7912M differential qualification
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-model-migrate-v2-qual-7892-7912-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            build/product-sd1-model-migration-v2-draft/qualification-manifest.txt
+            build/product-sd1-model-migration-v2-draft/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop
+            build/product-sd1-model-migration-v2-draft/qualified/7892m
+            build/product-sd1-model-migration-v2-draft/qualified/7912m
+
+      - name: Retain failed-run diagnostics without claiming qualification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-model-migrate-v2-diagnostic-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/product-sd1-model-migration-v2-draft/host-recompile.log
+            build/product-sd1-model-migration-v2-draft/migrate-7892.log
+            build/product-sd1-model-migration-v2-draft/advance-7912.log
+            build/product-sd1-model-migration-v2-draft/qualification-manifest.txt
+
+# This A/qualification workflow cannot cross 8B. It never invokes the future
+# v2 relay driver. B/8012M needs a NEW independent manual workflow, the new
+# executable SHA from A, source artifact attestation and separate review.

@@ -13,6 +13,16 @@ VERILATOR_THREADS ?= 1
 VERILATOR_THREAD_FLAGS := $(if $(filter 1,$(VERILATOR_THREADS)),,--threads $(VERILATOR_THREADS))
 VERILATOR_MAKE_OPT ?= -MAKEFLAGS "OPT_FAST=-O3 OPT_GLOBAL=-O3"
 SIM_CXXFLAGS ?= -std=c++20 -O3 -march=native
+# Product RTL uses the proven fixed two-low-eval reference until an exact
+# Product-model A/B qualifies the optional adaptive second evaluation.
+SIM_SETTLE_MODE ?= reference
+ifeq ($(SIM_SETTLE_MODE),adaptive)
+SIM_SETTLE_CXXFLAGS := -DAETHERCORE_SIM_ADAPTIVE_SETTLE
+else ifeq ($(SIM_SETTLE_MODE),reference)
+SIM_SETTLE_CXXFLAGS :=
+else
+$(error unknown SIM_SETTLE_MODE '$(SIM_SETTLE_MODE)' (use reference or adaptive))
+endif
 JOBS ?= 6
 FW_BIN ?= build/l32-linux-boot/opensbi/platform/generic/firmware/fw_payload.bin
 MAX_CYCLES ?= 50000000
@@ -62,7 +72,7 @@ sim: rtl
 	set +e; \
 		$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_THREAD_FLAGS) $(VERILATOR_MAKE_OPT) --cc --exe --build -Wall -Wno-fatal \
 			--top-module $(TOP) -Mdir $(OBJ_DIR) \
-			-CFLAGS "$(SIM_CXXFLAGS)" \
+			-CFLAGS "$(SIM_CXXFLAGS) $(SIM_SETTLE_CXXFLAGS)" \
 			$(RTL_DIR)/*.sv $(abspath sim/opensbi_boot_main.cpp) \
 			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-build.log; \
 		rc=$${PIPESTATUS[0]}; \
@@ -77,7 +87,7 @@ forkserver-sim-existing-rtl:
 	set +e; \
 		$(VERILATOR) $(VERILATOR_MODEL_OPT) $(VERILATOR_MAKE_OPT) --cc --exe --build -Wall -Wno-fatal \
 			--top-module $(TOP) -Mdir $(FORKSERVER_OBJ_DIR) \
-			-CFLAGS "$(SIM_CXXFLAGS)" \
+			-CFLAGS "$(SIM_CXXFLAGS) $(SIM_SETTLE_CXXFLAGS)" \
 			$(RTL_DIR)/*.sv $(abspath sim/opensbi_forkserver_main.cpp) \
 			-j $(JOBS) 2>&1 | tee $(BUILD_DIR)/logs/verilator-forkserver-build.log; \
 		rc=$${PIPESTATUS[0]}; \

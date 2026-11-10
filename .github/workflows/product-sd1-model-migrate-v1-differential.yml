@@ -1,0 +1,216 @@
+name: Product SD1 frozen-model zero-step migration and 3972M-to-3992M exact differential
+
+# Opt-in only; no cold boot, no source image changes and NO crossing 4B.
+# A passing 20M differential is a PRECONDITION for a separate cross-4B run.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-model-migrate-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  migrate_and_diff:
+    if: >-
+      github.event.label.name == 'product-sd1-model-migrate-v1-3972m-differential' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHERCORE_SD1_MODEL_MIGRATE_CONFIRM: FROZEN_SIGNED_SD1_MODEL_MIGRATE_V1
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      SIM_SETTLE_MODE: reference
+      VERILATOR_THREADS: '1'
+      AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+    steps:
+      - name: Authenticate exact successful original-model 3972M and 3992M source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=42382284478
+          sha=0573965b157e1006d3da58c078e58149ea754d2f
+          repo="$GITHUB_REPOSITORY"
+          gh api "repos/$repo/actions/runs/$run" > "$RUNNER_TEMP/parent.json"
+          jq -e --arg repo "$repo" --arg sha "$sha" --argjson run "$run" '
+            .id == $run and .workflow_id == 410400673 and .run_attempt == 1 and
+            .event == "pull_request" and .repository.full_name == $repo and
+            .head_repository.full_name == $repo and .head_sha == $sha and
+            .head_branch == "design/rv64gc-product-architecture-20261103" and
+            .status == "completed" and .conclusion == "success"
+          ' "$RUNNER_TEMP/parent.json" >/dev/null || exit 16
+          gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json"
+          jq -e '
+            [.jobs[] | select(.name == "tail_3952_3992" and
+              .status == "completed" and .conclusion == "success")] | length == 1
+          ' "$RUNNER_TEMP/jobs.json" >/dev/null || exit 16
+          for step in 'Advance authentic RTL 3952M to 3972M' \
+                      'Upload 3972M complete RTL DDR SD checkpoint before next stage' \
+                      'Advance authentic RTL 3972M to 3992M' \
+                      'Upload 3992M complete RTL DDR SD checkpoint'; do
+            jq -e --arg step "$step" '
+              [.jobs[] | select(.name == "tail_3952_3992") | .steps[] |
+                select(.name == $step and .status == "completed" and
+                       .conclusion == "success")] | length == 1
+            ' "$RUNNER_TEMP/jobs.json" >/dev/null || exit 16
+          done
+          gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" > "$RUNNER_TEMP/artifacts.json"
+          jq -e '
+            ([.artifacts[] | select(.id == 13578361093 and
+              .name == "product-sd1-spi-polling-3972m-42382284478" and
+              .digest == "sha256:8dce04210f6ea184492fe2d55e3cd1f6703d97d2d6bd7f5ae3de80074d0ad1f4" and
+              .workflow_run.head_sha == "0573965b157e1006d3da58c078e58149ea754d2f" and
+              .expired == false and .size_in_bytes > 1000000)] | length == 1) and
+            ([.artifacts[] | select(.id == 13577948863 and
+              .name == "product-sd1-spi-polling-3992m-42382284478" and
+              .digest == "sha256:639fd2d79d97efbf826c0ea10ab3d7c602d2339bd8018f6da3a632e255cc55fe" and
+              .workflow_run.head_sha == "0573965b157e1006d3da58c078e58149ea754d2f" and
+              .expired == false and .size_in_bytes > 1000000)] | length == 1)
+          ' "$RUNNER_TEMP/artifacts.json" >/dev/null || exit 16
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+      - name: Cheap strict syntax and byte-level contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n tools/ci/product_sd1_model_migration_v1_qualify.sh
+          python3 -m unittest tests_py.test_product_sd1_model_migration_v1 -v
+      - name: Restore unchanged signed Debian SD image and Linux manifests
+        id: seed
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+      - name: Verify exact original signed media cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.seed.outputs.cache-hit }}' == true ||
+             '${{ steps.seed.outputs.cache-matched-key }}' == \
+               'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ]] || exit 16
+          python3 tools/ci/product_sd1_official_seed.py verify
+      - name: Restore original GPIO-CS patched Linux Image
+        id: diag
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/product-sd1-gpio-cs-diagnostic/linux/result.txt
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/.config
+            build/product-sd1-gpio-cs-diagnostic/linux/obj/arch/riscv/boot/Image
+            build/product-sd1-gpio-cs-diagnostic/linux/evidence
+            build/product-sd1-gpio-cs-diagnostic/boot
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-gpio-cs-diagnostic-image-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/product_sd1_gpio_cs_diag_build.sh', 'tools/ci/patches/linux-6.6.143-mmc-spi-gpio-cs-off.patch', 'tools/ci/rv64_minimal_init_payload_build.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+      - name: Reject missing original Linux cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.diag.outputs.cache-hit }}' == true ]] || exit 16
+          grep -Fxq 'PRODUCT_SD1_GPIO_CS_DIAG_ARTIFACTS: status=READY_FOR_SHORT_RTL_ONLY' \
+            build/product-sd1-gpio-cs-diagnostic/diagnostic-manifest.txt
+      - name: Import original signed polling firmware
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42338584047
+          name: product-sd1-spi-polling-build-42338584047
+          github-token: ${{ github.token }}
+          path: build/product-sd1-spi-polling-import
+      - name: Import original 3972M Host RTL DDR SD checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42382284478
+          name: product-sd1-spi-polling-3972m-42382284478
+          github-token: ${{ github.token }}
+          path: build/product-sd1-migration-source-3972m
+      - name: Import original 3992M Host RTL DDR SD checkpoint
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 42382284478
+          name: product-sd1-spi-polling-3992m-42382284478
+          github-token: ${{ github.token }}
+          path: build/product-sd1-migration-source-3992m
+      - name: Restore pinned Verilator 5.054 compiler for Host relink
+        id: verilator
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+          key: aethercore-Linux-X64-verilator-product-gsim-g3-v1-0d5cab64c9f95f1a19e38d7220450b5555d6a853d6ac53283fab6b1ca779c1d8
+      - name: Restore exact frozen original savable RTL model cache
+        id: model
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-persistent-checkpoint/savable-model
+          # Do NOT hash current Host source; original freeze included pre-migration code.
+          key: aethercore-Linux-X64-product-sd1-savable-portable-v1-x86_64-89e4c31da3dafc5a664e-b1ea68eed0a37532d6ec1feb08d5e5061e99336b8b8e17accbdbb000997895b9
+      - name: Reject any missing cache before creating guest cycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ steps.verilator.outputs.cache-hit }}' == true &&
+             '${{ steps.model.outputs.cache-hit }}' == true ]] || exit 16
+          test "$(sha256sum build/product-sd1-persistent-checkpoint/savable-model/obj/VAetherCoreProductDebianSdRV64SimTop | cut -d' ' -f1)" = \
+            5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc
+      - name: Build independent Host candidate, migrate zero clocks and differential 20M
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 38m \
+            bash tools/ci/product_sd1_model_migration_v1_qualify.sh
+          grep -Fxq 'PRODUCT_SD1_MODEL_MIGRATION_V1: status=QUALIFIED_UNDER_4B_ONLY' \
+            build/product-sd1-model-migration-v1/qualification-manifest.txt
+          cat build/product-sd1-model-migration-v1/qualification-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive new candidate executable and authenticated 3992M result
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-model-migrate-v1-qualified-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            build/product-sd1-model-migration-v1/qualification-manifest.txt
+            build/product-sd1-model-migration-v1/candidate-savable-model/obj/VAetherCoreProductDebianSdRV64SimTop
+            build/product-sd1-model-migration-v1/qualified/3972m/persistent.pre.rtl
+            build/product-sd1-model-migration-v1/qualified/3972m/persistent.pre.host
+            build/product-sd1-model-migration-v1/qualified/3992m/persistent.pre.rtl
+            build/product-sd1-model-migration-v1/qualified/3992m/persistent.pre.host
+      - name: Preserve diagnostic failure evidence without falsely claiming Debian PASS
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-model-migrate-v1-evidence-${{ github.run_id }}
+          retention-days: 90
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/product-sd1-model-migration-v1/host-recompile.log
+            build/product-sd1-model-migration-v1/migrate-3972.log
+            build/product-sd1-model-migration-v1/advance-3992.log
+            build/product-sd1-model-migration-v1/qualification-manifest.txt

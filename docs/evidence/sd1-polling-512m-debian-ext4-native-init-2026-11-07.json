@@ -1,0 +1,74 @@
+{
+  "qualification": "REAL_PRODUCT_RTL_SPI_POLLING_DEBIAN_EXT4_MOUNT_AND_KERNEL_INIT_EXEC_MARKER_NOT_LOGIN_PASS",
+  "repo": "yituanxing/minicore",
+  "pr": 379,
+  "run_id": 42342072950,
+  "as_of_date": "2026-11-07",
+  "identity": {
+    "model_sha256": "5a39da4993e9fa8c9a4280fdd3fedb48c6039cb6fa1eb487f8d0b41b2d31c8cc",
+    "firmware_sha256": "4c9b6ed61950094e2551bda780fbea9c79ded65fab433f13b06e2eb64817e5be",
+    "dtb_sha256": "72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1c",
+    "linux_image_sha256": "522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393",
+    "sd_media_sha256": "6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7",
+    "rootfs_result_sha256": "f2f8c6bf118c0be578b633dfd5486e0d1e1ef7becdaf093bbc4f16f62d0e474e"
+  },
+  "verification": "Downloaded original 472M, 492M, 512M GitHub Actions ZIP artifacts, verified SHA256 (streamed original 256MiB host state, RTL state and JSON progress) against each .polling-ready. Decoded authenticated AETSDCP1 guest UART preamble, not QEMU nor host inference. Full UART SHA256 the same for 472M and 492M.",
+  "guest_uart_sha256_472m_492m": "e65143496ea7a68ba7180e20189bca6183bdc208c9bcbc62a0c3f9598f79bc4a",
+  "guest_uart_qualified_excerpt": [
+    "[    5.455267] mmc0: new SDHC card on SPI",
+    "[    6.874958]  mmcblk0: p1",
+    "[    7.755586] EXT4-fs (mmcblk0p1): mounted filesystem 96207020-0015-4000-8000-000000000501 r/w with ordered data mode. Quota mode: disabled.",
+    "[    7.757984] VFS: Mounted root (ext4 filesystem) on device 179:1.",
+    "[    7.785331] devtmpfs: mounted",
+    "[    7.847376] Run /sbin/init as init process"
+  ],
+  "snapshots": [
+    {
+      "cycle": 472000000,
+      "artifact_id": 13562376540,
+      "name": "product-sd1-spi-polling-472m-42342072950",
+      "host_sha256": "7fe74cd2fb15ed2944add7d443f6de7cba52b173abc57ca8a2be8579a277da45",
+      "rtl_sha256": "d04f057aaf901ad342a9de820e48543dcef0084ffa34efa2fca6a5e7b6017619",
+      "profile_sha256": "8b18bfc56c24b8006aee9f8df17fef04f43f6979d42b849f5cc633d44d124428",
+      "sd_reads": 419,
+      "sd_write_blocks": 0,
+      "ext4_root_mounted": true,
+      "kernel_init_exec_marker": true,
+      "login_seen": false
+    },
+    {
+      "cycle": 492000000,
+      "artifact_id": 13562825691,
+      "name": "product-sd1-spi-polling-492m-42342072950",
+      "host_sha256": "dd9029006093b773b4f361ae43cccf1703128414bb39c4f15f67152a03e8c21e",
+      "rtl_sha256": "fcc69b31a5fb0f867e316ada6066d385c343da8e808a6a27e7723f4f9156886f",
+      "profile_sha256": "b4705570d9609f72f95f867509524514b12c1e2f8ea96c9327261d8b8c700638",
+      "sd_reads": 566,
+      "sd_write_blocks": 0,
+      "ext4_root_mounted": true,
+      "kernel_init_exec_marker": true,
+      "login_seen": false
+    },
+    {
+      "cycle": 512000000,
+      "artifact_id": 13562481745,
+      "name": "product-sd1-spi-polling-512m-42342072950",
+      "host_sha256": "df223af7098c8acb34acbe0a0f9fdc52078a3d19d9c0c0fae25c7eb56534d6f0",
+      "rtl_sha256": "105e400cd90f0010a3e2f3a16559e9900acfab032f52bfa5bb0865a368423490",
+      "profile_sha256": "950e8c1e912ba14bdc2a49490491035ef27576845130917ab98fecfc843b9e80",
+      "sd_reads": 723,
+      "sd_write_blocks": 8,
+      "ext4_root_mounted": true,
+      "kernel_init_exec_marker": true,
+      "login_seen": false
+    }
+  ],
+  "limits": {
+    "user_space_pid1_completed": false,
+    "systemd_userspace_output_observed": false,
+    "login_prompt_observed": false,
+    "notes": "Run /sbin/init as init process is a Linux kernel marker for its init exec attempt. It does not prove systemd finished booting. No native Debian login is claimed.",
+    "irq_missing_log": "spi_oc_tiny 10001000.spi: error -ENXIO: IRQ index 0 not found",
+    "irq_missing_interpretation": "Expected for intentionally absent polling SPI IRQ; model thereafter discovers SDHC, reads data, mounts root. Avoid changing kernel without new isolated evidence."
+  }
+}

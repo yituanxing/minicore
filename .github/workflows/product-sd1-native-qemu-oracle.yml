@@ -1,0 +1,242 @@
+name: AetherCore Product SD1 native Debian QEMU oracle
+
+# Separate, strictly bounded native Debian PID1/login test on QEMU virtio.
+# This is NOT the Product SPI-SD RTL, nor does it launch a longrun. It may
+# consume only exact signed SD1 seed media from the independent offline job.
+# A first-party PR label can trigger the review branch without merging it;
+# pushes, ordinary PR synchronization, and scheduled events never trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Run bounded native Debian /sbin/init QEMU oracle with exactly seeded media
+        required: true
+        type: choice
+        options:
+          - 'NO'
+          - RUN_SD1_QEMU_NATIVE_INIT_ORACLE
+        default: 'NO'
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-product-sd1-native-qemu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  product-sd1-native-qemu-oracle:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirmation == 'RUN_SD1_QEMU_NATIVE_INIT_ORACLE' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'product-sd1-native-qemu-oracle' &&
+       github.event.pull_request.number == 379 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RV64_DEBIAN_STAGE: sd1
+      RV64_SD1_QEMU_BUILD_JOBS: '4'
+      RV64_SD1_QEMU_TIMEOUT_SECONDS: '540'
+
+    steps:
+      - name: Checkout exact Product code without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify explicit native Debian QEMU scope before cache/network
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$RV64_DEBIAN_STAGE" = sd1
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" &&
+             -z "${AETHERCORE_SD1_RELAY_CONFIRM:-}" &&
+             -z "${RV64_SD1_LOGIN_USER:-}" &&
+             -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" ]] || exit 19
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          bash -n tools/ci/product_sd1_qemu_init_oracle.sh
+          bash -n tools/ci/product_sd1_qemu_bpf_launch.sh
+          python3 -m unittest tests_py.test_product_sd1_qemu_oracle_contract \
+            tests_py.test_product_sd1_native_qemu_workflow_contract \
+            tests_py.test_product_sd1_qemu_bpf_launch_contract \
+            tests_py.test_product_sd1_qemu_bpf_icount_probe -v
+          echo 'QEMU virt boot only; no Product RTL, SD SPI model, guest DDR checkpoint, login credentials or media uploads.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore ONLY the exact official signed Debian SD1 media cache
+        id: media_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v2-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'build.mill', 'tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_payload_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_tree_digest.py', 'tools/ci/rv64_linux_early_build.sh', 'tools/ci/rv64_minimal_init_payload_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh', 'software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0
+
+      - name: Refuse absent media cache before native package installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Exact v2 cache hits and the single pinned legacy v1 key are admissible;
+          # the following signed-media/whole-image SHA verifier is mandatory.
+          [[ '${{ steps.media_cache.outputs.cache-hit }}' == true ||
+             ( '${{ steps.media_cache.outputs.cache-hit }}' == false &&
+               '${{ steps.media_cache.outputs.cache-matched-key }}' == 'aethercore-${{ runner.os }}-${{ runner.arch }}-product-sd1-official-seed-v1-327da1449dc81566d524cd0d159dba0c5c6ad83d001b00e00717e1b9ede26cf0' ) ]] || {
+            echo 'SD1_QEMU_ORACLE_OFFICIAL_MEDIA_REQUIRED: run exact offline seed first' >&2
+            exit 16
+          }
+          python3 tools/ci/product_sd1_official_seed.py verify
+          test -s build/rv64-debian-sd1-sd/sd-rootfs.img
+          test -s build/rv64-debian-linux/obj/.config
+          echo 'SD1_QEMU_ORACLE_EXACT_OFFICIAL_MEDIA_VERIFIED'
+
+      - name: Re-key individually SHA-verified official Debian media without RTL source coupling
+        if: steps.media_cache.outputs.cache-hit == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-boot
+            build/rv64-debian-sd1-sd
+            build/product-sd1-official-seed
+          key: ${{ steps.media_cache.outputs.cache-primary-key }}
+
+      - name: Restore frozen Bootlin RV64 GCC from trusted source cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore frozen upstream Linux sources for a DISTINCT QEMU virt kernel
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Reuse exact Ubuntu Noble QEMU prerequisite .deb downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/aethercore-sd1-qemu-apt-archives
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-noble-sd1-qemu-apt-v1
+
+      - name: Install QEMU virt and native host build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 ships RISC-V with qemu-system-misc. Do not pull its
+          # recommended GUI/SPICE/audio/GStreamer packages for a -nographic
+          # serial-only oracle: those alone exhausted the prior 10m budget.
+          missing=()
+          command -v qemu-system-riscv64 >/dev/null || missing+=(qemu-system-misc)
+          for binary_package in \
+            'bc:bc' 'make:make' 'gcc:build-essential' 'g++:build-essential' \
+            'bison:bison' 'flex:flex' 'dtc:device-tree-compiler' 'pahole:dwarves'; do
+            command -v "${binary_package%%:*}" >/dev/null || missing+=("${binary_package#*:}")
+          done
+          for package in libssl-dev libelf-dev; do
+            dpkg-query -W -f='${Status}' "$package" 2>/dev/null | \
+              grep -Fxq 'install ok installed' || missing+=("$package")
+          done
+          if (( ${#missing[@]} )); then
+            mapfile -t missing < <(printf '%s\n' "${missing[@]}" | sort -u)
+            apt_archives="$RUNNER_TEMP/aethercore-sd1-qemu-apt-archives"
+            mkdir -p "$apt_archives/partial"
+            timeout --signal=TERM --kill-after=20s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=20s 20m sudo apt-get install \
+              -y --no-install-recommends \
+              -o "Dir::Cache::archives=$apt_archives" \
+              -o 'APT::Keep-Downloaded-Packages=true' "${missing[@]}"
+            sudo chown -R "$(id -u):$(id -g)" "$apt_archives"
+          fi
+          command -v qemu-system-riscv64
+
+      - name: Validate exact GCC and pinned upstream source (no Product RTL)
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 15m bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          # The toolchain bootstrap exports its path through GITHUB_ENV;
+          # that value is visible to the NEXT Actions step, not this shell.
+          grep -Eq '^AETHERCORE_RV64_LINUX_CROSS_COMPILE=/[^[:space:]]+$' "$GITHUB_ENV"
+
+      - name: Prepare independent QEMU virt kernel from the qualified SD1 config
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${AETHERCORE_RV64_LINUX_CROSS_COMPILE:-}" == /* ]] || {
+            echo 'SD1_QEMU_ORACLE_ABSOLUTE_CROSS_GCC_REQUIRED' >&2
+            exit 14
+          }
+          timeout --signal=TERM --kill-after=30s 25m \
+            bash tools/ci/product_sd1_qemu_init_oracle.sh prepare
+          grep -Fxq 'PRODUCT_SD1_QEMU_ORACLE_KERNEL_RESULT: status=READY_UNVERIFIED' \
+            build/rv64-debian-sd1-qemu-oracle/result.txt
+
+      - name: Run bounded real Debian ext4 mount native init and serial login oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 11m \
+            bash tools/ci/product_sd1_qemu_init_oracle.sh run
+          grep -Fxq 'PRODUCT_SD1_QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL' \
+            build/rv64-debian-sd1-qemu-oracle/boot-result.txt
+          echo 'SD1_QEMU_NATIVE_INIT_LOGIN_PASS: real Debian /sbin/init & login; QEMU virtio ONLY, not Product SPI/RTL.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Measure exact sd_bind6 BPF verifier in separate bounded QEMU TCG process
+        id: bpf_compare
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is supplemental QEMU-only icount evidence. Independent QEMU
+          # native login PASS above never depends on a GDB/QMP profiling pass.
+          timeout --signal=TERM --kill-after=10s 9m \
+            bash tools/ci/product_sd1_qemu_bpf_launch.sh
+          echo 'SD1_QEMU_BPF_ICOUNT_MEASURED: exact sd_bind6 QEMU guest instructions; optional post-UART-login sample is a non-atomic whole-boot lower bound, never RTL cycles.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report BPF instrumentation outcome independently from native Debian login
+        if: always() && steps.bpf_compare.outcome == 'failure'
+        shell: bash
+        run: |
+          echo '::warning::SD1_QEMU_BPF_DIAGNOSTIC_FAILED_OR_INCOMPARABLE; existing QEMU Debian login verdict is unchanged.'
+          echo 'SD1_QEMU_BPF_DIAGNOSTIC_FAILED_OR_INCOMPARABLE: no verifier fraction can be claimed; native QEMU login and Product RTL status unchanged.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bounded log and SHA evidence only (never SD image or guest DDR)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-sd1-qemu-native-init-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            build/rv64-debian-sd1-qemu-oracle/result.txt
+            build/rv64-debian-sd1-qemu-oracle/boot-result.txt
+            build/rv64-debian-sd1-qemu-oracle/boot-uart.log
+            build/rv64-debian-sd1-qemu-oracle/bpf-icount-probe.json
+            build/rv64-debian-sd1-qemu-oracle/bpf-qemu-uart.log
+            build/rv64-debian-sd1-qemu-oracle/bpf-qemu-stderr.log

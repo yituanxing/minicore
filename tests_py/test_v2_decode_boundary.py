@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 V2 = ROOT / "src/main/scala/aethercore/core/v2"
+SEMANTIC = ROOT / "src/main/scala/aethercore/core/semantic"
 
 
 class V2DecodeBoundaryContract(unittest.TestCase):
@@ -19,9 +20,12 @@ class V2DecodeBoundaryContract(unittest.TestCase):
 
         self.assertEqual(
             decoder_users,
-            ["TinySemanticDecode.scala"],
-            "v2 ISA Decoder must terminate at the single TinySemanticDecode bridge",
+            [],
+            "v2 must only use the shared SemanticDecode implementation",
         )
+        source = (SEMANTIC / "SemanticDecode.scala").read_text(encoding="utf-8")
+        self.assertIn("val decoder = Module(new Decoder(isa))", source)
+        self.assertEqual(source.count("new Decoder(isa)"), 1)
 
     def test_backend_never_redecodes_retained_instruction_bits(self):
         # Keeping canonical/raw encodings in DecodedInstruction is intentional:
@@ -53,11 +57,18 @@ class V2DecodeBoundaryContract(unittest.TestCase):
         foundation = (V2 / "FoundationTypes.scala").read_text(encoding="utf-8")
         bridge = (V2 / "TinySemanticDecode.scala").read_text(encoding="utf-8")
 
-        self.assertIn("class DecodedInstruction", foundation)
+        shared = (SEMANTIC / "SemanticTypes.scala").read_text(encoding="utf-8")
+        implementation = (SEMANTIC / "SemanticDecode.scala").read_text(encoding="utf-8")
+        compatibility = (V2 / "package.scala").read_text(encoding="utf-8")
+        self.assertIn("class DecodedInstruction", shared)
+        self.assertNotIn("class DecodedInstruction", foundation)
         self.assertIn("class BackendUop", foundation)
         self.assertIn("val decoded = new DecodedInstruction", foundation)
-        self.assertIn("val decoder = Module(new Decoder(isa))", bridge)
-        self.assertIn("io.dispatch.decoded", bridge)
+        self.assertIn("type DecodedInstruction = aethercore.core.semantic.DecodedInstruction", compatibility)
+        self.assertIn("new SemanticDecode(isa)", bridge)
+        self.assertIn("io.dispatch.decoded := semantic.io.decoded", bridge)
+        self.assertNotIn("RobDispatch", implementation)
+        self.assertNotIn("ExecutionClass", implementation)
 
 
 if __name__ == "__main__":

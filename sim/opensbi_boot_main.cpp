@@ -6,12 +6,24 @@ using OpenSbiTop = VAetherCoreOpenSbiCSimTop;
 using OpenSbiTop = VAetherCoreOpenSbiSimTop;
 #endif
 #include "l32_opensbi_runtime.h"
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+#include "l32_g5_silence_watchdog.h"
+#endif
+#if defined(AETHERCORE_PRODUCT_SPI_SD) && !defined(AETHERCORE_PRODUCT_DEBIAN)
+#error "Product SD1 requires both AETHERCORE_PRODUCT_SPI_SD and AETHERCORE_PRODUCT_DEBIAN"
+#endif
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+#include "l32_sd_spi_card.h"
+#endif
 #include "verilated.h"
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -20,9 +32,17 @@ constexpr std::size_t kRecentCommitCount = 16;
 constexpr const char* kDefaultMilestone = "Test payload running";
 constexpr std::uint64_t kSupervisorTimerInterruptCode = 5;
 constexpr std::uint64_t kSupervisorExternalInterruptCode = 9;
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+// RV64 OpenSBI fw_payload hands its Image off at 0x80200000; the older
+// RV32 qualification has a distinct 0x80400000 image base. Keep their
+// compressed-retirement accounting independent without changing execution.
+constexpr std::uint64_t kLinuxPayloadBase = 0x80200000ULL;
+#else
 constexpr std::uint64_t kLinuxPayloadBase = 0x80400000ULL;
+#endif
 
 using aethercore::l32sim::Memory;
+using aethercore::l32sim::TransportRuntimeState;
 using aethercore::l32sim::initialize;
 using aethercore::l32sim::step;
 
@@ -87,6 +107,22 @@ int main(int argc, char** argv) {
         argc >= 12 ? std::stoull(argv[11], nullptr, 0) : 0ULL;
     const std::uint64_t minPostMilestoneCommits =
         argc >= 13 ? std::stoull(argv[12], nullptr, 0) : 0ULL;
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+    // Disabled unless the explicitly bounded G5 diagnosis requests it. This
+    // is not an automatic Linux boot failure criterion: a quiet late initcall
+    // may legitimately need time on RTL. Never alter short A/B or SD1 oracles.
+    std::uint64_t lateBootSilenceBudget = 0;
+    if (const char* value = std::getenv("AETHERCORE_G5_STALL_WATCHDOG_CYCLES")) {
+      const std::string requested(value);
+      if (requested.empty() || requested.find_first_not_of("0123456789") != std::string::npos)
+        throw std::runtime_error("AETHERCORE_G5_STALL_WATCHDOG_CYCLES must be decimal guest cycles");
+      lateBootSilenceBudget = std::stoull(requested);
+      if (lateBootSilenceBudget == 0)
+        throw std::runtime_error("AETHERCORE_G5_STALL_WATCHDOG_CYCLES must be nonzero when set");
+    }
+    aethercore::l32sim::G5SilenceWatchdog lateBootWatchdog(lateBootSilenceBudget);
+    std::uint64_t nextLateBootCheckCycle = 1000000;
+#endif
     std::string uartInput;
     if (!uartCommand.empty()) {
       uartInput = uartCommand;
@@ -96,8 +132,58 @@ int main(int argc, char** argv) {
     VerilatedContext context;
     context.commandArgs(argc, argv);
     OpenSbiTop top{&context};
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+    static_assert(requires(OpenSbiTop& hardware) {
+      hardware.io_commit_rdWrite;
+      hardware.io_commit_rd;
+      hardware.io_commit_rdData;
+      hardware.io_commit_floating_rdWrite;
+      hardware.io_commit_floating_rd;
+      hardware.io_commit_floating_rdData;
+      hardware.io_commit_floating_fflags;
+      hardware.io_commit_floating_stateDirty;
+    }, "G5 Verilator A/B must expose all real RV64GC integer and floating retirement ports");
+#endif
     Memory memory;
     memory.loadAtBase(image);
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+    // Match the Product FPGA stream loader's separate fw_payload + FDT DDR
+    // transactions, with no dependence on an OpenSBI embedded-DTB shortcut.
+    constexpr std::uint64_t kIndependentDtbAddress = 0x87f00000ULL;
+    constexpr std::size_t kMaxDtbBytes = 1ULL << 20;
+    static_assert(kIndependentDtbAddress > aethercore::l32sim::kRamBase);
+    const char* dtbPath = std::getenv("AETHERCORE_PRODUCT_DTB_IMAGE");
+    if (!dtbPath || *dtbPath == '\0')
+      throw std::runtime_error("Product SD1 needs AETHERCORE_PRODUCT_DTB_IMAGE for independent FPGA-style DDR loading");
+    if (std::filesystem::file_size(image) > kIndependentDtbAddress - aethercore::l32sim::kRamBase)
+      throw std::runtime_error("Product SD1 firmware overlaps fixed independent DTB DDR address");
+    memory.loadBoundedRegion(dtbPath, kIndependentDtbAddress, kMaxDtbBytes);
+    std::cerr << "\nPRODUCT_SD1_INDEPENDENT_DTB_READY address=0x87f00000 bytes="
+              << std::filesystem::file_size(dtbPath) << "\n";
+#else
+    if (std::getenv("AETHERCORE_PRODUCT_DTB_IMAGE"))
+      throw std::runtime_error("independent Product DTB passed to a non-SD runner");
+#endif
+    TransportRuntimeState transport;
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+    static_assert(requires(OpenSbiTop& hardware) {
+      hardware.io_spiSclk;
+      hardware.io_spiMosi;
+      hardware.io_spiMiso;
+      hardware.io_spiCsN;
+    }, "Product SD1 must expose actual SPI-SD physical pins");
+    const char* sdPath = std::getenv("AETHERCORE_PRODUCT_SD_IMAGE");
+    if (!sdPath || *sdPath == '\0')
+      throw std::runtime_error("Product SD1 requires AETHERCORE_PRODUCT_SD_IMAGE=raw-MBR-ext4-SD.img");
+    aethercore::l32sim::SdSpiCard sdCard{sdPath};
+    top.io_spiMiso = 1;
+    std::cerr << "\nPRODUCT_SD1_SD_IMAGE_READY sectors=" << sdCard.sourceSectors()
+              << " partition1_lba=" << sdCard.partitionStartLba()
+              << " mode=immutable-image-plus-session-COW" << "\n";
+#else
+    if (std::getenv("AETHERCORE_PRODUCT_SD_IMAGE"))
+      throw std::runtime_error("SD_IMAGE provided to a non-SD Product simulator; select the explicit SD1 top");
+#endif
 
     std::uint64_t cycles = 0;
     std::uint64_t commits = 0;
@@ -111,8 +197,14 @@ int main(int argc, char** argv) {
     std::uint64_t lastExceptionCause = 0;
     std::uint64_t lastExceptionValue = 0;
     std::uint64_t lastExceptionPc = 0;
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+    aethercore::l32sim::ProductDebianRetireDigest g5Retire;
+#endif
     std::uint64_t milestoneCommitCount = 0;
     std::string uart;
+    // Hash the actual UART byte stream, not only its length. Short Product
+    // simulator A/B must reject divergent output with the same byte count.
+    std::uint64_t uartFingerprint = 0xcbf29ce484222325ULL;
     bool sawOpenSbiBanner = false;
     bool sawMilestone = false;
     bool inputStarted = !uartInput.empty() && uartTrigger.empty();
@@ -124,12 +216,15 @@ int main(int argc, char** argv) {
     std::uint64_t inputCompleteCycle = 0;
     std::uint64_t postInputDeadline = 0;
     std::uint64_t nextProgressCycle = progressIntervalCycles;
+    std::uint64_t previousProgressCycle = 0;
+    std::uint64_t previousProgressCommits = 0;
+    std::uint64_t lastUartCycle = 0;
     const auto hostStart = std::chrono::steady_clock::now();
     std::array<std::uint64_t, kRecentCommitCount> recentPcs{};
     std::size_t recentCount = 0;
     std::size_t recentIndex = 0;
 
-    initialize(top, memory);
+    initialize(top, memory, transport);
 
     if (inputStarted) {
       std::cerr << "\nL32_UART_INPUT_START cycles=0 commits=0 bytes=" << uartInput.size()
@@ -138,12 +233,21 @@ int main(int argc, char** argv) {
 
     for (; cycles < maxCycles; ++cycles) {
       const bool presentInput = inputStarted && inputIndex < uartInput.size();
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+      top.io_spiMiso = sdCard.miso() ? 1 : 0;
+#endif
       const bool rxAccepted = step(
           top,
           context,
           memory,
+          transport,
           presentInput,
           presentInput ? static_cast<std::uint8_t>(uartInput[inputIndex]) : 0);
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+      sdCard.observe(static_cast<bool>(top.io_spiSclk),
+                     static_cast<bool>(top.io_spiMosi),
+                     static_cast<bool>(top.io_spiCsN));
+#endif
 
       if (cycles == 3) top.reset = 0;
       if (top.reset) continue;
@@ -152,12 +256,38 @@ int main(int argc, char** argv) {
         const auto elapsed = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - hostStart).count();
         const auto cyclesPerSecond = elapsed > 0.0 ? cycles / elapsed : 0.0;
+        const auto intervalCycles = cycles - previousProgressCycle;
+        const auto intervalCommits = commits - previousProgressCommits;
+        const auto intervalIpc = intervalCycles != 0
+            ? static_cast<double>(intervalCommits) / intervalCycles : 0.0;
         std::cerr << "\nL32_SIM_PROGRESS cycles=" << cycles
                   << " commits=" << commits
                   << " host-seconds=" << elapsed
                   << " cycles-per-second=" << cyclesPerSecond
                   << " input=" << inputIndex << '/' << uartInput.size()
-                  << " milestone=" << (sawMilestone ? 1 : 0) << "\n";
+                  << " milestone=" << (sawMilestone ? 1 : 0)
+                  << " interval-commits=" << intervalCommits
+                  << " interval-ipc=" << intervalIpc
+                  << " uart-bytes=" << uart.size()
+                  << " uart-silent-cycles=" << (cycles - lastUartCycle)
+                  << " exceptions=" << exceptions
+                  << " interrupts=" << interrupts
+                  << " stip=" << supervisorTimerInterrupts
+                  << " seip=" << supervisorExternalInterrupts
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+                  << ' ' << sdCard.progress()
+#endif
+                  << "\n";
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+        if (lateBootWatchdog.anchored()) {
+          std::cerr << "L32_G5_LATE_BOOT_PC_PROGRESS cycles=" << cycles
+                    << " silent-cycles=" << cycles - lateBootWatchdog.lastUartCycle();
+          lateBootWatchdog.emit(std::cerr);
+          std::cerr << "\n";
+        }
+#endif
+        previousProgressCycle = cycles;
+        previousProgressCommits = commits;
         nextProgressCycle += progressIntervalCycles;
       }
 
@@ -184,8 +314,14 @@ int main(int argc, char** argv) {
       }
 
       if (top.io_uartValid) {
+        lastUartCycle = cycles;
         const char byte = static_cast<char>(top.io_uartByte);
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+        lateBootWatchdog.observeUart(cycles, byte);
+#endif
         uart.push_back(byte);
+        uartFingerprint ^= static_cast<std::uint8_t>(top.io_uartByte);
+        uartFingerprint *= 0x100000001b3ULL;
         std::cout.put(byte);
         if (byte == '\n') std::cout.flush();
         if (!sawOpenSbiBanner && endsWith(uart, "OpenSBI v1.6")) {
@@ -219,6 +355,18 @@ int main(int argc, char** argv) {
       if (top.io_commit_valid) {
         ++commits;
         const auto commitPc = static_cast<std::uint64_t>(top.io_commit_pc);
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+        g5Retire.record(
+            commitPc, static_cast<std::uint32_t>(top.io_commit_inst),
+            static_cast<bool>(top.io_commit_rdWrite),
+            static_cast<std::uint8_t>(top.io_commit_rd),
+            static_cast<std::uint64_t>(top.io_commit_rdData),
+            static_cast<bool>(top.io_commit_floating_rdWrite),
+            static_cast<std::uint8_t>(top.io_commit_floating_rd),
+            static_cast<std::uint64_t>(top.io_commit_floating_rdData),
+            static_cast<std::uint8_t>(top.io_commit_floating_fflags),
+            static_cast<bool>(top.io_commit_floating_stateDirty));
+#endif
         if (static_cast<unsigned>(top.io_commit_instBytes) == 2U) {
           ++compressedCommits;
           if (commitPc < kLinuxPayloadBase) {
@@ -275,6 +423,13 @@ int main(int argc, char** argv) {
         }
         if (isInterruptCause(interruptCause, kSupervisorTimerInterruptCode)) {
           ++supervisorTimerInterrupts;
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+          // The Product core drives interruptPc from its precise asynchronous
+          // trap boundary PC, used as trapPc/sepc. The final 16 retire PCs can
+          // instead all be from account_process_tick(), hiding the wait site.
+          lateBootWatchdog.observeTimerInterrupt(
+              static_cast<std::uint64_t>(top.io_commit_interruptPc));
+#endif
           if (supervisorTimerInterrupts == 1) {
             std::cerr << "\nL32_FIRST_SUPERVISOR_TIMER_INTERRUPT cycles=" << cycles
                       << " commits=" << commits
@@ -304,6 +459,39 @@ int main(int argc, char** argv) {
           }
         }
       }
+
+#ifdef AETHERCORE_PRODUCT_DEBIAN
+      if (lateBootWatchdog.enabled() && cycles >= nextLateBootCheckCycle) {
+        nextLateBootCheckCycle += 1000000;
+        if (lateBootWatchdog.expired(cycles)) {
+          std::cout.flush();
+          std::cerr << "\nL32_G5_LATE_BOOT_SILENCE_WATCHDOG"
+                    << " classification=suspected-stalled-initcall-not-proven-deadlock"
+                    << " cycles=" << cycles
+                    << " anchor-cycle=" << lateBootWatchdog.anchorCycle()
+                    << " last-uart-cycle=" << lateBootWatchdog.lastUartCycle()
+                    << " silent-cycles=" << cycles - lateBootWatchdog.lastUartCycle()
+                    << " commits=" << commits
+                    << " interrupts=" << interrupts
+                    << " stip=" << supervisorTimerInterrupts
+                    << " seip=" << supervisorExternalInterrupts
+                    << " mtime=0x" << std::hex << static_cast<std::uint64_t>(top.io_mtime)
+                    << " mtimecmp=0x" << static_cast<std::uint64_t>(top.io_mtimecmp)
+                    << " last-exception-pc=0x" << lastExceptionPc
+                    << " last-exception-cause=0x" << lastExceptionCause
+                    << " last-exception-value=0x" << lastExceptionValue << std::dec;
+          lateBootWatchdog.emit(std::cerr);
+          std::cerr << " recent-pcs=" << std::hex;
+          for (std::size_t i = 0; i < recentCount; ++i) {
+            const auto slot = (recentIndex + kRecentCommitCount - recentCount + i) % kRecentCommitCount;
+            if (i != 0) std::cerr << ',';
+            std::cerr << "0x" << recentPcs[slot];
+          }
+          std::cerr << std::dec << "\n";
+          return 14;
+        }
+      }
+#endif
 
       const bool inputSatisfied = uartInput.empty() ||
           (inputStarted && inputIndex == uartInput.size() && sawRxInterrupt && sawPostInputSeip);
@@ -363,7 +551,9 @@ int main(int argc, char** argv) {
                   << " input-bytes=" << inputIndex << '/' << uartInput.size()
                   << " rx-irq=" << (sawRxInterrupt ? 1 : 0)
                   << " post-input-seip=" << (sawPostInputSeip ? 1 : 0)
-                  << " marker=" << milestone << "\n";
+                  << " marker=" << milestone
+                  << " ram-fingerprint=0x" << std::hex << memory.fingerprint()
+                  << std::dec << "\n";
         return sawOpenSbiBanner ? 0 : 5;
       }
 
@@ -390,6 +580,7 @@ int main(int argc, char** argv) {
               << " opensbi-compressed=" << opensbiCompressedCommits
               << " linux-compressed=" << linuxCompressedCommits
               << " uart-bytes=" << uart.size()
+              << " uart-fingerprint=0x" << std::hex << uartFingerprint << std::dec
               << " banner=" << (sawOpenSbiBanner ? 1 : 0)
               << " milestone=" << (sawMilestone ? 1 : 0)
               << " min-interrupts=" << minInterrupts
@@ -413,12 +604,26 @@ int main(int argc, char** argv) {
               << " last-exception-pc=0x" << lastExceptionPc
               << " last-exception-cause=0x" << lastExceptionCause
               << " last-exception-value=0x" << lastExceptionValue
+              << " ram-fingerprint=0x" << memory.fingerprint()
               << " recent-pcs=";
     for (std::size_t i = 0; i < recentCount; ++i) {
       const auto slot = (recentIndex + kRecentCommitCount - recentCount + i) % kRecentCommitCount;
       if (i != 0) std::cerr << ',';
       std::cerr << "0x" << recentPcs[slot];
     }
+#ifdef AETHERCORE_PRODUCT_SPI_SD
+    // Deterministic card-side progress joins the existing same-cycle CPU/RAM
+    // timeout fingerprint for short Product SD1 simulator A/B comparisons.
+    // This is an observation, not a card-state checkpoint or runtime shortcut.
+    std::cerr << ' ' << sdCard.progress();
+#endif
+#ifdef AETHERCORE_PRODUCT_GSIM_DEBIAN_AB_TRACE
+    std::cerr << " g5-retire-digest=0x" << std::hex << g5Retire.retirement
+              << " g5-int-digest=0x" << g5Retire.integer
+              << " g5-fp-digest=0x" << g5Retire.floating << std::dec
+              << " g5-fp-writes=" << g5Retire.floatingWrites
+              << " g5-fflags-events=" << g5Retire.flagEvents;
+#endif
     std::cerr << std::dec << "\n";
     return 2;
   } catch (const std::exception& error) {

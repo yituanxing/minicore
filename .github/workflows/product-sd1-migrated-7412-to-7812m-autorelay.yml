@@ -1,0 +1,111 @@
+name: Product signed SD1 migrated RTL 7412M to 7812M authenticated relay
+
+# Source 7412M authenticated by run #42482165517 stage_04 terminal
+# certificate and exact artifact/ZIP/Host/RTL SHA-256; no QEMU substitution.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: product-sd1-migrated-7412-7812m-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  stage_01:
+    if: >-
+      github.event.label.name == 'product-sd1-migrated-7412m-to-7812m-autorelay' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '7412'
+      stage1: '7432'
+      stage2: '7452'
+      stage3: '7472'
+      stage4: '7492'
+      stage5: '7512'
+      source_run: '42482165517'
+      source_head_sha: 'f8490d3e0e1b0d7668335b50d8a8b435c76397ab'
+      source_workflow_path: '.github/workflows/product-sd1-migrated-7012-to-7412m-autorelay.yml'
+      source_job: 'stage_04 / relay_five'
+      source_completed_step: 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs'
+      source_artifact_id: '13619202982'
+      source_artifact_name: 'product-sd1-migrated-7412m-42482165517'
+      source_artifact_digest: 'ff161885b3649b9761d705ca543ce136550bf5938828a6f18e5c626310dc517f'
+      source_host_sha: 'a7cdfc92cdaa6dd0aea3dcfd3234e80b3e1d527f193b7769b64b8492270393ef'
+      source_rtl_sha: '6cff4997896589d127920b58e010fbda743b44ecdc7436d0a9abf471f31da958'
+
+  stage_02:
+    needs: stage_01
+    if: needs.stage_01.result == 'success'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '7512'
+      stage1: '7532'
+      stage2: '7552'
+      stage3: '7572'
+      stage4: '7592'
+      stage5: '7612'
+      source_mode: intra_run
+      source_run: ${{ format('{0}', github.run_id) }}
+      source_head_sha: ${{ github.event.pull_request.head.sha }}
+      source_workflow_path: '.github/workflows/product-sd1-migrated-7412-to-7812m-autorelay.yml'
+      source_job: 'stage_01 / relay_five'
+      source_completed_step: 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs'
+      source_artifact_id: ${{ needs.stage_01.outputs.terminal_artifact_id }}
+      source_artifact_name: product-sd1-migrated-7512m-${{ github.run_id }}
+      source_artifact_digest: ${{ needs.stage_01.outputs.terminal_artifact_digest }}
+      source_host_sha: ${{ needs.stage_01.outputs.terminal_host_sha }}
+      source_rtl_sha: ${{ needs.stage_01.outputs.terminal_rtl_sha }}
+
+  stage_03:
+    needs: stage_02
+    if: needs.stage_02.result == 'success'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '7612'
+      stage1: '7632'
+      stage2: '7652'
+      stage3: '7672'
+      stage4: '7692'
+      stage5: '7712'
+      source_mode: intra_run
+      source_run: ${{ format('{0}', github.run_id) }}
+      source_head_sha: ${{ github.event.pull_request.head.sha }}
+      source_workflow_path: '.github/workflows/product-sd1-migrated-7412-to-7812m-autorelay.yml'
+      source_job: 'stage_02 / relay_five'
+      source_completed_step: 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs'
+      source_artifact_id: ${{ needs.stage_02.outputs.terminal_artifact_id }}
+      source_artifact_name: product-sd1-migrated-7612m-${{ github.run_id }}
+      source_artifact_digest: ${{ needs.stage_02.outputs.terminal_artifact_digest }}
+      source_host_sha: ${{ needs.stage_02.outputs.terminal_host_sha }}
+      source_rtl_sha: ${{ needs.stage_02.outputs.terminal_rtl_sha }}
+
+  stage_04:
+    needs: stage_03
+    if: needs.stage_03.result == 'success'
+    uses: ./.github/workflows/product-sd1-migrated-autorelay-five-reusable.yml
+    with:
+      start_m: '7712'
+      stage1: '7732'
+      stage2: '7752'
+      stage3: '7772'
+      stage4: '7792'
+      stage5: '7812'
+      source_mode: intra_run
+      source_run: ${{ format('{0}', github.run_id) }}
+      source_head_sha: ${{ github.event.pull_request.head.sha }}
+      source_workflow_path: '.github/workflows/product-sd1-migrated-7412-to-7812m-autorelay.yml'
+      source_job: 'stage_03 / relay_five'
+      source_completed_step: 'Publish authenticated terminal artifact ID digest and full Host RTL SHA outputs'
+      source_artifact_id: ${{ needs.stage_03.outputs.terminal_artifact_id }}
+      source_artifact_name: product-sd1-migrated-7712m-${{ github.run_id }}
+      source_artifact_digest: ${{ needs.stage_03.outputs.terminal_artifact_digest }}
+      source_host_sha: ${{ needs.stage_03.outputs.terminal_host_sha }}
+      source_rtl_sha: ${{ needs.stage_03.outputs.terminal_rtl_sha }}

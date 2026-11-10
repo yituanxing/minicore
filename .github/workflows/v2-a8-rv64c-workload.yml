@@ -1,20 +1,6 @@
 name: AetherCore V2 A8 RV64C Compiler Workload
 
 on:
-  pull_request:
-    paths:
-      - software/rv64/v2_rv64c_workload.c
-      - software/rv64/v2_rv64c_start.S
-      - software/rv64/v2_rv64c_workload.ld
-      - tools/ci/v2_rv64c_workload_build.sh
-      - tools/ensure_verilator_5_024.sh
-      - tools/ensure_riscv64_linux_gcc_13_3.sh
-      - src/main/scala/aethercore/config/**
-      - src/main/scala/aethercore/core/Rv32CDecompressor.scala
-      - src/main/scala/aethercore/core/Rv32CParcelController.scala
-      - src/main/scala/aethercore/core/v2/**
-      - src/test/scala/aethercore/V2A8Rv64CCompilerWorkloadSpec.scala
-      - .github/workflows/v2-a8-rv64c-workload.yml
   workflow_dispatch:
 
 permissions:

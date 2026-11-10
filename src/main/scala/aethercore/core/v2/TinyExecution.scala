@@ -230,126 +230,81 @@ class V2IterativeDivider(val xlen: Int) extends Module {
 
   private val IdentityBits = TinyRobGeometry.IndexBits
   private val GenerationBits = TinyRobGeometry.GenerationBits
-  private val CountBits = log2Ceil(xlen + 1)
-
   val io = IO(new Bundle {
     val request = Flipped(Decoupled(new ExecutionRequest(xlen, IdentityBits, GenerationBits)))
     val response = Decoupled(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
   })
 
-  private val busy = RegInit(false.B)
-  private val responseValid = RegInit(false.B)
-  private val responseBits = Reg(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
-  private val requestBits = Reg(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
-  private val quotient = Reg(UInt(xlen.W))
-  private val divisor = Reg(UInt(xlen.W))
-  private val remainder = Reg(UInt((xlen + 1).W))
-  private val count = Reg(UInt(CountBits.W))
+  // Single restoring algorithm now lives in core.arith and is also consumed
+  // by ProductCore. V2 only owns ISA sign/word semantics and Tiny token shape.
+  private val divider = Module(new aethercore.core.arith.UnsignedRestoringDivider(xlen))
+  private val saved = Reg(new ExecutionRequest(xlen, IdentityBits, GenerationBits))
   private val negateQuotient = Reg(Bool())
   private val negateRemainder = Reg(Bool())
   private val chooseRemainder = Reg(Bool())
   private val divideByZero = Reg(Bool())
 
-  io.request.ready := !busy && !responseValid
-  io.response.valid := responseValid
-  io.response.bits := responseBits
-
-  private val signedOperation =
+  private val signedOp =
     io.request.bits.aluOp === AluOp.Div || io.request.bits.aluOp === AluOp.Rem
-  private val remainderOperation =
+  private val remOp =
     io.request.bits.aluOp === AluOp.Rem || io.request.bits.aluOp === AluOp.Remu
 
-  private val normalizedLhs = Wire(UInt(xlen.W))
-  private val normalizedRhs = Wire(UInt(xlen.W))
+  private val lhs = Wire(UInt(xlen.W))
+  private val rhs = Wire(UInt(xlen.W))
   if (xlen == 64) {
     val signedWordLhs = Cat(Fill(32, io.request.bits.lhs(31)), io.request.bits.lhs(31, 0))
     val signedWordRhs = Cat(Fill(32, io.request.bits.rhs(31)), io.request.bits.rhs(31, 0))
     val unsignedWordLhs = Cat(0.U(32.W), io.request.bits.lhs(31, 0))
     val unsignedWordRhs = Cat(0.U(32.W), io.request.bits.rhs(31, 0))
-    normalizedLhs := Mux(
-      io.request.bits.wordOp,
-      Mux(signedOperation, signedWordLhs, unsignedWordLhs),
-      io.request.bits.lhs
-    )
-    normalizedRhs := Mux(
-      io.request.bits.wordOp,
-      Mux(signedOperation, signedWordRhs, unsignedWordRhs),
-      io.request.bits.rhs
-    )
+    lhs := Mux(io.request.bits.wordOp, Mux(signedOp, signedWordLhs, unsignedWordLhs),
+      io.request.bits.lhs)
+    rhs := Mux(io.request.bits.wordOp, Mux(signedOp, signedWordRhs, unsignedWordRhs),
+      io.request.bits.rhs)
   } else {
-    normalizedLhs := io.request.bits.lhs
-    normalizedRhs := io.request.bits.rhs
+    lhs := io.request.bits.lhs
+    rhs := io.request.bits.rhs
     when(io.request.valid) {
       assert(!io.request.bits.wordOp, "RV32 execution cannot consume an RV64 word divide")
     }
   }
+  private val lhsNeg = signedOp && lhs(xlen - 1)
+  private val rhsNeg = signedOp && rhs(xlen - 1)
+  private val absLhs = Mux(lhsNeg, (~lhs).asUInt + 1.U, lhs)
+  private val absRhs = Mux(rhsNeg, (~rhs).asUInt + 1.U, rhs)
 
-  private val lhsNegative = signedOperation && normalizedLhs(xlen - 1)
-  private val rhsNegative = signedOperation && normalizedRhs(xlen - 1)
-  private val lhsMagnitude = Mux(lhsNegative, (~normalizedLhs).asUInt + 1.U, normalizedLhs)
-  private val rhsMagnitude = Mux(rhsNegative, (~normalizedRhs).asUInt + 1.U, normalizedRhs)
+  divider.io.request.valid := io.request.valid
+  divider.io.request.bits.dividend := absLhs
+  divider.io.request.bits.divisor := absRhs
+  io.request.ready := divider.io.request.ready
 
   when(io.request.fire) {
-    requestBits := io.request.bits
-    quotient := lhsMagnitude
-    divisor := rhsMagnitude
-    remainder := 0.U
-    count := 0.U
-    negateQuotient := lhsNegative ^ rhsNegative
-    negateRemainder := lhsNegative
-    chooseRemainder := remainderOperation
-    divideByZero := normalizedRhs === 0.U
-    busy := true.B
+    saved := io.request.bits
+    negateQuotient := lhsNeg ^ rhsNeg
+    negateRemainder := lhsNeg
+    chooseRemainder := remOp
+    divideByZero := rhs === 0.U
   }
 
-  when(busy) {
-    val shiftedRemainder = Cat(remainder(xlen - 1, 0), quotient(xlen - 1))
-    val shiftedQuotient = Cat(quotient(xlen - 2, 0), 0.U(1.W))
-    val extendedDivisor = Cat(0.U(1.W), divisor)
-    val subtract = shiftedRemainder >= extendedDivisor
-    val nextRemainder = Mux(subtract, shiftedRemainder - extendedDivisor, shiftedRemainder)
-    val nextQuotient = Mux(subtract, shiftedQuotient | 1.U, shiftedQuotient)
+  private val rawQuotient = divider.io.response.bits.quotient
+  private val rawRemainder = divider.io.response.bits.remainder
+  private val signedQuotient = Mux(negateQuotient,
+    (~rawQuotient).asUInt + 1.U, rawQuotient)
+  private val signedRemainder = Mux(negateRemainder,
+    (~rawRemainder).asUInt + 1.U, rawRemainder)
+  private val quotientResult = Mux(divideByZero, Fill(xlen, 1.U(1.W)), signedQuotient)
+  private val selected = Mux(chooseRemainder, signedRemainder, quotientResult)
+  private val value = if (xlen == 64) {
+    Mux(saved.wordOp, Cat(Fill(32, selected(31)), selected(31, 0)), selected)
+  } else selected
 
-    when(count === (xlen - 1).U) {
-      val unsignedRemainder = nextRemainder(xlen - 1, 0)
-      val signedQuotient = Mux(
-        negateQuotient,
-        (~nextQuotient).asUInt + 1.U,
-        nextQuotient
-      )
-      val signedRemainder = Mux(
-        negateRemainder,
-        (~unsignedRemainder).asUInt + 1.U,
-        unsignedRemainder
-      )
-      val quotientResult = Mux(divideByZero, Fill(xlen, 1.U(1.W)), signedQuotient)
-      val selectedResult = Mux(chooseRemainder, signedRemainder, quotientResult)
-      val architecturalResult = if (xlen == 64) {
-        Mux(
-          requestBits.wordOp,
-          Cat(Fill(32, selectedResult(31)), selectedResult(31, 0)),
-          selectedResult
-        )
-      } else selectedResult
-
-      responseBits := 0.U.asTypeOf(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
-      responseBits.robToken := requestBits.robToken
-      responseBits.producerTag := requestBits.producerTag
-      responseBits.valueRef := requestBits.valueRef
-      responseBits.hasValue := true.B
-      responseBits.value := architecturalResult
-      responseValid := true.B
-      busy := false.B
-    }.otherwise {
-      remainder := nextRemainder
-      quotient := nextQuotient
-      count := count + 1.U
-    }
-  }
-
-  when(io.response.fire) {
-    responseValid := false.B
-  }
+  io.response.valid := divider.io.response.valid
+  divider.io.response.ready := io.response.ready
+  io.response.bits := 0.U.asTypeOf(new ExecutionResponse(xlen, IdentityBits, GenerationBits))
+  io.response.bits.robToken := saved.robToken
+  io.response.bits.producerTag := saved.producerTag
+  io.response.bits.valueRef := saved.valueRef
+  io.response.bits.hasValue := true.B
+  io.response.bits.value := value
 }
 
 /**

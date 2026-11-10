@@ -1,0 +1,746 @@
+#pragma once
+
+#include "l32_sd_spi_snapshot_codec.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <algorithm>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace aethercore::l32sim {
+
+/** Pin-level SDHC card used ONLY by the explicit Product SD1 SPI-SD top.
+ *
+ * Linux's mmc_spi driver speaks SD SPI mode 0 through the same four physical
+ * pins exposed on the FPGA top. This model consumes complete bytes sampled on
+ * rising SCLK edges and changes MISO on falling edges. It does not short-cut
+ * the Product CPU, SPI controller, PLIC or Linux block layer.
+ *
+ * The source image is immutable. Accepted writes are kept in a sparse,
+ * session-local copy-on-write overlay: userspace can mount the ext4 partition
+ * read/write without a long Product run mutating its golden input. Real FPGA
+ * SD media is persistent; this host overlay is NOT an RTL checkpoint or a
+ * power-cycle persistence claim.
+ */
+class SdSpiCard {
+ public:
+  explicit SdSpiCard(const std::string& imagePath)
+      : imagePath_(imagePath), disk_(imagePath, std::ios::binary) {
+    if (!disk_) throw std::runtime_error("Product SD1 SD image cannot be opened: " + imagePath);
+    const auto bytes = std::filesystem::file_size(imagePath);
+    if (bytes < (64ULL << 20) || bytes % (512ULL << 10) != 0 ||
+        bytes / 512 > (1ULL << 22) * 1024ULL) {
+      throw std::runtime_error("Product SD1 needs a 512KiB-aligned 64MiB..2TiB raw SDHC image");
+    }
+    sectorCount_ = bytes / 512;
+
+    const auto mbr = readSector(0);
+    if (mbr[510] != 0x55 || mbr[511] != 0xaa || mbr[0x1be + 4] != 0x83)
+      throw std::runtime_error("Product SD1 SD image must have an MBR with Linux partition 1");
+    firstPartitionLba_ = le32(mbr.data() + 0x1be + 8);
+    partitionSectors_ = le32(mbr.data() + 0x1be + 12);
+    if (firstPartitionLba_ < 2048 || partitionSectors_ == 0 ||
+        static_cast<std::uint64_t>(firstPartitionLba_) + partitionSectors_ > sectorCount_)
+      throw std::runtime_error("Product SD1 SD image has an invalid partition-1 sector range");
+    const auto ext4Superblock = readSector(firstPartitionLba_ + 2);
+    if (ext4Superblock[56] != 0x53 || ext4Superblock[57] != 0xef)
+      throw std::runtime_error("Product SD1 partition 1 is not an ext2/3/4 filesystem");
+    // Pin the whole underlying image at construction, not just its MBR,
+    // geometry or file metadata. The immutable-source contract must reject
+    // same-size edits even when another process restores the old mtime.
+    sourceSha256_ = snapshot_detail::sha256File(imagePath_);
+  }
+
+  bool miso() const { return miso_; }
+
+  // Call only after one complete simulated clock edge. The model's SCLK edge
+  // detector is independent of simulator eval count or host execution time.
+  void observe(bool sclk, bool mosi, bool csHigh) {
+    if (csHigh) {
+      if (!lastCsHigh_) deselect();
+      if (!lastSclk_ && sclk) {
+        // A physical SD card must see at least 74 startup clocks with both
+        // CS and DI high before it can enter SPI mode via CMD0. Count only
+        // a contiguous valid preamble, saturating to avoid wraparound on a
+        // long Debian simulation that deasserts CS between transactions.
+        if (!startupClockSequenceSeen_) {
+          if (!mosi) unselectedClocks_ = 0;
+          else if (unselectedClocks_ < 74) ++unselectedClocks_;
+          if (unselectedClocks_ >= 74) startupClockSequenceSeen_ = true;
+        }
+      }
+      miso_ = true;
+    } else {
+      // Selection and the first SPI edge can coincide. Treat the electrical
+      // edge exactly once even in that case: losing one input bit would make
+      // the whole subsequent command stream impossible to enumerate.
+      if (lastCsHigh_) select();
+      if (!lastSclk_ && sclk) {
+        rxByte_ = static_cast<std::uint8_t>((rxByte_ << 1) | (mosi ? 1 : 0));
+        if (++rxBits_ == 8) {
+          consumeByte(rxByte_);
+          rxByte_ = 0;
+          rxBits_ = 0;
+        }
+      } else if (lastSclk_ && !sclk) {
+        if (txBit_ == 0) {
+          txByte_ = nextTransmitByte();
+          txBit_ = 7;
+        } else {
+          --txBit_;
+        }
+        miso_ = ((txByte_ >> txBit_) & 1U) != 0;
+      }
+    }
+    lastSclk_ = sclk;
+    lastCsHigh_ = csHigh;
+  }
+
+  std::string progress() const {
+    std::ostringstream out;
+    out << "sd-cmds=" << commands_ << " sd-reads=" << reads_
+        << " sd-writes=" << writes_ << " sd-cow-sectors=" << overlay_.size()
+        << " sd-last-cmd=" << lastCommand_ << " sd-init=" << (!idle_ ? 1 : 0);
+    return out.str();
+  }
+
+  std::uint64_t sourceSectors() const { return sectorCount_; }
+  std::uint32_t partitionStartLba() const { return firstPartitionLba_; }
+
+  // C1 is an opt-in, rootfs-independent checkpoint profile. Record exactly
+  // which immutable SD sector bytes were exposed to the guest BEFORE the
+  // kernel reaches the handoff. A warm rootfs swap must not invalidate bytes
+  // already consumed by Linux, even when the MBR and geometry still match.
+  // Ordinary SD1 checkpoint bytes and their strict whole-image SHA binding
+  // remain unchanged unless the caller explicitly arms this profile.
+  void armC1RootfsBoundary() {
+    if (commands_ || reads_ || writes_ || !overlay_.empty())
+      throw std::runtime_error("C1 read tracking must start before the guest accesses SD");
+    c1ReadTracking_ = true;
+  }
+
+  bool c1RootfsBoundaryArmed() const { return c1ReadTracking_; }
+  std::size_t c1ConsumedSectorCount() const { return c1ReadLedger_.size(); }
+
+  // Read-only preflight for the guest C1_READY capture gate. A UART marker
+  // alone is insufficient: chip-select must be deasserted and no unfinished
+  // command, buffered response, or guest write may cross the media switch.
+  bool c1RootfsHandoffQuiescent() const {
+    return c1ReadTracking_ && lastCsHigh_ && !lastSclk_ && !rxBits_ &&
+           !commandBytes_ && output_.empty() && !multiRead_ &&
+           !multiWrite_ && !appCommand_ && writeState_ == WriteState::None &&
+           !writes_ && overlay_.empty();
+  }
+
+  // Call only on the restored C1 checkpoint, when an independent guest UART
+  // gate has proved that rootfs has not been mounted/unpacked. The old source
+  // must still be present for strict checkpoint restore; only THEN can this
+  // method switch to a second immutable backing image. It never mutates the
+  // source disk or discards any previously guest-visible bytes.
+  void rebindC1Rootfs(const std::string& newImagePath) {
+    if (!c1RootfsHandoffQuiescent())
+      throw std::runtime_error("C1 rootfs rebind requires a quiescent, unwritten SD boundary");
+    // Check the original source, too: a renamed/modified old image must not
+    // bypass the strict immutable-media identity of the loaded checkpoint.
+    (void)immutableMediaSha256();
+    SdSpiCard next(newImagePath);
+    if (next.sectorCount_ != sectorCount_ ||
+        next.firstPartitionLba_ != firstPartitionLba_ ||
+        next.partitionSectors_ != partitionSectors_)
+      throw std::runtime_error("C1 replacement SD geometry/partition differs");
+    for (const auto& [lba, bytesSha] : c1ReadLedger_) {
+      const auto sector = next.readSector(lba);
+      if (snapshot_detail::sha256(sector) != bytesSha)
+        throw std::runtime_error("C1 replacement changed a sector already consumed by Linux");
+    }
+    // All verification finished: preserve SPI state and guest-visible card
+    // identity, changing ONLY the immutable backing bytes for future reads.
+    disk_ = std::move(next.disk_);
+    imagePath_ = std::move(next.imagePath_);
+    sourceSha256_ = next.sourceSha256_;
+    c1ReadLedger_.clear();
+    c1ReadTracking_ = false;
+  }
+
+  // Versioned, endian-stable host-state bytes. Save only at a complete Product
+  // simulated clock boundary (after observe()); all partial SPI bit/command/
+  // write data phases are still serialized. The physical image stays strictly
+  // read-only: the sorted COW overlay is the sole persisted write state.
+  // This is the SD card HOST component of a future RTL+RAM+peripheral
+  // checkpoint; using it alone is NOT a savable Product/Debian RTL run.
+  std::vector<std::uint8_t> snapshot() const {
+    using namespace snapshot_detail;
+    Writer body;
+    body.u64(sectorCount_);
+    body.u32(firstPartitionLba_);
+    body.u32(partitionSectors_);
+    body.bytes(immutableMediaSha256());
+    for (const bool b : {idle_, highCapacity_, crcEnabled_, appCommand_, multiRead_, multiWrite_,
+                         startupClockSequenceSeen_, lastSclk_, lastCsHigh_, miso_})
+      body.u8(b ? 1 : 0);
+    body.u8(static_cast<std::uint8_t>(writeState_));
+    body.u8(rxByte_); body.u8(static_cast<std::uint8_t>(rxBits_));
+    body.u8(txByte_); body.u8(static_cast<std::uint8_t>(txBit_));
+    body.u32(static_cast<std::uint32_t>(commandBytes_));
+    body.u32(static_cast<std::uint32_t>(writeBytes_));
+    body.u64(nextReadLba_); body.u64(nextWriteLba_);
+    body.u64(commands_); body.u64(reads_); body.u64(writes_);
+    body.u64(unselectedClocks_); body.u32(lastCommand_);
+    body.bytes(command_);
+    body.bytes(writePacket_);
+    if (output_.size() > std::numeric_limits<std::uint32_t>::max())
+      throw std::runtime_error("SD checkpoint TX queue too large");
+    body.u32(static_cast<std::uint32_t>(output_.size()));
+    for (auto byte : output_) body.u8(byte);
+    std::vector<std::uint64_t> keys;
+    keys.reserve(overlay_.size());
+    for (const auto& [lba, _] : overlay_) keys.push_back(lba);
+    std::sort(keys.begin(), keys.end());
+    body.u64(keys.size());
+    for (const auto lba : keys) {
+      body.u64(lba);
+      body.bytes(overlay_.at(lba));
+    }
+    // Schema v2 is ONLY for opt-in C1; schema v1 remains byte-for-byte
+    // identical for the already qualified strict SD1 replay path.
+    if (c1ReadTracking_) {
+      if (c1ReadLedger_.size() > kMaxC1ReadSectors)
+        throw std::runtime_error("C1 consumed too many sectors before rootfs handoff");
+      std::vector<std::uint64_t> readLbas;
+      readLbas.reserve(c1ReadLedger_.size());
+      for (const auto& [lba, _] : c1ReadLedger_) readLbas.push_back(lba);
+      std::sort(readLbas.begin(), readLbas.end());
+      body.u32(static_cast<std::uint32_t>(readLbas.size()));
+      for (const auto lba : readLbas) {
+        body.u64(lba);
+        body.bytes(c1ReadLedger_.at(lba));
+      }
+    }
+    constexpr std::array<std::uint8_t, 8> Magic{'A','C','S','D','S','P','0','1'};
+    Writer envelope;
+    envelope.bytes(Magic);
+    envelope.u32(c1ReadTracking_ ? 2 : 1);  // strictly versioned opt-in C1
+    envelope.u64(body.out.size());
+    envelope.bytes(sha256(body.out));  // reject corruption before mutation
+    envelope.bytes(body.out);
+    return std::move(envelope.out);
+  }
+
+  void restore(std::span<const std::uint8_t> bytes) {
+    using namespace snapshot_detail;
+    constexpr std::array<std::uint8_t, 8> Magic{'A','C','S','D','S','P','0','1'};
+    Reader input(bytes);
+    const auto magic = input.bytes(Magic.size());
+    const auto version = input.u32();
+    if (!std::equal(magic.begin(), magic.end(), Magic.begin()) ||
+        (version != 1 && version != 2))
+      throw std::runtime_error("SD checkpoint magic/version mismatch");
+    const auto bodyLength = input.u64();
+    const auto expectedDigest = input.bytes(32);
+    if (bodyLength != input.remaining())
+      throw std::runtime_error("SD checkpoint has truncated/trailing bytes");
+    const auto bodyBytes = input.bytes(static_cast<std::size_t>(bodyLength));
+    const auto actualDigest = sha256(bodyBytes);
+    if (!std::equal(expectedDigest.begin(), expectedDigest.end(), actualDigest.begin()))
+      throw std::runtime_error("SD checkpoint SHA256 checksum differs");
+
+    // Transactional: all verification/allocations happen in this distinct
+    // card; the live object remains byte-for-byte unchanged on any failure.
+    SdSpiCard staged(imagePath_);
+    Reader body(bodyBytes);
+    if (body.u64() != staged.sectorCount_ ||
+        body.u32() != staged.firstPartitionLba_ ||
+        body.u32() != staged.partitionSectors_)
+      throw std::runtime_error("SD checkpoint media geometry/partition differs");
+    const auto mediaDigest = body.bytes(32);
+    const auto realMediaDigest = staged.immutableMediaSha256();
+    if (!std::equal(mediaDigest.begin(), mediaDigest.end(), realMediaDigest.begin()))
+      throw std::runtime_error("SD checkpoint immutable image SHA256 differs");
+    staged.idle_=body.flag(); staged.highCapacity_=body.flag(); staged.crcEnabled_=body.flag();
+    staged.appCommand_=body.flag(); staged.multiRead_=body.flag(); staged.multiWrite_=body.flag();
+    staged.startupClockSequenceSeen_=body.flag(); staged.lastSclk_=body.flag();
+    staged.lastCsHigh_=body.flag(); staged.miso_=body.flag();
+    const auto writeState=body.u8();
+    if (writeState > static_cast<std::uint8_t>(WriteState::ReceiveData))
+      throw std::runtime_error("SD checkpoint write FSM state invalid");
+    staged.writeState_=static_cast<WriteState>(writeState);
+    staged.rxByte_=body.u8(); staged.rxBits_=body.u8();
+    staged.txByte_=body.u8(); staged.txBit_=body.u8();
+    staged.commandBytes_=body.u32(); staged.writeBytes_=body.u32();
+    staged.nextReadLba_=body.u64(); staged.nextWriteLba_=body.u64();
+    staged.commands_=body.u64(); staged.reads_=body.u64(); staged.writes_=body.u64();
+    staged.unselectedClocks_=body.u64(); staged.lastCommand_=body.u32();
+    const auto command=body.bytes(staged.command_.size());
+    std::copy(command.begin(), command.end(), staged.command_.begin());
+    const auto packet=body.bytes(staged.writePacket_.size());
+    std::copy(packet.begin(), packet.end(), staged.writePacket_.begin());
+    if (staged.rxBits_ > 7 || staged.txBit_ > 7 || staged.commandBytes_ > 5 ||
+        staged.writeBytes_ > staged.writePacket_.size() || staged.lastCommand_ > 63 ||
+        staged.unselectedClocks_ > 74 ||
+        (staged.writeState_ == WriteState::ReceiveData &&
+         staged.writeBytes_ >= staged.writePacket_.size()) ||
+        (!staged.startupClockSequenceSeen_ && staged.unselectedClocks_ >= 74))
+      throw std::runtime_error("SD checkpoint contains invalid SPI protocol position");
+    const auto outputBytes=body.u32();
+    const auto output=body.bytes(outputBytes);
+    staged.output_.assign(output.begin(), output.end());
+    const auto overlayCount=body.u64();
+    if (overlayCount > staged.sectorCount_ || overlayCount > body.remaining()/(8+SectorSize))
+      throw std::runtime_error("SD checkpoint overlay entry count invalid");
+    std::uint64_t previous=0;
+    for (std::uint64_t i=0; i<overlayCount; ++i) {
+      const auto lba=body.u64();
+      if (lba >= staged.sectorCount_ || (i>0 && lba<=previous))
+        throw std::runtime_error("SD checkpoint overlay LBA invalid/unsorted/duplicated");
+      previous=lba;
+      Sector sector{};
+      const auto data=body.bytes(SectorSize);
+      std::copy(data.begin(), data.end(), sector.begin());
+      staged.overlay_.emplace(lba, std::move(sector));
+    }
+    if (version == 2) {
+      staged.c1ReadTracking_ = true;
+      const auto count = body.u32();
+      if (count > kMaxC1ReadSectors || count > staged.reads_)
+        throw std::runtime_error("C1 SD read-set exceeds saved guest read count");
+      std::uint64_t previousLba = 0;
+      for (std::uint32_t i = 0; i < count; ++i) {
+        const auto lba = body.u64();
+        if (lba >= staged.sectorCount_ || (i && lba <= previousLba))
+          throw std::runtime_error("C1 SD read-set has invalid/duplicate LBA");
+        previousLba = lba;
+        const auto hash = body.bytes(32);
+        std::array<std::uint8_t, 32> digest{};
+        std::copy(hash.begin(), hash.end(), digest.begin());
+        staged.c1ReadLedger_.emplace(lba, digest);
+      }
+      // The old source must still match every read exposed to Linux.
+      for (const auto& [lba, bytesSha] : staged.c1ReadLedger_)
+        if (snapshot_detail::sha256(staged.readSector(lba)) != bytesSha)
+          throw std::runtime_error("C1 SD read-set does not match the checkpoint source");
+    }
+    if (body.remaining() != 0)
+      throw std::runtime_error("SD checkpoint contains unexpected trailing fields");
+    *this=std::move(staged);
+  }
+
+ private:
+  static constexpr std::size_t SectorSize = 512;
+  static constexpr std::size_t kMaxC1ReadSectors = 65536;
+  using Sector = std::array<std::uint8_t, SectorSize>;
+  enum class WriteState { None, WaitToken, ReceiveData };
+
+  std::array<std::uint8_t,32> immutableMediaSha256() const {
+    // Never use an mtime/size-only shortcut: callers might restore an old
+    // timestamp after overwriting an arbitrary SD sector. A true checkpoint
+    // must bind exact media *bytes* independently of host filesystem stats.
+    if (std::filesystem::file_size(imagePath_) != sectorCount_ * SectorSize)
+      throw std::runtime_error("SD checkpoint source image length changed");
+    const auto actual = snapshot_detail::sha256File(imagePath_);
+    if (std::filesystem::file_size(imagePath_) != sectorCount_ * SectorSize ||
+        actual != sourceSha256_)
+      throw std::runtime_error("SD checkpoint immutable source image SHA256 differs");
+    return actual;
+  }
+
+  static std::uint32_t le32(const std::uint8_t* b) {
+    return static_cast<std::uint32_t>(b[0]) |
+        (static_cast<std::uint32_t>(b[1]) << 8) |
+        (static_cast<std::uint32_t>(b[2]) << 16) |
+        (static_cast<std::uint32_t>(b[3]) << 24);
+  }
+
+  static std::uint8_t crc7(const std::uint8_t* bytes, std::size_t count) {
+    std::uint8_t crc = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+      std::uint8_t next = bytes[i];
+      for (int bit = 0; bit < 8; ++bit) {
+        crc <<= 1;
+        if ((crc ^ next) & 0x80) crc ^= 0x09;
+        next <<= 1;
+      }
+    }
+    return crc & 0x7f;
+  }
+
+  static std::uint16_t crc16(const std::uint8_t* bytes, std::size_t count) {
+    std::uint16_t crc = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+      crc ^= static_cast<std::uint16_t>(bytes[i]) << 8;
+      for (int bit = 0; bit < 8; ++bit)
+        crc = static_cast<std::uint16_t>((crc << 1) ^ ((crc & 0x8000) ? 0x1021 : 0));
+    }
+    return crc;
+  }
+
+  Sector readSector(std::uint64_t lba) {
+    if (lba >= sectorCount_) throw std::runtime_error("Product SD1 SD read beyond image");
+    if (const auto found = overlay_.find(lba); found != overlay_.end()) return found->second;
+    Sector bytes{};
+    disk_.clear();
+    disk_.seekg(static_cast<std::streamoff>(lba * SectorSize));
+    disk_.read(reinterpret_cast<char*>(bytes.data()), SectorSize);
+    if (!disk_) throw std::runtime_error("Product SD1 SD short sector read");
+    return bytes;
+  }
+
+  void select() {
+    rxBits_ = 0;
+    rxByte_ = 0;
+    txBit_ = 7;
+    txByte_ = 0xff;
+    miso_ = true;
+  }
+
+  void deselect() {
+    rxBits_ = 0;
+    rxByte_ = 0;
+    commandBytes_ = 0;
+    txByte_ = 0xff;
+    txBit_ = 7;
+    output_.clear();
+    multiRead_ = false;
+    multiWrite_ = false;
+    writeState_ = WriteState::None;
+    // CMD55 selects an application command across a subsequent SPI message.
+    // Linux mmc_spi may release CS between CMD55 and ACMD41/ACMD51. Clearing
+    // appCommand_ here would turn ACMD41 into unsupported CMD41 and prevent
+    // SD-card enumeration on an otherwise working physical controller.
+  }
+
+  void queueByte(std::uint8_t value) { output_.push_back(value); }
+  void queueR1(std::uint8_t status) {
+    queueByte(0xff);  // Standard N(CR) delay before the response.
+    queueByte(status);
+  }
+  std::uint8_t status() const { return idle_ ? 0x01 : 0x00; }
+
+  void queueData(const std::uint8_t* data, std::size_t bytes) {
+    queueByte(0xff);
+    queueByte(0xfe);
+    for (std::size_t i = 0; i < bytes; ++i) queueByte(data[i]);
+    const auto crc = crc16(data, bytes);
+    queueByte(static_cast<std::uint8_t>(crc >> 8));
+    queueByte(static_cast<std::uint8_t>(crc));
+  }
+
+  void queueReadBlock(std::uint64_t lba) {
+    if (lba >= sectorCount_) {
+      queueByte(0x09); // SD SPI data-error token: out of range.
+      multiRead_ = false;
+      return;
+    }
+    const auto sector = readSector(lba);
+    if (c1ReadTracking_) {
+      if (c1ReadLedger_.size() >= kMaxC1ReadSectors &&
+          c1ReadLedger_.find(lba) == c1ReadLedger_.end())
+        throw std::runtime_error("C1 rootfs boundary was not reached within the SD read budget");
+      c1ReadLedger_.emplace(lba, snapshot_detail::sha256(sector));
+    }
+    queueData(sector.data(), sector.size());
+    ++reads_;
+  }
+
+  std::uint8_t nextTransmitByte() {
+    if (output_.empty() && multiRead_ && !idle_)
+      queueReadBlock(nextReadLba_++);
+    if (output_.empty()) return 0xff;
+    const auto result = output_.front();
+    output_.pop_front();
+    return result;
+  }
+
+  std::array<std::uint8_t, 16> cid() const {
+    std::array<std::uint8_t, 16> value{
+        0x03, 'A', 'E', 'T', 'H', 'E', 'R', 0x10, 0x20, 0x26, 0x11, 0x05,
+        0x01, 0x60, 0x00, 0x01};
+    value[15] = static_cast<std::uint8_t>((crc7(value.data(), 15) << 1) | 1);
+    return value;
+  }
+
+  std::array<std::uint8_t, 16> csd() const {
+    // CSD v2.0 capacity=(C_SIZE+1)*1024 sectors, READ_BL_LEN=9 (512B).
+    const auto csize = static_cast<std::uint32_t>((sectorCount_ / 1024) - 1);
+    std::array<std::uint8_t, 16> value{
+        0x40, 0x0e, 0x00, 0x32, 0x5b, 0x59, 0x00,
+        static_cast<std::uint8_t>((csize >> 16) & 0x3f),
+        static_cast<std::uint8_t>(csize >> 8),
+        static_cast<std::uint8_t>(csize),
+        0x7f, 0x80, 0x0a, 0x40, 0x00, 0x01};
+    value[15] = static_cast<std::uint8_t>((crc7(value.data(), 15) << 1) | 1);
+    return value;
+  }
+
+  void consumeWriteByte(std::uint8_t data) {
+    if (writeState_ == WriteState::WaitToken) {
+      if (multiWrite_ && data == 0xfd) {
+        writeState_ = WriteState::None;
+        multiWrite_ = false;
+      } else if (data == (multiWrite_ ? 0xfc : 0xfe)) {
+        writeBytes_ = 0;
+        writeState_ = WriteState::ReceiveData;
+      }
+      return;
+    }
+    if (writeState_ != WriteState::ReceiveData) return;
+    writePacket_[writeBytes_++] = data;
+    if (writeBytes_ != writePacket_.size()) return;
+
+    const auto actualCrc = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(writePacket_[512]) << 8) | writePacket_[513]);
+    const bool valid = !crcEnabled_ || crc16(writePacket_.data(), 512) == actualCrc;
+    if (nextWriteLba_ >= sectorCount_) {
+      queueByte(0x0d); // SD SPI write-error response.
+    } else if (!valid) {
+      queueByte(0x0b); // SD SPI CRC-error response.
+    } else {
+      Sector sector{};
+      for (std::size_t i = 0; i < sector.size(); ++i) sector[i] = writePacket_[i];
+      overlay_[nextWriteLba_] = sector;
+      queueByte(0x05); // SD SPI data accepted.
+      ++writes_;
+    }
+    queueByte(0x00); // Busy for a bounded period; next byte is ready.
+    queueByte(0xff);
+    if (multiWrite_) {
+      ++nextWriteLba_;
+      writeState_ = WriteState::WaitToken;
+    } else {
+      writeState_ = WriteState::None;
+    }
+  }
+
+  void consumeByte(std::uint8_t data) {
+    if (writeState_ != WriteState::None) {
+      consumeWriteByte(data);
+      return;
+    }
+    if (commandBytes_ == 0) {
+      if ((data & 0xc0) != 0x40) return;
+    }
+    command_[commandBytes_++] = data;
+    if (commandBytes_ != command_.size()) return;
+    commandBytes_ = 0;
+    executeCommand();
+  }
+
+  void executeCommand() {
+    const auto opcode = static_cast<std::uint8_t>(command_[0] & 0x3f);
+    if (opcode == 0 && !startupClockSequenceSeen_) {
+      // Reject an emulator-only success before burning billions of RTL
+      // cycles. Real hardware would not recognize this premature CMD0.
+      throw std::runtime_error(
+          "Product SD1 CMD0 before 74 CS-high/DI-high initialization clocks");
+    }
+    const auto argument = (static_cast<std::uint32_t>(command_[1]) << 24) |
+        (static_cast<std::uint32_t>(command_[2]) << 16) |
+        (static_cast<std::uint32_t>(command_[3]) << 8) | command_[4];
+    // CMD0 is an unconditional SPI reset, even if a previous CMD55 was
+    // abandoned. A power-up retry must never be decoded as an application
+    // command while an old APP_CMD latch is still present.
+    const bool app = appCommand_ && opcode != 55 && opcode != 0;
+    appCommand_ = false;
+    ++commands_;
+    lastCommand_ = opcode;
+
+    // CMD0/CMD8 always require CRC7; CMD59 may enable CRC for all commands.
+    if ((opcode == 0 || opcode == 8 || crcEnabled_) &&
+        command_[5] != static_cast<std::uint8_t>((crc7(command_.data(), 5) << 1) | 1)) {
+      queueR1(static_cast<std::uint8_t>(status() | 0x08));
+      return;
+    }
+
+    if (app) {
+      switch (opcode) {
+        case 41: // ACMD41 SD_SEND_OP_COND with HCS bit for SDHC.
+          highCapacity_ = (argument & 0x40000000) != 0;
+          idle_ = false;
+          queueR1(0);
+          return;
+        case 23: // ACMD23 SET_WR_BLK_ERASE_COUNT.
+          queueR1(status());
+          return;
+        case 6: // ACMD6 SET_BUS_WIDTH; SPI transport remains 1-bit.
+          queueR1(status());
+          return;
+        case 51: { // ACMD51 SEND_SCR, SD v2 + 1/4-bit capabilities.
+          queueR1(status());
+          constexpr std::array<std::uint8_t, 8> scr{0x02, 0x05, 0, 0, 0, 0, 0, 0};
+          queueData(scr.data(), scr.size());
+          return;
+        }
+        case 13: { // ACMD13 SD_STATUS (SPI R2 + 64-byte block).
+          queueR1(status());
+          queueByte(0);
+          const std::array<std::uint8_t, 64> zero{};
+          queueData(zero.data(), zero.size());
+          return;
+        }
+        default:
+          queueR1(static_cast<std::uint8_t>(status() | 0x04));
+          return;
+      }
+    }
+
+    switch (opcode) {
+      case 0: // GO_IDLE_STATE.
+        idle_ = true;
+        highCapacity_ = false;
+        crcEnabled_ = false;
+        multiRead_ = false;
+        multiWrite_ = false;
+        writeState_ = WriteState::None;
+        queueR1(0x01);
+        break;
+      case 1: // Legacy SEND_OP_COND fallback.
+        idle_ = false;
+        queueR1(0);
+        break;
+      case 8: // SEND_IF_COND, R7.
+        queueR1(status());
+        queueByte(static_cast<std::uint8_t>(argument >> 24));
+        queueByte(static_cast<std::uint8_t>(argument >> 16));
+        queueByte(static_cast<std::uint8_t>(argument >> 8));
+        queueByte(static_cast<std::uint8_t>(argument));
+        break;
+      case 9: { // SEND_CSD.
+        queueR1(status());
+        if (!idle_) { const auto data = csd(); queueData(data.data(), data.size()); }
+        break;
+      }
+      case 10: { // SEND_CID.
+        queueR1(status());
+        if (!idle_) { const auto data = cid(); queueData(data.data(), data.size()); }
+        break;
+      }
+      case 12: // STOP_TRANSMISSION; SPI prepends one stuff byte.
+        multiRead_ = false;
+        output_.clear();
+        queueByte(0xff);
+        queueR1(status());
+        break;
+      case 13: // SEND_STATUS, SPI R2.
+        queueR1(status());
+        queueByte(0);
+        break;
+      case 16: // SET_BLOCKLEN (SDHC always 512).
+        queueR1(argument == 512 ? status() : static_cast<std::uint8_t>(status() | 0x40));
+        break;
+      case 17: { // READ_SINGLE_BLOCK.
+        const auto lba = highCapacity_ ? argument : argument / 512;
+        if (idle_ || lba >= sectorCount_) {
+          queueR1(static_cast<std::uint8_t>(status() | 0x20));
+        } else {
+          queueR1(0);
+          queueReadBlock(lba);
+        }
+        break;
+      }
+      case 18: { // READ_MULTIPLE_BLOCK.
+        const auto lba = highCapacity_ ? argument : argument / 512;
+        if (idle_ || lba >= sectorCount_) {
+          queueR1(static_cast<std::uint8_t>(status() | 0x20));
+        } else {
+          queueR1(0);
+          multiRead_ = true;
+          nextReadLba_ = lba;
+        }
+        break;
+      }
+      case 23: // SET_BLOCK_COUNT (non-app); no optional pre-erase policy.
+        queueR1(status());
+        break;
+      case 24: // WRITE_BLOCK.
+      case 25: { // WRITE_MULTIPLE_BLOCK.
+        const auto lba = highCapacity_ ? argument : argument / 512;
+        if (idle_ || lba >= sectorCount_) {
+          queueR1(static_cast<std::uint8_t>(status() | 0x20));
+        } else {
+          queueR1(0);
+          multiWrite_ = opcode == 25;
+          nextWriteLba_ = lba;
+          writeState_ = WriteState::WaitToken;
+        }
+        break;
+      }
+      case 55: // APP_CMD.
+        appCommand_ = true;
+        queueR1(status());
+        break;
+      case 58: { // READ_OCR, R3: 3.2..3.4V, CCS and power-up ready.
+        queueR1(status());
+        const std::uint32_t ocr = (idle_ ? 0 : 0x80000000U) |
+            (highCapacity_ ? 0x40000000U : 0) | 0x00ff8000U;
+        for (int shift = 24; shift >= 0; shift -= 8)
+          queueByte(static_cast<std::uint8_t>(ocr >> shift));
+        break;
+      }
+      case 59: // CRC_ON_OFF.
+        crcEnabled_ = (argument & 1) != 0;
+        queueR1(status());
+        break;
+      case 6: { // SWITCH_FUNC: default-speed-only, valid 64-byte status.
+        queueR1(status());
+        if (!idle_) {
+          const std::array<std::uint8_t, 64> supportedDefaultOnly{};
+          queueData(supportedDefaultOnly.data(), supportedDefaultOnly.size());
+        }
+        break;
+      }
+      default:
+        // Unsupported optional commands are explicitly rejected. The MMC
+        // driver may fall back to basic SD SPI rather than silently accepting
+        // a command for which the model has no semantics.
+        queueR1(static_cast<std::uint8_t>(status() | 0x04));
+        break;
+    }
+  }
+
+  std::string imagePath_;
+  std::ifstream disk_;
+  std::array<std::uint8_t,32> sourceSha256_{};
+  std::uint64_t sectorCount_ = 0;
+  std::uint32_t firstPartitionLba_ = 0;
+  std::uint32_t partitionSectors_ = 0;
+  std::unordered_map<std::uint64_t, Sector> overlay_;
+  bool c1ReadTracking_ = false;
+  std::unordered_map<std::uint64_t, std::array<std::uint8_t,32>> c1ReadLedger_;
+  std::deque<std::uint8_t> output_;
+  std::array<std::uint8_t, 6> command_{};
+  std::size_t commandBytes_ = 0;
+  std::array<std::uint8_t, 514> writePacket_{};
+  std::size_t writeBytes_ = 0;
+  WriteState writeState_ = WriteState::None;
+  bool multiRead_ = false;
+  bool multiWrite_ = false;
+  bool appCommand_ = false;
+  bool crcEnabled_ = false;
+  bool highCapacity_ = false;
+  bool idle_ = true;
+  std::uint64_t nextReadLba_ = 0;
+  std::uint64_t nextWriteLba_ = 0;
+  std::uint64_t commands_ = 0;
+  std::uint64_t reads_ = 0;
+  std::uint64_t writes_ = 0;
+  std::uint64_t unselectedClocks_ = 0;
+  bool startupClockSequenceSeen_ = false;
+  unsigned lastCommand_ = 0;
+  bool lastSclk_ = false;
+  bool lastCsHigh_ = true;
+  bool miso_ = true;
+  std::uint8_t rxByte_ = 0;
+  unsigned rxBits_ = 0;
+  std::uint8_t txByte_ = 0xff;
+  unsigned txBit_ = 7;
+};
+
+} // namespace aethercore::l32sim

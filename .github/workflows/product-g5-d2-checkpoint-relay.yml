@@ -1,0 +1,362 @@
+name: AetherCore Product G5 D2 durable checkpoint relay
+
+# Deliberately isolated from the normal Product/SoC/Linux CI. This is a
+# bounded continuation of the immutable historical 99a5 G5 binary.
+# Each run consumes a SHA-qualified prior artifact and uploads the newest
+# complete checkpoint even when a later 5M-cycle window fails.
+on:
+  # This second, SHA-pinned push leg resumes the 1.8B complete artifact from
+  # the first successful relay run, and executes nine independently uploaded
+  # 100M milestones through 2.7B. It does not rebuild or mutate the model.
+  # The frozen host's bootMax CLI argument remains exactly 1.8B; its restore
+  # path advances a separately bounded 5M from the checkpoint each invocation.
+  # A manual dispatch remains a single bounded 50M/100M continuation after
+  # default-branch workflow registration.
+  push:
+    branches:
+      - design/rv64gc-product-architecture-20261103
+    paths:
+      - '.github/workflows/product-g5-d2-checkpoint-relay.yml'
+      - 'tools/ci/product_g5_d2_checkpoint_relay.sh'
+  workflow_dispatch:
+    inputs:
+      source_kind:
+        description: 'relay uses the pinned 1.8B run; seed_950m is for historical replay only'
+        type: choice
+        required: true
+        default: relay
+        options:
+          - seed_950m
+          - relay
+      source_run_id:
+        description: 'GitHub Actions run ID containing the verified checkpoint (relay: 42168606753)'
+        type: string
+        required: true
+        default: '42168606753'
+      segment_cycles:
+        description: 'Guest RTL cycles to execute, checked and saved every 5M'
+        type: choice
+        required: true
+        default: '100000000'
+        options:
+          - '50000000'
+          - '100000000'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: g5-d2-durable-relay
+  cancel-in-progress: false
+
+jobs:
+  continue-g5-d2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      SOURCE_RUN_ID: ${{ inputs.source_run_id || '42168606753' }}
+      SOURCE_KIND: ${{ inputs.source_kind || 'relay' }}
+      SEGMENT_CYCLES: ${{ inputs.segment_cycles || '100000000' }}
+    steps:
+      - name: Checkout continuation script only (not a Product build)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Bind the assigned runner's temporary directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'ARTIFACT_OUT=%s/g5-d2-durable-out\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Validate source run provenance and determine immutable artifact
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 10
+          [[ "$SOURCE_KIND" == seed_950m || "$SOURCE_KIND" == relay ]] || exit 11
+          [[ "$SEGMENT_CYCLES" == 50000000 || "$SEGMENT_CYCLES" == 100000000 ]] || exit 12
+          meta="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+          jq -e --arg repo "$GITHUB_REPOSITORY" \
+            '.repository.full_name == $repo and .id > 0' <<< "$meta" >/dev/null
+          if [[ "$SOURCE_KIND" == seed_950m ]]; then
+            [[ "$SOURCE_RUN_ID" == 42044232627 ]] || exit 13
+            jq -e '.head_sha == "50ecaa8fdb1eba8dbb572b488d2e268e03e808d6" and
+                   .conclusion == "success" and
+                   .path == ".github/workflows/product-g5-debian-rv64gc.yml"' \
+              <<< "$meta" >/dev/null
+            name=aethercore-product-g5-debian-42044232627
+          else
+            [[ "$SOURCE_RUN_ID" == 42168606753 && "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID" ]] || exit 14
+            jq -e '.event == "push" and
+                   .head_sha == "d6626e2b84a32a99e8bce69faba422a104e0c349" and
+                   .head_branch == "design/rv64gc-product-architecture-20261103" and
+                   .path == ".github/workflows/product-g5-d2-checkpoint-relay.yml" and
+                   .conclusion == "success" and
+                   .status == "completed"' <<< "$meta" >/dev/null
+            # The pinned, successful first leg's canonical artifact contains
+            # the 1.8B state, checked down to bytes and model provenance below.
+            name="g5-d2-checkpoint-${SOURCE_RUN_ID}"
+          fi
+          echo "artifact_name=$name" >> "$GITHUB_OUTPUT"
+          echo "G5_D2_RELAY_SOURCE_VALIDATED run=$SOURCE_RUN_ID kind=$SOURCE_KIND artifact=$name"
+
+      - name: Download immutable prior checkpoint artifact, never rebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.artifact_name }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/g5-d2-source
+
+      - name: Verify source hashes and stage immutable G5 binary plus initial state
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_g5_d2_checkpoint_relay.sh
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh prepare \
+            "$RUNNER_TEMP/g5-d2-source" "$ARTIFACT_OUT" "$SOURCE_KIND"
+
+      - name: Resume verified 1.8B state and run first bounded 100M segment
+        id: stage1
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Exact archived binary only; no GCC/Scala/Chisel/Verilator build.
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" "$SEGMENT_CYCLES"
+
+      - name: Persist complete checkpoint after push window 1
+        id: upload_stage1
+        if: ${{ always() && github.event_name == 'push' && steps.stage1.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage1
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 2/9 (100M RTL cycles)
+        id: stage2
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 2
+        id: upload_stage2
+        if: ${{ always() && github.event_name == 'push' && steps.stage2.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage2
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 3/9 (100M RTL cycles)
+        id: stage3
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 3
+        id: upload_stage3
+        if: ${{ always() && github.event_name == 'push' && steps.stage3.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage3
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 4/9 (100M RTL cycles)
+        id: stage4
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 4
+        id: upload_stage4
+        if: ${{ always() && github.event_name == 'push' && steps.stage4.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage4
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 5/9 (100M RTL cycles)
+        id: stage5
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 5
+        id: upload_stage5
+        if: ${{ always() && github.event_name == 'push' && steps.stage5.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage5
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 6/9 (100M RTL cycles)
+        id: stage6
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 6
+        id: upload_stage6
+        if: ${{ always() && github.event_name == 'push' && steps.stage6.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage6
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 7/9 (100M RTL cycles)
+        id: stage7
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 7
+        id: upload_stage7
+        if: ${{ always() && github.event_name == 'push' && steps.stage7.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage7
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 8/9 (100M RTL cycles)
+        id: stage8
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 8
+        id: upload_stage8
+        if: ${{ always() && github.event_name == 'push' && steps.stage8.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage8
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Continue push-only durable window 9/9 (100M RTL cycles)
+        id: stage9
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_g5_d2_checkpoint_relay.sh run \
+            "$ARTIFACT_OUT" 100000000
+
+      - name: Persist complete checkpoint after push window 9
+        id: upload_stage9
+        if: ${{ always() && github.event_name == 'push' && steps.stage9.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}-stage9
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+
+
+      - name: Upload canonical recovery artifact after all stages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g5-d2-checkpoint-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 1
+          path: |
+            ${{ runner.temp }}/g5-d2-durable-out/model/product-g5-checkpoint
+            ${{ runner.temp }}/g5-d2-durable-out/checkpoints/**
+            ${{ runner.temp }}/g5-d2-durable-out/progress.log
+            ${{ runner.temp }}/g5-d2-durable-out/logs/*.log
+

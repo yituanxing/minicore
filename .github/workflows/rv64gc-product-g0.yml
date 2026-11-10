@@ -1,0 +1,45 @@
+name: RV64GC product G0 ownership and protocol contract
+
+# Product migration is source-first. Request G0 only when the architecture
+# batch is ready; a routine Product code edit does not enqueue verification.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64gc-g0-${{ github.event.pull_request.number || github.ref }}
+  # An unrelated PR label also creates a skipped run in this concurrency group;
+  # it must not cancel an explicitly requested G0 qualification.
+  cancel-in-progress: false
+
+jobs:
+  g0-contract:
+    name: State ownership, identities, example protocols, current RTL anchors
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-g0-source')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate machine-readable G0 contract JSON
+        run: |
+          python3 -m json.tool docs/architecture/rv64gc_g0_contract.json >/dev/null
+          python3 -m json.tool docs/architecture/rv64gc_g1_migration_map.json >/dev/null
+      - name: Run exact G0 architecture-contract tests (no RTL claim)
+        run: |
+          python3 -m unittest \
+            tests_py.test_product_g0_contract \
+            tests_py.test_product_g1_migration_contract \
+            tests_py.test_product_g1_rename_reference \
+            tests_py.test_product_nax_distro_target \
+            tests_py.test_shared_semantic_owner \
+            tests_py.test_product_config_contract \
+            tests_py.test_product_small_backend_contract \
+            tests_py.test_product_integer_fu_contract \
+            tests_py.test_product_lsq_integration \
+            tests_py.test_product_fpga_pin_cost \
+            tests_py.test_v2_foundation_contract \
+            tests_py.test_v2_decode_boundary -v

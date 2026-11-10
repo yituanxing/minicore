@@ -15,6 +15,8 @@ final case class IsaConfig(
 ) {
   require(xlen == 32 || xlen == 64, s"XLEN must be 32 or 64, got $xlen")
   require(extensions.contains('I'), "the base I extension is required")
+  require(!extensions.contains('D') || extensions.contains('F'),
+    "the D extension requires the F register and execution architecture")
   require(privilegeModes.contains('M'), "machine mode is required")
   require(
     zExtensions.forall(name => name.startsWith("Z") && name.length > 1),

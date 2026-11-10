@@ -28,6 +28,19 @@ object MachineCsrAddress {
   val Mhartid: Int = 0xf14
 }
 
+/** Architectural floating-point CSRs are accessible only while mstatus.FS != Off. */
+object FloatingCsrAddress {
+  val Fflags: Int = 0x001
+  val Frm: Int = 0x002
+  val Fcsr: Int = 0x003
+}
+
+/** Only a precise ROB retirement may update floating-point architectural state. */
+class FpRetireState extends Bundle {
+  val fflags = UInt(5.W)
+  val dirty = Bool()
+}
+
 object SupervisorCsrAddress {
   val Sstatus: Int = 0x100
   val Sie: Int = 0x104
@@ -50,6 +63,7 @@ object MachineCsrBit {
   val MstatusMpie: Int = 7
   val SstatusSpp: Int = 8
   val MstatusMppLow: Int = 11
+  val MstatusFsLow: Int = 13
   val MstatusMprv: Int = 17
   val SstatusSum: Int = 18
   val SstatusMxr: Int = 19
@@ -62,6 +76,10 @@ object MachineCsrBit {
 }
 
 object MachineCsrWarl {
+  private def floatingStateMask(isa: IsaConfig): BigInt =
+    if (isa.extensions.contains('F')) BigInt(3) << MachineCsrBit.MstatusFsLow
+    else BigInt(0)
+
   private def supervisorStatusMask(isa: IsaConfig): BigInt = {
     if (!isa.hasS) BigInt(0)
     else {
@@ -70,10 +88,10 @@ object MachineCsrWarl {
           (BigInt(1) << MachineCsrBit.SstatusSpie) |
           (BigInt(1) << MachineCsrBit.SstatusSpp)
       if (isa.hasPagedVirtualMemory)
-        v1Mask |
+        v1Mask | floatingStateMask(isa) |
           (BigInt(1) << MachineCsrBit.SstatusSum) |
           (BigInt(1) << MachineCsrBit.SstatusMxr)
-      else v1Mask
+      else v1Mask | floatingStateMask(isa)
     }
   }
 
@@ -82,7 +100,7 @@ object MachineCsrWarl {
       (BigInt(1) << MachineCsrBit.MstatusMpie) |
       (BigInt(3) << MachineCsrBit.MstatusMppLow) |
       (if (isa.hasU) BigInt(1) << MachineCsrBit.MstatusMprv else BigInt(0)) |
-      supervisorStatusMask(isa)
+      supervisorStatusMask(isa) | floatingStateMask(isa)
 
   /**
     * AetherCore currently implements one XLEN for each enabled RV64 lower
@@ -212,6 +230,15 @@ object MachineCsrWarl {
       is(SupervisorCsrAddress.Stvec.U) { result := data & mtvecMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sepc.U) { result := data & epcMask.U(xlen.W) }
       is(SupervisorCsrAddress.Sip.U) { result := 0.U }
+      is(FloatingCsrAddress.Fflags.U) {
+        result := data & 0x1f.U(xlen.W)
+      }
+      is(FloatingCsrAddress.Frm.U) {
+        result := data & 0x7.U(xlen.W)
+      }
+      is(FloatingCsrAddress.Fcsr.U) {
+        result := data & 0xff.U(xlen.W)
+      }
     }
 
     if (isa.hasPmp) {
@@ -253,6 +280,8 @@ class MachineCsrFile(
   require(!withSupervisorExternalInterrupt || isa.hasS, "supervisor external interrupt requires S-mode")
 
   private val xlen = isa.xlen
+  private val hasFloat = isa.extensions.contains('F')
+  require(!isa.extensions.contains('D') || hasFloat, "D requires the F extension")
   private val pmpGeometry = PmpGeometry(xlen, paddrBits)
   private val pmpAddressBits = pmpGeometry.encodedAddressBits
   private val pagingGeometries = isa.orderedPageTableGeometries
@@ -275,9 +304,13 @@ class MachineCsrFile(
   private val sstatusSum = BigInt(1) << MachineCsrBit.SstatusSum
   private val sstatusMxr = BigInt(1) << MachineCsrBit.SstatusMxr
   private val mstatusMpp = BigInt(3) << MachineCsrBit.MstatusMppLow
+  private val fsMask = BigInt(3) << MachineCsrBit.MstatusFsLow
+  private val sdMask = BigInt(1) << (xlen - 1)
+  private val fsClearMask = allBits & ~fsMask
   private val supervisorStatusMask =
     if (isa.hasS) {
-      val v1Mask = sstatusSie | sstatusSpie | sstatusSpp
+      val v1Mask = sstatusSie | sstatusSpie | sstatusSpp |
+        (if (hasFloat) fsMask else BigInt(0))
       if (isa.hasPagedVirtualMemory) v1Mask | sstatusSum | sstatusMxr else v1Mask
     } else BigInt(0)
   private val mstatusXlenValue = MachineCsrWarl.mstatusXlenValue(isa)
@@ -326,6 +359,13 @@ class MachineCsrFile(
     val writeAddr = Input(UInt(12.W))
     val writeData = Input(UInt(xlen.W))
 
+    // Exactly one architectural floating-point state update at the retiring
+    // instruction boundary; speculative FU completion cannot drive this port.
+    val fpCommit = if (hasFloat) Some(Flipped(Valid(new FpRetireState))) else None
+    val fpStateEnabled = Output(Bool())
+    val fpRoundingMode = Output(UInt(3.W))
+    val fpFlags = Output(UInt(5.W))
+
     val currentPrivilege = Output(UInt(2.W))
     val effectiveDataPrivilege = Output(UInt(2.W))
     val supervisorSum = Output(Bool())
@@ -366,6 +406,8 @@ class MachineCsrFile(
 
   val privilege = RegInit(PrivilegeMode.Machine.U(2.W))
   val mstatus = RegInit(mstatusXlenValue.U(xlen.W))
+  val fpFflags = if (hasFloat) Some(RegInit(0.U(5.W))) else None
+  val fpFrm = if (hasFloat) Some(RegInit(0.U(3.W))) else None
   val medeleg = RegInit(0.U(xlen.W))
   val mideleg = RegInit(0.U(xlen.W))
   val mie = RegInit(0.U(xlen.W))
@@ -401,6 +443,47 @@ class MachineCsrFile(
     withSupervisorExternalInterrupt
   )
   val ordinaryWrite = io.writeEnable
+  // mstatus.FS belongs to the common privileged CSR state. FCSR belongs to
+  // the same retirement domain and is never modified by speculative execute.
+  val fpStateEnabled = hasFloat.B && mstatus(MachineCsrBit.MstatusFsLow + 1,
+    MachineCsrBit.MstatusFsLow).orR
+  val fpCommitValid = if (hasFloat) io.fpCommit.get.valid else false.B
+  val fpCommitFlags = if (hasFloat) io.fpCommit.get.bits.fflags else 0.U(5.W)
+  val fpCommitChangesState = if (hasFloat) {
+    io.fpCommit.get.bits.dirty || io.fpCommit.get.bits.fflags.orR
+  } else false.B
+  val fpCsrWrite = hasFloat.B && ordinaryWrite && fpStateEnabled && (
+    io.writeAddr === FloatingCsrAddress.Fflags.U ||
+      io.writeAddr === FloatingCsrAddress.Frm.U ||
+      io.writeAddr === FloatingCsrAddress.Fcsr.U)
+  val fpFlagsCsrWrite = fpCsrWrite && (
+    io.writeAddr === FloatingCsrAddress.Fflags.U ||
+      io.writeAddr === FloatingCsrAddress.Fcsr.U)
+  val fpFrmCsrWrite = fpCsrWrite && (
+    io.writeAddr === FloatingCsrAddress.Frm.U ||
+      io.writeAddr === FloatingCsrAddress.Fcsr.U)
+  val fpDirtyEvent = fpCsrWrite || (fpCommitValid && fpCommitChangesState)
+  io.fpStateEnabled := fpStateEnabled
+  // Preserve the architectural raw frm; the actual arithmetic unit resolves
+  // static/dynamic rm and rejects reserved encodings at *execution*.
+  io.fpRoundingMode := (if (hasFloat) fpFrm.get else 0.U(3.W))
+  io.fpFlags := (if (hasFloat) fpFflags.get else 0.U(5.W))
+  if (hasFloat) {
+    assert(!fpCommitValid || fpStateEnabled,
+      "precise floating retirement requires mstatus.FS enabled")
+    when(fpFlagsCsrWrite || fpCommitValid) {
+      val baseFlags = Mux(fpFlagsCsrWrite, canonicalWriteData(4, 0), fpFflags.get)
+      fpFflags.get := baseFlags | Mux(fpCommitValid, fpCommitFlags, 0.U(5.W))
+    }
+    when(fpFrmCsrWrite) {
+      fpFrm.get := Mux(io.writeAddr === FloatingCsrAddress.Fcsr.U,
+        canonicalWriteData(7, 5), canonicalWriteData(2, 0))
+    }
+  }
+  val readableMstatus = mstatus | Mux(
+    hasFloat.B && mstatus(MachineCsrBit.MstatusFsLow + 1,
+      MachineCsrBit.MstatusFsLow) === 3.U,
+    sdMask.U(xlen.W), 0.U(xlen.W))
 
   val sstc = if (isa.hasSstc) Some(Module(new Rv32SstcTimer)) else None
   val timeAccessAllowed = if (isa.hasTimeCounter) {
@@ -456,6 +539,10 @@ class MachineCsrFile(
       mstatus
     )
   )
+  val effectiveMstatusWithFp = Mux(fpDirtyEvent,
+    (effectiveMstatus & fsClearMask.U(xlen.W)) |
+      (BigInt(3) << MachineCsrBit.MstatusFsLow).U(xlen.W),
+    effectiveMstatus)
   val mprvActive = isa.hasU.B && privilege === PrivilegeMode.Machine.U &&
     effectiveMstatus(MachineCsrBit.MstatusMprv)
   io.effectiveDataPrivilege := Mux(
@@ -554,7 +641,7 @@ class MachineCsrFile(
 
   switch(io.readAddr) {
     is(MachineCsrAddress.Mstatus.U) {
-      io.readData := mstatus
+      io.readData := readableMstatus
       io.readImplemented := true.B
       io.readWritable := true.B
     }
@@ -615,6 +702,28 @@ class MachineCsrFile(
     }
   }
 
+  if (hasFloat) {
+    when(fpStateEnabled) {
+      switch(io.readAddr) {
+        is(FloatingCsrAddress.Fflags.U) {
+          io.readData := fpFflags.get
+          io.readImplemented := true.B
+          io.readWritable := true.B
+        }
+        is(FloatingCsrAddress.Frm.U) {
+          io.readData := fpFrm.get
+          io.readImplemented := true.B
+          io.readWritable := true.B
+        }
+        is(FloatingCsrAddress.Fcsr.U) {
+          io.readData := Cat(fpFrm.get, fpFflags.get)
+          io.readImplemented := true.B
+          io.readWritable := true.B
+        }
+      }
+    }
+  }
+
   if (xlen == 32) {
     when(io.readAddr === MachineCsrAddress.Mstatush.U) {
       // AetherCore is little-endian only and currently implements none of the
@@ -638,7 +747,9 @@ class MachineCsrFile(
         io.readWritable := true.B
       }
       is(SupervisorCsrAddress.Sstatus.U) {
-        io.readData := (mstatus & supervisorStatusMask.U(xlen.W)) | sstatusXlenValue.U(xlen.W)
+        io.readData := (readableMstatus &
+          (supervisorStatusMask | (if (hasFloat) sdMask else BigInt(0))).U(xlen.W)) |
+          sstatusXlenValue.U(xlen.W)
         io.readImplemented := true.B
         io.readWritable := true.B
       }
@@ -758,12 +869,12 @@ class MachineCsrFile(
   val canonicalMachineTrapPc = MachineCsrWarl.canonicalize(isa, MachineCsrAddress.Mepc.U, io.trapPc)
   val canonicalSupervisorTrapPc = MachineCsrWarl.canonicalize(isa, SupervisorCsrAddress.Sepc.U, io.trapPc)
   val machineTrapMstatus =
-    (effectiveMstatus & mstatusTransitionPreserveMask.U(xlen.W)) |
-      (effectiveMstatus(MachineCsrBit.MstatusMie).asUInt << MachineCsrBit.MstatusMpie) |
+    (effectiveMstatusWithFp & mstatusTransitionPreserveMask.U(xlen.W)) |
+      (effectiveMstatusWithFp(MachineCsrBit.MstatusMie).asUInt << MachineCsrBit.MstatusMpie) |
       (privilege << MachineCsrBit.MstatusMppLow)
   val supervisorTrapMstatus =
-    (effectiveMstatus & sstatusTransitionPreserveMask.U(xlen.W)) |
-      (effectiveMstatus(MachineCsrBit.SstatusSie).asUInt << MachineCsrBit.SstatusSpie) |
+    (effectiveMstatusWithFp & sstatusTransitionPreserveMask.U(xlen.W)) |
+      (effectiveMstatusWithFp(MachineCsrBit.SstatusSie).asUInt << MachineCsrBit.SstatusSpie) |
       ((privilege === PrivilegeMode.Supervisor.U).asUInt << MachineCsrBit.SstatusSpp)
 
   val machineReturnPrivilege = mstatus(12, 11)
@@ -814,8 +925,9 @@ class MachineCsrFile(
       mstatus := machineReturnMstatus
     }
   }.elsewhen(ordinaryWrite) {
+    when(fpDirtyEvent) { mstatus := effectiveMstatusWithFp }
     switch(io.writeAddr) {
-      is(MachineCsrAddress.Mstatus.U) { mstatus := canonicalWriteData }
+      is(MachineCsrAddress.Mstatus.U) { mstatus := effectiveMstatusWithFp }
       is(MachineCsrAddress.Mstatush.U) {
         // RV32 mstatush fields are implemented as WARL-zero in this profile.
       }
@@ -846,7 +958,7 @@ class MachineCsrFile(
       switch(io.writeAddr) {
         is(MachineCsrAddress.Medeleg.U) { medeleg := canonicalWriteData }
         is(MachineCsrAddress.Mideleg.U) { mideleg := canonicalWriteData }
-        is(SupervisorCsrAddress.Sstatus.U) { mstatus := sstatusWriteValue }
+        is(SupervisorCsrAddress.Sstatus.U) { mstatus := effectiveMstatusWithFp }
         is(SupervisorCsrAddress.Sie.U) { mie := sieWriteValue }
         is(SupervisorCsrAddress.Scounteren.U) { scounteren := canonicalWriteData }
         is(SupervisorCsrAddress.Stvec.U) { stvec := canonicalWriteData }
@@ -860,5 +972,7 @@ class MachineCsrFile(
         }
       }
     }
+  }.elsewhen(fpDirtyEvent) {
+    mstatus := effectiveMstatusWithFp
   }
 }

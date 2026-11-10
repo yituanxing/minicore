@@ -107,6 +107,15 @@ class AetherCoreV2UnifiedMemorySoC(
     new AetherMemResponse(dataBits, externalTxnIdBits),
     2
   ))
+  // Hold the selected BootROM/external response across MemoryHub backpressure:
+  // an RRArbiter alone can change its output when another producer asserts
+  // valid.  Flow-through avoids a bubble when the hub is already ready.
+  val responseSkid = Module(new Queue(
+    new AetherMemResponse(dataBits, externalTxnIdBits),
+    entries = 1,
+    pipe = true,
+    flow = true
+  ))
 
   // Unified/AXI/FPGA composition uses the platform's semantic external-RAM
   // seam directly. The historical terminal-response data port is tied off and
@@ -163,7 +172,8 @@ class AetherCoreV2UnifiedMemorySoC(
   responseArbiter.io.in(1).bits := io.memoryResponse.bits
   io.memoryResponse.ready := responseArbiter.io.in(1).ready
 
-  hub.io.downstreamResponse <> responseArbiter.io.out
+  responseSkid.io.enq <> responseArbiter.io.out
+  hub.io.downstreamResponse <> responseSkid.io.deq
 
   // Byte-stream UART remains at the reusable SoC boundary. A physical serial
   // PHY belongs in the later FPGA wrapper.

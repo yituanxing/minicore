@@ -125,10 +125,24 @@ class PageTableReadBusIO(
   val fault = Input(Bool())
 }
 
+/** Optional trace fields for the independent architectural f0..f31 file.
+  * The register value is the original IEEE payload (including F32 NaN-boxing),
+  * while `fflags` is the *per-retired-instruction* exception-flag delta, not a
+  * speculative FU signal or the cumulative FCSR value.
+  */
+class FloatingCommitTrace(val xlen: Int) extends Bundle {
+  val rdWrite = Bool()
+  val rd = UInt(5.W)
+  val rdData = UInt(xlen.W)
+  val fflags = UInt(5.W)
+  val stateDirty = Bool()
+}
+
 class CommitTrace(
     val xlen: Int = 64,
     val paddrBits: Int = 64,
-    val busDataBits: Int = 64
+    val busDataBits: Int = 64,
+    val withFloating: Boolean = false
 ) extends Bundle {
   require(xlen == 32 || xlen == 64, s"commit XLEN must be 32 or 64, got $xlen")
   require(paddrBits > 0, s"commit physical address width must be positive, got $paddrBits")
@@ -143,6 +157,9 @@ class CommitTrace(
   val rd = UInt(5.W)
   val rdWrite = Bool()
   val rdData = UInt(xlen.W)
+  // The legacy integer-only CommitTrace is structurally unchanged; v0/v2
+  // and no-F FPGA images must not pay for unimplemented floating trace ports.
+  val floating = if (withFloating) Some(new FloatingCommitTrace(xlen)) else None
 
   val memValid = Bool()
   val memWrite = Bool()

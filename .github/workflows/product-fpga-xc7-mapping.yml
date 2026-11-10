@@ -1,0 +1,78 @@
+name: AetherCore Product XC7 unplaced mapping (bounded)
+
+# Intentionally never run this expensive floating-point SoC on every commit.
+# The Artix P0 exact-SHA RTL export must have succeeded and populated cache.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-xc7-mapping-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  one-small-rv64gc:
+    name: One full Small RV64GC Xilinx 7-series mapping (no P&R)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'product-fpga-xc7-map')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 11
+    steps:
+      - name: Checkout exact selected Product commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Contract test before optional heavyweight mapping
+        run: |
+          python3 -m unittest tests_py.test_product_fpga_artix7_p0 tests_py.test_product_fpga_xc7_unplaced -v
+          bash -n tools/ci/product_fpga_xc7_unplaced.sh
+
+      - name: Restore exact Product RTL produced by Artix-7 P0
+        id: rtl_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/product-artix7-p0
+          key: product-artix7-p0-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}-v2
+
+      - name: Fail closed unless exact source RTL is cached and verified
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ '${{ steps.rtl_cache.outputs.cache-hit }}' != 'true' ]]; then
+            echo 'XC7_NOT_RUN_NO_EXACT_RTL_CACHE: run product-fpga-artix7-p0 first for this commit.' >&2
+            exit 3
+          fi
+          bash tools/ci/product_fpga_artix7_p0.sh prepare "$RUNNER_TEMP/product-artix7-p0"
+          echo 'Verified exact-SHA Product RTL cache; no Chisel re-elaboration.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Yosys once for the Xilinx 7-series logic mapper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq yosys
+          yosys -V
+          yosys -Q -p 'help synth_xilinx' | grep -q -- '-noiopad'
+          yosys -Q -p 'help stat' | grep -q -- '-json'
+
+      - name: Map exactly one full RV64GC Small Product to XC7 logic cells
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_fpga_xc7_unplaced.sh \
+            "$RUNNER_TEMP/product-artix7-p0" "$RUNNER_TEMP/product-xc7-mapping"
+          jq -e '.status == "XC7_UNPLACED_MAPPING_PASS" and .placed == false and .routed == false' \
+            "$RUNNER_TEMP/product-xc7-mapping/result.json"
+          echo 'XC7 mapped cell statistics PASS; no specific part fit, routing, DDR PHY or Fmax claim.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve results or bounded failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-xc7-unplaced-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/product-xc7-mapping/

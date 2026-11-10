@@ -38,10 +38,24 @@ jobs:
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_BEFORE_SHA: ${{ github.event.before }}
+          PR_AFTER_SHA: ${{ github.event.after }}
         run: |
           set -euo pipefail
           if [[ -n "${PR_BASE_SHA:-}" ]]; then
             classified_base="${PR_BASE_SHA}"
+            # Native pull_request.paths is cumulative over the full PR.  A
+            # synchronize event provides the old/new PR heads, so development
+            # checks should route the actual new batch; a missing/non-ancestor
+            # head (force-push, reopened PR) safely falls back to the full PR.
+            if [[ "${PR_ACTION:-}" == synchronize &&
+                  "${PR_AFTER_SHA:-}" == "$(git rev-parse HEAD)" &&
+                  "${PR_BEFORE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] &&
+               git cat-file -e "${PR_BEFORE_SHA}^{commit}" 2>/dev/null &&
+               git merge-base --is-ancestor "${PR_BEFORE_SHA}" HEAD; then
+              classified_base="${PR_BEFORE_SHA}"
+            fi
             changed="$(git diff --name-only "${classified_base}" HEAD)"
           else
             classified_base="HEAD^1"
@@ -89,11 +103,16 @@ jobs:
             run_legacy_chisel=true
           fi
 
-          # Any Scala outside the isolated v2 tree may affect the legacy core,
-          # its software execution path, and the reusable primitives v2 wraps.
+          # Product-only modules belong to the Product G0/G1/G2 ownership gates.
+          # They do not feed the legacy/FreeRTOS implementation. Replaying the
+          # entire historical v2 + supervisor + FreeRTOS RTL suites whenever
+          # Product's private OoO/FPGA code changes is both unrelated and costly.
+          # Shared semantic, SoC, memory and common interfaces are deliberately
+          # NOT excluded: edits to those can affect both implementation lines.
           shared_scala="$(
             grep -E '^src/(main|test)/scala/' <<<"$changed" \
               | grep -Ev '^(src/main/scala/aethercore/core/v2/|src/test/scala/aethercore/V2[^/]*\.scala$|src/test/scala/aethercore/DatapathWidthSpec\.scala$)' \
+              | grep -Ev '^(src/main/scala/aethercore/core/product/|src/main/scala/aethercore/soc/AetherCoreProduct[^/]*\.scala$|src/main/scala/aethercore/soc/AetherProduct[^/]*\.scala$|src/main/scala/aethercore/soc/ElaborateProductSoC\.scala$|src/main/scala/aethercore/sim/AetherCoreProduct[^/]*\.scala$|src/main/scala/aethercore/ElaborateProduct[^/]*\.scala$|src/test/scala/aethercore/(Product|AetherCoreProduct|AetherProduct)[^/]*\.scala$)' \
               || true
           )"
           if [[ -n "$shared_scala" ]]; then

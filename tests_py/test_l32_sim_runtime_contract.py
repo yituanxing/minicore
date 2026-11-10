@@ -96,6 +96,21 @@ class L32SimRuntimeContractTest(unittest.TestCase):
         ):
             self.assertIn(marker, cold)
 
+        # Long Linux RTL boots need progress diagnostics that distinguish a
+        # live initcall sequence from a retirement stall without altering the
+        # existing cycles-per-second parser contract.
+        for field in (
+            '" cycles-per-second="',
+            '" interval-commits="',
+            '" interval-ipc="',
+            '" uart-bytes="',
+            '" uart-silent-cycles="',
+            '" exceptions="',
+            '" stip="',
+            '" seip="',
+        ):
+            self.assertIn(field, cold)
+
         self.assertIn("const bool accepted = step(top, ctx, mem, rxValid, rxByte);", forkserver)
         self.assertIn("record(top, c);", forkserver)
         for marker in (

@@ -1,0 +1,247 @@
+name: AetherCore G5 same-kernel Tiny fast GSIM PID1
+
+# One-shot controlled G5 D2 kernel + Tiny rootfs: the same Tiny firmware
+# must pass a strict 30M GSIM/Verilator differential before GSIM Linux PID1.
+# This is NOT native Debian userland qualification.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [synchronize]
+    paths:
+      - '.github/workflows/product-g5-tiny-gsim-pid1.yml'
+      - 'tools/ci/product_gsim_g5_tiny_pid1.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-g5-tiny-gsim-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  same-kernel-tiny-gsim:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      AETHERCORE_MILL_NO_DAEMON: '1'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      AETHERCORE_VERILATOR_FAST_VERIFY: '1'
+      AETHERCORE_VERILATOR_VERSION: '5.054'
+      AETHERCORE_ALLOW_PRODUCT_GSIM_G5_AB: '1'
+      AETHERCORE_ALLOW_PRODUCT_GSIM_G5_TINY_PID1: '1'
+      SIM_SETTLE_MODE: reference
+      RV64_DEBIAN_STAGE: d2
+      RV64_LINUX_JOBS: '4'
+      GSIM_PREFIX_OPT: '-O3'
+      JOBS: '4'
+
+    steps:
+      - name: Checkout exact Product G5 commit; exclude external SD1
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Require explicit one-shot G5 GSIM Tiny run
+        id: selected
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] ||
+             [[ "$(git log -1 --format=%s)" == *'[g5-tiny-gsim-run]'* ]]; then
+            echo 'run=1' >> "$GITHUB_OUTPUT"
+            echo 'PRODUCT_G5_TINY_GSIM_EXPLICIT_RUN: strict same-firmware A/B then full PID1'
+          else
+            echo 'run=0' >> "$GITHUB_OUTPUT"
+            echo 'PRODUCT_G5_TINY_GSIM_SKIPPED: no head commit marker'
+          fi
+
+      - name: Freeze bounded exact G5 Debian RAM-only scope
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          [[ -z "${AETHERCORE_PRODUCT_SD_IMAGE:-}" &&
+             -z "${AETHERCORE_PRODUCT_DTB_IMAGE:-}" ]] || exit 2
+          bash -n tools/ci/product_gsim_build.sh tools/ci/product_gsim_g5_build.sh \
+            tools/ci/product_gsim_g5_short_ab.sh
+          python3 tools/ci/product_gsim_g5_compare_selftest.py
+          bash -n tools/ci/product_gsim_g5_tiny_pid1.sh
+          echo 'G5 Tiny: strict 30M same-firmware GSIM/Verilator A/B before Linux PID1; NOT Debian userland' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore Scala dependencies
+        if: steps.selected.outputs.run == '1'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-
+
+      - name: Restore pinned 5.054, RV64 GCC, Linux and OpenSBI caches
+        if: steps.selected.outputs.run == '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-tools-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-tools-v1-
+
+      - name: Restore verified pinned GSIM source/patch
+        if: steps.selected.outputs.run == '1'
+        id: gs-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Install actual GSIM, Verilator and Debian build dependencies
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk-headless python3 clang-19 \
+            bison flex libfl-dev libgmp-dev libjemalloc-dev git curl make \
+            zlib1g-dev autoconf cmake ninja-build libssl-dev libelf-dev \
+            libreadline-dev pkg-config build-essential bc device-tree-compiler \
+            dwarves xz-utils qemu-user
+          docker version
+
+      - name: Freeze host native clang and CPU ABI for generated model cache
+        if: steps.selected.outputs.run == '1'
+        id: host-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(clang++-19 --version | head -1 | sha256sum | cut -c1-20)"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact G5 generated GSIM native model
+        if: steps.selected.outputs.run == '1'
+        id: gs-native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-debian-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-native-v1-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_build.sh', 'tools/ci/product_gsim_g5_build.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-native-v1-${{ steps.host-abi.outputs.signature }}-
+
+      - name: Restore exact G5 Verilator 5.054 RV64GC trace model
+        if: steps.selected.outputs.run == '1'
+        id: vl-native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-g5-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-vmodel-v1-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_054.sh') }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-vmodel-v1-${{ steps.host-abi.outputs.signature }}-
+
+      - name: Provision pinned RV64 GCC for NEXT Debian build step
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: bash tools/ensure_riscv64_linux_gcc_13_3.sh
+
+      - name: Build exact native Debian D2 rootfs and frozen Linux payload
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/rv64_linux_early_build.sh
+          bash tools/ci/rv64_debian_rootfs_build.sh
+          bash tools/ci/rv64_debian_linux_build.sh
+          RV64_DEBIAN_INITCALL_TRACE=1 bash tools/ci/rv64_debian_payload_build.sh
+          bash tools/ci/product_g5_tiny_control_build.sh
+          grep -Fxq 'PRODUCT_G5_TINY_PAYLOAD_BUILD_RESULT: status=PASS' build/product-g5-tiny-control/boot/result.txt
+          grep -Fxq 'RV64_DEBIAN_PAYLOAD_BUILD_RESULT: status=PASS' build/rv64-debian-boot/result.txt
+          grep -Fxq 'spi_sd=0' build/rv64-debian-boot/result.txt
+          sha256sum --check --status build/rv64-debian-boot/evidence/sha256.txt
+
+      - name: Compile/fingerprint independent actual G5 GSIM and Verilator models
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g5_short_ab.sh build
+          test -s build/product-gsim-g5-ab/model-ready.txt
+          echo 'G5 GSIM and Verilator exact same-source models compiled for Tiny reuse' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache pinned GSIM source before bounded guest runtime
+        if: steps.selected.outputs.run == '1' && success() && steps.gs-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+
+      - name: Cache exact G5 native GSIM model before runtime
+        if: steps.selected.outputs.run == '1' && success() && steps.gs-native-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-debian-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-native-v1-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_build.sh', 'tools/ci/product_gsim_g5_build.sh') }}
+
+      - name: Cache exact G5 native Verilator model before runtime
+        if: steps.selected.outputs.run == '1' && success() && steps.vl-native-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-gsim-g5-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-vmodel-v1-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_054.sh') }}
+
+      - name: Compare exact Tiny firmware GSIM and Verilator at 30M cycles
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g5_tiny_pid1.sh ab
+          grep -Fq 'PRODUCT_G5_TINY_GSIM_30M_AB_PASS' build/product-g5-tiny-gsim/ab-qualified.txt
+          cat build/product-g5-tiny-gsim/compare.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run qualified fast GSIM real G5 Tiny Linux PID1 STIP SEIP
+        if: steps.selected.outputs.run == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_gsim_g5_tiny_pid1.sh pid1
+          grep -Fq 'PRODUCT_G5_TINY_GSIM_REAL_PID1_PASS' build/product-g5-tiny-gsim/pid1-result.txt
+          cat build/product-g5-tiny-gsim/pid1-result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve same-Tiny GSIM PID1, strict A/B, model and firmware identities
+        if: steps.selected.outputs.run == '1' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-g5-tiny-gsim-pid1-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-boot/result.txt
+            build/product-gsim-debian-bridge/build-identity.txt
+            build/product-gsim-g5-ab/model-ready.txt
+            build/product-gsim-g5-ab/qualification.txt
+            build/product-gsim-g5-ab/compare.txt
+            build/product-gsim-g5-ab/logs/*.log
+            build/product-g5-tiny-control/linux/result.txt
+            build/product-g5-tiny-control/boot/result.txt
+            build/product-g5-tiny-control/evidence/*.txt
+            build/product-g5-tiny-gsim/ab-qualified.txt
+            build/product-g5-tiny-gsim/compare.txt
+            build/product-g5-tiny-gsim/pid1-result.txt
+            build/product-g5-tiny-gsim/logs/*.log
