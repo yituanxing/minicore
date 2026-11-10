@@ -94,15 +94,13 @@ jobs:
           start="$(date +%s)"
           timeout 900s ./ci/install-verilator.sh v4.228 "$RUNNER_TEMP/nax-toolchain" \
             2>&1 | tee "$LOG_DIR/verilator-install.log"
-          # Upstream install-verilator.sh builds in the source tree but does
-          # not run "make install". A compiled binary alone is insufficient:
-          # the generated VNaxRiscv.mk expects share/verilator/include/verilated.mk.
+          # Upstream script configures --prefix to the same source directory.
+          # In that layout `make install` fails by copying bin/verilator onto
+          # itself; use Verilator's supported build-tree VERILATOR_ROOT instead.
           verilator_src="$RUNNER_TEMP/nax-toolchain/verilator-v4.228"
-          if [[ ! -s "$verilator_src/share/verilator/include/verilated.mk" ]]; then
-            timeout 180s make -C "$verilator_src" install -j2 \
-              2>&1 | tee "$LOG_DIR/verilator-make-install.log"
-          fi
-          test -s "$verilator_src/share/verilator/include/verilated.mk"
+          test -s "$verilator_src/include/verilated.mk"
+          export VERILATOR_ROOT="$verilator_src"
+          echo "VERILATOR_ROOT=$VERILATOR_ROOT" >> "$GITHUB_ENV"
           verilator_bin="$RUNNER_TEMP/nax-toolchain/verilator-v4.228/bin"
           test -x "$verilator_bin/verilator"
           echo "$verilator_bin" >> "$GITHUB_PATH"
