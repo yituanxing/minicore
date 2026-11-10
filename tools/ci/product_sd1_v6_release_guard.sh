@@ -20,14 +20,17 @@ git merge-base --is-ancestor "$V6_ORIGIN_HEAD" HEAD ||
    "$(git rev-parse HEAD^)" == "$V6_REVIEWED_PRIOR_HEAD" ]] ||
   reject 'missing V6 reviewed prior HEAD or more than one release commit'
 # The single release commit may ONLY fill V6 pins/approval in the workflow.
-# The executor, artifact verifier and signed model path must stay byte-identical
-# to the independently reviewed V6 draft.
+# The executable Host-only capacity/migration change, its new qualification
+# script and all artifact verifiers must stay byte-identical to the separately
+# reviewed V6 draft. The release commit can only fill workflow pins.
 while IFS= read -r -d '' release_change; do
   [[ "$release_change" == .github/workflows/product-sd1-v6-20b-needs-14992-to-19992-INERT-DRAFT.yml ]] ||
     reject "reviewed V6 release code drift: $release_change"
 done < <(git diff --name-only -z "$V6_REVIEWED_PRIOR_HEAD" HEAD)
 # Changes relative to official signed source must be *only* newly added V6 CI.
-# No changes to RTL, compiler, signed media, V5 helpers or V5 workflows.
+# No changes to generated RTL, compiler, signed media, V5 helpers or V5 jobs.
+# Only the reviewed V6 Host-side model migration source is permitted here;
+# its new executable SHA must be independently attested by the 20M differential.
 while IFS= read -r -d '' changed; do
   case "$changed" in
     .github/workflows/product-sd1-v6-20b-needs-14992-to-19992-INERT-DRAFT.yml|\
@@ -36,7 +39,10 @@ while IFS= read -r -d '' changed; do
     tools/ci/product_sd1_v6_chain.py|\
     tools/ci/product_sd1_v6_chain_prepare.sh|\
     tools/ci/product_sd1_v6_postcross_20m.sh|\
-    tools/ci/product_sd1_v6_release_guard.sh) ;;
+    tools/ci/product_sd1_v6_release_guard.sh|\
+    tools/ci/product_sd1_model_migration_v6_20b_qualify.sh|\
+    tests_py/test_product_sd1_model_migration_v6_20b_static.py|\
+    sim/product_rv64_checkpoint_sd1_main.cpp) ;;
     *) reject "unapproved difference from V5 signed source: $changed" ;;
   esac
 done < <(git diff --name-only -z "$V6_ORIGIN_HEAD" HEAD)
@@ -46,6 +52,10 @@ done < <(git diff --name-only -z "$V6_ORIGIN_HEAD" HEAD)
 for key in V6_14992_DIGEST V6_14992_HOST_SHA V6_14992_RTL_SHA V6_14992_CARD_SHA; do
   [[ "${!key:-}" =~ ^[a-f0-9]{64}$ ]] || reject "$key not pinned"
 done
+[[ "${V6_MODEL_SHA:-}" =~ ^[a-f0-9]{64}$ &&
+   "${V6_MODEL_SHA:-}" != 4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be &&
+   "${AETHERCORE_SD1_V6_REVIEWED_MODEL_SHA:-}" == "${V6_MODEL_SHA:-}" ]] ||
+  reject 'new V6 20B Host-only model digest not independently approved'
 # Formal 5B release MUST consume the separately authenticated one-stage V6
 # 14992M->15012M technical qualification. A human approval marker alone cannot
 # substitute for a real report archive/identity and its sealed source lineage.
