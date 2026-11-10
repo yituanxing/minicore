@@ -1,0 +1,390 @@
+name: FORMAL PR379 signed SD1 V6 20B continuation 15012 to 19992M
+# FORMAL RELEASE: six jobs enabled by independent review; PR379-only label,
+# immutable signed checkpoints, exact executor, and once-only run guard apply.
+# Keep this workflow inside original PR#379: seed and diagnostic caches are
+# inaccessible from another pull_request merge-ref cache scope.
+'on':
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: sd1-v6-formal-20b-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  V6_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+  V6_FORMAL_PARENT_HEAD: d1a13ac76b09e00b0298e69bb95217e5197d235f
+  # Distinct trust domains. The technical report was executed by ffa59,
+  # while formal source review has its own immutable executor commit.
+  V6_TECH_QUAL_EXECUTOR_HEAD: ffa59df56fa88611eaf727bbd96909fae748ebd2
+  V6_FORMAL_EXECUTOR_HEAD: 6a3227180b58b19945bbb49189f5c1d7538b683f
+  V6_ORIGIN_RUN: '42600415630'
+  V6_ORIGIN_HEAD: 8a40835c470d059448a4871bafead04cc555bee5
+  V6_14992_ID: '13738787578'
+  V6_14992_NAME: product-sd1-v5-15b-42600415630-attempt7-v5_billion_5-14992m
+  V6_14992_DIGEST: b235fb53f493b274aae9217ae09fafe3a1a16813bde4e38adf50ac048cedd31b
+  V6_14992_HOST_SHA: ba7e2161c5917f522a6854eb5457e9cff703492bb0ef1c5485cb13f6500a01cb
+  V6_14992_RTL_SHA: 948ab3d2a7554566ca9cb0070c51eafbecf111eee465ec11a7ecbcb354c57ed9
+  V6_14992_CARD_SHA: 3ef8a3c6281ca52fd2c734f7244634de55908d276208b2ef26736b355ff1c4a3
+  V6_QUAL_RUN: '42772805117'
+  V6_QUAL_ID: '13742896253'
+  V6_QUAL_HEAD: d1a13ac76b09e00b0298e69bb95217e5197d235f
+  V6_QUAL_NAME: product-sd1-v6-20b-host-qual-42772805117-attempt1
+  V6_QUAL_DIGEST: d5cc239861ed9176ae0a8a0d0a0650f75ebea384ba29e18a72315edb6c841981
+  V6_QUAL_MANIFEST_SHA: feba839c75ec62fd652f3a203310bbb44af414b3438ec220a04fe6f8b09fdb97
+  V6_MODEL_SHA: 3b22f54ee7017b605c7fafe86ca3e21fcdb7d3945e93e329b10c62fa39806101
+  AETHERCORE_SD1_V6_REVIEWED_MODEL_SHA: 3b22f54ee7017b605c7fafe86ca3e21fcdb7d3945e93e329b10c62fa39806101
+  V6_TECH_QUAL_RUN: '42772805117'
+  V6_TECH_QUAL_ATTEMPT: '1'
+  V6_TECH_QUAL_ID: '13742299835'
+  V6_TECH_QUAL_NAME: product-sd1-v6-qual-14992-15012-42772805117-attempt1
+  V6_TECH_QUAL_DIGEST: c908e3924657b275482c68c67fba5cf90b2d5fbdc8f0bc3440fcea9598267c25
+  V6_TECH_QUAL_PR379_HEAD: d1a13ac76b09e00b0298e69bb95217e5197d235f
+  V6_TECH_TERMINAL_ID: '13742384494'
+  V6_TECH_TERMINAL_NAME: product-sd1-v6-qual-15012-checkpoint-42772805117-attempt1
+  V6_TECH_TERMINAL_DIGEST: 2e0c038afd89c693c68c3442cbcba3db5d36eacf4b31fc721dc0a96dfbe9d969
+  V6_15012_HOST_SHA: 5928695d9637e5e54a3b394f4e2aac7669e86063cbe0018578981d3c07336f62
+  V6_15012_RTL_SHA: 28501616ad4ff83ec93565a6cc43d4793403ce978a17d07964d679d6da23392a
+  V6_15012_CARD_SHA: 1f04938348893282bab7771e2cd5b013b749b18a825089827996f0add7a2d18f
+  # These two independent approval tokens are authenticated by the formal guard.
+  # The technical qualification label alone cannot authorize 5B.
+  AETHERCORE_SD1_V6_20B_APPROVED: QUALIFIED_V6_20B_SIGNED_14992_CROSS_RUN
+  AETHERCORE_SD1_RELAY_CONFIRM: SD1_FULL_DEBIAN_SIGNED_RELAY_V6_CHECKPOINT_20B
+  AETHERCORE_VERILATOR_VERSION: '5.054'
+  SIM_SETTLE_MODE: reference
+  VERILATOR_THREADS: '1'
+  AETHERCORE_DATA_MEM_WAIT_CYCLES: '0'
+jobs:
+  v6_billion_1:
+    name: Genuine RTL 15012 to 15992M, 49 previously unexecuted 20M stages
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+      github.event.label.name == 'sd1-v6-20b-formal-approved' &&
+      github.event.pull_request.number == 379 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'design/rv64gc-product-architecture-20261103'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs:
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - name: Reject duplicate formal RTL runs before guest execution
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reject() { echo "PRODUCT_SD1_V6_FORMAL_DUPLICATE_GUARD_REJECTED: $*" >&2; exit 16; }
+          [[ "$GITHUB_REPOSITORY" == yituanxing/minicore &&
+             "$GITHUB_EVENT_NAME" == pull_request &&
+             "$GITHUB_RUN_ID" =~ ^[0-9]+$ &&
+             "$GITHUB_RUN_NUMBER" =~ ^[0-9]+$ &&
+             "$V6_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || reject 'untrusted event identity'
+          self="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")" ||
+            reject 'cannot authenticate current GitHub run'
+          workflow_id="$(jq -er --argjson run "$GITHUB_RUN_ID" \
+              --argjson number "$GITHUB_RUN_NUMBER" --arg head "$V6_SOURCE_SHA" '
+            select(.id == $run and .run_number == $number and
+                   .event == "pull_request" and .head_sha == $head and
+                   (.workflow_id | type) == "number" and .workflow_id > 0)
+            | .workflow_id
+          ' <<< "$self")" || reject 'current run identity mismatch'
+          # Always inspect every prior run of this exact workflow. Earlier
+          # unrelated PR labels are safe only if the first guest job is
+          # explicitly recorded as skipped. A previous started guest job
+          # must be resumed by rerunning its OWN run_id, never by relabeling.
+          runs="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=pull_request&per_page=100")" ||
+            reject 'workflow run history inaccessible'
+          jq -se --argjson run "$GITHUB_RUN_ID" \
+              --argjson workflow "$workflow_id" \
+              --argjson number "$GITHUB_RUN_NUMBER" \
+              --arg head "$V6_SOURCE_SHA" '
+            length > 0 and all(.[];
+              (.total_count | type) == "number" and .total_count >= 0 and
+              (.workflow_runs | type) == "array" and
+              all(.workflow_runs[];
+                (.id | type) == "number" and
+                (.workflow_id | type) == "number" and
+                (.run_number | type) == "number" and
+                (.head_sha | type) == "string")) and
+            ([.[].workflow_runs[]] | length) == .[0].total_count and
+            # A successful history lookup must include the current run exactly
+            # once. If GitHub indexing is stale, refuse instead of mistaking an
+            # empty/partial listing for the absence of a prior 5B launch.
+            ([.[].workflow_runs[] | select(.id == $run and
+               .workflow_id == $workflow and .run_number == $number and
+               .head_sha == $head)] | length) == 1
+          ' \
+            <<< "$runs" > /dev/null || reject 'incomplete workflow run history'
+          prior_ids="$(jq -sr --argjson workflow "$workflow_id" \
+              --argjson number "$GITHUB_RUN_NUMBER" --argjson run "$GITHUB_RUN_ID" \
+              --arg head "$V6_SOURCE_SHA" '
+            [.[].workflow_runs[]? | select(.workflow_id == $workflow and
+               .run_number < $number and .id != $run and .head_sha == $head)]
+            | .[].id
+          ' <<< "$runs")" || reject 'malformed prior run identity'
+          while IFS= read -r prior; do
+            [[ -n "$prior" ]] || continue
+            [[ "$prior" =~ ^[0-9]+$ ]] || reject 'malformed prior run number'
+            jobs="$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$prior/jobs?filter=all&per_page=100")" ||
+              reject 'prior run jobs inaccessible'
+            jq -se --arg first 'Genuine RTL 15012 to 15992M, 49 previously unexecuted 20M stages' '
+              length > 0 and all(.[];
+                (.total_count | type) == "number" and .total_count >= 0 and
+                (.jobs | type) == "array") and
+              ([.[].jobs[]] | length) == .[0].total_count and
+              [.[].jobs[]? | select(.name == $first)] as $matches
+              | ($matches | length) >= 1 and
+                all($matches[]; .status == "completed" and .conclusion == "skipped")
+            ' <<< "$jobs" > /dev/null ||
+              reject "some attempt of prior formal guest run $prior was not conclusively skipped"
+          done <<< "$prior_ids"
+          echo 'PRODUCT_SD1_V6_FORMAL_FIRST_RUN_ONLY_VERIFIED'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_FORMAL_EXECUTOR_HEAD }}
+          path: v6-formal-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Import immutable independently reviewed Host-only V6 executor
+        shell: bash
+        run: &review_import |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
+          reviewed="$GITHUB_WORKSPACE/v6-formal-reviewed-tools"
+          [[ "$(git -C "$reviewed" rev-parse HEAD)" == "$V6_FORMAL_EXECUTOR_HEAD" ]] || exit 16
+          for path in \
+            tools/ci/product_sd1_v6_formal_pr379_guard.sh \
+            tools/ci/product_sd1_v6_chain.py \
+            tools/ci/product_sd1_v6_chain_prepare.sh \
+            tools/ci/product_sd1_v6_postcross_20m.sh \
+            .github/actions/product-sd1-v6-20m/action.yml \
+            .github/actions/product-sd1-v6-batch/action.yml; do
+            [[ ! -e "$GITHUB_WORKSPACE/$path" ]] || exit 16
+            [[ "$(git -C "$reviewed" rev-parse "HEAD:$path")" == "$(git -C "$reviewed" hash-object "$path")" ]] || exit 16
+            mkdir -p "$(dirname "$GITHUB_WORKSPACE/$path")"
+            cp -- "$reviewed/$path" "$GITHUB_WORKSPACE/$path"
+            cmp -s "$reviewed/$path" "$GITHUB_WORKSPACE/$path" || exit 16
+          done
+          bash -n tools/ci/product_sd1_v6_formal_pr379_guard.sh
+          bash -n tools/ci/product_sd1_v6_chain_prepare.sh
+          bash -n tools/ci/product_sd1_v6_postcross_20m.sh
+          python3 -m py_compile tools/ci/product_sd1_v6_chain.py
+          bash tools/ci/product_sd1_v6_formal_pr379_guard.sh
+          [[ "$(git rev-parse HEAD)" == "$V6_SOURCE_SHA" ]] || exit 16
+      - id: batch
+        uses: ./.github/actions/product-sd1-v6-batch
+        with:
+          stage_count: '49'
+          start_m: '15012'
+          end_m: '15992'
+          source_mode: technical_terminal
+          source_id: ${{ env.V6_TECH_TERMINAL_ID }}
+          source_name: ${{ env.V6_TECH_TERMINAL_NAME }}
+          source_digest: ${{ env.V6_TECH_TERMINAL_DIGEST }}
+          source_host_sha: ${{ env.V6_15012_HOST_SHA }}
+          source_rtl_sha: ${{ env.V6_15012_RTL_SHA }}
+          source_card_sha: ${{ env.V6_15012_CARD_SHA }}
+
+  v6_billion_2:
+    name: Genuine RTL 15992 to 16992M, fifty 20M stages
+    needs: v6_billion_1
+    if: >-
+      needs.v6_billion_1.result == 'success' &&
+      needs.v6_billion_1.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs: &batch_outputs
+      terminal_artifact_id: ${{ steps.batch.outputs.terminal_artifact_id }}
+      terminal_artifact_name: ${{ steps.batch.outputs.terminal_artifact_name }}
+      terminal_artifact_digest: ${{ steps.batch.outputs.terminal_artifact_digest }}
+      terminal_host_sha: ${{ steps.batch.outputs.terminal_host_sha }}
+      terminal_rtl_sha: ${{ steps.batch.outputs.terminal_rtl_sha }}
+      terminal_card_sha: ${{ steps.batch.outputs.terminal_card_sha }}
+      terminal_m: ${{ steps.batch.outputs.terminal_m }}
+      serial_login_verified: ${{ steps.batch.outputs.serial_login_verified }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_FORMAL_EXECUTOR_HEAD }}
+          path: v6-formal-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Import immutable independently reviewed Host-only V6 executor
+        shell: bash
+        run: *review_import
+      - id: batch
+        uses: ./.github/actions/product-sd1-v6-batch
+        with:
+          stage_count: '50'
+          start_m: '15992'
+          end_m: '16992'
+          source_mode: intra_run
+          source_id: ${{ needs.v6_billion_1.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v6_billion_1.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v6_billion_1.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v6_billion_1.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v6_billion_1.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v6_billion_1.outputs.terminal_card_sha }}
+
+  v6_billion_3:
+    name: Genuine RTL 16992 to 17992M, fifty 20M stages
+    needs: v6_billion_2
+    if: >-
+      needs.v6_billion_2.result == 'success' &&
+      needs.v6_billion_2.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs: *batch_outputs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_FORMAL_EXECUTOR_HEAD }}
+          path: v6-formal-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Import immutable independently reviewed Host-only V6 executor
+        shell: bash
+        run: *review_import
+      - id: batch
+        uses: ./.github/actions/product-sd1-v6-batch
+        with:
+          stage_count: '50'
+          start_m: '16992'
+          end_m: '17992'
+          source_mode: intra_run
+          source_id: ${{ needs.v6_billion_2.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v6_billion_2.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v6_billion_2.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v6_billion_2.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v6_billion_2.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v6_billion_2.outputs.terminal_card_sha }}
+
+  v6_billion_4:
+    name: Genuine RTL 17992 to 18992M, fifty 20M stages
+    needs: v6_billion_3
+    if: >-
+      needs.v6_billion_3.result == 'success' &&
+      needs.v6_billion_3.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs: *batch_outputs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_FORMAL_EXECUTOR_HEAD }}
+          path: v6-formal-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Import immutable independently reviewed Host-only V6 executor
+        shell: bash
+        run: *review_import
+      - id: batch
+        uses: ./.github/actions/product-sd1-v6-batch
+        with:
+          stage_count: '50'
+          start_m: '17992'
+          end_m: '18992'
+          source_mode: intra_run
+          source_id: ${{ needs.v6_billion_3.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v6_billion_3.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v6_billion_3.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v6_billion_3.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v6_billion_3.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v6_billion_3.outputs.terminal_card_sha }}
+
+  v6_billion_5:
+    name: Genuine RTL 18992 to 19992M, fifty 20M stages
+    needs: v6_billion_4
+    if: >-
+      needs.v6_billion_4.result == 'success' &&
+      needs.v6_billion_4.outputs.serial_login_verified != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 335
+    outputs: *batch_outputs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.V6_FORMAL_EXECUTOR_HEAD }}
+          path: v6-formal-reviewed-tools
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Import immutable independently reviewed Host-only V6 executor
+        shell: bash
+        run: *review_import
+      - id: batch
+        uses: ./.github/actions/product-sd1-v6-batch
+        with:
+          stage_count: '50'
+          start_m: '18992'
+          end_m: '19992'
+          source_mode: intra_run
+          source_id: ${{ needs.v6_billion_4.outputs.terminal_artifact_id }}
+          source_name: ${{ needs.v6_billion_4.outputs.terminal_artifact_name }}
+          source_digest: ${{ needs.v6_billion_4.outputs.terminal_artifact_digest }}
+          source_host_sha: ${{ needs.v6_billion_4.outputs.terminal_host_sha }}
+          source_rtl_sha: ${{ needs.v6_billion_4.outputs.terminal_rtl_sha }}
+          source_card_sha: ${{ needs.v6_billion_4.outputs.terminal_card_sha }}
+
+  final_genuine_rtl_proof:
+    needs: [v6_billion_1, v6_billion_2, v6_billion_3, v6_billion_4, v6_billion_5]
+    # Without an explicit status function, GitHub implicitly applies success()
+    # and skips this proof when genuine UART login stops downstream jobs early.
+    # !cancelled() allows those skipped needs while respecting run cancellation.
+    # Formal proof remains guarded by !cancelled() and independent serial audit.
+    if: >-
+      !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail closed unless full 19992M, or verified UART service-login
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            ([.[] | select(.result=="failure" or .result=="cancelled")] | length)==0 and
+            (
+              .v6_billion_5.result=="success" and .v6_billion_5.outputs.terminal_m=="19992"
+              or
+              ([.[] | select(.result=="success" and .outputs.serial_login_verified=="1")] | length)>=1
+            )
+          ' <<< "$NEEDS_JSON" >/dev/null || exit 16
+          echo 'PRODUCT_SD1_V6_FORMAL_RELAY_CANDIDATE_REQUIRES_INDEPENDENT_SERIAL_ARCHIVE_AUDIT'
