@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
@@ -22,6 +23,34 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
             ["bash", str(SCRIPT), *map(str, args)],
             capture_output=True, text=True, check=False,
         )
+
+    def test_export_producer_rejects_dirty_source_even_before_cache_lookup(self):
+        # Use an isolated tiny git repository; never dirty the real Product
+        # checkout or rely on the test runner's own working tree state.
+        with TemporaryDirectory() as temp:
+            fixture = Path(temp) / "product"
+            (fixture / "tools/ci").mkdir(parents=True)
+            (fixture / "tools/fpga").mkdir(parents=True)
+            (fixture / "src/main/scala").mkdir(parents=True)
+            shutil.copyfile(SCRIPT, fixture / "tools/ci/product_fpga_artix7_p0.sh")
+            source = fixture / "src/main/scala/Dummy.scala"
+            source.write_text("object Dummy {}\n")
+            subprocess.run(["git", "init", "-q", str(fixture)], check=True)
+            subprocess.run(["git", "add", "tools/ci", "src/main"],
+                           cwd=fixture, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.name=Product Test",
+                            "-c", "user.email=product-test@example.invalid",
+                            "commit", "-qm", "pin source"], cwd=fixture,
+                           check=True, capture_output=True)
+            source.write_text("object Dummy { val dirty = true }\n")
+            target = fixture / "export"
+            result = subprocess.run(
+                ["bash", str(fixture / "tools/ci/product_fpga_artix7_p0.sh"),
+                 "prepare", str(target)], capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("dirty; commit before exact-SHA export", result.stderr)
+            self.assertFalse(target.exists())
 
     def test_uses_full_product_small_rv64gc_sd1_board_neutral_top(self):
         script = SCRIPT.read_text()
@@ -129,6 +158,16 @@ class ProductFpgaArtixP0Contract(unittest.TestCase):
         self.assertIn("actions/cache/save@v4", workflow)
         self.assertIn("product-artix7-p0-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}-v2", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
+        self.assertIn("product_nexys_axi_port_gate.py", workflow)
+        self.assertIn("tests_py.test_product_nexys_axi_port_gate", workflow)
+        self.assertIn("nexys-axi-port-report.json", workflow)
+        self.assertIn("mapped_product_ports == 50", workflow)
+        # The producer checks that source/tooling files are clean: do not
+        # mutate the tracked Mill launcher during a CI preflight.
+        self.assertNotIn("chmod +x mill", workflow)
+        self.assertEqual(workflow.count("product_fpga_artix7_p0.sh prepare"), 1)
+        self.assertLess(workflow.index("product_fpga_artix7_p0.sh prepare"),
+                        workflow.index("product_nexys_axi_port_gate.py"))
         self.assertNotIn("synth_ecp5", workflow)
         self.assertNotIn("vivado -mode", workflow)
         self.assertNotIn("push:", workflow)

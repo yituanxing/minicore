@@ -36,6 +36,9 @@ class ProductFpgaXc7UnplacedContract(unittest.TestCase):
         script = SCRIPT.read_text()
         self.assertIn("top=AetherCoreProductFpgaUartDdrBoard", script)
         self.assertIn("read_verilog -sv -DSYNTHESIS", script)
+        self.assertIn("tools/fpga/aether_product_nexys_axi_bridge.sv", script)
+        self.assertIn("hierarchy -check -top aether_product_nexys_axi_bridge", script)
+        self.assertIn("nexys_axi_wrapper_hierarchy_checked:true", script)
         self.assertIn("hierarchy -check -top $top", script)
         self.assertIn("synth_xilinx -family xc7 -noiopad -top $top", script)
         self.assertIn("stat -json -tech xilinx", script)
@@ -103,6 +106,7 @@ class ProductFpgaXc7UnplacedContract(unittest.TestCase):
             self.assertFalse(accepted["placed"])
             self.assertFalse(accepted["routed"])
             self.assertFalse(accepted["physical_timing_qualified"])
+            self.assertTrue(accepted["nexys_axi_wrapper_hierarchy_checked"])
             self.assertEqual(accepted["rtl_files"], 1)
 
     def test_hierarchy_parser_weights_instances_and_rejects_false_totals(self):

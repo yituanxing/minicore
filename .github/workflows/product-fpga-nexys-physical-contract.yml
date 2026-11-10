@@ -1,0 +1,38 @@
+name: Nexys Video physical gate contract (offline only)
+
+on:
+  push:
+    branches:
+      - work/fpga-board-candidate-gate-20261109
+    paths:
+      - .github/workflows/product-fpga-nexys-physical-contract.yml
+      - tools/ci/product_fpga_nexys_video_ddr.sh
+      - tools/ci/nexys_video_windows_vivado.ps1
+      - tools/fpga/nexys_video_windows_probe.tcl
+      - tools/fpga/nexys_video_product_physical.tcl
+      - tools/fpga/nexys_video_physical_report_gate.py
+      - tests_py/test_product_nexys_physical_gate.py
+      - tests_py/test_product_nexys_windows_bridge.py
+
+permissions:
+  contents: read
+
+jobs:
+  offline-physical-gate-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check physical gate fails closed without Vivado or board
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/ci/product_fpga_nexys_video_ddr.sh
+          python3 -m unittest \
+            tests_py.test_product_nexys_physical_gate \
+            tests_py.test_product_nexys_windows_bridge \
+            tests_py.test_product_nexys_axi_port_gate \
+            tests_py.test_nexys_video_reference_gate \
+            tests_py.test_product_fpga_board_candidates \
+            -v
+          echo 'OFFLINE_CONTRACT_ONLY: no Vivado synth, route, bitstream, DDR calibration, or Debian login.' >> "$GITHUB_STEP_SUMMARY"

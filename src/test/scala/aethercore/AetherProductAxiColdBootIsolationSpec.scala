@@ -1,6 +1,6 @@
 package aethercore
 
-import aethercore.soc.AetherProductAxiColdBootIsolation
+import aethercore.soc.{AetherProductAxiColdBootIsolation, AetherProductDdrLocalAxiWindow, Axi4Burst}
 import chisel3._
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.flatspec.AnyFlatSpec
@@ -79,6 +79,42 @@ class AetherProductAxiColdBootIsolationSpec
       dut.io.ddr.ar.valid.expect(false.B)
       dut.io.ddr.b.ready.expect(false.B)
       dut.io.ddr.r.ready.expect(false.B)
+    }
+  }
+
+  it should "block a byte write whose WSTRB targets another DDR byte lane" in {
+    // This selected G2/FPGA suite also checks the downstream DDR window: the
+    // CPU cannot rely on the vendor SmartConnect to repair malformed strobes.
+    simulate(new AetherProductDdrLocalAxiWindow(32, 28, 4)) { dut =>
+      dut.io.physical.aw.valid.poke(true.B)
+      dut.io.physical.aw.bits.poke(0.U.asTypeOf(dut.io.physical.aw.bits))
+      dut.io.physical.aw.bits.addr.poke("h80000003".U)
+      dut.io.physical.aw.bits.size.poke(0.U)
+      dut.io.physical.aw.bits.burst.poke(Axi4Burst.Incr)
+      dut.io.physical.w.valid.poke(false.B)
+      dut.io.physical.w.bits.poke(0.U.asTypeOf(dut.io.physical.w.bits))
+      dut.io.physical.w.bits.last.poke(true.B)
+      dut.io.physical.b.ready.poke(true.B)
+      dut.io.physical.ar.valid.poke(false.B)
+      dut.io.physical.ar.bits.poke(0.U.asTypeOf(dut.io.physical.ar.bits))
+      dut.io.physical.r.ready.poke(true.B)
+      dut.io.local.aw.ready.poke(true.B)
+      dut.io.local.w.ready.poke(true.B)
+      dut.io.local.b.valid.poke(false.B)
+      dut.io.local.b.bits.poke(0.U.asTypeOf(dut.io.local.b.bits))
+      dut.io.local.ar.ready.poke(true.B)
+      dut.io.local.r.valid.poke(false.B)
+      dut.io.local.r.bits.poke(0.U.asTypeOf(dut.io.local.r.bits))
+
+      dut.io.local.aw.valid.expect(true.B)
+      dut.clock.step() // AW accepted; lane mask must survive this edge.
+      dut.io.physical.aw.valid.poke(false.B)
+      dut.io.physical.w.valid.poke(true.B)
+      dut.io.physical.w.bits.strb.poke("h01".U) // Only lane 3 is legal.
+      dut.io.local.w.valid.expect(false.B)
+      dut.io.physical.w.ready.expect(false.B)
+      dut.clock.step()
+      dut.io.stickyFatal.expect(true.B)
     }
   }
 }

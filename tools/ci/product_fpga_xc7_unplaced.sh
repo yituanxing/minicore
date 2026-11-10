@@ -52,6 +52,8 @@ jq -e --arg sha "$sha" --arg top "$top" \
 }
 mapfile -t svs < <(find "$rtl_dir" -maxdepth 1 -type f -name '*.sv' -print | sort)
 ((${#svs[@]} > 0)) || { echo 'ERROR: no synthesizable Product SV files' >&2; exit 2; }
+bridge="$repo_dir/tools/fpga/aether_product_nexys_axi_bridge.sv"
+[[ -s "$bridge" ]] || { echo 'ERROR: missing Nexys AXI physical boundary wrapper' >&2; exit 2; }
 jq -e --argjson count "${#svs[@]}" '.rtl_files == $count' "$export_dir/manifest.json" >/dev/null || {
   echo 'ERROR: Product RTL file count disagrees with pinned manifest' >&2
   exit 2
@@ -63,6 +65,7 @@ read_cmd='read_verilog -sv -DSYNTHESIS'
 for sv in "${svs[@]}"; do
   read_cmd+=" \"${sv//\"/\\\"}\""
 done
+read_cmd+=" \"${bridge//\"/\\\"}\""
 # Yosys tee opens the raw argument, including literal quote characters.
 # GitHub RUNNER_TEMP has no whitespace; reject spaces and pass an unquoted
 # filename token, or the entire mapping can finish but stats export fail.
@@ -70,7 +73,10 @@ done
   echo 'ERROR: XC7 output path must not contain whitespace (Yosys tee)' >&2
   exit 2
 }
-flow="$read_cmd; hierarchy -check -top $top; synth_xilinx -family xc7 -noiopad -top $top; tee -o $stats stat -json -tech xilinx; stat -tech xilinx"
+# First resolve the real Product+Nexys wrapper port hierarchy using exactly
+# the pinned 122-file source. Then map the original Product top so the XC7
+# resource numbers remain comparable with the previous reference run.
+flow="$read_cmd; hierarchy -check -top aether_product_nexys_axi_bridge; hierarchy -check -top $top; synth_xilinx -family xc7 -noiopad -top $top; tee -o $stats stat -json -tech xilinx; stat -tech xilinx"
 
 # The old floating ECP5 SHARE pass exhausted a 16 GiB hosted runner. Observe
 # the exact XC7 process and cgroup live, then stop before the OS kills the job
@@ -152,6 +158,7 @@ jq -n --arg sha "$sha" --arg top "$top" --arg version "$(yosys -V)" \
   --arg rtl_bundle "$(sha256sum "$export_dir/rtl.sha256" | cut -d' ' -f1)" \
   '{status:"XC7_UNPLACED_MAPPING_PASS",git_sha:$sha,top:$top,
     yosys_version:$version,family:"xc7",io_pads:false,rtl_files:$rtl_files,
+    nexys_axi_wrapper_hierarchy_checked:true,
     rtl_file_hashes_sha256:$rtl_bundle,resource_report:"stats.json",
     device_part:null,placed:false,routed:false,physical_timing_qualified:false,
     qualification:"Xilinx 7-series mapped cells only; not device fit, routed Fmax or board boot"}' \

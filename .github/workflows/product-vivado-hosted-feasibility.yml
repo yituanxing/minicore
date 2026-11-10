@@ -1,0 +1,72 @@
+name: Product Vivado hosted-runner feasibility (read-only)
+
+on:
+  push:
+    branches:
+      - work/fpga-board-candidate-gate-20261109
+    paths:
+      - .github/workflows/product-vivado-hosted-feasibility.yml
+
+permissions:
+  contents: read
+
+jobs:
+  free-hosted-probe:
+    name: Probe standard Ubuntu runner capacity; no Vivado install
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Measure actual runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'VIVADO_PROBE: standard GitHub-hosted ubuntu-24.04; no paid runner, no AMD credentials'
+          uname -a
+          df -h / /tmp "$RUNNER_TEMP"
+          free -h
+          nproc
+          if command -v vivado >/dev/null 2>&1; then
+            echo 'VIVADO_BINARY_PRESENT: true'
+            command -v vivado
+            vivado -version | head -10
+          else
+            echo 'VIVADO_BINARY_PRESENT: false'
+          fi
+          for candidate in /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /usr/local/share/powershell; do
+            if [[ -d "$candidate" ]]; then
+              du -sh "$candidate" 2>/dev/null || true
+            fi
+          done
+          echo 'VIVADO_INSTALL_ATTEMPTED: false; official AMD download requires authentication'
+      - name: Save structured resource evidence
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, platform, shutil
+          from pathlib import Path
+          targets = ['/','/tmp',os.environ['RUNNER_TEMP']]
+          sample = {
+            'status': 'HOSTED_VIVADO_FITNESS_PROBED',
+            'github_sha': os.environ['GITHUB_SHA'],
+            'runner': 'ubuntu-24.04 standard',
+            'vivado_binary': shutil.which('vivado'),
+            'vivado_installed_or_licensed': False,
+            'amd_download_requires_user_auth': True,
+            'vivado_install_attempted': False,
+            'cpu_count': os.cpu_count(),
+            'platform': platform.platform(),
+            'disks': {p: dict(total_bytes=shutil.disk_usage(p).total,
+                             available_bytes=shutil.disk_usage(p).free) for p in targets},
+          }
+          location = Path(os.environ['RUNNER_TEMP']) / 'vivado-hosted-fitness.json'
+          location.write_text(json.dumps(sample, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(sample, indent=2, sort_keys=True))
+          PY
+      - name: Preserve exact GitHub runner findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vivado-hosted-fitness
+          path: ${{ runner.temp }}/vivado-hosted-fitness.json
+          if-no-files-found: warn
+          retention-days: 7
