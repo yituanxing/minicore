@@ -179,6 +179,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Upstream's makefile emits "-L$(realpath ${SPIKE_LIB}) -lSDL2".
+          # If the Spike lib directory is absent, the naked -L consumes
+          # -lSDL2 as its argument and drops SDL2 from the link command.
+          mkdir -p "$RISCV/lib"
+          test -f /usr/lib/x86_64-linux-gnu/libSDL2.so
           cd "$NAX_DIR/src/test/cpp/naxriscv"
           start="$(date +%s)"
           timeout 600s make compile TRACE=no THREAD_COUNT=2 2>&1 | tee "$LOG_DIR/verilator-build.log"
