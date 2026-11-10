@@ -1,0 +1,268 @@
+name: SD1 slow-udev getty candidate native QEMU
+
+# ONE isolated candidate branch. This workflow never modifies PR #379's
+# immutable signed SD1 media or resumes its multi-day Product RTL checkpoint.
+# It rebuilds native Debian from the same pinned official sources but with
+# the candidate rootfs change, then observes a real serial getty on QEMU virt.
+on:
+  push:
+    branches:
+      - fix/sd1-udev-getty-timeout-20261110
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aethercore-sd1-getty-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate-native-debian-qemu:
+    if: >-
+      github.repository == 'yituanxing/minicore' &&
+      github.ref == 'refs/heads/fix/sd1-udev-getty-timeout-20261110' &&
+      contains(github.event.head_commit.message, '[sd1-getty-qemu-run]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 230
+    env:
+      RV64_DEBIAN_STAGE: sd1
+      RV64_LINUX_JOBS: '4'
+      RV64_SD1_QEMU_BUILD_JOBS: '4'
+      RV64_SD1_QEMU_TIMEOUT_SECONDS: '540'
+      AETHERCORE_TOOLCHAIN_JOBS: '4'
+      AETHERCORE_MILL_NO_DAEMON: '1'
+
+    steps:
+      - name: Checkout exact isolated candidate without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Pin candidate scope and verify scripts before any network
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$RV64_DEBIAN_STAGE" = sd1
+          test ! -e build/rv64-debian-rootfs
+          [[ -z "${AETHERCORE_SD1_LONGRUN_CONFIRM:-}" &&
+             -z "${AETHERCORE_SD1_RELAY_CONFIRM:-}" &&
+             -z "${RV64_SD1_LOGIN_USER:-}" &&
+             -z "${RV64_SD1_LOGIN_PASSWORD_HASH_FILE:-}" ]] || exit 19
+          python3 tools/ci/product_sd1_official_seed.py validate-lock >> "$GITHUB_ENV"
+          for script in \
+            tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh \
+            tools/ci/rv64_debian_rootfs_build.sh \
+            tools/ci/rv64_debian_sd1_sd_image_build.sh \
+            tools/ci/rv64_debian_linux_build.sh \
+            tools/ci/product_sd1_qemu_init_oracle.sh; do
+            bash -n "$script"
+          done
+          python3 -m unittest \
+            tests_py.test_product_sd1_slow_device_getty_contract \
+            tests_py.test_product_sd1_getty_candidate_workflow_contract \
+            tests_py.test_product_sd1_official_seed_contract \
+            tests_py.test_product_sd1_qemu_oracle_contract \
+            tests_py.test_product_sd1_native_qemu_workflow_contract -v
+          echo 'CANDIDATE_ONLY: native Debian QEMU virtio; NOT Product RTL or official signed SD1 PASS' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restore pinned Bootlin RV64 GCC cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-gcc-13.3-v1-${{ hashFiles('tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore immutable upstream Linux and OpenSBI sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-rv64-linux-v2-${{ hashFiles('software/rv64/linux_early.env', 'software/rv64/opensbi_first_exec.env', 'tools/ci/rv64_linux_early_build.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+
+      - name: Restore Scala build dependency cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+
+      - name: Restore public Debian apt package downloads only
+        id: apt_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-sd1-official-apt-cache
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-
+
+      - name: Provision minimal host dependencies and native QEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          java17_home="${JAVA_HOME_17_X64:-${JAVA_HOME:-}}"
+          if [[ -n "$java17_home" && -x "$java17_home/bin/java" ]]; then
+            echo "JAVA_HOME=$java17_home" >> "$GITHUB_ENV"
+            echo "$java17_home/bin" >> "$GITHUB_PATH"
+            export PATH="$java17_home/bin:$PATH"
+          fi
+          java -version 2>&1 | grep -Eq 'version "17([.]|"|-)'
+          javac -version 2>&1 | grep -Eq '^javac 17([.]|$)'
+          missing=()
+          need() { command -v "$1" >/dev/null 2>&1 || missing+=("$2"); }
+          need bc bc
+          need gcc build-essential
+          need g++ build-essential
+          need make build-essential
+          need bison bison
+          need flex flex
+          need dtc device-tree-compiler
+          need pahole dwarves
+          need qemu-riscv64-static qemu-user-static
+          need qemu-system-riscv64 qemu-system-misc
+          need mkfs.ext4 e2fsprogs
+          need python3 python3
+          need curl curl
+          need xz xz-utils
+          need git git
+          test -r /usr/include/openssl/ssl.h || missing+=(libssl-dev)
+          test -r /usr/include/libelf.h || missing+=(libelf-dev)
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64 || missing+=(binfmt-support)
+          if (( ${#missing[@]} )); then
+            mapfile -t missing < <(printf '%s\n' "${missing[@]}" | sort -u)
+            timeout --signal=TERM --kill-after=30s 10m sudo apt-get update
+            timeout --signal=TERM --kill-after=30s 20m sudo apt-get install \
+              -y --no-install-recommends "${missing[@]}"
+          fi
+          if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-riscv64 ]] && \
+             command -v update-binfmts >/dev/null 2>&1; then
+            sudo update-binfmts --enable qemu-riscv64
+          fi
+          test -e /proc/sys/fs/binfmt_misc/qemu-riscv64
+          docker version
+          command -v gpgv
+          command -v qemu-system-riscv64
+          chmod +x mill
+
+      - name: Validate frozen GCC and unchanged Linux baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 20m \
+            bash tools/ensure_riscv64_linux_gcc_13_3.sh
+          [[ -n "$(sed -n 's/^AETHERCORE_RV64_LINUX_CROSS_COMPILE=//p' "$GITHUB_ENV")" ]]
+
+      - name: Build pinned upstream Linux baseline with exact cross compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 35m \
+            bash tools/ci/rv64_linux_early_build.sh
+          grep -Fxq 'RV64_LINUX_EARLY_BUILD_RESULT: status=PASS' \
+            build/rv64-linux-early/result.txt
+
+      - name: Configure authentic pinned Debian and new SD1 rootfs
+        id: rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset RV64_SD1_LOGIN_USER RV64_SD1_LOGIN_PASSWORD_HASH_FILE
+          timeout --signal=TERM --kill-after=30s 75m \
+            bash tools/ci/rv64_debian_sd1_official_full_rootfs_prepare.sh
+          source build/rv64-debian-sd1-official-rootfs/source.env
+          timeout --signal=TERM --kill-after=30s 20m \
+            bash tools/ci/rv64_debian_rootfs_build.sh
+          grep -Fxq 'RV64_DEBIAN_ROOTFS_BUILD_RESULT: status=PASS' \
+            build/rv64-debian-rootfs/result.txt
+          sudo grep -Fxq 'DefaultDeviceTimeoutSec=10min' \
+            build/rv64-debian-rootfs/rootfs/etc/systemd/system.conf.d/90-sd1-device-coldplug.conf
+          grep -Fxq 'console_login_credentials=NOT_PROVISIONED' \
+            build/rv64-debian-sd1-official-rootfs/console-provisioning.txt
+
+      - name: Preserve pinned public apt downloads after rootfs attempt
+        id: apt_download_count
+        if: always() && steps.rootfs.outcome != 'skipped' && steps.apt_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          if [[ -d build/product-sd1-official-apt-cache ]]; then
+            count="$(find build/product-sd1-official-apt-cache -maxdepth 1 -type f -name '*.deb' | wc -l)"
+          fi
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "SD1_CANDIDATE_APT_DOWNLOADS=$count" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save only fully downloaded pinned public Debian packages
+        if: >-
+          always() && steps.apt_download_count.outputs.count != '' &&
+          steps.apt_download_count.outputs.count != '0' &&
+          steps.apt_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/product-sd1-official-apt-cache
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-debs-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build candidate MBR ext4 SD and matching Product kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 15m bash tools/ci/rv64_debian_sd1_sd_image_build.sh
+          timeout --signal=TERM --kill-after=30s 35m bash tools/ci/rv64_debian_linux_build.sh
+          echo "candidate_sha=$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          sed -n '/^sd_image_sha256=/p' build/rv64-debian-sd1-sd/result.txt >> "$GITHUB_STEP_SUMMARY"
+          sed -n '/^rootfs_tree_sha256=/p' build/rv64-debian-rootfs/result.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare separate QEMU virt kernel (never Product RTL)
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 25m \
+            bash tools/ci/product_sd1_qemu_init_oracle.sh prepare
+
+      - name: Retain uncredentialed candidate media and its SHA manifests for bounded follow-up
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-linux/obj/.config
+            build/rv64-debian-linux/obj/arch/riscv/boot/Image
+            build/rv64-debian-sd1-sd
+            build/rv64-debian-sd1-qemu-oracle/obj/.config
+            build/rv64-debian-sd1-qemu-oracle/obj/arch/riscv/boot/Image
+            build/rv64-debian-sd1-qemu-oracle/result.txt
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-sd1-getty-candidate-media-v1-${{ hashFiles('software/rv64/product_sd1_official_seed.lock', 'tools/ci/rv64_debian_rootfs_build.sh', 'tools/ci/rv64_debian_sd1_sd_image_build.sh', 'tools/ci/rv64_debian_linux_build.sh', 'tools/ci/product_sd1_qemu_init_oracle.sh') }}-${{ github.run_id }}
+
+      - name: Run bounded candidate native Debian service and login oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 11m \
+            bash tools/ci/product_sd1_qemu_init_oracle.sh run
+          grep -Fxq 'PRODUCT_SD1_QEMU_NATIVE_DEBIAN_INIT_LOGIN_PROMPT_PASS_NOT_RTL' \
+            build/rv64-debian-sd1-qemu-oracle/boot-result.txt
+          python3 tools/ci/product_sd1_getty_candidate_uart_proof.py \
+            build/rv64-debian-sd1-qemu-oracle/boot-uart.log
+          echo 'CANDIDATE_QEMU_ORDERED_GETTY_LOGIN_PASS_NOT_RTL: observed serial-getty@ttyS0.service before native Debian login on rebuilt candidate SD image' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bounded proof and hashes only, never guest media or secrets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd1-getty-candidate-qemu-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            build/rv64-debian-rootfs/result.txt
+            build/rv64-debian-linux/result.txt
+            build/rv64-debian-sd1-sd/result.txt
+            build/rv64-debian-sd1-qemu-oracle/result.txt
+            build/rv64-debian-sd1-qemu-oracle/boot-result.txt
+            build/rv64-debian-sd1-qemu-oracle/boot-uart.log
