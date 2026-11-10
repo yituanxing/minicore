@@ -136,8 +136,8 @@ PY
   [[ "$source_host" =~ $hex64 && "$source_rtl" =~ $hex64 && "$source_card" == "$V6_SOURCE_CARD_SHA" &&
      -s "$source_dir/.migration-ready" &&
      "$(field previous_model_sha256 "$source_dir/.migration-ready")" == 4f946c321c63528ce789440486c82ef89204fc0905985bb42a97d1ec9fe989be &&
-     "$(field source_host_sha256 "$source_dir/.migration-ready")" == "$V6_SOURCE_HOST_SHA" &&
-     "$(field source_rtl_sha256 "$source_dir/.migration-ready")" == "$V6_SOURCE_RTL_SHA" &&
+     "$(field migration_origin_host_sha256 "$source_dir/.migration-ready")" == "$V6_SOURCE_HOST_SHA" &&
+     "$(field migration_origin_rtl_sha256 "$source_dir/.migration-ready")" == "$V6_SOURCE_RTL_SHA" &&
      "$(field model_sha256 "$source_dir/.migration-ready")" == "$V6_MODEL_SHA" ]] ||
     fail 'qualified 14992M V6 model/old-V5 lineage mismatch'
   cmp -s "$first/persistent.pre.rtl" "$source_dir/persistent.pre.rtl" ||
