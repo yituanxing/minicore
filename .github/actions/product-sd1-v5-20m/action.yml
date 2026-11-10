@@ -71,7 +71,21 @@ runs:
         # canonical 64-hex digest for both REST and next-job provenance.
         ART_SHA="${ART_SHA#sha256:}"
         [[ "$ART_ID" =~ ^[0-9]+$ && "$ART_SHA" =~ ^[a-f0-9]{64}$ ]] || exit 16
-        gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID" > "$RUNNER_TEMP/v5-art-$ART_ID.json"
+        # GitHub may report a just-finalized upload as 404 until its REST
+        # artifact metadata becomes visible. Never skip provenance verification.
+        artifact_meta="$RUNNER_TEMP/v5-art-$ART_ID.json"
+        artifact_meta_ok=0
+        for retry_wait in 0 2 3 5 8 13 21 30; do
+          if (( retry_wait > 0 )); then sleep "$retry_wait"; fi
+          if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID" > "$artifact_meta"; then
+            artifact_meta_ok=1
+            break
+          fi
+        done
+        if (( artifact_meta_ok != 1 )); then
+          echo "V5 artifact metadata still unavailable after bounded retries: $ART_ID" >&2
+          exit 16
+        fi
         python3 tools/ci/product_sd1_v5_chain.py verify-artifact \
           "$RUNNER_TEMP/v5-art-$ART_ID.json" "$ART_ID" "$ART_NAME" "$ART_SHA" \
           "$GITHUB_RUN_ID" "$V5_SOURCE_SHA"
