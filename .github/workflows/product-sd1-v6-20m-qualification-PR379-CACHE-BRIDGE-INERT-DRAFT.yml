@@ -24,7 +24,7 @@ env:
   V6_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
   V6_EVENT_REVIEWED_PARENT_HEAD: '367ce462c9fcc1a7da80db9ae8f67b642893717c'
   V6_SIGNED_ORIGIN_HEAD: '8a40835c470d059448a4871bafead04cc555bee5'
-  V6_REVIEWED_HEAD: '40d7be6302f767c52ef33d093f2300ca5ee934bf'
+  V6_REVIEWED_HEAD: '99dbb5a90849c54b8c61c00ac58765e5414e0f04'
   # Runtime-only pins are emitted AFTER the genuine independent V6 Host-only
   # 20M differential and uploaded 90-day qualification archive are verified.
   V6_QUAL_RUN: 'PENDING_RUNTIME_V6_20B_QUAL_RUN'
