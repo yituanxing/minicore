@@ -46,4 +46,68 @@ done < <(git diff --name-only -z "$V6_ORIGIN_HEAD" HEAD)
 for key in V6_14992_DIGEST V6_14992_HOST_SHA V6_14992_RTL_SHA V6_14992_CARD_SHA; do
   [[ "${!key:-}" =~ ^[a-f0-9]{64}$ ]] || reject "$key not pinned"
 done
+# Formal 5B release MUST consume the separately authenticated one-stage V6
+# 14992M->15012M technical qualification. A human approval marker alone cannot
+# substitute for a real report archive/identity and its sealed source lineage.
+[[ "${V6_TECH_QUAL_RUN:-}" =~ ^[0-9]{9,13}$ &&
+   "${V6_TECH_QUAL_ID:-}" =~ ^[0-9]{8,13}$ &&
+   "${V6_TECH_QUAL_NAME:-}" =~ ^product-sd1-v6-qual-14992-15012-[0-9]+-attempt[1-9][0-9]*$ &&
+   "${V6_TECH_QUAL_DIGEST:-}" =~ ^[a-f0-9]{64}$ &&
+   "${V6_TECH_QUAL_PR379_HEAD:-}" =~ ^[a-f0-9]{40}$ &&
+   "${V6_TECH_QUAL_REVIEWED_HEAD:-}" == "$V6_REVIEWED_PRIOR_HEAD" &&
+   "${V6_TECH_QUAL_PR379_HEAD:-}" != "$V6_ORIGIN_HEAD" &&
+   "${V6_TECH_QUAL_NAME:-}" == "product-sd1-v6-qual-14992-15012-${V6_TECH_QUAL_RUN}-attempt${V6_TECH_QUAL_ATTEMPT:-}" &&
+   "${V6_TECH_QUAL_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]] ||
+  reject 'independent reviewed V6 20M technical report pins absent'
+command -v gh >/dev/null && command -v jq >/dev/null && command -v unzip >/dev/null ||
+  reject 'qualification artifact verifier tools unavailable'
+qual_meta="$(mktemp)" qual_zip="$(mktemp)"
+trap 'rm -f -- "$qual_meta" "$qual_zip"' EXIT
+visible=0
+for delay in 0 2 3 5 8 13 21 30; do
+  if (( delay > 0 )); then sleep "$delay"; fi
+  if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V6_TECH_QUAL_ID" > "$qual_meta"; then
+    visible=1
+    break
+  fi
+done
+[[ "$visible" == 1 ]] || reject 'V6 technical qualification metadata unavailable'
+jq -e --argjson id "$V6_TECH_QUAL_ID" --argjson run "$V6_TECH_QUAL_RUN" \
+  --arg name "$V6_TECH_QUAL_NAME" --arg digest "sha256:$V6_TECH_QUAL_DIGEST" \
+  --arg head "$V6_TECH_QUAL_PR379_HEAD" '
+  .id==$id and .name==$name and .digest==$digest and .workflow_run.id==$run and
+  .workflow_run.head_sha==$head and .expired==false and .size_in_bytes>1024
+  ' "$qual_meta" >/dev/null || reject 'V6 technical report provenance mismatch'
+zip_ok=0
+for delay in 0 2 3 5 8 13 21 30; do
+  if (( delay > 0 )); then sleep "$delay"; fi
+  if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$V6_TECH_QUAL_ID/zip" > "$qual_zip"; then
+    zip_ok=1
+    break
+  fi
+done
+[[ "$zip_ok" == 1 && "$(sha256sum "$qual_zip" | cut -d' ' -f1)" == "$V6_TECH_QUAL_DIGEST" ]] ||
+  reject 'V6 technical report archive digest mismatch'
+qual_manifest="$(unzip -p "$qual_zip" qualification-manifest.txt)" ||
+  reject 'V6 technical report manifest absent'
+[[ "$(printf '%s\n' "$qual_manifest" | sed -n 's/^schema=//p')" == SD1_V6_14992_15012_TECHNICAL_QUALIFICATION_V1 &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^reviewed_v6_head=//p')" == "$V6_REVIEWED_PRIOR_HEAD" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^event_pr379_head=//p')" == "$V6_TECH_QUAL_PR379_HEAD" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_run=//p')" == "$V6_ORIGIN_RUN" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_head=//p')" == "$V6_ORIGIN_HEAD" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_id=//p')" == "$V6_14992_ID" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_name=//p')" == "$V6_14992_NAME" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_zip_digest=//p')" == "$V6_14992_DIGEST" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_host_sha=//p')" == "$V6_14992_HOST_SHA" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_rtl_sha=//p')" == "$V6_14992_RTL_SHA" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^origin_card_sha=//p')" == "$V6_14992_CARD_SHA" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^model_sha=//p')" == "$V6_MODEL_SHA" &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^signed_no_cold_boot=//p')" == 1 &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^debian_login_claim=//p')" == 0 &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^stage_artifact_id=//p')" =~ ^[0-9]+$ &&
+   "$(printf '%s\n' "$qual_manifest" | sed -n 's/^stage_artifact_zip_digest=//p')" =~ ^[a-f0-9]{64}$ ]] ||
+  reject 'V6 technical qualification manifest lineage invalid'
+[[ -n "${GITHUB_ENV:-}" ]] || reject 'no authenticated runner environment'
+echo 'V6_TECH_QUAL_REPORT_VERIFIED=1' >> "$GITHUB_ENV"
 echo 'PRODUCT_SD1_V6_REVIEWED_CI_ONLY_EXACT_V5_SOURCE_AND_TERMINAL_PIN_AUTHENTICATED'
+
