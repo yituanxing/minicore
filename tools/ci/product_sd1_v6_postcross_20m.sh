@@ -18,25 +18,61 @@ readonly DTB_SHA=72f9b4298f7f4544321288334e2642943a4a2fb5a9eef1e1957c8e3e8e87fc1
 readonly SD_SHA=6f4ab4daa2b4eb9b9d46ca69816a52ff37f334734ab4e7698e1be64dbc011ed7
 readonly LINUX_SHA=522e2d5847534962eefc0b44561c03e8aa79b0e94acb7e75e4a985a3aa6b6393
 readonly ROOTFS_SHA=f2f8c6bf118c0be578b633dfd5486e0d1e1ef7becdaf093bbc4f16f62d0e474e
+readonly ORIGIN_HEAD=8a40835c470d059448a4871bafead04cc555bee5
+readonly ORIGIN_RUN=42600415630
+readonly ORIGIN_14992_ID=13738787578
+readonly ORIGIN_14992_NAME=product-sd1-v5-15b-42600415630-attempt7-v5_billion_5-14992m
+readonly ORIGIN_14992_DIGEST=b235fb53f493b274aae9217ae09fafe3a1a16813bde4e38adf50ac048cedd31b
+readonly ORIGIN_14992_HOST_SHA=ba7e2161c5917f522a6854eb5457e9cff703492bb0ef1c5485cb13f6500a01cb
+readonly ORIGIN_14992_RTL_SHA=948ab3d2a7554566ca9cb0070c51eafbecf111eee465ec11a7ecbcb354c57ed9
+readonly ORIGIN_14992_CARD_SHA=3ef8a3c6281ca52fd2c734f7244634de55908d276208b2ef26736b355ff1c4a3
 if [[ "${1:---plan}" == --plan && $# -le 1 ]]; then
   echo 'PRODUCT_SD1_V6_PLAN_ONLY no_guest_cycles=1 dynamic_20M_reviewed_14992M_to_19992M=1'
   exit 0
 fi
 [[ $# == 3 && "$1" == --execute-reviewed-postcross-20m ]] ||
   reject 'usage: --plan | --execute-reviewed-postcross-20m ABS_STAGE_DIR TARGET_M'
-[[ "${AETHERCORE_SD1_V6_20B_APPROVED:-}" == QUALIFIED_V6_20B_SIGNED_14992_CROSS_RUN &&
-   "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_FULL_DEBIAN_SIGNED_RELAY_V6_CHECKPOINT_20B &&
-   "$V6_MODEL" =~ ^[a-f0-9]{64}$ && "$V6_MODEL" != "$V4_MODEL" &&
+[[ "$V6_MODEL" =~ ^[a-f0-9]{64}$ && "$V6_MODEL" != "$V4_MODEL" &&
    "${AETHERCORE_VERILATOR_VERSION:-}" == 5.054 &&
    "${SIM_SETTLE_MODE:-}" == reference &&
    "${VERILATOR_THREADS:-}" == 1 &&
    "${AETHERCORE_DATA_MEM_WAIT_CYCLES:-}" == 0 ]] ||
-  reject 'reviewed V6 model/timing/approval qualification absent'
+  reject 'reviewed V6 model/timing qualification absent'
 [[ "$2" == /* && -d "$2" && "$(realpath -e "$2")" == "$2" ]] || reject 'noncanonical source'
 readonly SOURCE="$2" TARGET_M="$3"
 [[ "$TARGET_M" =~ ^[0-9]+$ && "$TARGET_M" -ge 15012 && "$TARGET_M" -le 19992 &&
    "$(((TARGET_M-15012)%20))" -eq 0 ]] || reject 'outside strict V6 20M target lattice/15B cap'
 readonly SOURCE_M=$((TARGET_M-20))
+# The one-stage technical trial is NOT an approval for the 5B continuation.
+# It is accepted only at 14992M -> 15012M from the exact signed V5 checkpoint
+# on the original PR379 event identity. Everything beyond 15012M still requires
+# the independent V6 qualification report plus the formal 5B release gate.
+if [[ "${V6_20M_TECH_TRIAL_AUTHORIZED:-}" == SIGNED_V6_ONLY_14992_TO_15012_20M_TECH_TRIAL ]]; then
+  [[ "${AETHERCORE_SD1_V6_20B_APPROVED:-}" != QUALIFIED_V6_20B_SIGNED_14992_CROSS_RUN &&
+     "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_SIGNED_V6_14992_TO_15012_TECH_TRIAL_ONLY &&
+     "$SOURCE_M" == 14992 && "$TARGET_M" == 15012 &&
+     "${V6_BATCH_START_M:-}" == 14992 && "${V6_BATCH_END_M:-}" == 15992 &&
+     "${V6_SOURCE_MODE:-}" == cross_run &&
+     "${GITHUB_REPOSITORY:-}" == yituanxing/minicore &&
+     "${GITHUB_EVENT_NAME:-}" == pull_request &&
+     "${GITHUB_REF:-}" == refs/pull/379/merge &&
+     "${GITHUB_JOB:-}" == v6_billion_1 &&
+     "${GITHUB_HEAD_REF:-}" == design/rv64gc-product-architecture-20261103 &&
+     "${V6_ORIGIN_RUN:-}" == "$ORIGIN_RUN" &&
+     "${V6_ORIGIN_HEAD:-}" == "$ORIGIN_HEAD" &&
+     "${V6_14992_ID:-}" == "$ORIGIN_14992_ID" &&
+     "${V6_14992_NAME:-}" == "$ORIGIN_14992_NAME" &&
+     "${V6_14992_DIGEST:-}" == "$ORIGIN_14992_DIGEST" &&
+     "${V6_14992_HOST_SHA:-}" == "$ORIGIN_14992_HOST_SHA" &&
+     "${V6_14992_RTL_SHA:-}" == "$ORIGIN_14992_RTL_SHA" &&
+     "${V6_14992_CARD_SHA:-}" == "$ORIGIN_14992_CARD_SHA" ]] ||
+    reject 'V6 20M trial source, PR379 identity, or scope unreviewed'
+else
+  [[ "${AETHERCORE_SD1_V6_20B_APPROVED:-}" == QUALIFIED_V6_20B_SIGNED_14992_CROSS_RUN &&
+     "${AETHERCORE_SD1_RELAY_CONFIRM:-}" == SD1_FULL_DEBIAN_SIGNED_RELAY_V6_CHECKPOINT_20B &&
+     "${V6_TECH_QUAL_REPORT_VERIFIED:-}" == 1 ]] ||
+    reject 'formal 5B continuation requires separately verified V6 technical report'
+fi
 readonly START=$((SOURCE_M*1000000)) TARGET=$((TARGET_M*1000000))
 readonly OUT="${AETHERCORE_SD1_V6_OUT:-}"
 [[ "$OUT" == "$ROOT"/build/product-sd1-v6-chain-* && -d "$OUT" &&
@@ -165,3 +201,4 @@ cp -- "$log" "$stage/advance.log"
 [[ ! -e "$OUT/${TARGET_M}m" ]] || reject 'target appeared concurrently'
 mv -T -- "$stage" "$OUT/${TARGET_M}m"
 echo "PRODUCT_SD1_V6_REAL_RTL_STAGE_SAVED source=$START target=$TARGET complete_host_rtl_sd=1 no_debian_login_claim=1"
+
