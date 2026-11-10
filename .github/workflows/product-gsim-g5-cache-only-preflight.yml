@@ -1,0 +1,121 @@
+name: AetherCore Product G5 RAM cache-only preflight
+
+# Read-only exact-key lookup; never downloads, builds, runs RTL or writes caches.
+# Can be promoted only after each exact cache is visible to THIS branch scope.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-g5-cache-only-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  exact-cache-lookup:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'product-g5-cache-only-preflight')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact branch for source-key calculation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check exact Scala dependency cache (no download)
+        id: scala
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-scala-v1-${{ hashFiles('build.mill', 'mill') }}
+          lookup-only: 'true'
+
+      - name: Check pinned G5 Linux and Verilator toolchain cache (no download)
+        id: tools
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/aethercore/toolchains/verilator-5.054
+            ~/.cache/aethercore/toolchains/src/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/build/verilator-bbb60a403932a9f695cb6ff001ceb73de6ad9234
+            ~/.cache/aethercore/toolchains/bootlin-riscv64-lp64d-glibc-stable-2024.05-1
+            ~/.cache/aethercore/toolchains/downloads/riscv64-lp64d--glibc--stable-2024.05-1.tar.xz
+            ~/.cache/aethercore/rv64/linux
+            ~/.cache/aethercore/rv64/linux-build
+            ~/.cache/aethercore/l32/opensbi
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-tools-v1-${{ hashFiles('tools/ensure_verilator_5_024.sh', 'tools/ensure_verilator_5_054.sh', 'tools/ensure_riscv64_linux_gcc_13_3.sh') }}
+          lookup-only: 'true'
+
+      - name: Check pinned GSIM source cache (no download)
+        id: gsim-source
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aethercore/gsim/product-45a73d6afb9b1893781cfb57ccd54096987bb23d
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-45a73d6-bridge-v1-${{ hashFiles('tools/ci/product_gsim_frontend_patch.py') }}
+          lookup-only: 'true'
+
+      - name: Determine whether host compiler ABI can be computed without installing tools
+        id: host-abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v clang++-19 >/dev/null 2>&1; then
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'signature=not-available' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cpu="$(awk -F: '/^model name[[:space:]]*:|^flags[[:space:]]*:/{print $0; n++; if(n==2)exit}' /proc/cpuinfo | sha256sum | cut -c1-20)"
+          compiler="$(clang++-19 --version | head -1 | sha256sum | cut -c1-20)"
+          echo 'available=true' >> "$GITHUB_OUTPUT"
+          echo "signature=$cpu-$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Check exact Product G5 GSIM native cache (no download)
+        if: steps.host-abi.outputs.available == 'true'
+        id: gsim-native
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-debian-bridge
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-native-v1-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/product_gsim_prefix_main.cpp', 'sim/product_gsim_port_adapter.h', 'sim/l32_opensbi_runtime.h', 'tools/ci/product_gsim_build.sh', 'tools/ci/product_gsim_g5_build.sh') }}
+          lookup-only: 'true'
+
+      - name: Check exact Product G5 Verilator native cache (no download)
+        if: steps.host-abi.outputs.available == 'true'
+        id: verilator-native
+        uses: actions/cache/restore@v4
+        with:
+          path: build/product-gsim-g5-ab/model-verilator-5.054-reference
+          key: aethercore-${{ runner.os }}-${{ runner.arch }}-product-gsim-g5-vmodel-v1-${{ steps.host-abi.outputs.signature }}-${{ hashFiles('build.mill', 'src/main/scala/**/*.scala', 'sim/opensbi_boot_main.cpp', 'sim/l32_opensbi_runtime.h', 'sim/product_rv64_opensbi_shim/*.h', 'tools/ci/product_sim_cache.sh', 'tools/ensure_verilator_5_054.sh') }}
+          lookup-only: 'true'
+
+      - name: Publish fail-closed exact-cache conclusion (not a G5 runtime test)
+        if: always()
+        env:
+          SCALA: ${{ steps.scala.outputs.cache-hit }}
+          TOOLS: ${{ steps.tools.outputs.cache-hit }}
+          GSIM_SOURCE: ${{ steps.gsim-source.outputs.cache-hit }}
+          COMPILER: ${{ steps.host-abi.outputs.available }}
+          GSIM_NATIVE: ${{ steps.gsim-native.outputs.cache-hit }}
+          VERILATOR_NATIVE: ${{ steps.verilator-native.outputs.cache-hit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'G5_CACHE_ONLY_EXACT_LOOKUP_NOT_RTL_PASS'
+            printf 'scala=%s tools=%s gsim_source=%s compiler_available=%s gsim_native=%s verilator_native=%s\n' \
+              "${SCALA:-unknown}" "${TOOLS:-unknown}" "${GSIM_SOURCE:-unknown}" \
+              "${COMPILER:-unknown}" "${GSIM_NATIVE:-unknown}" "${VERILATOR_NATIVE:-unknown}"
+            echo 'All exact hits are branch/cache-scope specific; a prior PR merge-ref cache is NOT automatically visible in a different PR.'
+            echo 'Even exact cache hits do not certify unarchived firmware, rootfs or generated build tickets.'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "${SCALA:-}" == true && "${TOOLS:-}" == true && \
+             "${GSIM_SOURCE:-}" == true && "${COMPILER:-}" == true && \
+             "${GSIM_NATIVE:-}" == true && "${VERILATOR_NATIVE:-}" == true ]] || exit 3
+          echo 'G5_CACHE_ONLY_EXACT_KEYS_REACHABLE_NOT_RTL_PASS' >> "$GITHUB_STEP_SUMMARY"
