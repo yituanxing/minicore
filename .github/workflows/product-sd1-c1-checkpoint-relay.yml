@@ -96,7 +96,8 @@ jobs:
             tools/ci/product_sd1_c1_checkpoint.sh \
             tools/ci/product_sd1_c1_firmware_build.sh
           python3 -m unittest tests_py.test_product_sd1_c1_artifact_relay_contract \
-            tests_py.test_product_sd1_c1_ready_inspection_contract -v
+            tests_py.test_product_sd1_c1_ready_inspection_contract \
+            tests_py.test_product_sd1_c1_inspect_smoke_contract -v
 
       - name: Pin conservative C1 RTL host ISA firmware and ledger compatibility
         id: compat
@@ -412,6 +413,15 @@ jobs:
           proof_dir="$(sed -n 's/^PRODUCT_SD1_C1_CHECKPOINT_SAVED directory=\([^ ]*\).*/\1/p' "$RUNNER_TEMP/c1-seed.txt")"
           [[ -d "$proof_dir" ]]
           echo "proof_dir=$proof_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Zero-cycle C1 Host/RTL inspect and corrupted-copy rejection
+        if: steps.source.outputs.mode == 'seed'
+        shell: bash
+        env:
+          SEED_PROOF: ${{ steps.seed.outputs.proof_dir }}
+        run: |
+          set -euo pipefail
+          bash tools/ci/product_sd1_c1_inspect_smoke.sh "$SEED_PROOF"
 
       - name: Advance restored C1 prefix in at most five independently bounded 20M windows
         shell: bash
