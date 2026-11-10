@@ -42,6 +42,7 @@ while IFS= read -r -d '' changed; do
     tools/ci/product_sd1_v6_release_guard.sh|\
     tools/ci/product_sd1_model_migration_v6_20b_qualify.sh|\
     tests_py/test_product_sd1_model_migration_v6_20b_static.py|\
+    .github/workflows/product-sd1-v6-20m-qualification-PR379-CACHE-BRIDGE-INERT-DRAFT.yml|\
     sim/product_rv64_checkpoint_sd1_main.cpp) ;;
     *) reject "unapproved difference from V5 signed source: $changed" ;;
   esac
